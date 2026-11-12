@@ -134,6 +134,8 @@ private:
 // a stack containing an unknown coding, is exposed as received with its
 // Content-Encoding field kept; a malformed or over-deep Content-Encoding field
 // fails the response with protocol_error.
+// decode_content(false) 保留编码字节与原 Content-Encoding/Content-Length，
+// 不等正文结束即交付第一块；framing()/content_length() 始终表示线面计划。
 // For HTTP/1, bytes received beyond a complete framed response retire the
 // connection and are discarded; they do not turn that response into a failure.
 class http_client_response_body final {
@@ -209,6 +211,10 @@ public:
     // The status code as received, including an invalid 600..999.
     [[nodiscard]] http_received_status received_status() const;
     [[nodiscard]] http_protocol_version protocol_version() const;
+    [[nodiscard]] http_client_response_framing framing() const;
+    [[nodiscard]] std::optional<std::uint64_t> content_length() const;
+    [[nodiscard]] const http_client_connection_info& connection_info() const& RUVIA_LIFETIMEBOUND;
+    const http_client_connection_info& connection_info() const&& = delete;
     // Queues RFC 9218 PRIORITY_UPDATE on a live HTTP/2 response; a
     // response the peer has already completed is left unchanged. Throws
     // http_client_error(closing) once the response transport is retired.
@@ -296,6 +302,16 @@ public:
     [[nodiscard]] http_protocol_version protocol_version() const {
         return response_.protocol_version();
     }
+    [[nodiscard]] http_client_response_framing framing() const {
+        return response_.framing();
+    }
+    [[nodiscard]] std::optional<std::uint64_t> content_length() const {
+        return response_.content_length();
+    }
+    [[nodiscard]] const http_client_connection_info& connection_info() const& RUVIA_LIFETIMEBOUND {
+        return response_.connection_info();
+    }
+    const http_client_connection_info& connection_info() const&& = delete;
     [[nodiscard]] std::span<const http_header> headers() const& RUVIA_LIFETIMEBOUND {
         return response_.headers();
     }
@@ -516,6 +532,10 @@ public:
     // handshake confirmation, CID availability and path validation together.
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
+    [[nodiscard]] std::pmr::vector<http_client_endpoint_address> dns_snapshot() const;
+    void update_dns(std::span<const http_client_endpoint_address> addresses) const;
+    [[nodiscard]] task<void> refresh_dns() const;
+    [[nodiscard]] bool close_connection(std::uint64_t id) const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
     [[nodiscard]] std::optional<http_client_push> next_push() const;
     [[nodiscard]] std::string_view host() const& RUVIA_LIFETIMEBOUND;
@@ -529,10 +549,10 @@ private:
     friend class http_client_request;
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
-    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request) const;
-    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const;
+    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request, const http_client_request_options& options) const;
+    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& options) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class context;
@@ -544,6 +564,7 @@ private:
     static void expire_capability(void* target) noexcept;
 
     detail::http_client_pool* pool_{nullptr};
+    std::shared_ptr<detail::http_client_pool> pool_owner_;
     std::pmr::memory_resource* resource_{nullptr};
     operation_options options_;
     stop_token host_stop_token_;
@@ -564,6 +585,18 @@ public:
     http_client_request& query(std::string_view name, std::string_view value);
     http_client_request& body(std::string_view bytes);
     http_client_request& body(std::span<const std::byte> bytes);
+    http_client_request& configure(http_client_request_options options);
+    http_client_request& decode_content(bool enabled);
+    http_client_request& field_source(http_request_field_source source);
+    http_client_request& fresh_connection(bool enabled = true);
+    http_client_request& timeouts(http_client_phase_timeouts timeouts);
+    // 按线序 await；字段借用只持续到回调完成。回调应响应 stop，
+    // 不得等待本次 exchange 或依赖其释放池容量的操作；异常使该 exchange 失败。
+    // HTTP/2/3 只背压本响应，不阻塞其他流；总截止期不因回调挂起而暂停。
+    http_client_request& on_informational(http_client_informational_callback callback);
+    // 在跨源跳转前 await，可异步 upsert 目的 origin；false 保留原响应。
+    // token 合并宿主、调用方取消与总截止期；回调须协作取消，返回后才释放借用 origin。
+    http_client_request& redirect_policy(move_only_function<task<bool>(http_origin_view, stop_token)> policy);
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     http_client_request& json(const value_type& value) {
@@ -582,6 +615,7 @@ public:
     }
     [[nodiscard]] task<http_client_response> send();
     [[nodiscard]] task<http_client_exchange> upload(http_client_upload_config config = {});
+    [[nodiscard]] task<http_client_tunnel_result> upgrade(http_client_tunnel_config config = {});
 
 private:
     friend class http_client_handle;
@@ -594,6 +628,8 @@ private:
     std::pmr::vector<http_header> headers_;
     std::pmr::string body_;
     std::size_t max_redirects_{5};
+    http_client_request_options request_options_;
+    move_only_function<task<bool>(http_origin_view, stop_token)> redirect_policy_;
     bool has_body_{false};
     bool consumed_{false};
 };
@@ -606,6 +642,7 @@ public:
     http_client_connect_request& operator=(http_client_connect_request&&) = delete;
     http_client_connect_request& header(std::string_view name, std::string_view value);
     http_client_connect_request& headers(std::span<const http_header_view> fields);
+    http_client_connect_request& configure(http_client_request_options options);
     http_client_connect_request& protocol(std::string_view value);
     http_client_connect_request& target(std::string_view value);
     [[nodiscard]] task<http_client_tunnel_result> open(http_client_tunnel_config config = {});
@@ -618,12 +655,13 @@ private:
     std::pmr::string protocol_;
     std::pmr::string target_;
     std::pmr::vector<http_header> headers_;
+    http_client_request_options request_options_;
     bool udp_;
     bool consumed_{false};
 };
 
-// Preconfigured outbound HTTP origins bound to one Ruvia event loop. Construction
-// does not create a thread; connections are established lazily by send().
+// 绑定一个 Ruvia event loop 的出站 origin 集合，可在所属 worker 动态更新。
+// 构造不创建线程；send() 按需建连。
 class http_client final {
 public:
     http_client(event_loop loop, const http_client_config& config,
@@ -643,11 +681,18 @@ public:
     [[nodiscard]] http_client_handle with_options(operation_options options) const&;
     http_client_handle with_options(operation_options) const&& = delete;
     // client() selects the sole configuration, or alias "default" in a set.
-    // Redirects may reach only this owner's preconfigured origins.
+    // 默认重定向仅可到达已注册 origin；请求策略可显式扩充集合。
     [[nodiscard]] http_client_handle client() const&;
     http_client_handle client() const&& = delete;
     [[nodiscard]] http_client_handle client(std::string_view alias) const&;
     http_client_handle client(std::string_view) const&& = delete;
+    // Worker-local 发布；调用时拥有配置，await 在 blocking_pool 准备 TLS 后原子替换。
+    // 无 TLS 文件准备时无需 blocking_pool；取消或准备失败不改变既有 alias。
+    // 旧池取消并 join，最后一个旧句柄/冷操作释放后回收；其他 alias 不变。
+    [[nodiscard]] task<void> upsert(const http_client_config& config, operation_options options = {}) &;
+    task<void> upsert(const http_client_config&, operation_options = {}) && = delete;
+    [[nodiscard]] bool remove(std::string_view alias) &;
+    bool remove(std::string_view) && = delete;
 
     // Idempotent and callable from any thread. It only requests immediate
     // shutdown; use shutdown() when the worker teardown must be awaited.

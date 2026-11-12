@@ -1,6 +1,8 @@
 #include "client/http_client_pool.h"
 
 #include <algorithm>
+#include <array>
+#include <atomic>
 #include <charconv>
 #include <cstdint>
 #include <exception>
@@ -9,7 +11,9 @@
 #include <stdexcept>
 #include <utility>
 
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/socket.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
@@ -100,7 +104,8 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       slots_(*this, http_client_scheduler_slots(config_), worker_),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),
       background_tasks_(worker_, {.resource_ = process_resource()}),
-      connections_(process_resource()) {
+      connections_(process_resource()),
+      dns_changed_(worker_) {
     if (config_.scheme_ == http_scheme::https) {
         configure_client_tls_context(*tls_context_.native_handle(), config_.tls_);
     }
@@ -109,6 +114,220 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
         connections_.push_back(make_pmr_object<http_client_connection>(process_resource(), *this, index));
     }
     response_memory_ = http_client_response_memory_domain::create(worker_, result_budget_domain_);
+    schedule_dns_refresh();
+}
+
+std::uint64_t http_client_pool::next_connection_id() noexcept {
+    static std::atomic<std::uint64_t> next{0};
+    const auto id = next.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (id == 0) {
+        std::terminate();
+    }
+    return id;
+}
+
+std::pmr::vector<http_client_endpoint_address> http_client_pool::dns_snapshot() const {
+    std::pmr::vector<http_client_endpoint_address> result(process_resource());
+    const auto append = [&result](const asio::ip::tcp::endpoint& endpoint) {
+        result.emplace_back(endpoint.address().to_string(), endpoint.port(), process_resource());
+    };
+    if (dns_addresses_.literal_) {
+        append(*dns_addresses_.literal_);
+    } else {
+        result.reserve(dns_addresses_.addresses_.size());
+        for (const auto& address : dns_addresses_.addresses_) {
+            append(address.endpoint());
+        }
+    }
+    return result;
+}
+
+void http_client_pool::validate_addresses(const client_resolve_result& result) const {
+    if (!config_.address_validator_) {
+        return;
+    }
+    const auto validate = [this](const asio::ip::tcp::endpoint& endpoint) {
+        if (!config_.address_validator_(endpoint.address().to_string(), endpoint.port())) {
+            throw http_client_error(http_client_error::code_type::resolve_failed, "HTTP dial address rejected");
+        }
+    };
+    if (result.literal_) {
+        validate(*result.literal_);
+    } else {
+        for (const auto& address : result.addresses_) {
+            validate(address.endpoint());
+        }
+    }
+}
+
+void http_client_pool::install_addresses(client_resolve_result result) {
+    validate_addresses(result);
+    if (result.error_ || (!result.literal_ && result.addresses_.empty())) {
+        throw http_client_error(http_client_error::code_type::resolve_failed, "HTTP DNS resolution failed");
+    }
+    const bool had_addresses = dns_addresses_.literal_.has_value() || !dns_addresses_.addresses_.empty();
+    const bool changed = dns_addresses_.literal_ != result.literal_ ||
+                         !std::equal(dns_addresses_.addresses_.begin(), dns_addresses_.addresses_.end(),
+                             result.addresses_.begin(), result.addresses_.end(),
+                             [](const auto& left, const auto& right) { return left.endpoint() == right.endpoint(); });
+    dns_addresses_ = std::move(result);
+    ++dns_revision_;
+    if (had_addresses && changed) {
+        for (auto& connection : connections_) {
+            if (connection) {
+                connection->retire_addresses();
+            }
+        }
+#ifdef RUVIA_ENABLE_HTTP3
+        for (auto& connection : http3_connections_) {
+            if (connection) {
+                connection->retire_addresses();
+            }
+        }
+#endif
+    }
+}
+
+void http_client_pool::update_dns(std::span<const http_client_endpoint_address> addresses) {
+    require_accepting();
+    if (slots_.closing()) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+    }
+    if (addresses.empty()) {
+        throw std::invalid_argument("HTTP DNS snapshot must not be empty");
+    }
+    std::pmr::vector<asio::ip::tcp::endpoint> endpoints(process_resource());
+    endpoints.reserve(addresses.size());
+    for (const auto& value : addresses) {
+        const auto address = parse_ip_address(value.ip_);
+        if (!address || value.port_.value() == 0) {
+            throw std::invalid_argument("HTTP DNS snapshot requires numeric addresses and positive ports");
+        }
+        const asio::ip::tcp::endpoint endpoint(*address, value.port_.value());
+        if (std::ranges::find(endpoints, endpoint) == endpoints.end()) {
+            endpoints.push_back(endpoint);
+        }
+    }
+    client_resolve_result result;
+    if (endpoints.size() == 1) {
+        result.literal_ = endpoints.front();
+    } else {
+        result.addresses_ = asio::ip::tcp::resolver::results_type::create(endpoints.begin(), endpoints.end(), "", "");
+    }
+    install_addresses(std::move(result));
+}
+
+task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view host, std::uint16_t port,
+    client_host_resolver& resolver, const operation_timeout& timeout) {
+    const bool primary = host == config_.dial_host_ && port == config_.dial_port_;
+    if (primary && (dns_addresses_.literal_ || !dns_addresses_.addresses_.empty())) {
+        validate_addresses(dns_addresses_);
+        co_return dns_addresses_;
+    }
+    const auto revision = dns_revision_;
+    auto pending = resolver.resolve(host, port, timeout, dns_stop_.token());
+    client_resolve_result result;
+    if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+        result = std::move(*immediate);
+    } else {
+        result = co_await std::move(std::get<task<client_resolve_result>>(pending));
+    }
+    if (primary && revision != dns_revision_) {
+        validate_addresses(dns_addresses_);
+        co_return dns_addresses_;
+    }
+    if (!result.error_) {
+        if (primary) {
+            install_addresses(result);
+        } else {
+            validate_addresses(result);
+        }
+    }
+    co_return result;
+}
+
+task<void> http_client_pool::refresh_dns(operation_options options) {
+    require_accepting();
+    if (slots_.closing()) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+    }
+    ++dns_active_;
+    struct refresh_lease final {
+        http_client_pool& pool_;
+        ~refresh_lease() {
+            --pool_.dns_active_;
+            pool_.dns_changed_.notify();
+        }
+    } lease{*this};
+    client_host_resolver resolver(worker_);
+    stop_group cancellation(dns_stop_.token(), options.stop_token_);
+    const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{config_.connect_timeout_});
+    const auto revision = dns_revision_;
+    auto pending = resolver.resolve(config_.dial_host_, config_.dial_port_, timeout, cancellation.token());
+    client_resolve_result result;
+    if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+        result = std::move(*immediate);
+    } else {
+        result = co_await std::move(std::get<task<client_resolve_result>>(pending));
+    }
+    if (cancellation.token().stop_requested()) {
+        throw http_client_error(http_client_error::code_type::cancelled, "HTTP DNS refresh cancelled");
+    }
+    if (timeout.expired()) {
+        throw http_client_error(http_client_error::code_type::timeout, "HTTP DNS refresh timed out");
+    }
+    if (revision == dns_revision_) {
+        install_addresses(std::move(result));
+    }
+}
+
+void http_client_pool::schedule_dns_refresh() {
+    if (!config_.dns_refresh_interval_ || slots_.closing() || background_joined_) {
+        return;
+    }
+    (void)worker_.schedule_timer(dns_refresh_timer_, worker_timer_deadline_after(config_.dns_refresh_interval_->value()),
+        [this](worker_timer_outcome outcome) noexcept {
+            if (outcome != worker_timer_outcome::expired || slots_.closing()) {
+                return;
+            }
+            try {
+                background_tasks_.spawn(background_refresh_dns());
+            } catch (...) {
+                report_unhandled_failure("HTTP DNS refresh", std::current_exception());
+            }
+        });
+}
+
+task<void> http_client_pool::background_refresh_dns() {
+    try {
+        co_await refresh_dns({});
+    } catch (...) {
+        if (!slots_.closing()) {
+            report_unhandled_failure("HTTP DNS refresh", std::current_exception());
+        }
+    }
+    schedule_dns_refresh();
+}
+
+bool http_client_pool::close_connection(std::uint64_t id) noexcept {
+    if (id == 0) {
+        return false;
+    }
+    for (auto& connection : connections_) {
+        if (connection && connection->connection_id() == id && connection->connected_) {
+            connection->close();
+            return true;
+        }
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (auto& connection : http3_connections_) {
+        if (connection && connection->connection_id() == id) {
+            connection->close();
+            return true;
+        }
+    }
+#endif
+    return false;
 }
 
 http_client_pool::~http_client_pool() {
@@ -120,10 +339,14 @@ void http_client_pool::close_now() noexcept {
     if (!slots_.close()) {
         return;
     }
+    dns_refresh_timer_.cancel();
+    dns_stop_.request_stop();
     // slots_.close() retires queued waiters and connection shutdown aborts
     // every connect and exchange; a transferred slot fails at admission.
     for (auto& connection_value : connections_) {
-        connection_value->shutdown();
+        if (connection_value) {
+            connection_value->shutdown();
+        }
     }
 #ifdef RUVIA_ENABLE_HTTP3
     for (auto& connection_value : http3_connections_) {
@@ -139,6 +362,7 @@ task<void> http_client_pool::join() {
         co_return;
     }
     background_joined_ = true;
+    dns_refresh_timer_.cancel();
     std::exception_ptr failure;
     try {
         co_await background_tasks_.join();
@@ -150,6 +374,9 @@ task<void> http_client_pool::join() {
             std::terminate();
         }
         failure = std::current_exception();
+    }
+    while (dns_active_ != 0) {
+        co_await dns_changed_.wait();
     }
 #ifdef RUVIA_ENABLE_HTTP3
     for (auto& connection_value : http3_connections_) {
@@ -164,6 +391,17 @@ task<void> http_client_pool::join() {
     pushes_.clear();
     advertisements_.retire();
     response_memory_.reset();
+    {
+        decltype(connections_) retired_connections(process_resource());
+        retired_connections.swap(connections_);
+#ifdef RUVIA_ENABLE_HTTP3
+        decltype(http3_connections_) retired_http3(process_resource());
+        retired_http3.swap(http3_connections_);
+        decltype(alternative_services_) retired_alternatives(process_resource());
+        retired_alternatives.swap(alternative_services_);
+#endif
+    }
+    dns_addresses_ = {};
     if (failure != nullptr) {
         std::rethrow_exception(failure);
     }
@@ -187,7 +425,7 @@ void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noe
         return;
     }
     for (auto& connection_value : connections_) {
-        if (connection_value->cancel_by_id(cancellation_id)) {
+        if (connection_value && connection_value->cancel_by_id(cancellation_id)) {
             return;
         }
     }
@@ -240,6 +478,12 @@ std::optional<http_client_push> http_client_pool::next_push() {
 void http_client_pool::spawn_request(
     http_client_request_storage request, operation_options options, http_client_response_state& state_value) {
     state_value.buffered_limit_ = config_.max_response_bytes_;
+    state_value.effective_connect_timeout_ = request.options_.timeouts_.connect_.resolve(config_.connect_timeout_);
+    state_value.effective_read_timeout_ = request.options_.timeouts_.read_.resolve(config_.read_timeout_);
+    state_value.effective_write_timeout_ = request.options_.timeouts_.write_.resolve(config_.write_timeout_);
+    state_value.effective_acquire_timeout_ = request.options_.timeouts_.acquire_.resolve(config_.acquire_timeout_);
+    state_value.decode_content_ = request.options_.decode_content_.value_or(config_.decode_content_);
+    state_value.informational_callback_ = request.options_.informational_;
     if (state_value.tunnel_) {
         request.bind_tunnel(*state_value.tunnel_);
     }
@@ -290,13 +534,26 @@ task<void> http_client_pool::execute_into(
     try {
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
+        auto failure = std::current_exception();
+        if (state_value->connection_info_.id_ != 0) {
+            try {
+                std::rethrow_exception(failure);
+            } catch (const http_client_error& error) {
+                try {
+                    throw http_client_error(error.code(), error.what(), error.status(), &state_value->connection_info_);
+                } catch (...) {
+                    failure = std::current_exception();
+                }
+            } catch (...) {
+            }
+        }
         if (state_value->complete_ && state_value->upload_ && !state_value->failure_) {
             if (!state_value->upload_->failure_) {
-                state_value->upload_->failure_ = std::current_exception();
+                state_value->upload_->failure_ = failure;
             }
         } else {
             state_value->discard_failed_encoded_response();
-            state_value->failure_ = std::current_exception();
+            state_value->failure_ = failure;
         }
     }
     state_value->complete_ = true;
@@ -315,10 +572,11 @@ void http_client_pool::require_accepting() const {
 }
 
 http_client_connection& http_client_pool::connection_for_request(std::size_t index) noexcept {
+    index %= config_.connection_count_;
     auto& preferred = connection(index);
     const auto find_connection = [this, index](auto predicate) noexcept -> http_client_connection* {
-        for (std::size_t offset = 1; offset < connections_.size(); ++offset) {
-            auto& candidate = connection(index + offset);
+        for (std::size_t offset = 1; offset < config_.connection_count_; ++offset) {
+            auto& candidate = connection((index + offset) % config_.connection_count_);
             if (predicate(candidate)) {
                 return &candidate;
             }
@@ -382,9 +640,11 @@ task<void> http_client_pool::execute_request_into(
         throw;
     }
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
-    stop_group cancellation(request.host_stop(), options.stop_token_);
+    const std::array stop_tokens{request.host_stop(), options.stop_token_, dns_stop_.token()};
+    stop_group cancellation(stop_tokens);
     options.stop_token_ = cancellation.token();
-    const auto acquire_timeout = timeout.constrained_by(config_.acquire_timeout_);
+    state_value->informational_stop_ = options.stop_token_;
+    const auto acquire_timeout = timeout.constrained_by(state_value->effective_acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
         throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
@@ -392,7 +652,7 @@ task<void> http_client_pool::execute_request_into(
     ++requests_buffered_;
     std::size_t index = 0;
     try {
-        index = co_await slots_.acquire(timeout, config_.acquire_timeout_, options.stop_token_);
+        index = co_await slots_.acquire(timeout, state_value->effective_acquire_timeout_, options.stop_token_);
     } catch (...) {
         --requests_buffered_;
         ++failed_requests_;
@@ -405,18 +665,36 @@ task<void> http_client_pool::execute_request_into(
     try {
         throw_if_abandoned(*state_value);
 #ifdef RUVIA_ENABLE_HTTP3
-        if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value)) {
+        if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value, index)) {
             --requests_in_flight_;
             ++completed_requests_;
             co_return;
         }
 #endif
-        tcp_connection = &connection_for_request(index);
+        if (request.options_.fresh_connection_) {
+            const auto fresh_index = config_.connection_count_ + index;
+            if (connections_.size() <= fresh_index) {
+                connections_.resize(fresh_index + 1);
+            }
+            if (!connections_[fresh_index]) {
+                connections_[fresh_index] = make_pmr_object<http_client_connection>(process_resource(), *this, fresh_index);
+                connections_[fresh_index]->fresh_ = true;
+            }
+            tcp_connection = connections_[fresh_index].get();
+        } else {
+            tcp_connection = &connection_for_request(index);
+        }
         state_value->connection_index_ = tcp_connection->index();
         co_await execute_tcp(*tcp_connection, request, timeout, acquire_timeout, options.stop_token_, *state_value);
+        if (request.options_.fresh_connection_) {
+            tcp_connection->close();
+        }
         --requests_in_flight_;
         ++completed_requests_;
     } catch (...) {
+        if (tcp_connection && request.options_.fresh_connection_) {
+            tcp_connection->close();
+        }
         --requests_in_flight_;
         ++failed_requests_;
         throw;
@@ -541,6 +819,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
         for (;;) {
             std::exception_ptr failure;
             try {
+                connection_value.capture_connection_info(state_value, reused_http1);
                 http1_client_exchange exchange(*this, connection_value);
                 co_await exchange.run(request, timeout, stop_token_value, state_value);
             } catch (...) {
@@ -579,6 +858,7 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
         return;
     }
     state_value.abandoned_ = true;
+    state_value.request_informational_stop();
     switch (state_value.transport_) {
         case http_client_response_transport::http2:
 #ifdef RUVIA_ENABLE_HTTP2
@@ -765,7 +1045,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
 #ifdef RUVIA_ENABLE_HTTP3
 task<bool> http_client_pool::execute_http3(const http_client_request_storage& request,
     const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
-    http_client_response_state& state) {
+    http_client_response_state& state, std::size_t slot_index) {
     if (slots_.closing()) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
@@ -781,23 +1061,38 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     // Another response can replace the cache while DNS or the handshake waits.
     // The selected endpoint is therefore owned across suspension; TLS always
     // verifies config_.host_, never this advertised transport name.
-    std::pmr::string host(required ? std::string_view(config_.host_) : std::string_view(alternative_services_.front().host_), process_resource());
-    const auto port = required ? config_.port_ : alternative_services_.front().port_;
+    const bool configured_endpoint = required || config_.dial_overridden_;
+    std::pmr::string host(configured_endpoint ? std::string_view(config_.dial_host_) : std::string_view(alternative_services_.front().host_), process_resource());
+    const auto port = configured_endpoint ? config_.dial_port_ : alternative_services_.front().port_;
     if (http3_connections_.empty()) {
         http3_connections_.resize(config_.connection_count_);
     }
     std::size_t selected = 0;
     std::size_t capacity = 0;
-    for (std::size_t index = 0; index < http3_connections_.size(); ++index) {
+    for (std::size_t index = 0; index < config_.connection_count_; ++index) {
         const auto available = http3_connections_[index] ? http3_connections_[index]->available() : config_.http3_.max_concurrent_streams_;
         if (available > capacity) {
             capacity = available;
             selected = index;
         }
     }
+    if (request.options_.fresh_connection_) {
+        selected = config_.connection_count_ + slot_index;
+        if (http3_connections_.size() <= selected) {
+            http3_connections_.resize(selected + 1);
+        }
+    }
     if (!http3_connections_[selected]) {
         http3_connections_[selected] = make_pmr_object<http3_client_connection>(process_resource(), *this, selected);
     }
+    struct fresh_retirement final {
+        http3_client_connection* connection_;
+        ~fresh_retirement() {
+            if (connection_) {
+                connection_->close();
+            }
+        }
+    } retirement{request.options_.fresh_connection_ ? http3_connections_[selected].get() : nullptr};
     const auto used = co_await http3_connections_[selected]->execute(request, host, port, !required, timeout, acquire_timeout, stop, state);
     if (!used) {
         std::erase_if(alternative_services_, [&](const alternative_service& service) { return service.host_ == host && service.port_ == port; });

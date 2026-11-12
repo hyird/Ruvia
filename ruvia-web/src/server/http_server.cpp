@@ -15,11 +15,11 @@
 #include <vector>
 
 #include <asio/co_spawn.hpp>
-#include <openssl/crypto.h>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
@@ -33,6 +33,8 @@
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_identity.h"
 #include "server/inbound_buffer_resource.h"
+#include "server/owned_listen_configs.h"
+#include "server/prepared_listener_state.h"
 #include "server/worker_codecs.h"
 #include "server/worker_connections.h"
 
@@ -68,103 +70,12 @@ asio::ip::tcp::endpoint service_endpoint(const listener_endpoint& endpoint) {
     return {*address, endpoint.port_.value()};
 }
 
-void cleanse_identity(tls_identity_config& identity) noexcept {
-    for (auto* secret : {&identity.private_key_password_, &identity.private_key_pem_, &identity.certificate_chain_pem_}) {
-        OPENSSL_cleanse(secret->data(), secret->size());
-        secret->clear();
-    }
-}
-
-// Created before returning a cold task: borrowed addresses and inherited handles
-// belong to the operation even if its coroutine is never started.
-struct owned_listen final {
-    listen_config config_;
-    std::string address_;
-    bool inherited_owned_{true};
-    explicit owned_listen(listen_config config)
-        : config_(std::move(config)) {
-        try {
-            address_.assign(config_.address_.view());
-            config_.address_ = address_;
-            if (config_.inherited_sockets_) {
-                const auto& sockets = *config_.inherited_sockets_;
-                const auto adopt_tcp = [this](const auto& handles, const auto& port) {
-                    if (handles.empty()) {
-                        return;
-                    }
-                    if (!port) {
-                        throw std::invalid_argument("inherited TCP sockets require their service");
-                    }
-                    const auto endpoint = service_endpoint({.address_ = config_.address_, .port_ = *port});
-                    for (const auto socket : handles) {
-                        adopt_inherited_tcp_socket(socket, endpoint, "inherited TCP socket does not serve its endpoint");
-                    }
-                };
-                adopt_tcp(sockets.http_, config_.http_);
-                adopt_tcp(sockets.https_, config_.https_);
-                if (!sockets.http3_.empty()) {
-                    if (!config_.http3_) {
-                        throw std::invalid_argument("inherited UDP sockets require HTTP/3");
-                    }
-                    const auto endpoint = service_endpoint({.address_ = config_.address_, .port_ = *config_.http3_});
-                    const asio::ip::udp::endpoint udp(endpoint.address(), endpoint.port());
-                    for (const auto socket : sockets.http3_) {
-                        adopt_inherited_udp_socket(socket, udp, "inherited UDP socket does not serve its endpoint");
-                    }
-                }
-            }
-        } catch (...) {
-            release();
-            throw;
-        }
-    }
-    owned_listen(owned_listen&& other) noexcept
-        : config_(std::move(other.config_)),
-          address_(std::move(other.address_)),
-          inherited_owned_(std::exchange(other.inherited_owned_, false)) {
-        config_.address_ = address_;
-    }
-    owned_listen(const owned_listen&) = delete;
-    ~owned_listen() {
-        release();
-    }
-    void release() noexcept {
-        cleanse_identity(config_.tls_.identity_);
-        for (auto& identity : config_.tls_.sni_) {
-            cleanse_identity(identity.identity_);
-        }
-        for (auto& identity : config_.tls_.local_addresses_) {
-            cleanse_identity(identity.identity_);
-        }
-        if (!inherited_owned_ || !config_.inherited_sockets_) {
-            return;
-        }
-        const auto& sockets = *config_.inherited_sockets_;
-        // Rejecting duplicate handles must close each native handle only once.
-        const std::span<const native_socket> groups[]{sockets.http_, sockets.https_, sockets.http3_};
-        for (std::size_t group = 0; group != 3; ++group) {
-            for (std::size_t index = 0; index != groups[group].size(); ++index) {
-                const auto socket = groups[group][index];
-                bool seen = false;
-                for (std::size_t previous_group = 0; previous_group <= group; ++previous_group) {
-                    const auto count = previous_group == group ? index : groups[previous_group].size();
-                    for (std::size_t previous = 0; previous != count; ++previous) {
-                        seen |= groups[previous_group][previous] == socket;
-                    }
-                }
-                if (!seen) {
-                    close_native_socket(socket);
-                }
-            }
-        }
-        inherited_owned_ = false;
-    }
-};
-
-std::shared_ptr<owned_listen> own_listen(listen_config config) {
-    owned_listen guard(std::move(config));
+template <typename input_type>
+std::shared_ptr<owned_listen_configs> own_listen(input_type input) {
+    owned_listen_configs guard(std::move(input));
     // Allocation precedes transfer so allocation failure still closes handles.
-    return std::make_shared<owned_listen>(std::move(guard));
+    return std::allocate_shared<owned_listen_configs>(
+        std::pmr::polymorphic_allocator<owned_listen_configs>(process_resource()), std::move(guard));
 }
 
 struct owned_endpoint final {
@@ -197,14 +108,13 @@ struct listener_candidate final {
     std::vector<sessions> sessions_;
 };
 
-listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen>>& inputs,
+listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen_configs>>& inputs,
     bool external, server_config config, const std::shared_ptr<http_server_callbacks>& callbacks,
     std::size_t count, std::chrono::steady_clock::time_point origin) {
     listener_candidate result;
     const auto options = standalone_options(config, *callbacks, count);
     for (const auto& input : inputs) {
-        input->inherited_owned_ = false;  // The shared loader owns every outcome from here.
-        auto loaded = load_server_listeners(std::span<const listen_config>(&input->config_, 1));
+        auto loaded = input->load();
         for (const auto& definition : loaded) {
             if (!definition.connection_ && !definition.request_stream_ &&
                 !std::holds_alternative<http_server_listener_definition::redirect_http_to_https>(definition.transport_)) {
@@ -233,9 +143,9 @@ void prepare_sessions(listener_candidate& candidate, std::size_t count, bool obs
     }
 }
 
-bool needs_tls_preparation(const std::vector<std::shared_ptr<owned_listen>>& inputs, const definitions& existing = {}) {
+bool needs_tls_preparation(const std::vector<std::shared_ptr<owned_listen_configs>>& inputs, const definitions& existing = {}) {
     for (const auto& input : inputs) {
-        if (input->config_.https_) {
+        if (input->needs_tls_preparation()) {
             return true;
         }
     }
@@ -279,6 +189,7 @@ class http_server_state final : public std::enable_shared_from_this<http_server_
         bool external_;
         bool active_{true};
         std::optional<std::size_t> http3_slot_;
+        bool published_{false};
     };
     struct activity final {
         http_server_state& self_;
@@ -349,7 +260,7 @@ public:
             }
         });
     }
-    void stage(std::shared_ptr<owned_listen> input) {
+    void stage(std::shared_ptr<owned_listen_configs> input) {
         require_current();
         require_open();
         if (started_ || starting_) {
@@ -365,13 +276,17 @@ public:
         }
         options_.set_trusted_proxies(config);
     }
-    task<void> add(std::shared_ptr<owned_listen> input, bool external) {
+    task<void> add(std::shared_ptr<owned_listen_configs> input, bool external) {
         return add_owned(shared_from_this(), std::move(input), external);
+    }
+    task<prepared_listener> prepare(std::shared_ptr<owned_listen_configs> input) {
+        auto transaction = prepared_listener_access::make(worker_);
+        return prepared_listener_access::launch(transaction, add_owned(shared_from_this(), std::move(input), false, transaction));
     }
     task<void> start() {
         return start_owned(shared_from_this());
     }
-    task<void> replace(owned_endpoint endpoint, std::shared_ptr<owned_listen> replacement) {
+    task<void> replace(owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         return replace_owned(shared_from_this(), std::move(endpoint), std::move(replacement));
     }
     void adopt(const listener_endpoint& endpoint, native_socket socket) {
@@ -391,7 +306,7 @@ public:
         require_running();
         return connections_.close_connection(id);
     }
-    void remove(const listener_endpoint& endpoint, std::shared_ptr<void> receipt = {}) {
+    void remove(const listener_endpoint& endpoint, std::shared_ptr<void> receipt = {}, listener_remove_options options = {}) {
         require_current();
         require_running();
         const auto index = find(endpoint);
@@ -410,7 +325,7 @@ public:
             }
         }
 #endif
-        connections_.remove_listener(index, std::move(receipt));
+        connections_.remove_listener(index, std::move(receipt), options);
         services_[index].active_ = false;
     }
 #ifndef _WIN32
@@ -492,7 +407,7 @@ private:
     std::size_t find(const listener_endpoint& endpoint) const {
         const auto target = service_endpoint(endpoint);
         for (std::size_t index = 0; index != services_.size(); ++index) {
-            if (services_[index].active_ && services_[index].definition_.endpoint_ == target) {
+            if (services_[index].active_ && services_[index].published_ && services_[index].definition_.endpoint_ == target) {
                 return index;
             }
         }
@@ -629,34 +544,57 @@ private:
         }
         co_return;
     }
-    static task<void> open_range(std::shared_ptr<http_server_state> self, std::size_t first) {
-        self->require_open();
-        for (auto index = first; index != self->services_.size(); ++index) {
-            if (!self->services_[index].active_) {
-                continue;
-            }
-            self->connections_.open_listener(index);
+    static task<void> open_range(std::shared_ptr<http_server_state> self, std::size_t first,
+        std::shared_ptr<prepared_listener_state> transaction = {}) {
 #if defined(_WIN32)
-            if (!self->services_[index].external_ && (!self->grouped_ || self->worker_index_ == 0)) {
-                co_await on_acceptor(self, [self, index] { self->acceptor_->open_listener(index); });
+        runtime_control_completion completion(self->worker_);
+        auto command = completion.make_command([self, first](const auto& receipt) noexcept {
+            for (auto index = first; index != self->services_.size(); ++index) {
+                if (self->services_[index].active_ && !self->services_[index].external_) {
+                    self->acceptor_->open_listener(index);
+                }
             }
+            receipt.complete();
+        });
+        move_only_function<void()> accepting(std::move(command));
 #endif
+        if (transaction) {
+            co_await transaction->checkpoint(self->token_);
         }
         self->require_open();
-        co_return;
+        for (auto index = first; index != self->services_.size(); ++index) {
+            if (self->services_[index].active_) {
+                self->connections_.open_listener(index);
+                self->services_[index].published_ = true;
+            }
+        }
+#if defined(_WIN32)
+        const bool posted = self->acceptor_ ? self->acceptor_->post_control(std::move(accepting)) : true;
+        accepting = nullptr;
+        co_await completion.wait();
+        (void)completion.failure();
+        if (!posted) {
+            throw std::logic_error("HTTP server acceptor is stopping");
+        }
+#endif
+        self->require_open();
     }
     static task<void> discard_range(std::shared_ptr<http_server_state> self, std::size_t first) {
+        runtime_control_completion retired(self->worker_);
+        auto receipt = std::make_shared<runtime_control_completion::receipt>(retired.make_receipt());
         for (auto index = first; index != self->services_.size(); ++index) {
-            self->connections_.discard_listener(index);
+            self->connections_.discard_listener(index, receipt);
             self->services_[index].active_ = false;
             self->services_[index].definition_.inherited_sockets_.reset();
 #if defined(_WIN32)
             if (self->acceptor_ && !self->services_[index].external_ && (!self->grouped_ || self->worker_index_ == 0)) {
-                co_await on_acceptor(self, [self, index] { self->acceptor_->discard_listener(index); });
+                co_await on_acceptor(self, [self, index, receipt] { self->acceptor_->discard_listener(index, receipt); });
             }
 #endif
         }
-        co_return;
+        receipt.reset();
+        co_await retired.wait();
+        (void)retired.failure();
     }
     static task<void> prepare_start_owned(std::shared_ptr<http_server_state> self, sessions prepared) {
         self->require_current();
@@ -733,7 +671,8 @@ private:
             std::rethrow_exception(failure);
         }
     }
-    static task<void> add_owned(std::shared_ptr<http_server_state> self, std::shared_ptr<owned_listen> input, bool external) {
+    static task<void> add_owned(std::shared_ptr<http_server_state> self, std::shared_ptr<owned_listen_configs> input, bool external,
+        std::shared_ptr<prepared_listener_state> transaction = {}) {
         self->require_current();
         auto lease = co_await self->gate_.acquire(self->worker_);
         self->require_open();
@@ -741,7 +680,7 @@ private:
             self->require_running();
         }
         activity active(*self);
-        const bool blocking = input->config_.https_.has_value();
+        const bool blocking = input->needs_tls_preparation();
         auto candidate = co_await prepare_work(self->worker_, blocking, [input = std::move(input), config = self->options_.server_, callbacks = self->callbacks_, origin = self->key_origin_, external, running = self->started_] {
             auto candidate = load_candidate({input}, external, config, callbacks, 1, origin);
             if (running) {
@@ -758,7 +697,7 @@ private:
         std::exception_ptr failure;
         try {
             co_await prepare_range(self, first, std::move(candidate.sessions_.front()));
-            co_await open_range(self, first);
+            co_await open_range(self, first, std::move(transaction));
         } catch (...) {
             failure = std::current_exception();
         }
@@ -772,7 +711,7 @@ private:
         }
     }
     static task<void> replace_owned(std::shared_ptr<http_server_state> self, owned_endpoint endpoint,
-        std::shared_ptr<owned_listen> replacement) {
+        std::shared_ptr<owned_listen_configs> replacement) {
         self->require_current();
         // Declared before the lease so a selector destructor can reenter control.
         std::shared_ptr<const http_server_tls_identities> retired;
@@ -784,9 +723,9 @@ private:
         if (!policy) {
             throw std::invalid_argument("the connection service does not use TLS");
         }
-        ensure_same_http_server_tls_policy(*policy, replacement->config_.tls_);
+        ensure_same_http_server_tls_policy(*policy, replacement->configs_.front().tls_);
         auto identities = co_await prepare_work(self->worker_, true, [replacement] {
-            auto loaded = load_server_listeners(std::span<const listen_config>(&replacement->config_, 1));
+            auto loaded = replacement->load();
             return std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
         });
         self->require_running();
@@ -940,7 +879,7 @@ private:
 #endif
     worker_connections connections_;
     std::pmr::vector<service> services_;
-    std::vector<std::shared_ptr<owned_listen>> staged_;
+    std::vector<std::shared_ptr<owned_listen_configs>> staged_;
     std::size_t http3_slots_{};
     std::chrono::steady_clock::time_point key_origin_{std::chrono::steady_clock::now()};
     worker_signal changed_;
@@ -1031,7 +970,7 @@ public:
             throw;
         }
     }
-    void stage(std::shared_ptr<owned_listen> input) {
+    void stage(std::shared_ptr<owned_listen_configs> input) {
         std::lock_guard lock(config_mutex_);
         require_open();
         if (startup_requested_) {
@@ -1060,13 +999,17 @@ public:
     task<void> start(worker_handle caller) {
         return start_owned(shared_from_this(), std::move(caller));
     }
-    task<void> add(worker_handle caller, std::shared_ptr<owned_listen> input, bool external) {
+    task<void> add(worker_handle caller, std::shared_ptr<owned_listen_configs> input, bool external) {
         return add_owned(shared_from_this(), std::move(caller), std::move(input), external);
     }
-    task<void> remove(worker_handle caller, owned_endpoint endpoint) {
-        return remove_owned(shared_from_this(), std::move(caller), std::move(endpoint));
+    task<prepared_listener> prepare(worker_handle caller, std::shared_ptr<owned_listen_configs> input) {
+        auto transaction = prepared_listener_access::make(caller);
+        return prepared_listener_access::launch(transaction, add_owned(shared_from_this(), std::move(caller), std::move(input), false, transaction));
     }
-    task<void> replace(worker_handle caller, owned_endpoint endpoint, std::shared_ptr<owned_listen> replacement) {
+    task<void> remove(worker_handle caller, owned_endpoint endpoint, listener_remove_options options) {
+        return remove_owned(shared_from_this(), std::move(caller), std::move(endpoint), options);
+    }
+    task<void> replace(worker_handle caller, owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         return replace_owned(shared_from_this(), std::move(caller), std::move(endpoint), std::move(replacement));
     }
     task<bool> close_connection(worker_handle caller, std::uint64_t id) {
@@ -1198,10 +1141,75 @@ private:
             throw std::logic_error("HTTP server group worker has retired");
         }
     }
+    static task<void> open_prepared(std::shared_ptr<http_server_group_state> self, worker_handle caller,
+        std::size_t first, std::shared_ptr<prepared_listener_state> transaction = {}) {
+        runtime_control_completion completion(caller);
+        std::pmr::vector<move_only_function<void()>> commands(process_resource());
+        commands.reserve(self->workers_.size());
+        for (const auto& worker : self->workers_) {
+            commands.emplace_back(completion.make_command([worker, first](const auto& receipt) noexcept {
+                if (!worker->closing_.load(std::memory_order_acquire)) {
+                    for (auto index = first; index != worker->services_.size(); ++index) {
+                        if (worker->services_[index].active_) {
+                            worker->connections_.open_listener(index);
+                            worker->services_[index].published_ = true;
+                        }
+                    }
+                    worker->started_ = true;
+                }
+                receipt.complete();
+            }));
+        }
+#if defined(_WIN32)
+        runtime_control_completion accepting_completion(caller);
+        move_only_function<void()> accepting(accepting_completion.make_command([self, first](const auto& receipt) noexcept {
+            const auto& services = self->workers_.front()->services_;
+            for (auto index = first; index != services.size(); ++index) {
+                if (services[index].active_ && !services[index].external_) {
+                    self->acceptor_->open_listener(index);
+                }
+            }
+            receipt.complete();
+        }));
+#endif
+        if (transaction) {
+            co_await transaction->checkpoint(self->workers_.front()->token_);
+        }
+        self->require_open();
+        bool posted = true;
+        std::exception_ptr failure;
+        try {
+            for (std::size_t index = 0; index != commands.size() && posted; ++index) {
+                posted = self->workers_[index]->loop_.defer_cleanup(std::move(commands[index]));
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        commands.clear();
+        co_await completion.wait();
+        (void)completion.failure();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        if (!posted) {
+            throw std::logic_error("HTTP server group worker has retired");
+        }
+        self->require_open();
+#if defined(_WIN32)
+        posted = self->acceptor_->post_control(std::move(accepting));
+        accepting = nullptr;
+        co_await accepting_completion.wait();
+        (void)accepting_completion.failure();
+        if (!posted) {
+            throw std::logic_error("HTTP server acceptor is stopping");
+        }
+#endif
+        self->require_open();
+    }
     static task<void> start_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_open();
-        std::vector<std::shared_ptr<owned_listen>> inputs;
+        std::vector<std::shared_ptr<owned_listen_configs>> inputs;
         {
             std::lock_guard lock(self->config_mutex_);
             if (self->startup_requested_) {
@@ -1252,10 +1260,7 @@ private:
                 throw std::logic_error("HTTP server caller is stopping");
             }
             self->require_open();
-            for (const auto& worker : self->workers_) {
-                co_await async_control(caller, worker, [](auto owner) { return http_server_state::open_range(std::move(owner), 0); });
-                co_await control(caller, worker, [](http_server_state& state) { state.require_open(); state.started_ = true; });
-            }
+            co_await open_prepared(self, caller, 0);
             self->require_open();
             self->started_ = true;
         } catch (...) {
@@ -1271,14 +1276,14 @@ private:
         }
     }
     static task<void> add_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller,
-        std::shared_ptr<owned_listen> input, bool external) {
+        std::shared_ptr<owned_listen_configs> input, bool external, std::shared_ptr<prepared_listener_state> transaction = {}) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_open();
         if (!external) {
             self->require_running();
         }
         const auto& source = self->workers_.front();
-        const bool blocking = input->config_.https_.has_value();
+        const bool blocking = input->needs_tls_preparation();
         auto prepared = co_await prepare_work(caller, blocking, [input = std::move(input), external, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_, running = self->started_] {
             auto candidate = load_candidate({input}, external, config, callbacks, count, origin);
             if (running) {
@@ -1336,9 +1341,7 @@ private:
                 throw std::logic_error("HTTP server caller is stopping");
             }
             self->require_open();
-            for (const auto& worker : self->workers_) {
-                co_await async_control(caller, worker, [first](auto owner) { return http_server_state::open_range(std::move(owner), first); });
-            }
+            co_await open_prepared(self, caller, first, std::move(transaction));
             self->require_open();
         } catch (...) {
             failure = std::current_exception();
@@ -1364,7 +1367,7 @@ private:
             std::rethrow_exception(failure);
         }
     }
-    static task<void> remove_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller, owned_endpoint endpoint) {
+    static task<void> remove_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller, owned_endpoint endpoint, listener_remove_options options) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_running();
         // Removal's native accepts hold this receipt until their completion.
@@ -1373,7 +1376,7 @@ private:
         std::exception_ptr failure;
         try {
             for (const auto& worker : self->workers_) {
-                co_await control(caller, worker, [&endpoint, lifetime](http_server_state& state) { state.remove(endpoint.view(), lifetime); });
+                co_await control(caller, worker, [&endpoint, lifetime, options](http_server_state& state) { state.remove(endpoint.view(), lifetime, options); });
             }
         } catch (...) {
             failure = std::current_exception();
@@ -1398,7 +1401,7 @@ private:
         co_return false;
     }
     static task<void> replace_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller,
-        owned_endpoint endpoint, std::shared_ptr<owned_listen> replacement) {
+        owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         struct target final {
             std::size_t slot_;
             std::shared_ptr<const http_server_tls_identities> retired_;
@@ -1415,13 +1418,13 @@ private:
                 if (!policy) {
                     throw std::invalid_argument("the connection service does not use TLS");
                 }
-                ensure_same_http_server_tls_policy(*policy, replacement->config_.tls_);
+                ensure_same_http_server_tls_policy(*policy, replacement->configs_.front().tls_);
                 targets.push_back({slot, policy->identities_});
             });
         }
         auto identities = co_await prepare_work(caller, true,
             [replacement] {
-                auto loaded = load_server_listeners(std::span<const listen_config>(&replacement->config_, 1));
+                auto loaded = replacement->load();
                 return std::get<http_server_listener_definition::tls>(loaded.front().transport_).identities_;
             });
         self->require_running();
@@ -1509,7 +1512,7 @@ private:
             directory_->close_unclaimed_listener_sockets(index);
         }
 #endif
-        std::vector<std::shared_ptr<owned_listen>> staged;
+        std::vector<std::shared_ptr<owned_listen_configs>> staged;
         {
             std::lock_guard lock(config_mutex_);
             staged.swap(staged_);
@@ -1558,7 +1561,7 @@ private:
 #endif
     runtime_control_gate gate_;
     std::mutex config_mutex_;
-    std::vector<std::shared_ptr<owned_listen>> staged_;
+    std::vector<std::shared_ptr<owned_listen_configs>> staged_;
     bool startup_requested_{};
     std::atomic<bool> closing_{};
     std::mutex failure_mutex_;
@@ -1583,6 +1586,33 @@ void fail_server_group(const std::weak_ptr<http_server_group_state>& group, cons
 
 namespace ruvia {
 
+prepared_listener::prepared_listener(std::shared_ptr<detail::prepared_listener_state> state) noexcept
+    : state_(std::move(state)) {}
+prepared_listener::prepared_listener(prepared_listener&&) noexcept = default;
+prepared_listener& prepared_listener::operator=(prepared_listener&& other) noexcept {
+    if (this != &other) {
+        auto retired = std::exchange(state_, std::move(other.state_));
+        if (retired) {
+            retired->decide(false);
+        }
+    }
+    return *this;
+}
+prepared_listener::~prepared_listener() {
+    if (auto retired = std::exchange(state_, {})) {
+        retired->decide(false);
+    }
+}
+task<void> prepared_listener::activate() && {
+    return detail::prepared_listener_access::finish(std::move(*this), true);
+}
+task<void> prepared_listener::cancel() && {
+    return detail::prepared_listener_access::finish(std::move(*this), false);
+}
+bool prepared_listener::valid() const noexcept {
+    return state_ != nullptr;
+}
+
 http_server::http_server(event_loop loop, http_server_callbacks callbacks, server_config config)
     : state_(std::allocate_shared<detail::http_server_state>(std::pmr::polymorphic_allocator<detail::http_server_state>(process_resource()),
           std::move(loop), std::allocate_shared<http_server_callbacks>(std::pmr::polymorphic_allocator<http_server_callbacks>(process_resource()), std::move(callbacks)), config)) {
@@ -1595,9 +1625,16 @@ void http_server::listen(listen_config config) & {
     const auto state = state_;
     state->stage(detail::own_listen(std::move(config)));
 }
-task<void> http_server::add_listener(listen_config config) & {
+task<prepared_listener> http_server::prepare_listener(listen_config config) & {
     const auto state = state_;
-    return state->add(detail::own_listen(std::move(config)), false);
+    return state->prepare(detail::own_listen(std::move(config)));
+}
+task<prepared_listener> http_server::prepare_listeners(std::span<const listen_config> configs) & {
+    const auto state = state_;
+    return state->prepare(detail::own_listen(configs));
+}
+task<void> http_server::add_listener(listen_config config) & {
+    return detail::prepared_listener_access::add(prepare_listener(std::move(config)));
 }
 task<void> http_server::add_connection_service(listen_config config) & {
     const auto state = state_;
@@ -1617,12 +1654,12 @@ task<void> http_server::start() & {
     const auto state = state_;
     return state->start();
 }
-void http_server::remove_listener(const listener_endpoint& endpoint) & {
-    state_->remove(endpoint);
+void http_server::remove_listener(const listener_endpoint& endpoint, listener_remove_options options) & {
+    state_->remove(endpoint, {}, options);
 }
 task<void> http_server::replace_tls_identities(const listener_endpoint& endpoint, tls_config config) & {
     const auto state = state_;
-    auto replacement = detail::own_listen({.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
+    auto replacement = detail::own_listen(listen_config{.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
     return state->replace(detail::owned_endpoint(endpoint), std::move(replacement));
 }
 #ifndef _WIN32
@@ -1655,9 +1692,16 @@ void http_server_group::listen(listen_config config) & {
     const auto state = state_;
     state->stage(detail::own_listen(std::move(config)));
 }
-task<void> http_server_group::add_listener(worker_handle caller, listen_config config) & {
+task<prepared_listener> http_server_group::prepare_listener(worker_handle caller, listen_config config) & {
     const auto state = state_;
-    return state->add(std::move(caller), detail::own_listen(std::move(config)), false);
+    return state->prepare(std::move(caller), detail::own_listen(std::move(config)));
+}
+task<prepared_listener> http_server_group::prepare_listeners(worker_handle caller, std::span<const listen_config> configs) & {
+    const auto state = state_;
+    return state->prepare(std::move(caller), detail::own_listen(configs));
+}
+task<void> http_server_group::add_listener(worker_handle caller, listen_config config) & {
+    return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
 }
 task<void> http_server_group::add_connection_service(worker_handle caller, listen_config config) & {
     const auto state = state_;
@@ -1671,13 +1715,13 @@ task<void> http_server_group::start(worker_handle caller) & {
     const auto state = state_;
     return state->start(std::move(caller));
 }
-task<void> http_server_group::remove_listener(worker_handle caller, const listener_endpoint& endpoint) & {
+task<void> http_server_group::remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options) & {
     const auto state = state_;
-    return state->remove(std::move(caller), detail::owned_endpoint(endpoint));
+    return state->remove(std::move(caller), detail::owned_endpoint(endpoint), options);
 }
 task<void> http_server_group::replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config) & {
     const auto state = state_;
-    auto replacement = detail::own_listen({.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
+    auto replacement = detail::own_listen(listen_config{.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
     return state->replace(std::move(caller), detail::owned_endpoint(endpoint), std::move(replacement));
 }
 #ifndef _WIN32

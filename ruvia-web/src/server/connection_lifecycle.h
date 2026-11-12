@@ -21,6 +21,7 @@ class connection_lifecycle;
 class connection_registry final {
 public:
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
+    void close_listener(const void* listener) noexcept;
 
 private:
     friend class connection_lifecycle;
@@ -29,10 +30,11 @@ private:
 
 class connection_lifecycle final {
 public:
-    connection_lifecycle(connection_registry& registry, connection_event event,
+    connection_lifecycle(connection_registry& registry, const void* listener, connection_event event,
         connection_open_callback_ref opened, connection_close_callback_ref closed, std::uint32_t interface_index = 0,
         connection_transport transport = {})
         : registry_(&registry),
+          listener_(listener),
           event_(std::move(event)),
           closed_(closed),
           transport_(transport),
@@ -72,6 +74,7 @@ public:
     connection_lifecycle& operator=(connection_lifecycle&&) = delete;
     connection_lifecycle(connection_lifecycle&& other) noexcept
         : registry_(std::exchange(other.registry_, nullptr)),
+          listener_(other.listener_),
           prev_(other.prev_),
           next_(other.next_),
           event_(other.event_),
@@ -162,6 +165,7 @@ private:
         }
     }
     connection_registry* registry_;
+    const void* listener_;
     connection_lifecycle* prev_{};
     connection_lifecycle* next_{};
     connection_event event_;
@@ -185,6 +189,14 @@ inline bool connection_registry::close_connection(std::uint64_t id) noexcept {
         }
     }
     return false;
+}
+
+inline void connection_registry::close_listener(const void* listener) noexcept {
+    for (auto* node = head_; node != nullptr; node = node->next_) {
+        if (node->listener_ == listener) {
+            node->abort();
+        }
+    }
 }
 
 }  // namespace ruvia::detail

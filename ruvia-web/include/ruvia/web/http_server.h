@@ -7,6 +7,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/connection_events.h"
+#include "ruvia/web/prepared_listener.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/server_connection.h"
@@ -53,6 +54,12 @@ public:
     // loading credentials. Runtime additions use add_listener().
     void listen(listen_config config) &;
     void listen(listen_config) && = delete;
+    [[nodiscard]] task<prepared_listener> prepare_listener(listen_config config) &;
+    task<prepared_listener> prepare_listener(listen_config) && = delete;
+    // 整批准备并共享一次提交/回滚；所有配置均就绪后才返回。
+    // 地址/TLS 配置在调用时复制，继承 socket 的所有权同时转入，包括冷任务。
+    [[nodiscard]] task<prepared_listener> prepare_listeners(std::span<const listen_config> configs) &;
+    task<prepared_listener> prepare_listeners(std::span<const listen_config>) && = delete;
     [[nodiscard]] task<void> add_listener(listen_config config) &;
     task<void> add_listener(listen_config) && = delete;
     // Stages or adds a TCP/TLS service without binding a listening socket.
@@ -76,10 +83,12 @@ public:
     // and have services added later.
     [[nodiscard]] task<void> start() &;
     task<void> start() && = delete;
-    // Owner loop only. Stops new admission immediately; established sessions
-    // continue until they end or close(). The endpoint may then be added again.
-    void remove_listener(const listener_endpoint& endpoint) &;
-    void remove_listener(const listener_endpoint&) && = delete;
+    // Owner loop only. Stops new admission immediately; by default established
+    // sessions continue. close_connections_ closes their transports immediately;
+    // session retirement is joined independently (also safe from their handlers).
+    // The endpoint may then be added again.
+    void remove_listener(const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    void remove_listener(const listener_endpoint&, listener_remove_options = {}) && = delete;
     [[nodiscard]] task<void> replace_tls_identities(const listener_endpoint& endpoint, tls_config config) &;
     task<void> replace_tls_identities(const listener_endpoint&, tls_config) && = delete;
 #ifndef _WIN32
@@ -121,6 +130,9 @@ public:
     http_server_group& operator=(http_server_group&&) = delete;
 
     void listen(listen_config config) &;
+    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) &;
+    // 整批所有 worker 就绪后才返回；单一票据统一激活或回滚全部端点。
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) &;
     [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config) &;
     [[nodiscard]] task<void> add_connection_service(worker_handle caller, listen_config config) &;
     // Before start only; replaces the complete set on every worker. Parsing
@@ -129,7 +141,7 @@ public:
     // Prepare every worker before opening any listener; failure rolls back
     // the whole host without cancelling unrelated caller work.
     [[nodiscard]] task<void> start(worker_handle caller) &;
-    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint) &;
+    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
     [[nodiscard]] task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config) &;
 #ifndef _WIN32
     [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const&;

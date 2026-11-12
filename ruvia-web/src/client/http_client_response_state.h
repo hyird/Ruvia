@@ -323,6 +323,13 @@ public:
     void rethrow_response_failure() const;
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
+    [[nodiscard]] task<void> dispatch_informational(const operation_timeout& timeout);
+    void request_informational_stop() noexcept {
+        informational_stop_requested_ = informational_stop_requested_ || informational_active_;
+        if (informational_abort_) {
+            informational_abort_->request_stop();
+        }
+    }
     void release_consumed_body_prefix();
     [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
         const auto retained = buffered_.size() - offset_ + pending_.size();
@@ -397,9 +404,23 @@ public:
     http_known_method request_method_{http_known_method::unknown};
     http_protocol_version protocol_version_{http_protocol_version::http11};
     std::optional<http_response_body_plan> response_body_plan_{};
+    http_client_response_framing framing_{http_client_response_framing::none};
+    std::optional<std::uint64_t> content_length_;
+    http_client_connection_info connection_info_;
+    std::optional<timeout_duration> effective_connect_timeout_;
+    std::optional<timeout_duration> effective_read_timeout_;
+    std::optional<timeout_duration> effective_write_timeout_;
+    std::optional<timeout_duration> effective_acquire_timeout_;
+    std::shared_ptr<http_client_informational_callback> informational_callback_;
+    stop_token informational_stop_;
+    std::optional<stop_source> informational_abort_;
+    bool informational_active_{false};
+    bool informational_stop_requested_{false};
+    bool decode_content_{true};
     std::pmr::vector<http_client_informational_response> informational_;
     // One aggregate byte budget across every retained interim head.
     http_field_section_budget informational_budget_;
+    std::size_t informational_delivered_{};
     std::pmr::vector<http_header> headers_;
     std::pmr::vector<http_header> trailers_;
     std::pmr::string buffered_;

@@ -156,6 +156,7 @@ http3_headers_event::http3_headers_event(
       stream_ended_(other.stream_ended_),
       trailers_(other.trailers_),
       status_(other.status_),
+      content_length_(other.content_length_),
       early_data_(other.early_data_) {
     fields_.reserve(other.fields_.size());
     for (const auto& field : other.fields_) {
@@ -170,6 +171,7 @@ void http3_headers_event::swap(http3_headers_event& other) noexcept {
     std::swap(trailers_, other.trailers_);
     std::swap(early_data_, other.early_data_);
     std::swap(status_, other.status_);
+    std::swap(content_length_, other.content_length_);
 }
 
 http3_headers_event& http3_headers_event::operator=(const http3_headers_event& other) {
@@ -586,6 +588,7 @@ public:
                 stream.local_content_.begin_unbounded();
             }
         }
+        head.content_length_ = has_length ? length.value() : std::nullopt;
         head.status_ = *status;
         head.fields_.erase(head.fields_.begin());
         return true;
@@ -1487,6 +1490,10 @@ http3_data_result http3_connection::submit_data(
 std::size_t http3_connection::pending_output_bytes(std::int64_t stream_id) const noexcept {
     const auto position = impl_->streams_.find(stream_id);
     return position == impl_->streams_.end() ? 0 : position->second.pending_bytes_;
+}
+
+bool http3_connection::output_flushed(std::int64_t stream_id) const noexcept {
+    return nghttp3_conn_is_stream_flushed(impl_->connection_, stream_id) != 0;
 }
 
 std::size_t http3_connection::available_output_bytes(std::int64_t stream_id) const noexcept {

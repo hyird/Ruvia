@@ -18,6 +18,7 @@
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
+#include <asio/ip/v6_only.hpp>
 #include <asio/socket_base.hpp>
 #include <asio/windows/object_handle.hpp>
 #include <asio/windows/overlapped_ptr.hpp>
@@ -202,15 +203,17 @@ struct windows_acceptor::worker_slot final {
 
 struct windows_acceptor::tcp_listener final {
     tcp_listener(asio::io_context& io, asio::ip::tcp::endpoint endpoint, std::size_t index,
-        std::optional<std::size_t> http3_index, std::shared_ptr<inherited_listener_sockets> inherited)
+        std::optional<std::size_t> http3_index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only)
         : socket_(io),
           endpoint_(endpoint),
+          ipv6_only_(ipv6_only),
           index_(index),
           http3_index_(http3_index),
           inherited_(std::move(inherited)) {}
 
     asio::ip::tcp::acceptor socket_;
     asio::ip::tcp::endpoint endpoint_;
+    std::optional<bool> ipv6_only_;
     // The listener's index in every business worker.
     std::size_t index_;
     // Its HTTP/3 service's index among udp_listeners_.
@@ -222,6 +225,7 @@ struct windows_acceptor::tcp_listener final {
     // receipt until none is left.
     std::size_t accepts_{0};
     std::shared_ptr<void> removal_receipt_;
+    std::optional<worker_signal> activated_;
     // From opening until removal or the acceptor's stop.
     bool admitting_{false};
 };
@@ -233,6 +237,7 @@ struct windows_acceptor::udp_transport final {
 
     asio::ip::udp::socket socket_;
     std::size_t listeners_{0};
+    std::pmr::vector<std::byte> receive_buffer_{http3_max_udp_payload_bytes, process_resource()};
     bool receiving_{false};
     LPFN_WSARECVMSG receive_message_{nullptr};
     LPFN_WSASENDMSG send_message_{nullptr};
@@ -240,8 +245,9 @@ struct windows_acceptor::udp_transport final {
 
 struct windows_acceptor::udp_listener final {
     udp_listener([[maybe_unused]] asio::io_context& io, asio::ip::udp::endpoint endpoint, std::shared_ptr<const http3_secret> secret,
-        std::size_t index, std::shared_ptr<inherited_listener_sockets> inherited)
+        std::size_t index, std::shared_ptr<inherited_listener_sockets> inherited, std::optional<bool> ipv6_only)
         : endpoint_(endpoint),
+          ipv6_only_(ipv6_only),
           secret_(std::move(secret)),
           index_(index),
           inherited_(std::move(inherited)) {}
@@ -259,6 +265,7 @@ struct windows_acceptor::udp_listener final {
 
     std::shared_ptr<udp_transport> transport_;
     asio::ip::udp::endpoint endpoint_;
+    std::optional<bool> ipv6_only_;
     std::shared_ptr<const http3_secret> secret_;
     // The HTTP/3 endpoint's index in every business worker.
     std::size_t index_;
@@ -268,6 +275,9 @@ struct windows_acceptor::udp_listener final {
     // A re-added listener may still need the same exclusive UDP socket.
     std::size_t released_{0};
     bool transport_released_{false};
+    std::optional<worker_signal> activated_;
+    std::shared_ptr<void> removal_receipt_;
+    bool receiving_{false};
 };
 #endif
 
@@ -310,11 +320,11 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
             http3_index = udp_listeners_.size();
             udp_listeners_.push_back(make_pmr_object<udp_listener>(process_resource(), io_,
                 asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_),
-                definition.http3_->secret_, *http3_index, definition.inherited_sockets_));
+                definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_));
         }
 #endif
         tcp_listeners_.push_back(make_pmr_object<tcp_listener>(
-            process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_));
+            process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_));
     }
     runtime_.configure({
         .startup_ = [this] { asio::co_spawn(io_, ruvia::as_awaitable(run()),
@@ -513,6 +523,9 @@ void windows_acceptor::open_listeners() {
         open_udp_listener(*listener);
     }
 #endif
+    for (auto& listener : tcp_listeners_) {
+        prepare_listener_tasks(*listener);
+    }
 }
 
 void windows_acceptor::open_tcp_listener(tcp_listener& listener) {
@@ -531,6 +544,9 @@ void windows_acceptor::open_tcp_listener(tcp_listener& listener) {
     } else {
         socket.open(listener.endpoint_.protocol());
         claim_exclusive_address(socket);
+        if (listener.ipv6_only_) {
+            socket.set_option(asio::ip::v6_only(*listener.ipv6_only_));
+        }
         socket.bind(listener.endpoint_);
         socket.listen(asio::socket_base::max_listen_connections);
     }
@@ -543,6 +559,13 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
         for (const auto& existing : udp_listeners_) {
             if (existing != nullptr && existing->endpoint_ == listener.endpoint_ &&
                 existing->transport_ != nullptr && existing->transport_->socket_.is_open()) {
+                if (listener.ipv6_only_ && existing->transport_->socket_.local_endpoint().address().is_v6()) {
+                    asio::ip::v6_only value;
+                    existing->transport_->socket_.get_option(value);
+                    if (value.value() != *listener.ipv6_only_) {
+                        throw std::invalid_argument("shared HTTP/3 socket IPV6_V6ONLY does not match");
+                    }
+                }
                 listener.transport_ = existing->transport_;
                 ++listener.transport_->listeners_;
                 listener.inherited_.reset();
@@ -567,6 +590,9 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
     } else {
         socket.open(listener.endpoint_.protocol());
         claim_exclusive_address(socket);
+        if (listener.ipv6_only_) {
+            socket.set_option(asio::ip::v6_only(*listener.ipv6_only_));
+        }
         socket.bind(listener.endpoint_);
     }
     enable_udp_packet_info(socket);
@@ -590,8 +616,8 @@ void windows_acceptor::serve_on_context() {
     }
 }
 
-void windows_acceptor::start_listener(tcp_listener& listener) {
-    listener.admitting_ = true;
+void windows_acceptor::prepare_listener_tasks(tcp_listener& listener) {
+    listener.activated_.emplace(runtime_.handle());
     for (std::size_t operation = 0; operation < accepts_per_listener; ++operation) {
         tasks_.spawn(run_accepts(listener));
     }
@@ -599,8 +625,23 @@ void windows_acceptor::start_listener(tcp_listener& listener) {
     if (listener.http3_index_.has_value()) {
         auto& udp = *udp_listeners_[*listener.http3_index_];
         if (!udp.transport_->receiving_) {
-            udp.transport_->receiving_ = true;
+            udp.activated_.emplace(runtime_.handle());
             tasks_.spawn(run_receives(udp));
+            udp.transport_->receiving_ = true;
+            udp.receiving_ = true;
+        }
+    }
+#endif
+}
+
+void windows_acceptor::start_listener(tcp_listener& listener) noexcept {
+    listener.admitting_ = true;
+    listener.activated_->notify();
+#if defined(RUVIA_ENABLE_HTTP3)
+    if (listener.http3_index_) {
+        auto& udp = *udp_listeners_[*listener.http3_index_];
+        if (udp.activated_) {
+            udp.activated_->notify();
         }
     }
 #endif
@@ -620,7 +661,7 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
         tcp_listeners_.resize(index + 1);
     }
     auto tcp = make_pmr_object<tcp_listener>(
-        process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_);
+        process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_);
 #if defined(RUVIA_ENABLE_HTTP3)
     std::unique_ptr<udp_listener, pmr_object_deleter<udp_listener>> udp(
         nullptr, pmr_object_deleter<udp_listener>{process_resource()});
@@ -634,7 +675,7 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
         }
         udp = make_pmr_object<udp_listener>(process_resource(), io_,
             asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_),
-            definition.http3_->secret_, *http3_index, definition.inherited_sockets_);
+            definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_);
     }
 #endif
     open_tcp_listener(*tcp);
@@ -645,30 +686,38 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
     }
 #endif
     tcp_listeners_[index] = std::move(tcp);
+    try {
+        prepare_listener_tasks(*tcp_listeners_[index]);
+    } catch (...) {
+        discard_listener(index);
+        throw;
+    }
 }
 
 void windows_acceptor::open_listener(std::size_t index) noexcept {
     if (!admitting_ || index >= tcp_listeners_.size() || tcp_listeners_[index] == nullptr) {
         return;
     }
-    try {
-        start_listener(*tcp_listeners_[index]);
-    } catch (...) {
-        (void)runtime_.fail(std::current_exception());
-    }
+    start_listener(*tcp_listeners_[index]);
 }
 
-void windows_acceptor::discard_listener(std::size_t index) noexcept {
+void windows_acceptor::discard_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept {
     if (index >= tcp_listeners_.size() || tcp_listeners_[index] == nullptr) {
         return;
     }
-    // Never opened: no accept or receive references it.
+    remove_listener(index, receipt);
 #if defined(RUVIA_ENABLE_HTTP3)
     if (const auto http3_index = tcp_listeners_[index]->http3_index_; http3_index.has_value()) {
-        udp_listeners_[*http3_index].reset();
+        auto& udp = *udp_listeners_[*http3_index];
+        if (udp.receiving_) {
+            udp.removal_receipt_ = std::move(receipt);
+        }
+        udp.release_transport();
+        if (udp.activated_) {
+            udp.activated_->notify();
+        }
     }
 #endif
-    tcp_listeners_[index].reset();
 }
 
 void windows_acceptor::remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept {
@@ -677,6 +726,9 @@ void windows_acceptor::remove_listener(std::size_t index, std::shared_ptr<void> 
     }
     auto& listener = *tcp_listeners_[index];
     listener.admitting_ = false;
+    if (listener.activated_) {
+        listener.activated_->notify();
+    }
     // Completes its pending AcceptEx operations as aborted.
     std::error_code ignored;
     listener.socket_.close(ignored);
@@ -691,6 +743,9 @@ void windows_acceptor::close_admission() noexcept {
     for (auto& listener : tcp_listeners_) {
         if (listener != nullptr) {
             listener->admitting_ = false;
+            if (listener->activated_) {
+                listener->activated_->notify();
+            }
             std::error_code ignored;
             listener->socket_.close(ignored);
         }
@@ -700,6 +755,9 @@ void windows_acceptor::close_admission() noexcept {
     for (auto& listener : udp_listeners_) {
         if (listener != nullptr && listener->transport_ != nullptr) {
             std::error_code ignored;
+            if (listener->activated_) {
+                listener->activated_->notify();
+            }
             listener->transport_->socket_.cancel(ignored);
         }
     }
@@ -708,6 +766,7 @@ void windows_acceptor::close_admission() noexcept {
 
 task<void> windows_acceptor::run_accepts(tcp_listener& listener) {
     ++listener.accepts_;
+    co_await listener.activated_->wait();
     // AcceptEx writes both addresses here; the frame outlives the operation.
     std::array<std::byte, 2 * accept_address_bytes> addresses{};
     const auto protocol = listener.endpoint_.protocol();
@@ -821,7 +880,15 @@ task<void> windows_acceptor::run_receives(udp_listener& listener) {
     // at this address continues receiving on the same exclusive socket.
     const auto transport = listener.transport_;
     auto& socket = transport->socket_;
-    std::pmr::vector<std::byte> buffer(http3_max_udp_payload_bytes, process_resource());
+    auto& buffer = transport->receive_buffer_;
+    struct receipt_release final {
+        udp_listener& listener_;
+        ~receipt_release() {
+            listener_.receiving_ = false;
+            listener_.removal_receipt_.reset();
+        }
+    } release{listener};
+    co_await listener.activated_->wait();
     try {
         while (admitting_ && socket.is_open()) {
             asio::ip::udp::endpoint remote;

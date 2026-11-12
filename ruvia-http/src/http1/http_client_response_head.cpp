@@ -95,6 +95,10 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
     // still delimit exactly; HEAD and 304 Content-Length remains a retained
     // field describing the selected representation.
     const bool framing_fields_apply = content_semantics == http_response_content_semantics::with_content;
+    bool parse_length_metadata = content_semantics == http_response_content_semantics::without_content &&
+                                 output.status_code_ != http_status::no_content &&
+                                 (http1_client_exchange_state_access::method(exchange_state) == http_known_method::head ||
+                                     output.status_code_ == http_status::not_modified);
 
     std::size_t cursor_value = 0;
     while (cursor_value < field_section.size()) {
@@ -116,9 +120,14 @@ http1_client_response_head_parse_result_type parse_http1_client_response_head_fi
                 // RFC 9112 section 6.3 rule 1: 1xx (including 101), 204, 304,
                 // and HEAD responses end at the first empty line regardless of
                 // framing fields; successful CONNECT becomes a tunnel.
-                if (framing_fields_apply) {
+                if (framing_fields_apply || parse_length_metadata) {
                     if (const auto error = parse_http1_content_length_field<http1_client_response_parse_error>(value, output.content_length_)) {
-                        return *error;
+                        if (framing_fields_apply) {
+                            return *error;
+                        }
+                        // 无正文优先级不变；不一致的表示元数据只是不再提供已知长度。
+                        output.content_length_ = {};
+                        parse_length_metadata = false;
                     }
                 }
                 break;

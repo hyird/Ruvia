@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <future>
@@ -294,4 +296,95 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     EXPECT_TRUE(ruvia::test::read_to_end(stream).ends_with("ready"));
     app.stop();
     run.join();
+}
+
+TEST(Ruvia, application_prepared_batch_waits_for_publication_and_rolls_back_failure_abandonment_and_stop) {
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation original(io), addition(io), second(io), abandoned(io);
+    asio::ip::tcp::acceptor blocker(io, {asio::ip::address_v4::loopback(), 0});
+    std::atomic<unsigned> calls{};
+    std::atomic<bool> published{true};
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2})
+        .listen({.address_ = "127.0.0.1", .http_ = original.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::connection})
+        .on_connection([&](ruvia::server_connection& connection) -> ruvia::task<void> {
+            EXPECT_TRUE(published.load());
+            ++calls;
+            co_await serve_connection(connection);
+        })
+        .on_start(nullptr)
+        .on_start([] { started.release(); });
+    ruvia::test::app_run run(app);
+    ASSERT_TRUE(started.try_acquire_for(10s));
+    wait_until_running(app);
+    const auto loop = control_loop();
+    const auto config = [](std::uint16_t port) {
+        return ruvia::listen_config{.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::connection};
+    };
+    const std::array failed_configs{config(addition.endpoint().port()), config(blocker.local_endpoint().port())};
+    EXPECT_THROW(loop.start(app.prepare_listeners(loop.handle(), failed_configs)).get(), std::system_error);
+    EXPECT_TRUE(request(io, original.endpoint()).ends_with("ready"));
+    asio::ip::tcp::socket refused(io);
+    asio::error_code error;
+    refused.connect(addition.endpoint(), error);
+    EXPECT_EQ(error, asio::error::connection_refused);
+    blocker.close();
+    calls.store(0);
+    published.store(false);
+    const std::array configs{config(addition.endpoint().port()), config(second.endpoint().port())};
+    auto prepared = loop.start(app.prepare_listeners(loop.handle(), configs)).get();
+    std::array<asio::ip::tcp::socket, 2> queued{asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
+    const std::array endpoints{addition.endpoint(), second.endpoint()};
+    constexpr std::string_view head = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    for (std::size_t index = 0; index != queued.size(); ++index) {
+        queued[index].connect(endpoints[index]);
+        asio::write(queued[index], asio::buffer(head));
+    }
+    EXPECT_EQ(calls.load(), 0U);
+    published.store(true);
+    loop.start(std::move(prepared).activate()).get();
+    for (auto& peer : queued) {
+        EXPECT_TRUE(ruvia::test::read_to_end(peer).ends_with("ready"));
+    }
+    EXPECT_EQ(calls.load(), 2U);
+    loop.start(app.remove_listener(loop.handle(), {.address_ = "127.0.0.1", .port_ = original.endpoint().port()})).get();
+    loop.start(app.remove_listener(loop.handle(), {.address_ = "127.0.0.1", .port_ = addition.endpoint().port()})).get();
+    loop.start(app.remove_listener(loop.handle(), {.address_ = "127.0.0.1", .port_ = second.endpoint().port()})).get();
+    const std::array abandoned_configs{config(abandoned.endpoint().port()), config(second.endpoint().port())};
+    {
+        auto pending = loop.start(app.prepare_listeners(loop.handle(), abandoned_configs)).get();
+    }
+    auto pending = loop.start(app.prepare_listeners(loop.handle(), abandoned_configs)).get();
+    app.stop();
+    run.join();
+    EXPECT_THROW(loop.start(std::move(pending).activate()).get(), std::logic_error);
+    // Only the cancelled candidate remained; restart has zero bound listeners.
+    ruvia::test::app_run empty_run(app);
+    ASSERT_TRUE(started.try_acquire_for(10s));
+    wait_until_running(app);
+    auto first = loop.start(app.prepare_listener(loop.handle(), config(addition.endpoint().port()))).get();
+    loop.start(std::move(first).activate()).get();
+    EXPECT_TRUE(request(io, addition.endpoint()).ends_with("ready"));
+    app.stop();
+    empty_run.join();
+    app.on_connection(&serve_connection);
+}
+
+TEST(Ruvia, application_cold_prepared_batch_owns_all_inherited_sockets_and_rejects_duplicate_handles) {
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation first(io), second(io);
+    const auto config = [&](const asio::ip::tcp::endpoint& endpoint) {
+        return ruvia::listen_config{.address_ = "127.0.0.1", .http_ = endpoint.port(), .dispatch_ = ruvia::listener_dispatch::connection, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {inherited_socket(io, endpoint)}}};
+    };
+    const std::array configs{config(first.endpoint()), config(second.endpoint())};
+    {
+        auto cold = ruvia::app().prepare_listeners(control_loop().handle(), configs);
+    }
+    for (const auto& entry : configs) {
+        EXPECT_TRUE(closed(entry.inherited_sockets_->http_.front()));
+    }
+    const auto repeated = config(first.endpoint());
+    const std::array duplicates{repeated, repeated};
+    EXPECT_THROW((void)ruvia::app().prepare_listeners(control_loop().handle(), duplicates), std::invalid_argument);
+    EXPECT_TRUE(closed(repeated.inherited_sockets_->http_.front()));
 }

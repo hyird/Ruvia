@@ -54,7 +54,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 
 - **协议裁剪单一来源**：HTTP/2、HTTP/3 的源码与安装头共用协议路径选择规则，新增协议文件不再维护第二份安装排除名单。
 
-依赖使用当前 vcpkg 端口；Core 要求 mimalloc 3.5+，HTTP/3 要求 ngtcp2 1.26.0+。非 Windows 静态 mimalloc 必须启用 `override`，不得叠加其他全局分配器替换。
+依赖使用当前 vcpkg 端口；Core 要求 mimalloc 3.5+，HTTP/3 要求 ngtcp2 1.26.0+ 与 nghttp3 1.17+。非 Windows 静态 mimalloc 必须启用 `override`，不得叠加其他全局分配器替换。
 
 ### 2.2 在下游 CMake 项目中使用
 

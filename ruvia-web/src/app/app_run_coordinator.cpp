@@ -193,10 +193,6 @@ private:
     void begin_run() {
         std::lock_guard lock(state_.mutex_);
         detail::ensure_app_not_running(state_.lifecycle_.active(), "app is already running");
-        if (state_.listeners_.empty()) {
-            throw std::invalid_argument(
-                "application::run() requires at least one listener; call application::listen() first");
-        }
         if (!state_.lifecycle_.begin_run()) {
             std::terminate();
         }

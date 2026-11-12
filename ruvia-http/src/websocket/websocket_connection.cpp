@@ -565,6 +565,9 @@ public:
           input_(input != nullptr ? input : &owned_input_.emplace(http_io_buffer::allocator_type(memory))),
           max_buffered_input_bytes_(options.max_buffered_input_bytes_),
           message_limit_(options.message_limit_),
+          receive_message_limit_(options.receive_message_limit_.read_ceiling() < options.message_limit_.read_ceiling()
+                                     ? options.receive_message_limit_
+                                     : options.message_limit_),
           out_buffer_(input_->get_allocator()),
           assembler_(input_->get_allocator().resource()),
           inbound_inflated_(input_->get_allocator().resource()),
@@ -786,6 +789,7 @@ public:
     http_io_buffer* input_;
     const std::size_t max_buffered_input_bytes_;
     protocol_byte_limit message_limit_;
+    protocol_byte_limit receive_message_limit_;
     // Bytes of the last returned frame, consumed by the next next_event().
     std::size_t pending_consume_{0};
     std::size_t needed_input_bytes_{0};
@@ -888,7 +892,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
 
         for (;;) {
             const auto read = detail::websocket_try_read_frame(*impl_->input_, impl_->pending_consume_,
-                impl_->message_limit_, impl_->deflate_.has_value(),
+                impl_->receive_message_limit_, impl_->deflate_.has_value(),
                 impl_->role_ == websocket_connection_role::server);
             if (const auto* need_input = read.need_input()) {
                 impl_->needed_input_bytes_ = need_input->missing_bytes();
@@ -899,7 +903,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             }
 
             const auto& frame = *read.frame();
-            const auto inbound = impl_->assembler_.accept(frame, impl_->message_limit_);
+            const auto inbound = impl_->assembler_.accept(frame, impl_->receive_message_limit_);
             if (const auto* failure = inbound.failure()) {
                 return protocol_failure_event(failure->error());
             }
@@ -951,7 +955,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             impl_->inbound_inflated_.clear();
             // Only a negotiated deflate admits RSV1, so a compressed message implies deflate_.
             const auto inflate_result = impl_->deflate_->decompress(
-                message.payload(), impl_->inbound_inflated_, impl_->message_limit_);
+                message.payload(), impl_->inbound_inflated_, impl_->receive_message_limit_);
             if (inflate_result == websocket_inflate_result::too_large) {
                 return protocol_failure_event(detail::websocket_protocol_failure::message_too_large);
             }

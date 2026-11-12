@@ -141,9 +141,9 @@ namespace {
 
 template <typename view_type>
 task<std::optional<view_type>> read_body(
-    detail::callback_ref<task<std::optional<std::span<const std::byte>>>()> read, bool& read_active) {
+    detail::callback_ref<task<std::optional<std::span<const std::byte>>>(stop_token)> read, bool& read_active, stop_token stop) {
     auto lease = detail::claim_operation_lane(read_active, "request body read is already in progress");
-    const auto chunk = co_await read();
+    const auto chunk = co_await read(std::move(stop));
     if (!chunk) {
         co_return std::nullopt;
     }
@@ -156,12 +156,12 @@ task<std::optional<view_type>> read_body(
 
 }  // namespace
 
-task<std::optional<std::span<const std::byte>>> body_reader::read() & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_));
+task<std::optional<std::span<const std::byte>>> body_reader::read(stop_token stop) & {
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_, std::move(stop)));
 }
 
-task<std::optional<std::string_view>> body_reader::text() & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_));
+task<std::optional<std::string_view>> body_reader::text(stop_token stop) & {
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_, std::move(stop)));
 }
 
 task<stream_commit_result> response_stream_writer::commit() & {

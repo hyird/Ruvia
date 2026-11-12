@@ -57,14 +57,17 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
 }
 
 client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port,
-    const operation_timeout& timeout) {
+    const operation_timeout& timeout, stop_token stop) {
+    if (stop.stop_requested()) {
+        return client_resolve_result{.error_ = asio::error::operation_aborted};
+    }
     if (const auto address = parse_ip_address(host)) {
         return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
     }
-    return resolve_query(query{std::pmr::string(host, process_resource()), port}, timeout);
+    return resolve_query(query{std::pmr::string(host, process_resource()), port}, timeout, std::move(stop));
 }
 
-task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_timeout timeout) {
+task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_timeout timeout, stop_token stop) {
     if (stop_) {
         throw std::logic_error("host resolver already has a pending query");
     }
@@ -75,8 +78,9 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
             stop_.reset();
         }
     } guard{stop_};
+    stop_group cancellation(stop_->token(), stop);
     auto result = co_await run_blocking(
-        *worker_, {.timeout_ = timeout.remaining(), .stop_token_ = stop_->token()}, std::move(input));
+        *worker_, {.timeout_ = timeout.remaining(), .stop_token_ = cancellation.token()}, std::move(input));
     switch (result.status()) {
         case blocking_status::completed:
             co_return std::move(result).take_value();

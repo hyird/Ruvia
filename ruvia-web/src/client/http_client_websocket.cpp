@@ -97,6 +97,9 @@ public:
     http_protocol_version protocol_version() const {
         return tunnel_.protocol_version();
     }
+    const http_client_connection_info& connection_info() const noexcept {
+        return transport_state_.connection_info_;
+    }
     bool connected() const noexcept {
         return !failure_ && !ended_ && !transport_state_.pool_closed_ &&
                !transport_state_.failure_ && !transport_state_.tunnel_->output_.stopped_ &&
@@ -631,6 +634,9 @@ std::string_view http_client_websocket::subprotocol() const& {
 http_protocol_version http_client_websocket::protocol_version() const {
     return require_websocket(state_).protocol_version();
 }
+const http_client_connection_info& http_client_websocket::connection_info() const& {
+    return require_websocket(state_).connection_info();
+}
 bool http_client_websocket::connected() const {
     return require_websocket(state_).connected();
 }
@@ -704,6 +710,15 @@ http_client_websocket_request& http_client_websocket_request::max_message_bytes(
     max_message_bytes_ = limit;
     return *this;
 }
+http_client_websocket_request& http_client_websocket_request::configure(http_client_request_options options) {
+    require_open();
+    if (options.field_source_ != http_request_field_source::generated &&
+        options.field_source_ != http_request_field_source::forwarded) {
+        throw std::invalid_argument("invalid HTTP request field source");
+    }
+    request_options_ = std::move(options);
+    return *this;
+}
 task<http_client_websocket> http_client_websocket_request::connect() {
     require_open();
     consumed_ = true;
@@ -727,6 +742,8 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
             std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
             websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
         stored.emplace("GET", request.path_, headers.view(), resource);
+        stored->options_ = request.request_options_;
+        stored->pool_owner_ = request.client_.pool_owner_;
         stored->set_host_stop(request.client_.host_stop_token_);
         stored->set_tunnel(pool.config().authority_, "websocket");
         stored->set_websocket(handshake);
@@ -742,13 +759,16 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
         [&opening_stop] { opening_stop.request_stop(); });
     bool opening_expired = false;
     worker_timer_registration opening_timer;
-    (void)pool.worker().schedule_timer(opening_timer, worker_timer_deadline_after(pool.config().connect_timeout_.value()),
-        [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
-            if (outcome == worker_timer_outcome::expired) {
-                opening_expired = true;
-                opening_stop.request_stop();
-            }
-        });
+    const auto connect_timeout = request.request_options_.timeouts_.connect_.resolve(pool.config().connect_timeout_);
+    if (connect_timeout) {
+        (void)pool.worker().schedule_timer(opening_timer, worker_timer_deadline_after(connect_timeout->value()),
+            [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    opening_expired = true;
+                    opening_stop.request_stop();
+                }
+            });
+    }
     auto opening_options = request.client_.options_;
     opening_options.stop_token_ = opening_stop.token();
     std::optional<http_client_tunnel_result> opened;
@@ -774,7 +794,7 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
     auto state = std::allocate_shared<detail::http_client_websocket_state>(
         std::pmr::polymorphic_allocator<detail::http_client_websocket_state>(process_resource()),
         std::move(*tunnel), pool.worker(), *handshake, request.deflate_, request.client_.options_,
-        request.lifecycle_, request.max_message_bytes_, pool.config().read_timeout_);
+        request.lifecycle_, request.max_message_bytes_, request.request_options_.timeouts_.read_.resolve(pool.config().read_timeout_));
     if (request.lifecycle_.heartbeat_.ping_interval_) {
         pool.tasks().spawn(detail::http_client_websocket_state::heartbeat(state));
     }

@@ -218,6 +218,9 @@ class http3_routes final {
 public:
     RUVIA_ROUTES_BEGIN(http3_routes)
     RUVIA_GET("/hello", hello);
+    RUVIA_GET("/dial-authority", dial_authority);
+    RUVIA_GET("/connection-hints", connection_hints);
+    RUVIA_GET("/connection-silent", connection_silent);
     RUVIA_POST("/echo", echo);
     RUVIA_GET("/stream", stream);
     RUVIA_POST("/upload-trailer", upload_trailer, ruvia::stream_body);
@@ -234,6 +237,23 @@ public:
 
     ruvia::task<ruvia::http_response> hello(ruvia::context& context) {
         co_return context.text("hello over http/3");
+    }
+    ruvia::task<ruvia::http_response> dial_authority(ruvia::context& context) {
+        context.draft().header("set-cookie", "logical=1; Domain=localhost; Path=/; Secure");
+        const auto authority = context.req().authority();
+        std::pmr::string text(authority.empty() ? context.req().header("host").value_or("") : authority, ruvia::process_resource());
+        text.push_back('|');
+        text.append(context.req().header("cookie").value_or(""));
+        co_return context.text(text);
+    }
+    ruvia::task<ruvia::http_response> connection_hints(ruvia::context& context) {
+        const std::array fields{ruvia::http_header_view("x-hint", "connection-controls")};
+        co_await context.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, fields));
+        co_return context.text("hints complete");
+    }
+    ruvia::task<ruvia::http_response> connection_silent(ruvia::context& context) {
+        (void)co_await ruvia::sleep_for(context.worker(), 1s, context.stop_token());
+        co_return context.text("delayed");
     }
     ruvia::task<ruvia::http_response> echo(ruvia::context& context) {
         const auto body = co_await context.req().text();
@@ -662,6 +682,281 @@ ruvia::task<void> run_negotiate_upgrade_lane(
     EXPECT_EQ(text.text(), "hello over http/3");
 }
 
+ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruvia::http_client_handle client) {
+    bool entered = false;
+    bool released = false;
+    bool completed = false;
+    auto request = client.get("/connection-hints");
+    request.on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields,
+                                 ruvia::stop_token stop) -> ruvia::task<void> {
+        EXPECT_EQ(status.value(), 103);
+        EXPECT_TRUE(std::ranges::any_of(fields, [](const ruvia::http_header& field) {
+            return field.name() == "x-hint" && field.value() == "connection-controls";
+        }));
+        entered = true;
+        while (!released && !stop.stop_requested()) {
+            (void)co_await ruvia::sleep_for(loop.handle(), 1ms, stop);
+        }
+    });
+    auto first = [&]() -> ruvia::task<void> {
+        auto response = co_await request.send();
+        const auto text = co_await response.text();
+        EXPECT_EQ(text.text(), "hints complete");
+        completed = true;
+    };
+    ruvia::task_scope tasks(loop.handle());
+    tasks.spawn(first());
+    std::exception_ptr failure;
+    try {
+        const auto deadline = std::chrono::steady_clock::now() + 5s;
+        while (!entered) {
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error("informational callback did not start");
+            }
+            (void)co_await ruvia::sleep_for(loop.handle(), 1ms);
+        }
+        auto independent = co_await client.get("/hello").send();
+        (void)co_await independent.text();
+        EXPECT_FALSE(completed);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    released = true;
+    co_await tasks.join();
+    EXPECT_TRUE(completed);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint16_t port,
+    const std::filesystem::path& ca_file, ruvia::http_client_protocol protocol) {
+    bool allowed = true;
+    std::size_t validations = 0;
+    ruvia::http_client_config config{.base_url_ = "https://localhost",
+        .dial_host_ = "127.0.0.1",
+        .dial_port_ = port};
+    config.protocol_ = protocol;
+    config.connection_count_ = 1;
+    config.request_timeout_ = 5s;
+    config.tls_.ca_file_ = ca_file;
+    config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
+    config.address_validator_ = [&](std::string_view ip, std::uint16_t dial_port) {
+        ++validations;
+        EXPECT_EQ(dial_port, port);
+        return allowed && (ip == "127.0.0.1" || ip == "127.0.0.2");
+    };
+    ruvia::http_client owner(loop, config);
+    auto client = owner.client();
+    std::exception_ptr failure;
+    std::string_view stage = "first-head";
+    int finish_attempt = -1;
+    try {
+        EXPECT_EQ(client.host(), "localhost");
+        EXPECT_EQ(client.port(), 443);
+        auto first = co_await client.get("/dial-authority").send();
+        const auto first_info = first.connection_info();
+        EXPECT_NE(first_info.id_, 0U);
+        EXPECT_EQ(first_info.peer_ip_, "127.0.0.1");
+        EXPECT_EQ(first_info.peer_port_, port);
+        EXPECT_FALSE(first_info.reused_);
+        EXPECT_GT(first_info.tls_duration_, std::chrono::steady_clock::duration::zero());
+        stage = "first-body";
+        const auto first_text = co_await first.text();
+        EXPECT_EQ(first_text.text(), "localhost|");
+        stage = "second-head";
+        auto second = co_await client.get("/dial-authority").send();
+        EXPECT_EQ(second.connection_info().id_, first_info.id_);
+        EXPECT_TRUE(second.connection_info().reused_);
+        stage = "second-body";
+        const auto second_text = co_await second.text();
+        EXPECT_EQ(second_text.text(), "localhost|logical=1");
+        std::uint64_t last_fresh = 0;
+        for (int attempt = 0; attempt != 2; ++attempt) {
+            stage = "fresh-head";
+            auto fresh = co_await client.get("/hello").fresh_connection().send();
+            EXPECT_FALSE(fresh.connection_info().reused_);
+            EXPECT_NE(fresh.connection_info().id_, first_info.id_);
+            EXPECT_NE(fresh.connection_info().id_, last_fresh);
+            last_fresh = fresh.connection_info().id_;
+            stage = "fresh-body";
+            (void)co_await fresh.text();
+        }
+        stage = "pooled-reuse";
+        auto reused = co_await client.get("/hello").send();
+        EXPECT_EQ(reused.connection_info().id_, first_info.id_);
+        (void)co_await reused.text();
+        EXPECT_TRUE(client.close_connection(first_info.id_));
+        EXPECT_FALSE(client.close_connection(first_info.id_));
+        stage = "replace-closed-connection";
+        auto replaced = co_await client.get("/hello").send();
+        const auto replacement_id = replaced.connection_info().id_;
+        EXPECT_NE(replacement_id, first_info.id_);
+        (void)co_await replaced.text();
+        if (protocol != ruvia::http_client_protocol::http1_only) {
+            stage = "independent-informational";
+            co_await exercise_independent_informational(loop, client);
+        }
+        if (protocol == ruvia::http_client_protocol::http3_only) {
+            // The peer can finish both halves before the UDP send completion
+            // resumes the producer that is awaiting its submitted trailers/FIN.
+            for (int attempt = 0; attempt != 4; ++attempt) {
+                finish_attempt = attempt;
+                stage = "upload-open";
+                auto upload = co_await client.post("/upload-trailer")
+                                  .header("trailer", "x-upload-checksum")
+                                  .fresh_connection(attempt % 2 == 0)
+                                  .upload({.expectation_ = ruvia::http_client_request_expectation::continue_value});
+                stage = "upload-write";
+                co_await upload.body().write("last");
+                const std::array fields{ruvia::http_header_view("x-upload-checksum", "finish-race")};
+                stage = "upload-end";
+                co_await upload.body().end(fields);
+                stage = "upload-response";
+                auto response = co_await upload.response();
+                stage = "upload-response-body";
+                const auto text = co_await response.text();
+                EXPECT_EQ(text.text(), "uploaded:4:finish-race");
+                EXPECT_EQ(response.trailer("x-response-trailer"), std::optional<std::string_view>{"verified"});
+                stage = "tunnel-open";
+                auto connected = co_await client.connect("echo.test:443").open();
+                auto* tunnel = connected.tunnel();
+                EXPECT_NE(tunnel, nullptr);
+                if (!tunnel) {
+                    throw std::runtime_error("HTTP/3 finish race requires an accepted tunnel");
+                }
+                stage = "tunnel-write";
+                co_await tunnel->write("half-close");
+                stage = "tunnel-finish";
+                co_await tunnel->finish();
+                stage = "tunnel-read-eof";
+                std::pmr::string echoed(ruvia::process_resource());
+                while (const auto chunk = co_await tunnel->text()) {
+                    echoed.append(*chunk);
+                }
+                EXPECT_EQ(echoed, "half-close");
+            }
+        }
+        bool timed_out = false;
+        try {
+            auto request = client.get("/connection-silent");
+            request.timeouts({.read_ = ruvia::http_client_timeout_override::after(10ms)});
+            (void)co_await request.send();
+        } catch (const ruvia::http_client_error& error) {
+            timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+            const auto* information = error.connection_info();
+            EXPECT_NE(information, nullptr);
+            if (information) {
+                EXPECT_NE(information->id_, 0U);
+                EXPECT_EQ(information->peer_ip_, "127.0.0.1");
+                EXPECT_EQ(information->peer_port_, port);
+            }
+        }
+        EXPECT_TRUE(timed_out);
+        stage = "dns-stream-head";
+        auto streaming = co_await client.get("/stream").send();
+        const auto draining_id = streaming.connection_info().id_;
+        const std::array candidates{
+            ruvia::http_client_endpoint_address{std::pmr::string("127.0.0.2", ruvia::process_resource()), port},
+            ruvia::http_client_endpoint_address{std::pmr::string("127.0.0.1", ruvia::process_resource()), port}};
+        client.update_dns(candidates);
+        EXPECT_EQ(client.dns_snapshot().size(), 2U);
+        std::exception_ptr replacement_failure;
+        auto replace = [&]() -> ruvia::task<void> {
+            try {
+                auto updated = co_await client.get("/hello").send();
+                EXPECT_NE(updated.connection_info().id_, draining_id);
+                EXPECT_EQ(updated.connection_info().peer_ip_, "127.0.0.1");
+                EXPECT_EQ(updated.connection_info().peer_port_, port);
+                (void)co_await updated.text();
+            } catch (...) {
+                replacement_failure = std::current_exception();
+            }
+        };
+        ruvia::task_scope replacement_tasks(loop.handle());
+        replacement_tasks.spawn(replace());
+        // 旧响应仍占唯一连接容量；新准入与旧正文消费并行，而非相互等待。
+        stage = "dns-draining-body";
+        std::exception_ptr drain_failure;
+        try {
+            const auto streamed_text = co_await streaming.text();
+            std::pmr::string expected(ruvia::process_resource());
+            for (int chunk = 0; chunk < stream_chunks; ++chunk) {
+                expected.append("chunk-");
+                expected.append(std::to_string(chunk));
+                expected.push_back(';');
+            }
+            EXPECT_EQ(streamed_text.text(), expected);
+            EXPECT_EQ(streaming.connection_info().id_, draining_id);
+        } catch (...) {
+            drain_failure = std::current_exception();
+        }
+        co_await replacement_tasks.join();
+        if (drain_failure) {
+            std::rethrow_exception(drain_failure);
+        }
+        if (replacement_failure) {
+            stage = "dns-replacement";
+            std::rethrow_exception(replacement_failure);
+        }
+        stage = "dns-explicit-refresh";
+        co_await client.refresh_dns();
+        const auto snapshot = client.dns_snapshot();
+        EXPECT_EQ(snapshot.size(), 1U);
+        if (!snapshot.empty()) {
+            EXPECT_EQ(snapshot.front().ip_, "127.0.0.1");
+            EXPECT_EQ(snapshot.front().port_.value(), port);
+        }
+        stage = "dns-policy-rejection";
+        allowed = false;
+        bool rejected = false;
+        try {
+            (void)co_await client.get("/hello").fresh_connection().send();
+        } catch (const ruvia::http_client_error& error) {
+            rejected = error.code() == ruvia::http_client_error::code_type::resolve_failed;
+        }
+        EXPECT_TRUE(rejected);
+        EXPECT_GT(validations, 0U);
+    } catch (const std::exception& error) {
+        failure = std::make_exception_ptr(std::runtime_error(
+            "connection controls protocol=" + std::to_string(static_cast<unsigned>(protocol)) +
+            " stage=" + std::string(stage) + " attempt=" + std::to_string(finish_attempt) + ": " + error.what()));
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await owner.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    allowed = true;
+    config.dns_refresh_interval_ = 10ms;
+    ruvia::http_client refreshing(loop, config);
+    failure = nullptr;
+    try {
+        const std::array initial{ruvia::http_client_endpoint_address{
+            std::pmr::string("127.0.0.2", ruvia::process_resource()), port}};
+        auto refreshed = refreshing.client();
+        refreshed.update_dns(initial);
+        const auto deadline = std::chrono::steady_clock::now() + 1s;
+        for (;;) {
+            const auto snapshot = refreshed.dns_snapshot();
+            if (snapshot.size() == 1 && snapshot.front().ip_ == "127.0.0.1") {
+                break;
+            }
+            if (std::chrono::steady_clock::now() >= deadline) {
+                throw std::runtime_error("background DNS refresh did not replace the snapshot");
+            }
+            (void)co_await ruvia::sleep_for(loop.handle(), 5ms);
+        }
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await refreshing.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::size_t loop_idx,
     std::uint16_t port, const std::filesystem::path& ca_file,
     const std::pmr::string& expected_stream, const std::pmr::string& expected_file,
@@ -691,6 +986,13 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
     ruvia::http_client neg_owner(loop, make_client_config(ruvia::http_client_protocol::negotiate));
     std::exception_ptr worker_failure;
     try {
+        if (loop_idx == 0) {
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http1_only);
+#ifdef RUVIA_ENABLE_HTTP2
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http2_only);
+#endif
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http3_only);
+        }
         {
             if (h2_owner) {
                 auto warm_h2 = co_await h2_owner->client().get("/hello").send();

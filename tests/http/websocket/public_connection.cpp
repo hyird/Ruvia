@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 #include <zlib.h>
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -1494,4 +1495,36 @@ TEST(Ruvia, ws_public_feed_reports_backpressure_when_initial_buffer_exceeds_limi
     websocket_connection connection(input, {.max_buffered_input_bytes_ = 8});
     EXPECT_TRUE(connection.feed("x") == websocket_feed_status::backpressured);
     EXPECT_EQ(input.size(), std::size_t{9});
+}
+
+TEST(Ruvia, ws_receive_ceiling_is_early_directional_and_only_tightens) {
+    for (const std::size_t receive_limit : {std::size_t{256}, std::size_t{2048}}) {
+        const auto effective = (std::min)(receive_limit, std::size_t{1024});
+        websocket_connection receiver({.message_limit_ = protocol_byte_limit::limited(1024),
+            .receive_message_limit_ = protocol_byte_limit::limited(receive_limit)});
+        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1024, 'r'), false),
+            websocket_frame_submit_status::accepted);
+        (void)drain(receiver);
+        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1025, 'r'), false),
+            websocket_frame_submit_status::message_too_large);
+        // 仅发送帧头，无正文：在分配或等待完整消息前拒绝声明的超限长度。
+        std::string header("\x82\xfe", 2);
+        header.push_back(static_cast<char>((effective + 1) >> 8));
+        header.push_back(static_cast<char>((effective + 1) & 0xff));
+        header.append(4, '\0');
+        EXPECT_EQ(receiver.feed(header), websocket_feed_status::accepted);
+        const auto failure = receiver.next_event();
+        ASSERT_TRUE(failure && failure->protocol_error());
+        EXPECT_EQ(failure->protocol_error()->close_code(), 1009);
+    }
+    // 各分片单独合法，累计消息长度仍受同一个接收上限约束。
+    websocket_connection receiver({.receive_message_limit_ = protocol_byte_limit::limited(4)});
+    const std::string first("\x02\x83\0\0\0\0abc", 9);
+    const std::string last("\x80\x82\0\0\0\0de", 8);
+    EXPECT_EQ(receiver.feed(first), websocket_feed_status::accepted);
+    EXPECT_FALSE(receiver.next_event());
+    EXPECT_EQ(receiver.feed(last), websocket_feed_status::accepted);
+    const auto failure = receiver.next_event();
+    ASSERT_TRUE(failure && failure->protocol_error());
+    EXPECT_EQ(failure->protocol_error()->close_code(), 1009);
 }

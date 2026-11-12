@@ -33,6 +33,9 @@ struct http_client_response_head_access final {
         http_client_response_head& head) noexcept {
         return head.headers_;
     }
+    static void content_length(http_client_response_head& head, std::optional<std::uint64_t> value) noexcept {
+        head.content_length_ = value;
+    }
 };
 
 struct http1_client_exchange_state_access final {

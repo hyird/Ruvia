@@ -6,6 +6,7 @@
 #include <memory>
 #include <memory_resource>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -131,7 +132,7 @@ public:
     // socket to `socket`.
     void open_listener_socket(std::size_t worker_index, std::size_t listener_index,
         const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
-        inherited_listener_sockets* inherited, asio::ip::udp::socket& socket);
+        inherited_listener_sockets* inherited, asio::ip::udp::socket& socket, std::optional<bool> ipv6_only);
     // Closes the sockets of `listener_index` no worker claimed, for a listener
     // whose addition was rolled back.
     void close_unclaimed_listener_sockets(std::size_t listener_index) noexcept;

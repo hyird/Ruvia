@@ -101,7 +101,7 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(
     } catch (...) {
         exception = std::current_exception();
     }
-    if (context_services_value.connection_aborted()) {
+    if (context_services_value.connection_aborted() || context_services_value.request_reset()) {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
         }

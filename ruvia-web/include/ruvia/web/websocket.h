@@ -21,6 +21,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {
@@ -52,6 +53,8 @@ struct websocket_route_config final {
     bool require_subprotocol_{false};
     websocket_lifecycle_options lifecycle_{};
     websocket_deflate_config deflate_{};
+    // 单会话接收消息上限（含解压后）；unlimited 继承服务器上限，只能收紧。
+    protocol_byte_limit max_message_bytes_{};
 };
 
 struct websocket_send_options final {

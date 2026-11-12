@@ -7,6 +7,8 @@
 #include <string_view>
 #include <utility>
 
+#include <asio/io_context.hpp>
+
 #include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/fnv1a.h"
 #include "ruvia/core/move_only_function.h"
@@ -50,6 +52,13 @@ public:
     // Whether this worker's event loop was given a blocking pool; run_blocking()
     // on a worker without one reports blocking_status::unavailable.
     [[nodiscard]] bool has_blocking_pool() const noexcept;
+
+    // Native I/O integration, not bounded business admission. The executor
+    // borrows the runtime's io_context: finish its operations before the
+    // runtime/attachment retires and never retain it beyond context destruction.
+    // Empty or detached handles throw std::logic_error; stopping workers still
+    // expose their executor so already admitted operations can finish.
+    [[nodiscard]] asio::io_context::executor_type executor() const;
 
     // Worker-affine timer registration. This stable handle must outlive the
     // borrowed registration; destruction unregisters without a late callback.

@@ -205,6 +205,10 @@ client_transport_result client_tcp_transport::finish(lane_deadline& lane, const 
 }
 
 task<client_transport_result> client_tcp_transport::connect(const operation_timeout& timeout) {
+    const auto connect_started = std::chrono::steady_clock::now();
+    connect_duration_ = {};
+    tls_duration_ = {};
+    peer_endpoint_ = {};
     tls_close_ready_ = false;
     writing_ = false;
     if (tls_started_) {
@@ -224,12 +228,31 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
         co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
     }
-    if (literal_endpoint_.has_value()) {
+    client_resolve_result resolved;
+    if (endpoint_.resolve_) {
+        resolved = co_await endpoint_.resolve_(endpoint_.resolve_context_, resolver_, timeout);
+    } else if (literal_endpoint_) {
+        resolved.literal_ = literal_endpoint_;
+    } else {
+        auto pending = resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
+        if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+            resolved = std::move(*immediate);
+        } else {
+            resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
+        }
+    }
+    if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
+        co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
+    }
+    if (resolved.error_) {
+        co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
+    }
+    if (resolved.literal_) {
         // One numeric endpoint needs neither a resolver result allocation nor
         // the multi-address race. The same transport deadline and cancellation
         // own this socket as in the ordinary I/O paths.
         stream_.next_layer().replace_socket(asio::ip::tcp::socket(stream_.get_executor()));
-        const auto connected = co_await async_asio([this, endpoint = *literal_endpoint_](auto handler) mutable {
+        const auto connected = co_await async_asio([this, endpoint = *resolved.literal_](auto handler) mutable {
             stream_.next_layer().socket().async_connect(endpoint, std::move(handler));
         });
         if (connected.error_code() || abort_reason_ != client_abort_reason::none ||
@@ -237,21 +260,6 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
             co_return finish(read_, timeout, connected.error_code(), 0, client_transport_status::connect_failed);
         }
     } else {
-        client_resolve_result resolved;
-        {
-            auto pending = resolver_.resolve(endpoint_.host_, endpoint_.port_, timeout);
-            if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
-                resolved = std::move(*immediate);
-            } else {
-                resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
-            }
-        }
-        if (abort_reason_ != client_abort_reason::none || read_.deadline_.expired() || timeout.expired()) {
-            co_return finish(read_, timeout, {}, 0, client_transport_status::resolve_failed);
-        }
-        if (resolved.error_) {
-            co_return finish(read_, timeout, resolved.error_, 0, client_transport_status::resolve_failed);
-        }
         client_happy_eyeballs connector(worker_, stream_.get_executor(), resolved.addresses_);
         resolved = {};
         connecting_ = &connector;
@@ -272,6 +280,12 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
         }
         stream_.next_layer().replace_socket(std::move(*connected.socket_));
     }
+    connect_duration_ = std::chrono::steady_clock::now() - connect_started;
+    std::error_code peer_error;
+    peer_endpoint_ = stream_.next_layer().socket().remote_endpoint(peer_error);
+    if (peer_error) {
+        co_return finish(read_, timeout, peer_error, 0, client_transport_status::connect_failed);
+    }
     auto mode_error = apply_tcp_socket_policies(stream_.next_layer().socket(), endpoint_.tcp_);
     // Every socket operation is asynchronous or a bounded probe, and the TLS
     // socket layer writes records directly.
@@ -283,15 +297,17 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     }
     tls_started_ = true;
     if (const auto prepared =
-            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.host_), endpoint_.alpn_);
+            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.identity_host_.empty() ? endpoint_.host_ : endpoint_.identity_host_), endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,
             .error_ = make_client_tls_setup_error_code(prepared)};
     }
+    const auto tls_started = std::chrono::steady_clock::now();
     const auto handshake = co_await async_asio([this](auto handler) mutable {
         stream_.async_handshake(asio::ssl::stream_base::client, std::move(handler));
     });
+    tls_duration_ = std::chrono::steady_clock::now() - tls_started;
     auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
     // RFC 9113 section 9.2: even a noncompliant peer selecting h2 over a
     // legacy TLS connection must never cause HTTP/2 preface/application I/O.

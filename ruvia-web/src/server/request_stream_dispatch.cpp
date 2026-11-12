@@ -67,7 +67,8 @@ task<std::exception_ptr> run_request_stream_callback(
 // callback that selected nothing is a fault. Unexpected failures reach the sink.
 // No application error handler takes part.
 void complete_request_stream(context& context_value, std::exception_ptr failure) {
-    if (context_access::services(context_value).connection_aborted()) {
+    if (context_access::services(context_value).connection_aborted() ||
+        context_access::services(context_value).request_reset()) {
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
@@ -153,6 +154,32 @@ const conn_info& request_stream::conn() const& noexcept {
     return context_.conn();
 }
 
+request_body_state request_stream::body_state() const noexcept {
+    return detail::context_access::services(context_).body_state();
+}
+
+void request_stream::reset_impl(std::optional<std::uint64_t> error) {
+    detail::context_access::services(context_).reset_request(error);
+}
+
+void request_stream::reset() {
+    reset_impl(std::nullopt);
+}
+
+void request_stream::reset(http2_error_code error) {
+    if (request().protocol_version() != http_protocol_version::http2) {
+        throw std::invalid_argument("HTTP/2 reset code requires HTTP/2");
+    }
+    reset_impl(static_cast<std::uint32_t>(error));
+}
+
+void request_stream::reset(http3_error_code error) {
+    if (request().protocol_version() != http_protocol_version::http3) {
+        throw std::invalid_argument("HTTP/3 reset code requires HTTP/3");
+    }
+    reset_impl(static_cast<std::uint64_t>(error));
+}
+
 body_reader& request_stream::body() & {
     if (accept_tunnel_ != nullptr) {
         throw std::logic_error("a tunnel request carries no content: its bytes belong to accept_tunnel()");
@@ -231,7 +258,9 @@ task<http_response> request_stream::static_file(const static_root& root, static_
 void request_stream::respond(http_response response) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
         "response stream output operation is already in progress");
-    if (response_.committed() || detail::context_access::output_committed(context_) ||
+    if (detail::context_access::services(context_).request_reset() ||
+        detail::context_access::services(context_).connection_aborted() ||
+        response_.committed() || detail::context_access::output_committed(context_) ||
         detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already selected or committed");
     }
@@ -263,7 +292,9 @@ task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, h
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");
     }
-    if (response_.committed() || detail::context_access::output_committed(context_) ||
+    if (detail::context_access::services(context_).request_reset() ||
+        detail::context_access::services(context_).connection_aborted() ||
+        response_.committed() || detail::context_access::output_committed(context_) ||
         detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already committed");
     }
@@ -288,7 +319,9 @@ task<websocket*> request_stream::accept_websocket_impl(websocket_route_config co
     if (accept_websocket_ == nullptr) {
         throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");
     }
-    if (response_.committed() || detail::context_access::output_committed(context_) ||
+    if (detail::context_access::services(context_).request_reset() ||
+        detail::context_access::services(context_).connection_aborted() ||
+        response_.committed() || detail::context_access::output_committed(context_) ||
         detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already selected or committed");
     }

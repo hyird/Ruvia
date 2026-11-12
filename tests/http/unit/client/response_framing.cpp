@@ -1,9 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <initializer_list>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <string>
 #include <utility>
 
@@ -730,11 +732,18 @@ TEST(Ruvia, http_client_no_body_content_length_metadata_does_not_fail_the_respon
              std::pair{"GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5, 6"}}) {
         const auto parsed = parse_head(method, response);
         EXPECT_TRUE(parsed.plan().without_content() != nullptr);
+        EXPECT_FALSE(parsed.head().content_length().has_value());
     }
 
     const auto repeated =
         parse_head("GET", "HTTP/1.1 304 Not Modified\r\nContent-Length: 5\r\nContent-Length: 5");
     EXPECT_TRUE(repeated.plan().without_content() != nullptr);
+    EXPECT_EQ(repeated.head().content_length(), std::optional<std::uint64_t>(5));
+    const auto head = parse_head("HEAD", "HTTP/1.1 200 OK\r\nContent-Length: 42");
+    EXPECT_EQ(head.head().content_length(), std::optional<std::uint64_t>(42));
+    const auto invalid_then_valid = parse_head(
+        "HEAD", "HTTP/1.1 200 OK\r\nContent-Length: invalid\r\nContent-Length: 42");
+    EXPECT_FALSE(invalid_then_valid.head().content_length().has_value());
 }
 
 TEST(Ruvia, http_client_bodyless_responses_ignore_framing_fields) {

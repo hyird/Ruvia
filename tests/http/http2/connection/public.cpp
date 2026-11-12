@@ -3158,6 +3158,7 @@ TEST(Ruvia, http2_public_server_request_snapshot_body_open_survives_batched_cont
             return;
         }
         EXPECT_TRUE(request->snapshot().body_open_ == !end_stream_on_headers);
+        EXPECT_EQ(request->snapshot().initial_end_stream_, end_stream_on_headers);
         EXPECT_TRUE(!request->snapshot().connect_pending_);
         if (!end_stream_on_headers) {
             const auto chunk = server.next_event();

@@ -4,6 +4,7 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <limits>
 #include <memory_resource>
 #include <span>
@@ -104,6 +105,13 @@ inline void validate_client_user_agent(std::string_view user_agent) {
         config.received_cookies_ != http_client_received_cookie_policy::retain_and_send) {
         throw std::invalid_argument("http client received cookie policy is invalid");
     }
+    if (config.dial_host_) {
+        validate_client_origin_host(config.dial_host_->view(), "HTTP client dial host must not be empty", "HTTP client dial host is invalid");
+    }
+    if (config.dial_port_ && config.dial_port_->value() == 0) {
+        throw std::invalid_argument("HTTP client dial port must be positive");
+    }
+    detail::ensure_positive_optional_durations("HTTP DNS refresh interval must be positive", config.dns_refresh_interval_);
     validate_client_origin_host(
         host, "http client host must not be empty", "http client host is invalid");
     detail::ensure_positive_size(
@@ -163,15 +171,22 @@ inline void validate_http_client_configured_cookie_capacity(
 }
 
 struct http_client_config_storage final {
-    http_client_config_storage(const http_client_config& source_value, std::pmr::memory_resource* resource)
+    http_client_config_storage(const http_client_config& source_value, std::pmr::memory_resource* resource,
+        client_tls_files files = client_tls_files::parse)
         : http_client_config_storage(
-              source_value, validate_http_client_config(source_value), pmr_resource_or_default(resource)) {}
+              source_value, validate_http_client_config(source_value), pmr_resource_or_default(resource), files) {}
 
     http_client_config_storage(
         const http_client_config_storage& source_value, std::pmr::memory_resource* resource)
-        : http_client_config_storage(source_value, source_value.origin(), pmr_resource_or_default(resource)) {}
+        : http_client_config_storage(source_value, source_value.origin(), pmr_resource_or_default(resource), client_tls_files::keep_paths) {}
 
     std::pmr::string host_;
+    std::pmr::string dial_host_;
+    std::uint16_t dial_port_;
+    bool dial_overridden_;
+    std::function<bool(std::string_view, std::uint16_t)> address_validator_;
+    std::optional<timeout_duration> dns_refresh_interval_;
+    bool decode_content_;
     // RFC 3986 uri-host (IPv6 literals bracketed) and the default-port-omitted
     // authority of the fixed origin, computed once at startup.
     std::pmr::string uri_host_;
@@ -221,15 +236,33 @@ private:
     [[nodiscard]] static std::string_view user_agent_view(const http_client_config_storage& source_value) noexcept {
         return source_value.user_agent_;
     }
+    [[nodiscard]] static std::string_view dial_host_view(const http_client_config& source, http_origin_view origin) noexcept {
+        return source.dial_host_ ? source.dial_host_->view() : transport_host(origin);
+    }
+    [[nodiscard]] static std::string_view dial_host_view(const http_client_config_storage& source, http_origin_view) noexcept {
+        return source.dial_host_;
+    }
+    [[nodiscard]] static std::uint16_t dial_port_value(const http_client_config& source, http_origin_view origin) noexcept {
+        return source.dial_port_.value_or(port_number(origin.port())).value();
+    }
+    [[nodiscard]] static std::uint16_t dial_port_value(const http_client_config_storage& source, http_origin_view) noexcept {
+        return source.dial_port_;
+    }
+    [[nodiscard]] static bool dial_overridden(const http_client_config& source) noexcept {
+        return source.dial_host_.has_value() || source.dial_port_.has_value();
+    }
+    [[nodiscard]] static bool dial_overridden(const http_client_config_storage& source) noexcept {
+        return source.dial_overridden_;
+    }
 
-    // Public https configuration parses the TLS files every pool's context
-    // installs; allocator-rebound copies share them.
+    // Startup parses TLS files; asynchronous updates first own paths only.
+    // Allocator-rebound copies share already prepared material.
     template <typename source_type>
     [[nodiscard]] static client_tls_config_storage tls_storage(
-        const source_type& source_value, http_scheme scheme, std::pmr::memory_resource* resource) {
+        const source_type& source_value, http_scheme scheme, std::pmr::memory_resource* resource, client_tls_files files) {
         if constexpr (std::same_as<source_type, http_client_config>) {
             return {source_value.tls_,
-                scheme == http_scheme::https ? client_tls_files::parse : client_tls_files::keep_paths,
+                scheme == http_scheme::https ? files : client_tls_files::keep_paths,
                 resource};
         } else {
             return {source_value.tls_, resource};
@@ -242,8 +275,14 @@ private:
         requires(std::same_as<source_type, http_client_config> ||
                     std::same_as<source_type, http_client_config_storage>)
     http_client_config_storage(
-        const source_type& source_value, http_origin_view origin_value, std::pmr::memory_resource* resource)
+        const source_type& source_value, http_origin_view origin_value, std::pmr::memory_resource* resource, client_tls_files files)
         : host_(transport_host(origin_value), resource),
+          dial_host_(dial_host_view(source_value, origin_value), resource),
+          dial_port_(dial_port_value(source_value, origin_value)),
+          dial_overridden_(dial_overridden(source_value)),
+          address_validator_(source_value.address_validator_),
+          dns_refresh_interval_(source_value.dns_refresh_interval_),
+          decode_content_(source_value.decode_content_),
           uri_host_(origin_value.host(), resource),
           scheme_(origin_value.scheme()),
           port_(origin_value.port()),
@@ -265,7 +304,7 @@ private:
           advertisements_(source_value.advertisements_),
           push_(source_value.push_),
           http3_(source_value.http3_),
-          tls_(tls_storage(source_value, scheme_, resource)),
+          tls_(tls_storage(source_value, scheme_, resource, files)),
           tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
           user_agent_(user_agent_view(source_value), resource),

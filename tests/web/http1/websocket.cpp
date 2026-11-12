@@ -92,6 +92,9 @@ class http1_websocket_routes final {
     RUVIA_GET_WS("/http1-websocket-echo-send", echo_send);
     RUVIA_GET_WS("/http1-websocket-deflate-echo", echo_all);
     RUVIA_GET_WS("/http1-websocket-deflate-takeover", echo_all, takeover_deflate);
+    const auto small_message = ruvia::websocket_route_config{
+        .max_message_bytes_ = ruvia::protocol_byte_limit::limited(256)};
+    RUVIA_GET_WS("/http1-websocket-small-message", echo_all, small_message);
     RUVIA_ROUTES_END
 
     ruvia::task<void> echo_all(ruvia::context& context_value) {
@@ -1095,5 +1098,33 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
             static_cast<void>(client.read_some(asio::buffer(rest), end));
         }
     }
+    server.finish();
+}
+
+TEST(Ruvia, websocket_route_receive_limit_rejects_before_payload) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    asio::ip::tcp::socket client(io);
+    client.connect(server.endpoint());
+    constexpr std::string_view upgrade =
+        "GET /http1-websocket-small-message HTTP/1.1\r\nHost: 127.0.0.1\r\n"
+        "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    asio::write(client, asio::buffer(upgrade));
+    std::string head;
+    char byte;
+    while (!head.ends_with("\r\n\r\n")) {
+        asio::read(client, asio::buffer(&byte, 1));
+        head.push_back(byte);
+    }
+    EXPECT_TRUE(head.starts_with("HTTP/1.1 101 "));
+    const std::string declared("\x82\xfe\x01\x01\0\0\0\0", 8);
+    asio::write(client, asio::buffer(declared));
+    std::array<unsigned char, 4> close{};
+    asio::read(client, asio::buffer(close));
+    EXPECT_EQ(close[0], 0x88);
+    EXPECT_EQ(close[1], 2);
+    EXPECT_EQ((static_cast<unsigned>(close[2]) << 8) | close[3], 1009U);
+    client.close();
     server.finish();
 }

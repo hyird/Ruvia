@@ -158,7 +158,7 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         // connection's and the worker's inbound budgets.
         body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(&d.inbound_buffer_pool_),
             body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_,
-            *d.base_route_services_.interim_output());
+            *d.base_route_services_.interim_output(), d.base_route_services_.worker());
         auto services = d.base_route_services_;
         services.bind_streaming_request_body(body_reader->facade());
         services.bind_request_trailers(body_reader->reader().trailers());
@@ -787,6 +787,14 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 scanner_entry.set_phase(connection_scanner::phase::idle);
                 const auto expectation_plan =
                     parsed_value.body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
+                request_body_state initial_body;
+                if (const auto* known = parsed_value.body_plan_.known_length()) {
+                    initial_body.framing_ = request_body_framing::known_length;
+                    initial_body.content_length_ = known->content_length();
+                } else if (parsed_value.body_plan_.chunked() != nullptr) {
+                    initial_body.framing_ = request_body_framing::chunked;
+                }
+                base_route_services.bind_body_state(initial_body);
                 admission.emplace(admit_http_request(
                     {
                         .request_ = parsed_value.request_,

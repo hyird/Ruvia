@@ -20,6 +20,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_signal.h"
 
 #include "http3/http3_connection_id.h"
 #include "http3/http3_worker_directory.h"
@@ -91,7 +92,7 @@ public:
     // whose acceptor binds it, only prepares the QUIC backend.
     void open(inherited_listener_sockets* inherited);
     // Starts admitting connections, and on POSIX receiving.
-    void start();
+    void start() noexcept;
     // The listener was removed: no connection is admitted any more, while
     // established ones are served. After the last one ends the POSIX socket
     // closes; on Windows the acceptor learns that this worker no longer
@@ -141,6 +142,7 @@ private:
 
 #if !defined(_WIN32)
     task<void> run_receive_loop();
+    worker_signal activated_;
 #endif
     task<void> serve(session_pointer session);
     void receive(std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,

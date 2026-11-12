@@ -40,10 +40,10 @@ private:
     friend struct detail::streaming_access;
     friend class multipart_reader;
 
-    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>()>;
+    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(stop_token)>;
 
     body_reader(void* target, read_type::invoke_type read) noexcept
-        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>()>(target, read)) {}
+        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(stop_token)>(target, read)) {}
 
 public:
     body_reader(const body_reader&) = delete;
@@ -57,14 +57,18 @@ public:
     /// safely share the borrowed buffer. Unstarted operations may coexist.
     /// HTTP/1 enters the interim-write operation only while a 100 Continue is
     /// pending; later reads do not repeat that operation.
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
-    task<std::optional<std::span<const std::byte>>> read() && = delete;
+    /// stop 取消本次等待并抛 system_error(operation_canceled)，不返回 EOF。
+    /// HTTP/2、HTTP/3 可继续读取；HTTP/1 放弃正文并在响应后关闭连接。
+    /// 取消不取消响应方向；token 在创建冷任务时拥有化。
+    /// 不延长服务器已有正文超时；启动的任务仍须等待完成，取消后再释放宿主。
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token stop = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(stop_token = {}) && = delete;
 
     /// Reads the next chunk as characters without charset conversion or UTF-8
     /// validation. Chunk boundaries may split encoded characters. Shares read()'s
     /// lifetime and linear operation contract.
-    [[nodiscard]] task<std::optional<std::string_view>> text() &;
-    task<std::optional<std::string_view>> text() && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> text(stop_token stop = {}) &;
+    task<std::optional<std::string_view>> text(stop_token = {}) && = delete;
 
 private:
     void bind_worker(const worker_handle& worker_value) noexcept {

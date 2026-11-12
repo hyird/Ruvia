@@ -3,15 +3,19 @@
 #include <algorithm>
 #include <array>
 #include <exception>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <utility>
 
+#include <openssl/crypto.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 
@@ -19,6 +23,33 @@
 
 namespace ruvia::detail {
 namespace {
+
+struct client_tls_preparation final {
+    explicit client_tls_preparation(client_tls_config_storage config)
+        : config_(std::move(config)),
+          password_(process_resource()) {}
+    ~client_tls_preparation() {
+        if (!password_.empty()) {
+            OPENSSL_cleanse(password_.data(), password_.size());
+        }
+    }
+    client_tls_config_storage config_;
+    std::pmr::string password_;
+};
+
+task<client_tls_config_storage> prepare_client_tls_owned(worker_handle worker,
+    std::unique_ptr<client_tls_preparation, pmr_object_deleter<client_tls_preparation>> input,
+    stop_token stop) {
+    auto result = co_await run_blocking(std::move(worker),
+        [input = std::move(input), stop = std::move(stop)]() mutable {
+            if (stop.stop_requested()) {
+                throw std::runtime_error("client TLS preparation cancelled");
+            }
+            input->config_.parse_files(input->password_);
+            return std::move(input->config_);
+        });
+    co_return std::move(result).take_value();
+}
 
 constexpr std::array<unsigned char, 9> http11_alpn = {8, 'h', 't', 't', 'p', '/', '1', '.', '1'};
 constexpr std::array<unsigned char, 3> http2_alpn = {2, 'h', '2'};
@@ -108,6 +139,7 @@ public:
 client_tls_config_storage::client_tls_config_storage(
     const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
     : mode_(source_value.mode_),
+      minimum_version_(source_value.minimum_version_),
       max_outgoing_records_(source_value.max_outgoing_records_) {
     auto* const target = pmr_resource_or_default(resource);
     if (source_value.ca_file_.has_value()) {
@@ -122,15 +154,30 @@ client_tls_config_storage::client_tls_config_storage(
     if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
         return;
     }
+    parse_files(source_value.identity_ ? std::string_view(source_value.identity_->private_key_password_) : std::string_view{});
+}
+
+void client_tls_config_storage::parse_files(std::string_view private_key_password) {
     trust_store_ = ca_file_.has_value() ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default();
     if (identity_.has_value()) {
-        certificate_ = load_tls_certificate(*identity_, source_value.identity_->private_key_password_);
+        certificate_ = load_tls_certificate(*identity_, private_key_password);
     }
+}
+
+task<client_tls_config_storage> prepare_client_tls_config(
+    worker_handle worker, client_tls_config_storage config,
+    std::string_view private_key_password, stop_token stop) {
+    auto input = make_pmr_object<client_tls_preparation>(process_resource(), std::move(config));
+    // Keep the secret at one stable address: moving an SSO string can leave
+    // uncleansed bytes behind in an abandoned coroutine or callable frame.
+    input->password_.assign(private_key_password);
+    return prepare_client_tls_owned(std::move(worker), std::move(input), std::move(stop));
 }
 
 client_tls_config_storage::client_tls_config_storage(
     const client_tls_config_storage& source_value, std::pmr::memory_resource* resource)
     : mode_(source_value.mode_),
+      minimum_version_(source_value.minimum_version_),
       max_outgoing_records_(source_value.max_outgoing_records_),
       trust_store_(source_value.trust_store_),
       certificate_(source_value.certificate_) {
@@ -151,6 +198,9 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
         throw std::invalid_argument("client TLS context requires TLS to be enabled");
     }
     apply_tls_protocol_policy(context_value, config.max_outgoing_records_);
+    if (SSL_CTX_set_min_proto_version(&context_value, static_cast<int>(config.minimum_version_)) != 1) {
+        throw std::runtime_error("failed to configure client TLS minimum version");
+    }
     SSL_CTX_set_verify(&context_value, SSL_VERIFY_PEER, nullptr);
     if (!config.trust_store_.has_value()) {
         throw std::logic_error("client TLS trust store was not parsed");

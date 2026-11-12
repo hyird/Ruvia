@@ -136,10 +136,11 @@ namespace ruvia::detail {
 
 [[nodiscard]] inline websocket_connection_options make_server_websocket_connection_options(
     const http_server_options& options, websocket_compression negotiated,
-    const websocket_deflate_config& deflate) noexcept {
+    const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
     // Directions without context takeover borrow the worker's codecs, which
     // outlive every connection, so they allocate no codec state here.
     return websocket_connection_options{
+        .receive_message_limit_ = receive_limit,
         .compression_ = negotiated,
         .deflater_ = deflate.deflater_,
         .shared_deflate_ = &options.codecs_->websocket_deflate(),
@@ -330,7 +331,8 @@ struct tunnel_upgrade_session_operation final {
                 websocket_endpoint.lifecycle(),
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
                 inbound_, pending_,
-                make_server_websocket_connection_options(options_, committed->compression(), websocket_endpoint.deflate()),
+                make_server_websocket_connection_options(options_, committed->compression(), websocket_endpoint.deflate(),
+                    websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)),
                 committed->release_subprotocol());
         } catch (...) {
             committed->abort();
@@ -435,7 +437,8 @@ struct websocket_upgrade_session_operation final {
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
                 inbound_, pending_frames_,
                 make_server_websocket_connection_options(
-                    options_, committed->compression(), websocket_endpoint_.deflate()),
+                    options_, committed->compression(), websocket_endpoint_.deflate(),
+                    websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)),
                 committed->release_subprotocol());
         } catch (...) {
             committed->abort();

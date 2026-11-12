@@ -40,24 +40,30 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
     std::terminate();
 }
 
-[[nodiscard]] client_tcp_endpoint http_client_endpoint(const http_client_config_storage& config) noexcept {
-    return {.host_ = config.host_,
-        .port_ = config.port_,
+[[nodiscard]] client_tcp_endpoint http_client_endpoint(http_client_pool& pool) noexcept {
+    const auto& config = pool.config();
+    return {.host_ = config.dial_host_,
+        .port_ = config.dial_port_,
         .tls_ = config.scheme_ == http_scheme::https ? &config.tls_ : nullptr,
         .tcp_ = config.tcp_,
-        .alpn_ = client_alpn_bytes(select_client_alpn(config.protocol_))};
+        .alpn_ = client_alpn_bytes(select_client_alpn(config.protocol_)),
+        .identity_host_ = config.host_,
+        .resolve_context_ = &pool,
+        .resolve_ = [](void* context, client_host_resolver& resolver, const operation_timeout& timeout) -> task<client_resolve_result> {
+            auto& owner = *static_cast<http_client_pool*>(context);
+            return owner.resolve_addresses(owner.config().dial_host_, owner.config().dial_port_, resolver, timeout);
+        }};
 }
 
 }  // namespace
 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
-    : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool.config()),
+    : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool),
           pool.wire_counters()),
       read_buffer_(process_resource()),
       write_buffer_(process_resource()),
 #ifdef RUVIA_ENABLE_HTTP2
-      http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().write_timeout_,
-          pool.config().http2_ping_interval_),
+      http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().http2_ping_interval_),
 #endif
       connect_scheduler_(1, pool.worker(), process_resource()),
       http1_scheduler_(1, pool.worker(), process_resource()),
@@ -70,6 +76,38 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 }
 
 http_client_connection::~http_client_connection() = default;
+
+void http_client_connection::capture_connection_info(http_client_response_state& response, bool reused) const {
+    if (response.connection_info_.id_ != connection_id_) {
+        response.connection_info_.peer_ip_ = peer_ip_;
+        response.connection_info_.peer_port_ = transport_.peer_endpoint().port();
+        response.connection_info_.id_ = connection_id_;
+    }
+    response.connection_info_.reused_ = reused;
+    response.connection_info_.connect_duration_ = reused ? std::chrono::steady_clock::duration{} : transport_.connect_duration();
+    response.connection_info_.tls_duration_ = reused ? std::chrono::steady_clock::duration{} : transport_.tls_duration();
+}
+
+void http_client_connection::retire_addresses() noexcept {
+    address_retired_ = true;
+#ifdef RUVIA_ENABLE_HTTP2
+    if (http2_.running()) {
+        http2_.mark_draining();
+        for (auto* stream : http2_streams_) {
+            if (stream->state_->tunnel_) {
+                cancel_http2_stream(stream->request_id_, client_abort_reason::closing);
+            }
+        }
+        if (http2_streams_.empty()) {
+            close_idle();
+        }
+        return;
+    }
+#endif
+    if (http1_response_ == nullptr || http1_response_->tunnel_) {
+        close();
+    }
+}
 
 #ifdef RUVIA_ENABLE_HTTP2
 std::size_t http_client_connection::available_http2_request_streams() const noexcept {
@@ -90,6 +128,7 @@ void http_client_connection::abort_http1_response() noexcept {
     if (http1_response_ == nullptr) {
         return;
     }
+    http1_response_->request_informational_stop();
     if (auto* output = http1_response_->output()) {
         output->stop();
     }
@@ -121,6 +160,10 @@ void http_client_connection::close() noexcept {
 
 void http_client_connection::begin_idle() noexcept {
     if (!connected_) {
+        return;
+    }
+    if (address_retired_ || fresh_) {
+        close_idle();
         return;
     }
     if (protocol_ == protocol_type::http1 && !idle_watch_wanted_) {
@@ -311,6 +354,9 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP response was abandoned");
     }
     end_idle();
+    if (address_retired_ && protocol_ != protocol_type::http2) {
+        close();
+    }
     if (retired_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
     }
@@ -372,18 +418,30 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
         // offer only http/1.1, like Pingora's prefer_h1.
         transport_.offer_alpn(client_alpn::http11);
     }
-    const auto& config = pool_.config();
-    const auto timeout = operation_timeout_value.constrained_by(config.connect_timeout_);
+    const auto timeout = operation_timeout_value.constrained_by(response.effective_connect_timeout_);
+    struct connect_attempt final {
+        http_client_connection& connection_;
+        bool committed_{false};
+        ~connect_attempt() {
+            if (!committed_) {
+                connection_.close();
+            }
+        }
+    } attempt{*this};
     const auto connected = co_await transport_.connect(timeout);
+    if (transport_.peer_endpoint().port() != 0) {
+        connection_id_ = pool_.next_connection_id();
+        peer_ip_ = transport_.peer_endpoint().address().to_string();
+        capture_connection_info(response, false);
+    }
     if (!connected.ok()) {
-        close();
         throw_http_client_transport_error(connected, "upstream closed while connecting");
     }
 #ifdef RUVIA_ENABLE_HTTP2
+    const auto& config = pool_.config();
     if (transport_.secure()) {
         const auto alpn = transport_.alpn();
         if (config.protocol_ == http_client_protocol::http2_only && alpn != "h2") {
-            close();
             throw http_client_error(
                 http_client_error::code_type::protocol_unavailable, "upstream did not negotiate HTTP/2");
         }
@@ -395,8 +453,10 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     protocol_ = protocol_type::http1;
 #endif
     connected_ = true;
+    address_retired_ = false;
 #ifdef RUVIA_ENABLE_HTTP2
     if (protocol_ != protocol_type::http2) {
+        attempt.committed_ = true;
         co_return false;
     }
     const auto started = co_await http2_.start({.enable_push_ = config.push_.enabled_,
@@ -405,16 +465,16 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     switch (started.status_) {
         case http2_client_session_start_status::started:
             http2_session_requests_ = 0;
+            attempt.committed_ = true;
             co_return false;
         case http2_client_session_start_status::transport_failed:
-            close();
             throw_http_client_transport_error(started.transport_, "upstream closed during HTTP/2 preface");
         case http2_client_session_start_status::protocol_failed:
-            close();
             throw http_client_error(http_client_error::code_type::protocol_error, "invalid HTTP/2 connection preface");
     }
     std::terminate();
 #else
+    attempt.committed_ = true;
     co_return false;
 #endif
 }

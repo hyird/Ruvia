@@ -55,6 +55,9 @@ public:
     [[nodiscard]] http_protocol_version protocol_version() const noexcept {
         return protocol_version_;
     }
+    [[nodiscard]] std::optional<std::uint64_t> content_length() const noexcept {
+        return content_length_;
+    }
 
     // Parsed field lines retain wire order and repeated metadata fields. In
     // particular, Content-Type values are not parsed as media types, merged,
@@ -98,6 +101,7 @@ private:
     http_received_status status_;
     http_protocol_version protocol_version_;
     std::pmr::vector<http_header> headers_;
+    std::optional<std::uint64_t> content_length_;
 };
 
 }  // namespace ruvia

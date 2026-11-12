@@ -82,6 +82,11 @@ struct context_connection_services final {
     connection_lifecycle* lifecycle_{};
 };
 
+struct request_stream_control final {
+    callback_ref<void(std::optional<std::uint64_t>)> reset_;
+    bool reset_requested_{false};
+};
+
 // Borrowed protocol channels outlive every context for this request.
 struct context_request_channels final {
     http_interim_response_output* interim_output_{};
@@ -107,6 +112,8 @@ struct context_request_services final {
     // (test_app); empty when those decisions read the steady clock.
     std::optional<std::chrono::steady_clock::time_point> pinned_arrival_{};
     bool early_data_{false};
+    request_body_state body_state_{};
+    request_stream_control* stream_control_{};
 };
 
 class context_services final {
@@ -196,6 +203,30 @@ public:
     }
     [[nodiscard]] bool early_data() const noexcept {
         return request_services_.early_data_;
+    }
+
+    void bind_body_state(request_body_state state) noexcept {
+        request_services_.body_state_ = state;
+    }
+    [[nodiscard]] request_body_state body_state() const noexcept {
+        return request_services_.body_state_;
+    }
+    void bind_stream_control(request_stream_control& control) noexcept {
+        request_services_.stream_control_ = &control;
+    }
+    [[nodiscard]] bool request_reset() const noexcept {
+        const auto* control = request_services_.stream_control_;
+        return control != nullptr && control->reset_requested_;
+    }
+    void reset_request(std::optional<std::uint64_t> error) const {
+        if (auto* control = request_services_.stream_control_) {
+            if (!control->reset_requested_) {
+                control->reset_requested_ = true;
+                control->reset_(error);
+            }
+        } else {
+            abort_connection();
+        }
     }
 
     [[nodiscard]] const route_table* routes() const noexcept {

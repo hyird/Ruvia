@@ -29,6 +29,8 @@ public:
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop, http_client_response_state& response);
     void close() noexcept;
+    void retire_addresses() noexcept;
+    [[nodiscard]] std::uint64_t connection_id() const noexcept;
     void shutdown() noexcept;
     [[nodiscard]] task<void> join();
     [[nodiscard]] bool cancel_by_id(std::uint64_t id) noexcept;

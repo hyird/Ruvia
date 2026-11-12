@@ -80,6 +80,8 @@ public:
     [[nodiscard]] std::string_view subprotocol() const& RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
     [[nodiscard]] http_protocol_version protocol_version() const;
+    [[nodiscard]] const http_client_connection_info& connection_info() const& RUVIA_LIFETIMEBOUND;
+    const http_client_connection_info& connection_info() const&& = delete;
     [[nodiscard]] bool connected() const;
     [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const;
     [[nodiscard]] std::string_view peer_close_reason() const& RUVIA_LIFETIMEBOUND;
@@ -107,6 +109,7 @@ public:
     http_client_websocket_request& operator=(http_client_websocket_request&&) = delete;
     http_client_websocket_request& headers(std::span<const http_header_view> fields);
     http_client_websocket_request& header(std::string_view name, std::string_view value);
+    http_client_websocket_request& configure(http_client_request_options options);
     http_client_websocket_request& subprotocol(std::string_view value);
     http_client_websocket_request& deflate(websocket_client_deflate_offer offer);
     // Pong expiry runs only while receive can observe it; blocked writes retain
@@ -129,6 +132,7 @@ private:
     websocket_client_deflate_offer deflate_{};
     websocket_lifecycle_options lifecycle_{};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};
+    http_client_request_options request_options_;
     bool consumed_{false};
 };
 

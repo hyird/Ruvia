@@ -111,6 +111,7 @@ struct http_server_listener_definition final {
     [[nodiscard]] http_server_listener_definition clone(std::pmr::memory_resource* resource) const;
 
     asio::ip::tcp::endpoint endpoint_;
+    std::optional<bool> ipv6_only_;
     // listen_config::inherited_sockets_ of this listener, shared by its
     // clones; null when it binds. The run that prepares the listener claims
     // them; the stored definition drops them once a run took them.
@@ -172,6 +173,7 @@ public:
     void adopt_tls_identities(std::shared_ptr<const http_server_tls_identities> identities) noexcept;
 
     http_server_listener_definition::transport_type transport_;
+    std::optional<bool> ipv6_only_;
     std::optional<http_server_listener_definition::http3_service> http3_;
     // Stable for the session's lifetime: the TLS contexts' ALPN selection
     // borrows connection_->alpn_.

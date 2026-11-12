@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -337,6 +338,9 @@ struct client_tcp_endpoint final {
     client_tcp_config tcp_;
     // ALPN wire offer borrowed until transport retirement; empty for TCP.
     std::span<const unsigned char> alpn_{};
+    std::string_view identity_host_{};
+    void* resolve_context_{};
+    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_timeout&){};
 };
 
 // True for an OpenSSL failure or a TLS stream truncated without close_notify.
@@ -372,6 +376,15 @@ public:
     // Replaces the endpoint's ALPN offer for every later connect().
     void offer_alpn(client_alpn alpn) noexcept {
         endpoint_.alpn_ = client_alpn_bytes(alpn);
+    }
+    [[nodiscard]] const asio::ip::tcp::endpoint& peer_endpoint() const noexcept {
+        return peer_endpoint_;
+    }
+    [[nodiscard]] std::chrono::steady_clock::duration connect_duration() const noexcept {
+        return connect_duration_;
+    }
+    [[nodiscard]] std::chrono::steady_clock::duration tls_duration() const noexcept {
+        return tls_duration_;
     }
     // Selected ALPN protocol of the current TLS connection; empty for TCP.
     [[nodiscard]] std::string_view alpn() noexcept;
@@ -451,6 +464,9 @@ private:
     client_tcp_endpoint endpoint_;
     std::optional<asio::ip::tcp::endpoint> literal_endpoint_{};
     client_wire_counters& counters_;
+    asio::ip::tcp::endpoint peer_endpoint_;
+    std::chrono::steady_clock::duration connect_duration_{};
+    std::chrono::steady_clock::duration tls_duration_{};
     client_host_resolver resolver_;
     asio::ssl::stream<client_tls_socket> stream_;
     lane_deadline read_;

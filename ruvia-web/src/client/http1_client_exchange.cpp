@@ -91,13 +91,13 @@ prepare_http1_request_head(
     const auto prepare = [&](std::span<char> buffer) {
         if (const auto* websocket = request.websocket()) {
             return prepare_http1_websocket_client_request(origin, source.target_.view(), websocket->key_,
-                websocket->negotiation_, headers, buffer, response_resource);
+                websocket->negotiation_, headers, buffer, response_resource, request.options_.field_source_);
         }
         if (connect_udp) {
-            return writer.prepare_connect_udp(origin, source.target_, headers, buffer);
+            return writer.prepare_connect_udp(origin, source.target_, headers, buffer, {.field_source_ = request.options_.field_source_});
         }
-        if (request.is_tunnel()) {
-            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer);
+        if (request.is_tunnel() && !request.is_upgrade()) {
+            return writer.prepare_connect(borrowed_text(request.tunnel_authority()), headers, buffer, {.field_source_ = request.options_.field_source_});
         }
         if (upload != nullptr) {
             return writer.prepare_streaming(origin,
@@ -105,9 +105,9 @@ prepare_http1_request_head(
                     .target_ = source.target_,
                     .headers_ = headers,
                     .content_length_ = upload->config_.content_length_},
-                buffer, {.expectation_ = upload->config_.expectation_});
+                buffer, {.expectation_ = upload->config_.expectation_, .field_source_ = request.options_.field_source_});
         }
-        return writer.prepare(origin, source, buffer);
+        return writer.prepare(origin, source, buffer, {.field_source_ = request.options_.field_source_});
     };
     return prepare_http1_request_head(write_buffer, max_client_request_head_bytes, prepare);
 }
@@ -157,12 +157,12 @@ prepare_http1_request_head(
     throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
 }
 
-// The final head opens the request's tunnel: a 2xx to CONNECT, or the 101
-// upgrade of CONNECT-UDP or WebSocket.
+// The parser validates the exact offered protocols and Connection options;
+// every accepted Upgrade uses the same transparent byte tunnel as CONNECT.
 [[nodiscard]] bool opens_tunnel(
     const http_client_request_storage& request, const http1_parsed_client_response_head& head) noexcept {
     return request.is_tunnel() && (head.plan().connect_tunnel() != nullptr ||
-                                      ((request.udp_tunnel() || request.websocket() != nullptr) &&
+                                      ((request.is_upgrade() || request.udp_tunnel() || request.websocket() != nullptr) &&
                                           head.plan().protocol_upgrade() != nullptr));
 }
 
@@ -196,7 +196,7 @@ void publish_body_progress(http_client_response_state& state_value,
 
 task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout) {
     const auto written =
-        co_await connection_.transport_.write(parts, timeout.constrained_by(pool_.config().write_timeout_));
+        co_await connection_.transport_.write(parts, timeout.constrained_by(response_->effective_write_timeout_));
     if (!written.ok()) {
         throw_http_client_transport_error(written, "upstream closed while receiving the HTTP request");
     }
@@ -212,7 +212,7 @@ task<client_transport_result> http1_client_exchange::read_append(
     }
     // Each read restarts the inactivity bound, inside the exchange deadline.
     auto read = co_await connection_.transport_.read_some(
-        read_space, read_inactivity_bound ? timeout.constrained_by(pool_.config().read_timeout_) : timeout);
+        read_space, read_inactivity_bound ? timeout.constrained_by(response_->effective_read_timeout_) : timeout);
     // close() may clear the target while the read is pending; never publish
     // bytes of a closed connection into it.
     if (!connection_.connected_) {
@@ -230,9 +230,10 @@ task<client_transport_result> http1_client_exchange::read_append(
 
 task<void> http1_client_exchange::run(
     const http_client_request_storage& request, const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
-    if (!request.tunnel_protocol().empty() && !request.udp_tunnel() && request.websocket() == nullptr) {
+    if (!request.is_upgrade() && !request.tunnel_protocol().empty() && !request.udp_tunnel() && request.websocket() == nullptr) {
         throw http_client_error(http_client_error::code_type::protocol_unavailable, "Extended CONNECT requires HTTP/2");
     }
+    response_ = &state_value;
     auto& connection = connection_;
     connection.end_idle();
     connection.transport_.reset_abort();
@@ -267,27 +268,32 @@ task<void> http1_client_exchange::run(
                 : std::string_view("HTTP request head is too large"));
     }
     http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
-    if (const auto* content = prepared->content_plan().immediate(); content && !content->bytes().empty()) {
-        std::array<asio::const_buffer, 2> parts{
-            asio::buffer(prepared->head()), asio::buffer(content->bytes())};
-        co_await write(coalesce_tls_write_parts(connection_.transport_.secure(), write_buffer, parts), timeout);
-        if (parser.complete_request_content() != http1_client_request_content_completion_status::completed) {
-            std::terminate();
-        }
-    } else {
-        // Streaming/continue-gated content must still send its head separately.
+    const auto* immediate = prepared->content_plan().immediate();
+    const bool immediate_content = immediate != nullptr && !immediate->bytes().empty();
+    if (!immediate_content) {
+        // Streaming/continue-gated content sends its head before the upload.
         co_await write(single_part(prepared->head()), timeout);
+        write_buffer.clear_retaining_small();
     }
-    write_buffer.clear_retaining_small();
-
-    if (upload == nullptr) {
+    if (upload == nullptr && !immediate_content) {
         co_await receive(request, timeout, state_value, parser);
+        connection_.retain_idle_buffers();
         co_return;
     }
     task_scope writers(pool_.worker(), {.resource_ = process_resource()});
     std::exception_ptr writer_failure;
-    writers.spawn(write_upload(state_value, timeout,
-        http1_request_content_writer(*prepared->content_plan().streaming()), parser, writer_failure));
+    bool immediate_completed = false;
+    std::array<asio::const_buffer, 2> parts;
+    if (immediate_content) {
+        parts = {asio::buffer(prepared->head()), asio::buffer(immediate->bytes())};
+        // Preserve one scatter/gather write (and small TLS coalescing) while
+        // receiving 1xx concurrently, without copying the owned request body.
+        const auto write_parts = coalesce_tls_write_parts(connection_.transport_.secure(), write_buffer, parts);
+        writers.spawn(write_immediate(write_parts, timeout, parser, immediate_completed, writer_failure));
+    } else {
+        writers.spawn(write_upload(state_value, timeout,
+            http1_request_content_writer(*prepared->content_plan().streaming()), parser, writer_failure));
+    }
     std::exception_ptr receive_failure;
     try {
         co_await receive(request, timeout, state_value, parser);
@@ -295,7 +301,9 @@ task<void> http1_client_exchange::run(
         receive_failure = std::current_exception();
     }
     if (receive_failure) {
-        upload->output_.stop();
+        if (upload != nullptr) {
+            upload->output_.stop();
+        }
         connection_.close();
     } else {
         // Response framing can finish before the request content. Publish that
@@ -303,9 +311,14 @@ task<void> http1_client_exchange::run(
         // writer finishes the request or is explicitly stopped.
         state_value.complete_ = true;
         state_value.data_signal_.notify();
+        if (immediate_content && !immediate_completed) {
+            // A complete early response ends the buffered exchange. Never wait
+            // for a peer that stopped consuming content, or pool its remainder.
+            connection_.close();
+        }
     }
     worker_timer_registration upload_completion_timer;
-    if (!upload->output_.ended_ && !upload->output_.stopped_) {
+    if (upload != nullptr && !upload->output_.ended_ && !upload->output_.stopped_) {
         if (timeout.expired()) {
             connection_.cancel(connection_.generation_, client_abort_reason::timeout);
         } else if (const auto deadline = timeout.deadline()) {
@@ -319,10 +332,16 @@ task<void> http1_client_exchange::run(
     }
     co_await writers.join();
     upload_completion_timer.cancel();
-    if (!upload->output_.ended_) {
+    if ((upload != nullptr && !upload->output_.ended_) || (immediate_content && !immediate_completed)) {
         connection_.close();
     }
-    if (writer_failure) {
+    connection_.retain_idle_buffers();
+    // The receive side decides an ordinary rejected write, including our own
+    // early-response close. Preserve its callback/protocol failure as well.
+    // Timeout, cancellation, TLS and local write failures still fail both lanes.
+    const bool receive_decides_write = immediate_content && writer_failure &&
+                                       http_client_failure_code(writer_failure) == http_client_error::code_type::io_error;
+    if (writer_failure && !receive_decides_write) {
         std::rethrow_exception(writer_failure);
     }
     if (receive_failure) {
@@ -337,11 +356,40 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // The parsed head is move-constructible only, so it is emplaced once.
     std::optional<http1_parsed_client_response_head> head;
     while (!head) {
-        if (auto next = take_final_head(state_value, parser)) {
-            head.emplace(std::move(*next));
-        } else if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout)).ok()) {
-            throw http_client_error(
-                http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
+        connection_.throw_if_aborted();
+        if (timeout.expired()) {
+            throw http_client_error(http_client_error::code_type::timeout, "HTTP response head timed out");
+        }
+        auto parse_result = parser.parse(read_buffer.view());
+        if (parse_result.failure()) {
+            throw http_client_error(http_client_error::code_type::protocol_error,
+                http1_client_response_parse_error_message(*parse_result.failure()));
+        }
+        if (parse_result.need_more()) {
+            if (read_buffer.size() >= max_http_header_bytes) {
+                throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
+            }
+            if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout)).ok()) {
+                throw http_client_error(
+                    http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
+            }
+            continue;
+        }
+        auto* parsed = parse_result.parsed();
+        if (parsed == nullptr) {
+            std::terminate();
+        }
+        if (parsed->plan().informational() == nullptr) {
+            head.emplace(std::move(*parsed));
+            break;
+        }
+        auto informational = std::move(*parsed).take_head();
+        state_value.retain_informational(
+            informational.status(), std::move(informational).take_headers(), parsed->plan().request_content_signal());
+        read_buffer.consume(parsed->consumed_bytes());
+        // No further transport input or parsing while the consumer is suspended.
+        if (state_value.informational_callback_) {
+            co_await state_value.dispatch_informational(timeout);
         }
     }
     if (auto* websocket = request.websocket()) {
@@ -356,6 +404,22 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         websocket->compression_ = selected->compression_;
     }
     const auto& plan = head->plan();
+    // The parser's message-length precedence is authoritative, including HEAD,
+    // 205 framing, ignored HTTP/1.0 Transfer-Encoding and accepted tunnels.
+    state_value.content_length_ = head->head().content_length();
+    if (plan.known_length() != nullptr) {
+        state_value.framing_ = http_client_response_framing::fixed_length;
+    } else if (plan.chunked() != nullptr) {
+        state_value.framing_ = http_client_response_framing::chunked;
+    } else if (plan.close_delimited() != nullptr) {
+        state_value.framing_ = http_client_response_framing::close_delimited;
+    } else if (plan.connect_tunnel() != nullptr) {
+        state_value.framing_ = http_client_response_framing::tunnel;
+    } else if (plan.protocol_upgrade() != nullptr) {
+        state_value.framing_ = http_client_response_framing::protocol_upgrade;
+    } else {
+        state_value.framing_ = http_client_response_framing::none;
+    }
     const bool tunnel_opened = opens_tunnel(request, *head);
     if (!tunnel_opened && (plan.connect_tunnel() != nullptr || plan.protocol_upgrade() != nullptr)) {
         throw http_client_error(http_client_error::code_type::protocol_error,
@@ -399,10 +463,9 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     bool eof = false;
     http1_close_policy persistence = http1_close_policy::close_after_response;
     for (;;) {
-        // Backpressure applies to decoding buffered compressed input too,
-        // not just to the next transport read. One step cannot overfill the
-        // producer queue; read_all retains its separate total byte policy.
-        // The wait is a coroutine only for the rare full queue.
+        // Buffered protocol input may still complete the response without I/O.
+        // Drain it within the queue limit before waiting for the consumer, so
+        // a complete retained response does not depend on a later body read.
         if (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
             co_await wait_for_body_space(state_value, timeout);
         }
@@ -433,6 +496,12 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         if (eof) {
             throw std::logic_error("HTTP body decoder requested input after EOF");
         }
+        // Only a new network read spends inactivity budget. Outstanding delivery
+        // (including the last borrowed chunk) postpones that read, not decoder
+        // completion on bytes already received.
+        if (!state_value.collect_all_ && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
+            co_await wait_for_body_space(state_value, timeout);
+        }
         const auto read = co_await read_append(read_buffer, response_read_chunk_bytes, timeout);
         // A TLS peer that drops TCP without close_notify leaves the message end
         // unauthenticated: an attacker could cut a close-delimited body short
@@ -449,48 +518,16 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     // response. A rejected CONNECT likewise leaves subsequent ownership
     // unknown (RFC 9112 §9.6).
     const bool reusable = persistence == http1_close_policy::allow_reuse &&
-                          !request.is_tunnel() && read_buffer.empty();
+                          (!request.is_tunnel() || request.is_upgrade()) && read_buffer.empty();
     finish_http_client_response_body(state_value, timeout, content_semantics_present, max_response_bytes);
     if (!reusable) {
         connection_.close();
-    }
-    connection_.retain_idle_buffers();
-}
-
-std::optional<http1_parsed_client_response_head> http1_client_exchange::take_final_head(
-    http_client_response_state& state_value, http1_client_response_parser& parser) {
-    auto& read_buffer = connection_.read_buffer_;
-    for (;;) {
-        auto parse_result = parser.parse(read_buffer.view());
-        if (parse_result.failure()) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
-                http1_client_response_parse_error_message(*parse_result.failure()));
-        }
-        if (parse_result.need_more()) {
-            if (read_buffer.size() >= max_http_header_bytes) {
-                throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
-            }
-            return std::nullopt;
-        }
-        auto* parsed_value = parse_result.parsed();
-        if (!parsed_value) {
-            std::terminate();
-        }
-        const auto* informational = parsed_value->plan().informational();
-        if (informational == nullptr) {
-            return std::move(*parsed_value);
-        }
-        auto head = std::move(*parsed_value).take_head();
-        state_value.retain_informational(
-            head.status(), std::move(head).take_headers(), parsed_value->plan().request_content_signal());
-        read_buffer.consume(parsed_value->consumed_bytes());
     }
 }
 
 task<void> http1_client_exchange::wait_for_body_space(
     http_client_response_state& state_value, const operation_timeout& timeout) {
-    const auto max_response_bytes = pool_.config().max_response_bytes_;
-    while (!state_value.collect_all_ && state_value.pending_.size() >= max_response_bytes) {
+    while (!state_value.collect_all_ && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
         connection_.throw_if_aborted();
         const auto deadline = timeout.deadline();
         if (deadline && *deadline <= std::chrono::steady_clock::now()) {
@@ -540,7 +577,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                 co_await output.data_.wait();
                 continue;
             }
-            const auto write_timeout = timeout.constrained_by(pool_.config().write_timeout_);
+            const auto write_timeout = timeout.constrained_by(response_->effective_write_timeout_);
             if (write_timeout.expired()) {
                 expire_tunnel();
                 connection_.throw_if_aborted();
@@ -672,6 +709,26 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     }
     if (receive_failure) {
         std::rethrow_exception(receive_failure);
+    }
+}
+
+task<void> http1_client_exchange::write_immediate(std::span<const asio::const_buffer> parts,
+    const operation_timeout& timeout, http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure) {
+    try {
+        co_await write(parts, timeout);
+        completed = true;
+        const auto status = parser.complete_request_content();
+        if (status == http1_client_request_content_completion_status::already_complete) {
+            std::terminate();
+        }
+        connection_.write_buffer_.clear_retaining_small();
+    } catch (...) {
+        failure = std::current_exception();
+        // A plain write failure can race a valid final response in the other
+        // TCP direction; let its framing decide. Other failures stop the reader.
+        if (http_client_failure_code(failure) != http_client_error::code_type::io_error) {
+            connection_.close();
+        }
     }
 }
 

@@ -45,6 +45,11 @@ namespace {
     }
     auto result_value =
         detail::http_client_response_head_access::make(*status, http_protocol_version::http2, resource);
+    if (const auto* known = stream.remote_content().allowed_known_length()) {
+        detail::http_client_response_head_access::content_length(result_value, known->declared_length());
+    } else if (const auto* metadata = stream.remote_content().metadata_only_known_length()) {
+        detail::http_client_response_head_access::content_length(result_value, metadata->declared_length());
+    }
     const auto header_count = stream.remote_header_count();
     if (header_count != 0) {
         auto& headers = detail::http_client_response_head_access::headers(result_value);
@@ -131,6 +136,7 @@ public:
             .priority_update_ = stream->priority_update(),
             .body_open_ = value.body_open_,
             .connect_pending_ = connect_pending,
+            .initial_end_stream_ = value.initial_end_stream_,
         };
         return ::ruvia::http2_event::request_head(
             this, value.stream_id_, stream->request_expectations(), content, snapshot);
@@ -581,7 +587,7 @@ namespace {
 template <class header_type>
 std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_extended_connect(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const header_type> headers) {
+    std::string_view authority, std::string_view target, std::span<const header_type> headers, http_request_field_source source) {
     const auto negotiation_fields = negotiation.request_fields();
     detail::http_header_descriptor_storage<http_header_view> staged_headers(negotiation.resource());
     staged_headers.reserve(negotiation_fields.size() + headers.size());
@@ -597,6 +603,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_ex
         .authority_ = authority,
         .target_ = target,
         .headers_ = staged_headers.view(),
+        .field_source_ = source,
     });
 }
 
@@ -604,14 +611,14 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_ex
 
 std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header> headers) {
-    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers);
+    std::string_view authority, std::string_view target, std::span<const http_header> headers, http_request_field_source source) {
+    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers, source);
 }
 
 std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header_view> headers) {
-    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers);
+    std::string_view authority, std::string_view target, std::span<const http_header_view> headers, http_request_field_source source) {
+    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers, source);
 }
 
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>

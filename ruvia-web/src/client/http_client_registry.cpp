@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <exception>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string_view>
@@ -20,8 +21,7 @@
 namespace ruvia::detail {
 namespace {
 
-// This runs in the first member initializer so invalid input is rejected before
-// even implementation-specific PMR container bookkeeping can touch owner memory.
+// Reject invalid aliases before any pool or alias-index storage is allocated.
 template <typename config_type>
 [[nodiscard]] std::pmr::memory_resource* validated_http_client_resource(
     std::span<const config_type> definitions) {
@@ -38,52 +38,180 @@ template <typename config_type>
 }
 }  // namespace
 
+struct http_client_registry::origin_preparation final {
+    origin_preparation(const http_client_config& source, const worker_handle& worker,
+        stop_token owner_stop, stop_token user_stop)
+        : alias_(source.alias_.view(), process_resource()),
+          config_(source, process_resource(), client_tls_files::keep_paths),
+          cancellation_(owner_stop, user_stop) {
+        if (config_.scheme_ == http_scheme::https) {
+            const auto password = source.tls_.identity_
+                                      ? std::string_view(source.tls_.identity_->private_key_password_)
+                                      : std::string_view{};
+            tls_.emplace(prepare_client_tls_config(worker, std::move(config_.tls_), password, cancellation_.token()));
+        }
+    }
+
+    std::pmr::string alias_;
+    http_client_config_storage config_;
+    stop_group cancellation_;
+    std::optional<task<client_tls_config_storage>> tls_;
+};
+
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::span<const http_client_definition_type> definitions,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : pools_(validated_http_client_resource(definitions)),
-      alias_index_(process_resource()) {
-    initialize(io_context, worker_value, definitions, result_budget_domain);
+    : io_context_(io_context),
+      worker_(worker_value),
+      result_budget_domain_(result_budget_domain),
+      aliases_(validated_http_client_resource(definitions)),
+      retirements_(worker_, {.resource_ = process_resource()}) {
+    initialize(definitions);
+    preparations_.bind_worker(worker_);
 }
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::span<const http_client_config> configs,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
-    : pools_(validated_http_client_resource(configs)),
-      alias_index_(process_resource()) {
-    initialize(io_context, worker_value, configs, result_budget_domain);
+    : io_context_(io_context),
+      worker_(worker_value),
+      result_budget_domain_(result_budget_domain),
+      aliases_(validated_http_client_resource(configs)),
+      retirements_(worker_, {.resource_ = process_resource()}) {
+    initialize(configs);
+    preparations_.bind_worker(worker_);
 }
 
 template <typename config_type>
-void http_client_registry::initialize(asio::io_context& io_context, const worker_handle& worker_value,
-    std::span<const config_type> configs,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    alias_index_.build(configs);
-    pools_.reserve(configs.size());
+void http_client_registry::initialize(std::span<const config_type> configs) {
     for (const auto& config : configs) {
-        pools_.push_back(make_pmr_object<http_client_pool>(process_resource(), io_context, worker_value,
-            http_client_config_storage(client_config(config), process_resource()), result_budget_domain));
+        auto pool = std::allocate_shared<http_client_pool>(
+            std::pmr::polymorphic_allocator<http_client_pool>(process_resource()), io_context_, worker_,
+            http_client_config_storage(client_config(config), process_resource()), result_budget_domain_);
+        aliases_.emplace(std::pmr::string(std::string_view(config.alias_), process_resource()),
+            alias_binding{std::move(pool), next_origin_order_++});
     }
 }
 
 http_client_registry::~http_client_registry() = default;
+
+void http_client_registry::require_mutable() const {
+    if (!worker_.is_current()) {
+        throw std::logic_error("HTTP client origins must be changed on their bound worker");
+    }
+    if (closing_ || !worker_.accepting()) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client registry is closing");
+    }
+}
+
+task<void> http_client_registry::upsert(const http_client_config& config, operation_options options) {
+    require_mutable();
+    validate_operation_options(options);
+    validate_capability_alias(config.alias_.view(), "HTTP client alias must not be empty");
+    auto input = make_pmr_object<origin_preparation>(
+        process_resource(), config, worker_, preparation_stop_.token(), options.stop_token_);
+    return make_scoped_operation(preparations_, prepare_origin(std::move(input), std::move(options)));
+}
+
+void http_client_registry::require_prepared(stop_token stop, const operation_timeout& timeout) const {
+    require_mutable();
+    if (stop.stop_requested()) {
+        throw http_client_error(http_client_error::code_type::cancelled, "HTTP origin update cancelled");
+    }
+    if (timeout.expired()) {
+        throw http_client_error(http_client_error::code_type::timeout, "HTTP origin update deadline expired");
+    }
+}
+
+task<void> http_client_registry::prepare_origin(preparation_owner_type input, operation_options options) {
+    const operation_timeout timeout(options.timeout_);
+    const auto stop = input->cancellation_.token();
+    require_prepared(stop, timeout);
+    if (input->tls_) {
+        std::exception_ptr failure;
+        try {
+            input->config_.tls_ = co_await std::move(*input->tls_);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        input->tls_.reset();
+        // Cancellation cannot interrupt an OpenSSL file read. Join it first,
+        // then decide whether the completed candidate may still be published.
+        require_prepared(stop, timeout);
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    }
+    auto replacement = std::allocate_shared<http_client_pool>(
+        std::pmr::polymorphic_allocator<http_client_pool>(process_resource()), io_context_, worker_,
+        std::move(input->config_), result_budget_domain_);
+    require_prepared(stop, timeout);
+    publish(std::move(input->alias_), std::move(replacement));
+}
+
+void http_client_registry::publish(std::pmr::string alias, pool_owner_type replacement) {
+    const auto position = aliases_.find(alias);
+    if (position != aliases_.end()) {
+        auto joining = position->second.pool_->join();
+        retirements_.spawn(retire_origin(position, std::move(replacement), std::move(joining)));
+        return;
+    }
+    if (next_origin_order_ == std::numeric_limits<std::size_t>::max()) {
+        throw std::length_error("HTTP client origin registration order is exhausted");
+    }
+    aliases_.emplace(std::move(alias), alias_binding{std::move(replacement), next_origin_order_});
+    ++next_origin_order_;
+}
+
+bool http_client_registry::remove(std::string_view alias) {
+    require_mutable();
+    validate_capability_alias(alias, "HTTP client alias must not be empty");
+    const auto position = aliases_.find(alias);
+    if (position == aliases_.end()) {
+        return false;
+    }
+    auto joining = position->second.pool_->join();
+    retirements_.spawn(retire_origin(position, {}, std::move(joining)));
+    return true;
+}
+
+task<void> http_client_registry::retire_origin(alias_map_type::iterator position,
+    pool_owner_type replacement, task<void> joining) {
+    // task_scope allocates its child before starting this coroutine. Everything
+    // through publication is then noexcept: a failed admission changes nothing.
+    auto retired = std::exchange(position->second.pool_, std::move(replacement));
+    if (!position->second.pool_) {
+        aliases_.erase(position);
+    }
+    retired->close_now();
+    co_await std::move(joining);
+}
 
 void http_client_registry::close_now() noexcept {
     if (closing_) {
         return;
     }
     closing_ = true;
-    for (auto& pool : pools_) {
-        pool->close_now();
+    preparation_stop_.request_stop();
+    for (auto& [alias, binding] : aliases_) {
+        binding.pool_->close_now();
     }
 }
 
 task<void> http_client_registry::join() {
     close_now();
     std::exception_ptr failure;
-    for (std::size_t i = 0; i < pools_.size(); ++i) {
+    co_await preparations_.close_and_join();
+    // Removed origins are no longer in aliases_; their retirement children own
+    // the old pools until all transport drivers finish.
+    try {
+        co_await retirements_.join();
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    for (auto& [alias, binding] : aliases_) {
         try {
-            co_await pools_[i]->join();
+            co_await binding.pool_->join();
         } catch (...) {
             if (failure == nullptr) {
                 failure = std::current_exception();
@@ -95,49 +223,44 @@ task<void> http_client_registry::join() {
     }
 }
 
-http_client_pool& http_client_registry::default_pool() const {
-    if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "http client registry is closing");
-    }
-    const auto default_pool_index = alias_index_.default_index();
-    if (!default_pool_index.has_value()) {
-        throw http_client_error(http_client_error::code_type::not_configured, "fixed HTTP client is not configured");
-    }
-    return *pools_[*default_pool_index];
+http_client_handle http_client_registry::get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop) const {
+    return aliases_.size() == 1 ? get(aliases_.begin()->first, scope, std::move(host_stop)) : get(scope, std::move(host_stop));
 }
 
 http_client_handle http_client_registry::get(::ruvia::operation_scope& scope, stop_token host_stop) const {
-    http_client_handle result(default_pool(), process_resource(), scope);
-    result.registry_ = this;
-    result.host_stop_token_ = std::move(host_stop);
-    return result;
+    return get(default_capability_alias, scope, std::move(host_stop));
 }
 
 http_client_handle http_client_registry::get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop) const {
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "http client registry is closing");
     }
-    const auto found = alias_index_.find(alias);
-    if (!found.has_value()) {
+    const auto found = aliases_.find(alias);
+    if (found == aliases_.end()) {
         throw http_client_error(http_client_error::code_type::not_configured, "named HTTP client is not configured");
     }
-    http_client_handle result(*pools_[*found], process_resource(), scope);
+    http_client_handle result(*found->second.pool_, process_resource(), scope);
+    result.pool_owner_ = found->second.pool_;
     result.registry_ = this;
     result.host_stop_token_ = std::move(host_stop);
     return result;
 }
 
-http_client_pool* http_client_registry::find_origin(http_scheme scheme, std::string_view authority) const {
+std::shared_ptr<http_client_pool> http_client_registry::find_origin(http_scheme scheme, std::string_view authority) const {
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client registry is closing");
     }
-    for (const auto& pool : pools_) {
-        if (pool->scheme() == scheme &&
+    const alias_binding* found = nullptr;
+    // Aliases sharing one origin retain registration precedence, independent
+    // of lexical lookup order or a replacement pool's storage position.
+    for (const auto& [alias, binding] : aliases_) {
+        const auto& pool = binding.pool_;
+        if ((found == nullptr || binding.order_ < found->order_) && pool->scheme() == scheme &&
             http_authorities_equal(pool->config().authority_, authority, scheme == http_scheme::https ? 443 : 80)) {
-            return pool.get();
+            found = &binding;
         }
     }
-    return nullptr;
+    return found == nullptr ? pool_owner_type{} : found->pool_;
 }
 
 class http_client_state final : public std::enable_shared_from_this<http_client_state> {
@@ -160,6 +283,14 @@ public:
 
     [[nodiscard]] http_client_handle handle(operation_options options);
     [[nodiscard]] http_client_handle alias_handle(std::string_view alias);
+    [[nodiscard]] task<void> upsert(const http_client_config& config, operation_options options) {
+        lifecycle_.require_ready();
+        return registry_.upsert(config, std::move(options));
+    }
+    [[nodiscard]] bool remove(std::string_view alias) {
+        lifecycle_.require_ready();
+        return registry_.remove(alias);
+    }
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
@@ -175,7 +306,6 @@ private:
 
     event_loop loop_;
     worker_handle worker_;
-    std::pmr::string default_alias_;
     http_client_registry registry_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<http_client_state> lifecycle_;
@@ -185,7 +315,6 @@ http_client_state::http_client_state(event_loop loop, std::span<const http_clien
     http_client_result_budget_config result_budget)
     : loop_(client_lifecycle<http_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
-      default_alias_(configs.size() == 1 ? configs.front().alias_.view() : default_capability_alias, process_resource()),
       // Responses may outlive this client: the process resource backs them.
       registry_(loop_.io_context(), worker_, configs,
           std::allocate_shared<http_client_result_budget_domain>(
@@ -199,12 +328,12 @@ void http_client_state::throw_not_ready() {
 http_client_handle http_client_state::handle(operation_options options) {
     lifecycle_.require_ready();
     validate_operation_options(options);
-    return registry_.get(default_alias_, lifecycle_.operation_scope()).with_options(std::move(options));
+    return registry_.get_single_or_default(lifecycle_.operation_scope(), lifecycle_.token()).with_options(std::move(options));
 }
 
 http_client_handle http_client_state::alias_handle(std::string_view alias) {
     lifecycle_.require_ready();
-    return registry_.get(alias, lifecycle_.operation_scope());
+    return registry_.get(alias, lifecycle_.operation_scope(), lifecycle_.token());
 }
 }  // namespace ruvia::detail
 
@@ -236,6 +365,14 @@ http_client_handle http_client::client() const& {
 
 http_client_handle http_client::client(std::string_view alias) const& {
     return state_->alias_handle(alias);
+}
+
+task<void> http_client::upsert(const http_client_config& config, operation_options options) & {
+    return state_->upsert(config, std::move(options));
+}
+
+bool http_client::remove(std::string_view alias) & {
+    return state_->remove(alias);
 }
 
 void http_client::close() noexcept {

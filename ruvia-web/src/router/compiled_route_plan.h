@@ -129,6 +129,10 @@ public:
     [[nodiscard]] const websocket_deflate_config& deflate() const noexcept {
         return deflate_;
     }
+    [[nodiscard]] protocol_byte_limit message_limit(std::size_t server_limit) const {
+        const auto local = max_message_bytes_.maximum();
+        return protocol_byte_limit::limited(local && *local < server_limit ? *local : server_limit);
+    }
 
 private:
     friend class route_endpoint;
@@ -140,7 +144,8 @@ private:
           subprotocols_(resource),
           require_subprotocol_(options.require_subprotocol_),
           lifecycle_(options.lifecycle_),
-          deflate_(options.deflate_) {
+          deflate_(options.deflate_),
+          max_message_bytes_(options.max_message_bytes_) {
         if (!options.subprotocols_.empty()) {
             std::size_t total_bytes = 0;
             for (const auto& subprotocol : options.subprotocols_) {
@@ -164,6 +169,7 @@ private:
     bool require_subprotocol_;
     websocket_lifecycle_options lifecycle_;
     websocket_deflate_config deflate_;
+    protocol_byte_limit max_message_bytes_;
 };
 
 // Startup-built endpoint contract, validated once when the process route plan

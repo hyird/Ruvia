@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <utility>
 #include <vector>
@@ -27,9 +28,9 @@ void close_native_socket(native_socket socket) noexcept;
 // listening TCP socket bound to exactly `endpoint` (std::invalid_argument
 // with `message` otherwise), then marks it close-on-exec (non-inheritable on
 // Windows).
-void adopt_inherited_tcp_socket(native_socket socket, const asio::ip::tcp::endpoint& endpoint, const char* message);
+void adopt_inherited_tcp_socket(native_socket socket, const asio::ip::tcp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only);
 // The same for a UDP socket bound to exactly `endpoint`.
-void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpoint& endpoint, const char* message);
+void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only);
 
 #if !defined(_WIN32)
 // A dup() of `socket`, without FD_CLOEXEC, that the caller owns.

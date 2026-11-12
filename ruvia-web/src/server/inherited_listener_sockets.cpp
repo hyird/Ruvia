@@ -84,6 +84,17 @@ void ensure_socket_kind(native_socket socket, int type, [[maybe_unused]] int pro
 #endif
 }
 
+void ensure_ipv6_only(native_socket socket, bool ipv6, std::optional<bool> expected) {
+    if (!expected) {
+        return;
+    }
+    int value = 0;
+    auto length = static_cast<socket_length>(sizeof(value));
+    if (!ipv6 || ::getsockopt(os_socket(socket), IPPROTO_IPV6, IPV6_V6ONLY, reinterpret_cast<char*>(&value), &length) != 0 || (value != 0) != *expected) {
+        throw std::invalid_argument("inherited listener IPV6_V6ONLY does not match its configuration");
+    }
+}
+
 }  // namespace
 
 void close_native_socket(native_socket socket) noexcept {
@@ -98,19 +109,21 @@ void close_native_socket(native_socket socket) noexcept {
 #endif
 }
 
-void adopt_inherited_tcp_socket(native_socket socket, const asio::ip::tcp::endpoint& endpoint, const char* message) {
+void adopt_inherited_tcp_socket(native_socket socket, const asio::ip::tcp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only) {
     ensure_socket_kind(socket, SOCK_STREAM, IPPROTO_TCP, message);
     if (socket_option(socket, SO_ACCEPTCONN).value_or(0) == 0 || !bound_to(socket, endpoint)) {
         throw std::invalid_argument(message);
     }
+    ensure_ipv6_only(socket, endpoint.address().is_v6(), ipv6_only);
     mark_close_on_exec(socket);
 }
 
-void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpoint& endpoint, const char* message) {
+void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only) {
     ensure_socket_kind(socket, SOCK_DGRAM, IPPROTO_UDP, message);
     if (!bound_to(socket, endpoint)) {
         throw std::invalid_argument(message);
     }
+    ensure_ipv6_only(socket, endpoint.address().is_v6(), ipv6_only);
     mark_close_on_exec(socket);
 }
 

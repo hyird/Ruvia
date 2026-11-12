@@ -122,7 +122,8 @@ private:
 
 bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name,
     const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0,
-    bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr) {
+    bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr,
+    ruvia::tls_version minimum = ruvia::tls_version::tls_1_1) {
     ruvia::test::tls_identity identity(common_name, san, elliptic_curve);
     auto* const context = identity.context_.native_handle();
     if (version != 0) {
@@ -146,6 +147,7 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     handshake_peer peer(identity.context_, driver == ruvia::db_driver::mariadb);
     ruvia::db_config config{.driver_ = driver, .host_ = "127.0.0.1", .port_ = peer.port(), .username_ = "test", .database_ = "test"};
     config.tls_.ca_file_ = identity.ca_file_;
+    config.tls_.minimum_version_ = minimum;
     if (mutual_tls) {
         // libpq rejects client private keys readable by group/other users;
         // the generic server identity fixture does not restrict its key file.
@@ -193,6 +195,18 @@ void checks_protocol_floor(ruvia::db_driver driver) {
     }
 }
 
+void checks_configured_protocol_floor(ruvia::db_driver driver) {
+    for (const auto minimum : {ruvia::tls_version::tls_1_2, ruvia::tls_version::tls_1_3}) {
+        for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
+            SCOPED_TRACE(static_cast<int>(minimum));
+            SCOPED_TRACE(version);
+            EXPECT_EQ(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1",
+                          std::uint64_t{1} << 23, version, false, false, nullptr, minimum),
+                version >= static_cast<int>(minimum));
+        }
+    }
+}
+
 }  // namespace database_tls_tests
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
@@ -212,6 +226,10 @@ TEST(Ruvia, postgresql_tls_checks_san_identity_before_sending_startup) {
 TEST(Ruvia, postgresql_tls_accepts_1_1_and_rejects_1_0_without_relaxing_identity_or_record_limits) {
     database_tls_tests::checks_protocol_floor(ruvia::db_driver::postgresql);
 }
+
+TEST(Ruvia, postgresql_configured_tls_minimum_blocks_startup_on_older_tls) {
+    database_tls_tests::checks_configured_protocol_floor(ruvia::db_driver::postgresql);
+}
 #endif
 
 #ifdef RUVIA_ENABLE_MARIADB
@@ -227,5 +245,9 @@ TEST(Ruvia, mariadb_tls_checks_ip_san_even_on_loopback_before_authentication) {
 
 TEST(Ruvia, mariadb_tls_accepts_1_1_and_rejects_1_0_without_relaxing_identity_or_record_limits) {
     database_tls_tests::checks_protocol_floor(ruvia::db_driver::mariadb);
+}
+
+TEST(Ruvia, mariadb_configured_tls_minimum_blocks_authentication_on_older_tls) {
+    database_tls_tests::checks_configured_protocol_floor(ruvia::db_driver::mariadb);
 }
 #endif

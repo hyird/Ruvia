@@ -99,6 +99,8 @@ struct http2_server_request_snapshot final {
     std::optional<http_priority_fields> priority_update_{};
     bool body_open_{false};
     bool connect_pending_{false};
+    // Captured from the initial HEADERS, including CONNECT; never changes as DATA arrives.
+    bool initial_end_stream_{false};
 };
 
 class http2_request_head_event final {

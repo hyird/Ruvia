@@ -208,6 +208,9 @@ struct listen_config final {
     // Numeric IPv4 or IPv6 bind address, normalized when application::listen consumes
     // this configuration.
     borrowed_text address_{"0.0.0.0"};
+    // 未设置时保留操作系统默认；显式值仅接受 IPv6 地址，绑定前同时
+    // 应用于 TCP 与 QUIC UDP。继承 socket 必须已经具有相同的值。
+    std::optional<bool> ipv6_only_{};
     // Values are checked before narrowing; an enabled service must be non-zero.
     std::optional<port_number> http_{};
     std::optional<port_number> https_{};
@@ -292,6 +295,12 @@ struct listen_config final {
 struct listener_endpoint final {
     borrowed_text address_{"0.0.0.0"};
     port_number port_{};
+};
+
+struct listener_remove_options final {
+    // 按稳定监听身份立即关闭所有既有连接（包括 TLS、多路复用与升级）。
+    // 默认只停止新接入；相同端点后来新增的监听不受影响。
+    bool close_connections_{false};
 };
 
 // Canonical startup values shared by application configuration and every worker's

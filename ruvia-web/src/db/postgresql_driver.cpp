@@ -764,6 +764,8 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
         const auto resolved_hosts = make_postgresql_resolved_host_list(
             tls_host, co_await pool.resolve_host(index, deadline_value), process_resource());
         const auto port = format_db_port(config.port_);
+        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : config.tls_.minimum_version_ == tls_version::tls_1_2 ? "TLSv1.2"
+                                                                                                                                                          : "TLSv1.1";
         const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname",
             "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version",
             nullptr};
@@ -771,7 +773,7 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
             port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8",
             use_tls ? "verify-full" : "disable", root_certificate,
             identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "",
-            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", "TLSv1.1",
+            identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls,
             nullptr};
         // PQconnectStartParams copies the parameter strings before returning.
         native_tls_context_scope tls_scope(use_tls ? tls_host : std::string_view{}, config.tls_.max_outgoing_records_);

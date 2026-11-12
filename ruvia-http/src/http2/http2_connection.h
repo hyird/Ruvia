@@ -78,6 +78,7 @@ struct http2_message_head_record final {
     // when the head is published; the same input batch may already have
     // delivered later frames to the core.
     bool body_open_{false};
+    bool initial_end_stream_{false};
 };
 
 // The bytes borrow the accepted feed() input until the next consuming feed().

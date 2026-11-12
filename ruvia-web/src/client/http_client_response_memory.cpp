@@ -194,6 +194,7 @@ http_client_response_state::http_client_response_state(http_client_response_memo
       data_signal_(memory_domain.worker()),
       space_signal_(memory_domain.worker()),
       resource_(memory_domain.resource()),
+      connection_info_(resource_),
       informational_(resource_),
       headers_(resource_),
       trailers_(resource_),

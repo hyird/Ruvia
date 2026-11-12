@@ -16,6 +16,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -29,6 +31,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -45,7 +48,15 @@
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
 #if defined(RUVIA_ENABLE_HTTP3)
+#include "ruvia/http/http3_connection.h"
+
 #include "http3_test_client.h"
+#endif
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "ruvia/http/hpack.h"
+#include "ruvia/http/http2_framing.h"
+
+#include "http2_wire_fixture.h"
 #endif
 
 namespace request_stream_test {
@@ -188,6 +199,21 @@ ruvia::task<void> echo_tunnel(ruvia::http_tunnel& tunnel) {
 // paths fail before or after the response is committed.
 ruvia::task<void> serve(ruvia::request_stream& stream) {
     const auto& request = stream.request();
+    const auto initial_body = stream.body_state();
+    if (request.path().starts_with("/state-")) {
+        const auto path = request.path();
+        if (request.protocol_version() == ruvia::http_protocol_version::http11) {
+            EXPECT_FALSE(initial_body.initial_end_stream_.has_value());
+            EXPECT_EQ(initial_body.framing_, path == "/state-zero"      ? ruvia::request_body_framing::known_length
+                                             : path == "/state-chunked" ? ruvia::request_body_framing::chunked
+                                                                        : ruvia::request_body_framing::none);
+        } else {
+            EXPECT_EQ(initial_body.initial_end_stream_, path == "/state-none");
+            EXPECT_EQ(initial_body.framing_, path == "/state-none" ? ruvia::request_body_framing::none
+                                                                   : ruvia::request_body_framing::multiplexed);
+        }
+        EXPECT_EQ(initial_body.content_length_, path == "/state-zero" ? std::optional<std::uint64_t>(0) : std::nullopt);
+    }
     EXPECT_FALSE(stream.conn().local().address().empty());
     EXPECT_NE(stream.conn().local().port(), 0);
     if (request.path() == "/runtime-cancel") {
@@ -359,6 +385,9 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     while (auto chunk = co_await stream.body().read()) {
         body.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
     }
+    EXPECT_EQ(stream.body_state().framing_, initial_body.framing_);
+    EXPECT_EQ(stream.body_state().content_length_, initial_body.content_length_);
+    EXPECT_EQ(stream.body_state().initial_end_stream_, initial_body.initial_end_stream_);
     if (request.path() == "/upload-trailer") {
         stream.draft().header("x-upload-checksum", stream.trailer("x-upload-checksum").value_or("missing"));
         stream.draft().header("x-upload-trailers", std::to_string(stream.trailers().size()));
@@ -807,6 +836,18 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         const asio::ip::udp::endpoint endpoint(asio::ip::address_v4::loopback(), http3_port);
         ruvia::test::http3_test_client initial(endpoint, identity.ca_file_, "localhost", 10s);
         EXPECT_EQ(initial.request("GET", "/early").header("x-early-data").value_or(std::pmr::string{}), "no");
+        for (const auto path : {"/state-none", "/state-zero", "/state-unknown"}) {
+            const bool ended = std::string_view(path) == "/state-none";
+            const auto stream = std::string_view(path) == "/state-zero"
+                                    ? initial.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"},
+                                                                    {":path", path}, {"content-length", "0"}},
+                                          false)
+                                    : initial.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", path}}, ended);
+            if (!ended) {
+                initial.send_stream_data(stream, bytes_of(std::string_view(path) == "/state-zero" ? "" : "x"), true);
+            }
+            EXPECT_EQ(initial.finish_response(stream).status_, 200);
+        }
         const auto ticket = initial.capture_resumption();
         ASSERT_TRUE(ticket.permits_early_data());
         ruvia::test::http3_test_client resumed(endpoint, identity.ca_file_, "localhost", 10s, &ticket, true);
@@ -836,6 +877,62 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         const auto echoed = reliable.finish_response(fallback);
         EXPECT_EQ(std::string_view(echoed.body_), std::string_view(capsule));
         EXPECT_FALSE(echoed.reset_error_.has_value());
+    }
+#endif
+    for (const auto path : {"/state-none", "/state-zero", "/state-chunked"}) {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(plain_endpoint);
+        std::string wire = std::string("POST ") + path + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
+        if (std::string_view(path) == "/state-zero") {
+            wire += "Content-Length: 0\r\n";
+        }
+        if (std::string_view(path) == "/state-chunked") {
+            wire += "Transfer-Encoding: chunked\r\n";
+        }
+        wire += "\r\n";
+        if (std::string_view(path) == "/state-chunked") {
+            wire += "0\r\n\r\n";
+        }
+        asio::write(socket, asio::buffer(wire));
+        EXPECT_TRUE(ruvia::test::read_to_end(socket).starts_with("HTTP/1.1 200 "));
+    }
+#if defined(RUVIA_ENABLE_HTTP2)
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(plain_endpoint);
+        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+        std::uint32_t id = 1;
+        for (const auto path : {"/state-none", "/state-zero", "/state-unknown"}) {
+            std::pmr::string block(ruvia::process_resource());
+            ruvia::hpack_encoder::encode_header(block, ":method", "POST");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+            ruvia::hpack_encoder::encode_header(block, ":path", path);
+            if (std::string_view(path) == "/state-zero") {
+                ruvia::hpack_encoder::encode_header(block, "content-length", "0");
+            }
+            const bool ended = std::string_view(path) == "/state-none";
+            ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, ended ? 5 : 4, id, block);
+            if (!ended) {
+                ruvia::test::append_frame(wire, ruvia::http2_frame_type::data, 1, id,
+                    std::string_view(path) == "/state-zero" ? "" : "x");
+            }
+            id += 2;
+        }
+        // 首部与终结DATA同一次socket写入；初始HEADERS状态不能被后者覆盖。
+        asio::write(socket, asio::buffer(wire));
+        unsigned ended = 0;
+        while (ended != 3) {
+            const auto frame = ruvia::test::read_frame(socket, std::chrono::steady_clock::now() + 5s);
+            EXPECT_NE(frame.header_.type_, static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream));
+            EXPECT_NE(frame.header_.type_, static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
+            if (frame.header_.stream_id_ != 0 &&
+                (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) || frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) &&
+                (frame.header_.flags_ & 1) != 0) {
+                ++ended;
+            }
+        }
     }
 #endif
 
@@ -1052,6 +1149,257 @@ TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
         co_await upstream.shutdown();
         EXPECT_EQ(proxy.stats().active_connections_, 0U);
         EXPECT_EQ(source.stats().active_connections_, 0U);
+        attachment.stop();
+        if (failure) std::rethrow_exception(failure);
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
+    asio::io_context io;
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
+    ruvia::test::tcp_port_reservation plain(io), secure(io);
+    ruvia::test::udp_port_reservation udp(io);
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    const auto run = [&]() -> ruvia::task<void> {
+        std::optional<ruvia::stop_source> stop;
+        ruvia::request_stream* pending = nullptr;
+        std::uint64_t pending_connection = 0;
+        unsigned cancelled = 0;
+        unsigned reset_failures = 0;
+        bool throw_after_reset = false;
+        bool reset_requested = false;
+        bool resume_body = false;
+        bool survivor_pending = false;
+        std::optional<ruvia::task<std::optional<std::span<const std::byte>>>> cold;
+        const auto worker = attachment.loop().handle();
+        ruvia::worker_signal retirement(worker);
+        std::uint64_t retiring_connection = 0;
+        bool connection_retired = false;
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
+                                                          const auto initial = request.body_state();
+                                                          const bool multiplexed = request.request().protocol_version() == ruvia::http_protocol_version::http2 ||
+                                                                                   request.request().protocol_version() == ruvia::http_protocol_version::http3;
+                                                          if (request.request().path() == "/survivor") {
+                                                              survivor_pending = true;
+                                                              std::string received;
+                                                              while (auto chunk = co_await request.body().text()) {
+                                                                  received.append(*chunk);
+                                                              }
+                                                              EXPECT_EQ(received, "alive");
+                                                          } else if (request.request().path() == "/pending") {
+                                                              EXPECT_EQ(initial.framing_, multiplexed ? ruvia::request_body_framing::multiplexed : ruvia::request_body_framing::chunked);
+                                                              EXPECT_FALSE(initial.content_length_.has_value());
+                                                              EXPECT_EQ(initial.initial_end_stream_, multiplexed ? std::optional(false) : std::nullopt);
+                                                              pending = &request;
+                                                              pending_connection = request.conn().id();
+                                                              try {
+                                                                  (void)co_await request.body().read(stop->token());
+                                                                  ADD_FAILURE() << "read unexpectedly completed without content or cancellation";
+                                                              } catch (const std::system_error& error) {
+                                                                  if (!reset_requested) {
+                                                                      EXPECT_EQ(error.code(), std::errc::operation_canceled);
+                                                                      ++cancelled;
+                                                                  }
+                                                              } catch (...) {
+                                                                  if (!reset_requested) {
+                                                                      throw;
+                                                                  }
+                                                              }
+                                                              pending = nullptr;
+                                                              EXPECT_EQ(request.body_state().framing_, initial.framing_);
+                                                              EXPECT_EQ(request.body_state().initial_end_stream_, initial.initial_end_stream_);
+                                                              if (reset_requested) {
+                                                                  if (throw_after_reset) {
+                                                                      throw std::runtime_error("failure after explicit stream reset");
+                                                                  }
+                                                                  co_return;
+                                                              }
+                                                              if (!multiplexed) {
+                                                                  bool failed = false;
+                                                                  try {
+                                                                      (void)co_await request.body().read();
+                                                                  } catch (const std::logic_error&) {
+                                                                      failed = true;
+                                                                  }
+                                                                  EXPECT_TRUE(failed);
+                                                              }
+                                                              if (resume_body) {
+                                                                  std::string received;
+                                                                  while (auto chunk = co_await request.body().text()) {
+                                                                      received.append(*chunk);
+                                                                  }
+                                                                  EXPECT_EQ(received, "resumed");
+                                                              }
+                                                              request.draft().status(ruvia::http_status::forbidden);
+                                                          } else {
+                                                              EXPECT_EQ(initial.initial_end_stream_, multiplexed ? std::optional(true) : std::nullopt);
+                                                              if (request.request().path() == "/cold") {
+                                                                  cold.emplace(request.body().read());
+                                                              }
+                                                          }
+                                                          request.draft().header("x-connection-id", std::to_string(request.conn().id()));
+                                                          (void)co_await request.response().commit();
+                                                          co_await request.response().end();
+                                                      },
+                                                         .connection_failure_ = [&](const ruvia::connection_failure_record& record) noexcept {
+                try {
+                    std::rethrow_exception(record.exception());
+                } catch (const std::runtime_error& error) {
+                    EXPECT_EQ(std::string_view(error.what()), "failure after explicit stream reset");
+                    ++reset_failures;
+                } },
+                                                         .connection_close_ = [&](const ruvia::connection_event& event, const std::shared_ptr<void>&) noexcept {
+                if (event.connection_id() == retiring_connection) {
+                    connection_retired = true;
+                    retirement.notify();
+                } }});
+        server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+#if defined(RUVIA_ENABLE_HTTP3)
+        tls.http3_ = udp.endpoint().port();
+#endif
+        server.listen(std::move(tls));
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            std::vector<client_target> targets{
+                {"http://127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "HTTP/1"},
+                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "TLS HTTP/1"}};
+#if defined(RUVIA_ENABLE_HTTP2)
+            targets.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2, "HTTP/2"});
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+            targets.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_protocol::http3_only, ruvia::http_protocol_version::http3, "HTTP/3"});
+#endif
+            for (const auto& target : targets) {
+                ruvia::http_client_config config{.base_url_ = target.base_url_, .protocol_ = target.protocol_};
+                config.tls_.ca_file_ = identity.ca_file_;
+                config.request_timeout_ = 5s;
+                ruvia::http_client client(attachment.loop(), config);
+                std::exception_ptr exchange_failure;
+                try {
+                    const bool multiplexed = target.version_ != ruvia::http_protocol_version::http11;
+                    for (unsigned mode = 0; mode != 3; ++mode) {
+                        if (mode == 1 && !multiplexed) continue;
+                        const bool reset = mode == 2;
+                        reset_requested = false;
+                        resume_body = mode == 1;
+                        stop.emplace();
+                        throw_after_reset = false;
+                        auto exchange = co_await client.client().post("/pending").upload({});
+                        for (unsigned count = 0; pending == nullptr && count != 5000; ++count) {
+                            (void)co_await ruvia::sleep_for(client.worker(), 1ms);
+                        }
+                        if (pending == nullptr) throw std::runtime_error("pending read did not start");
+                        const auto connection = pending_connection;
+                        std::optional<ruvia::http_client_exchange> survivor;
+                        if (multiplexed) {
+                            survivor_pending = false;
+                            survivor.emplace(co_await client.client().post("/survivor").upload({}));
+                            for (unsigned count = 0; !survivor_pending && count != 5000; ++count) {
+                                (void)co_await ruvia::sleep_for(client.worker(), 1ms);
+                            }
+                            EXPECT_TRUE(survivor_pending);
+                            EXPECT_NE(pending, nullptr);
+                        }
+                        if (reset) {
+                            reset_requested = true;
+                            pending->reset();
+                        } else {
+                            // 跨线程取消必须经控制通道转投，而不是等下一个网络字节。
+                            std::thread cancel([&] { stop->request_stop(); });
+                            cancel.join();
+                        }
+                        if (resume_body) {
+                            co_await exchange.body().write("resumed");
+                            co_await exchange.body().end();
+                        }
+                        bool reset_seen = false;
+                        try {
+                            auto response = co_await exchange.response();
+                            EXPECT_FALSE(reset);
+                            EXPECT_EQ(response.status(), ruvia::http_status::forbidden);
+                            (void)co_await response.text();
+                        } catch (const ruvia::http_client_error&) {
+                            reset_seen = true;
+                        }
+                        EXPECT_EQ(reset_seen, reset);
+                        if (survivor) {
+                            co_await survivor->body().write("alive");
+                            co_await survivor->body().end();
+                            auto response = co_await survivor->response();
+                            EXPECT_EQ(response.header("x-connection-id").value_or(""), std::to_string(connection));
+                            (void)co_await response.text();
+                        }
+                        auto next = co_await client.client().get("/other").send();
+                        const auto next_id = std::string(next.header("x-connection-id").value_or(""));
+                        EXPECT_EQ(next_id == std::to_string(connection), multiplexed);
+                        (void)co_await next.text();
+                    }
+                    if (multiplexed) {
+                        stop.emplace();
+                        throw_after_reset = true;
+                        auto exchange = co_await client.client().post("/pending").upload({});
+                        for (unsigned count = 0; pending == nullptr && count != 5000; ++count) {
+                            (void)co_await ruvia::sleep_for(client.worker(), 1ms);
+                        }
+                        if (pending == nullptr) throw std::runtime_error("reset exception read did not start");
+                        reset_requested = true;
+#if defined(RUVIA_ENABLE_HTTP2)
+                        if (target.version_ == ruvia::http_protocol_version::http2) {
+                            EXPECT_THROW(pending->reset(static_cast<ruvia::http3_error_code>(0x10c)), std::invalid_argument);
+                            pending->reset(ruvia::http2_error_code::internal_error);
+                        }
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+                        if (target.version_ == ruvia::http_protocol_version::http3) {
+                            EXPECT_THROW(pending->reset(static_cast<ruvia::http2_error_code>(8)), std::invalid_argument);
+                            pending->reset(ruvia::http3_error_code::internal_error);
+                        }
+#endif
+                        try {
+                            (void)co_await exchange.response();
+                            ADD_FAILURE() << "reset produced a response";
+                        } catch (const ruvia::http_client_error&) {
+                        }
+                    }
+                    {
+                        auto response = co_await client.client().get("/cold").send();
+                        (void)co_await response.text();
+                        // 收到响应EOF不意味着服务端已完成协程/正文facade的清理。
+                        // 等待真实连接退休通知，确定冷任务的宿主已销毁，不靠延时。
+                        retiring_connection = std::stoull(std::string(response.header("x-connection-id").value_or("0")));
+                        connection_retired = false;
+                        if (server.close_connection(retiring_connection)) {
+                            while (!connection_retired) {
+                                co_await retirement.wait();
+                            }
+                        }
+                        bool expired = false;
+                        try {
+                            (void)co_await std::move(*cold);
+                        } catch (const std::logic_error&) {
+                            expired = true;
+                        }
+                        cold.reset();
+                        EXPECT_TRUE(expired);
+                    }
+                } catch (...) {
+                    exchange_failure = std::current_exception();
+                }
+                co_await client.shutdown();
+                if (exchange_failure) std::rethrow_exception(exchange_failure);
+            }
+            EXPECT_EQ(cancelled, 2 * targets.size() - 2);
+            EXPECT_EQ(reset_failures, targets.size() - 2);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await server.shutdown();
         attachment.stop();
         if (failure) std::rethrow_exception(failure);
     };

@@ -42,9 +42,11 @@ namespace {
     return options;
 }
 
+#if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 [[nodiscard]] operation_options context_operation_options(const stop_token& stop_token_value) {
     return operation_options{.timeout_ = std::nullopt, .stop_token_ = stop_token_value};
 }
+#endif
 }  // namespace
 
 worker_capabilities::worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,

@@ -21,6 +21,7 @@
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
+#include "ruvia/web/prepared_listener.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
@@ -149,6 +150,11 @@ public:
     // before every worker accepted, and then they are not kept. config's
     // secrets are owned immediately and cleansed when the task completes or is dropped.
     [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config);
+    // 与 add_listener 共用事务；全部 worker 已准备后返回未接入的 owning 句柄。
+    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config);
+    // 同一业务配置的多个端点必须同批准备；任一失败均回滚整批，旧监听不变。
+    // 调用时拥有化全部配置及继承 socket；返回后可释放输入 span 与借用地址。
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs);
     // Removes the running TCP service `endpoint` names (as for
     // replace_tls_identities()), with its HTTP/3 service. Awaiting completes
     // once every worker stopped admitting it, closed its TCP sockets and its
@@ -159,7 +165,9 @@ public:
     // std::invalid_argument; the lifecycle rules of add_listener()
     // apply, and a removal the stop preempted keeps the listener for later
     // run()s. Concurrent runtime controls take effect one at a time.
-    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint);
+    // close_connections_ 同时关闭目标监听的全部连接；会话由独立退休任务
+    // join，不在本调用中等待（允许连接自己的处理器发起强制移除）。
+    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {});
     // Closes every protocol stream of the connection; false means the ID is
     // no longer live. Application workers may await this control too.
     [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id);

@@ -294,7 +294,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
     try {
         auto result_value = co_await routes_value.dispatch_response_stream(
             request, route, request_memory_value, response_stream, services);
-        if (services.connection_aborted() || peer_aborted()) {
+        if (services.connection_aborted() || services.request_reset() || peer_aborted()) {
             if (!sink_value.committed()) {
                 co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
@@ -313,7 +313,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         }
         co_return response_stream_dispatch_result::make_route_response(std::move(*result_value));
     } catch (const inbound_transport_error&) {
-        if (services.connection_aborted() || peer_aborted()) {
+        if (!services.request_reset() && (services.connection_aborted() || peer_aborted())) {
             if (!sink_value.committed()) {
                 co_return response_stream_dispatch_result::make_aborted_before_commit();
             }
@@ -324,7 +324,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
     } catch (...) {
         exception = std::current_exception();
     }
-    if (services.connection_aborted()) {
+    if (services.connection_aborted() || services.request_reset()) {
         auto result = sink_value.committed()
                           ? response_stream_dispatch_result::make_aborted_after_commit(
                                 committed_response_stream_status(sink_value))

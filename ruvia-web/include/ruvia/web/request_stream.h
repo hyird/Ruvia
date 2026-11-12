@@ -1,6 +1,7 @@
 #pragma once
 
 #include <chrono>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -28,6 +29,21 @@ namespace ruvia {
 
 class request_stream;
 class router;
+enum class http2_error_code : std::uint32_t;
+enum class http3_error_code : std::uint64_t;
+
+enum class request_body_framing { none,
+    known_length,
+    chunked,
+    multiplexed };
+
+// 初始协议计划的快照；读取正文不会改变这些字段。
+struct request_body_state final {
+    request_body_framing framing_{request_body_framing::none};
+    std::optional<std::uint64_t> content_length_{};
+    // HTTP/1 与服务器合成的 push 请求不适用；HTTP/3 表示初始 HEADERS 随 FIN 结束流。
+    std::optional<bool> initial_end_stream_{};
+};
 
 namespace detail {
 struct request_stream_access;
@@ -54,9 +70,9 @@ using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 // await router::dispatch() to apply its own frozen routes and middleware.
 //
 // The callback selects exactly one response: respond(), response().commit(),
-// accept_tunnel(), or accept_websocket(). respond() transfers a complete
-// response to the server, which sends it after the callback returns; it does
-// not commit output to the wire. Before wire commitment, callback failures
+// accept_tunnel(), accept_websocket(), or terminal reset()/abort_connection().
+// respond() transfers a complete response to the server, which sends it after
+// the callback returns; it does not commit output to the wire. Before wire commitment, callback failures
 // replace the selected response with the framework's error answer. After wire
 // commitment, a callback exception aborts the stream (HTTP/1: the connection)
 // and reaches on_connection_failure. A callback returning without a response
@@ -87,6 +103,15 @@ public:
     void abort_connection() noexcept {
         context_.abort_connection();
     }
+
+    // 终结当前请求；HTTP/2、HTTP/3 只重置本流，HTTP/1 关闭连接。
+    // 默认分别使用 CANCEL / H3_REQUEST_CANCELLED。正常返回不再自动生成响应；
+    // 后续异常仍上报。显式协议错误码与当前协议不匹配时抛 invalid_argument。
+    void reset();
+    void reset(http2_error_code error);
+    void reset(http3_error_code error);
+
+    [[nodiscard]] request_body_state body_state() const noexcept;
 
     // The streamed request content. Its first read sends a pending
     // 100 Continue. Throws std::logic_error for a tunnel request, whose bytes
@@ -228,6 +253,7 @@ private:
 
     [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
     [[nodiscard]] task<websocket*> accept_websocket_impl(websocket_route_config config);
+    void reset_impl(std::optional<std::uint64_t> error);
 
     context& context_;
     response_stream_writer& response_;

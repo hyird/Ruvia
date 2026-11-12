@@ -161,6 +161,9 @@ public:
         bool retry_425_{};
         bool rejected_{};
         bool write_stopped_{};
+        // Protocol submission precedes UDP completion and the producer's resumption.
+        bool request_end_submitted_{};
+        bool request_end_flushed_{};
         std::optional<std::uint64_t> stop_sending_error_;
     };
     session(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
@@ -217,6 +220,16 @@ public:
     ngtcp2_path path(asio::ip::udp::endpoint& local, asio::ip::udp::endpoint& remote) noexcept {
         return http3_quic_path(local, remote);
     }
+    void capture_connection_info(http_client_response_state& response, bool reused) const {
+        if (response.connection_info_.id_ != connection_id_) {
+            response.connection_info_.peer_ip_ = peer_ip_;
+            response.connection_info_.peer_port_ = remote_.port();
+            response.connection_info_.id_ = connection_id_;
+        }
+        response.connection_info_.reused_ = reused;
+        response.connection_info_.connect_duration_ = reused ? std::chrono::steady_clock::duration{} : connect_duration_;
+        response.connection_info_.tls_duration_ = reused ? std::chrono::steady_clock::duration{} : tls_duration_;
+    }
     bool usable() const noexcept {
         return open_ && quic_ && !quic_->closed() && !draining_;
     }
@@ -242,8 +255,12 @@ public:
             if (item == preserve) {
                 continue;
             }
+            if (item->id_ >= 0 || item->response_.informational_active_) {
+                item->response_.request_informational_stop();
+            }
             if (code != error_code::closing) {
-                if (item->done_ || item->retry_) {
+                const auto* output = item->response_.output();
+                if ((item->done_ && (!output || output->ended_ || output->stopped_ || item->request_end_flushed_)) || item->retry_) {
                     continue;
                 }
                 if (item->id_ < 0 && connecting_stream_ != item) {
@@ -306,6 +323,7 @@ public:
             [&item](std::exception_ptr failure) noexcept {
                 item.failure_ = std::move(failure);
                 item.signal_.notify();
+                item.owner_.changed_.notify();
             });
     }
     static void complete_websocket_tunnel(stream& item) noexcept {
@@ -348,13 +366,14 @@ public:
             }
             return;
         }
-        if (pool_.config().read_timeout_ && !item.done_ && item.response_.http3_data_credit_ == 0) {
-            item.timer_.read_deadline_ = worker_timer_deadline_after(pool_.config().read_timeout_->value());
+        if (!item.response_.informational_active_ && item.response_.effective_read_timeout_ && !item.done_ && item.response_.http3_data_credit_ == 0) {
+            item.timer_.read_deadline_ = worker_timer_deadline_after(item.response_.effective_read_timeout_->value());
             schedule(item);
         }
     }
     void cancel(stream& item, error_code code) noexcept {
         item.error_ = code;
+        item.response_.request_informational_stop();
         if (quic_ && item.id_ >= 0) {
             quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
         }
@@ -407,7 +426,8 @@ public:
             if (request.tunnel_protocol().empty()) {
                 const http3_connect_request_head_view head{
                     .authority_ = request.tunnel_authority(),
-                    .headers_ = headers};
+                    .headers_ = headers,
+                    .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             } else {
                 const http3_extended_connect_request_head_view head{
@@ -415,7 +435,8 @@ public:
                     .scheme_ = "https",
                     .authority_ = request.tunnel_authority(),
                     .target_ = request.target(),
-                    .headers_ = headers};
+                    .headers_ = headers,
+                    .field_source_ = request.options_.field_source_};
                 require_accepted(connection.submit_request_head(item.id_, head));
             }
             return;
@@ -438,7 +459,8 @@ public:
             .headers_ = headers,
             .content_length_ = content_length,
             .streaming_ = request.output() != nullptr || !request.body().empty(),
-            .expectation_ = expectation};
+            .expectation_ = expectation,
+            .field_source_ = request.options_.field_source_};
         require_accepted(connection.submit_request_head(item.id_, head));
     }
     void consume_event(const http_origin_advertisement& origins) {
@@ -504,6 +526,15 @@ public:
                     return;
                 }
                 response.headers_ = std::move(fields);
+                response.content_length_ = value.content_length_;
+                if (!response.connection_info_.reused_) {
+                    response.connection_info_.tls_duration_ = tls_duration_;
+                }
+                const auto body_plan = plan_http_response_body(response.request_method_, semantic_status);
+                response.framing_ = body_plan.content_semantics() == http_response_content_semantics::connect_tunnel
+                                        ? http_client_response_framing::tunnel
+                                    : body_plan.body_suppressed() ? http_client_response_framing::none
+                                                                  : http_client_response_framing::stream;
                 if (item.websocket_) {
                     accept_extended_connect_websocket_response(*item.websocket_,
                         semantic_status, response.headers_, value.stream_ended_,
@@ -577,7 +608,7 @@ public:
                                  response.response_body_plan_->content_semantics() == http_response_content_semantics::with_content;
             finish_http_client_response_body(response, item.timeout_, content, pool_.config().max_response_bytes_);
             response.complete_ = true;
-            if (response.upload_ && !response.upload_->output_.ended_) {
+            if (response.upload_ && !response.upload_->output_.ended_ && !item.request_end_submitted_) {
                 response.upload_->output_.stop();
             }
             item.done_ = true;
@@ -594,7 +625,9 @@ public:
                 response.tunnel_->receive_ended_ &&
                 value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
                 complete_websocket_tunnel(item);
-            } else if (auto* output = response.output()) {
+            } else if (auto* output = response.output();
+                output && (!item.request_end_submitted_ ||
+                              value.application_error_code_ != static_cast<std::uint64_t>(http3_error_code::no_error))) {
                 output->stop();
             }
         } else if (!item.done_ && !item.retry_) {
@@ -603,12 +636,23 @@ public:
     }
     void consume_stream_event(stream& item, const http3_stream_close_event& value) {
         auto& response = item.response_;
-        if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
-            response.tunnel_->receive_ended_ && !value.application_error_code_) {
+        if (!value.application_error_code_ && item.request_end_submitted_) {
+            // A clean QUIC stream close confirms both wire halves, even while
+            // the upload driver is queued behind this receive completion.
+            item.request_end_flushed_ = true;
+            if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_) {
+                item.done_ = true;
+            }
+        }
+        if (value.application_error_code_ && item.request_end_submitted_ && !item.request_end_flushed_) {
+            fail_or_retry_closed_stream(item, value.application_error_code_);
+        } else if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
+                   response.tunnel_->receive_ended_ && !value.application_error_code_) {
             complete_websocket_tunnel(item);
         } else if (!item.done_ && !item.retry_) {
             fail_or_retry_closed_stream(item, value.application_error_code_);
-        } else if (auto* output = response.output(); output && item.done_) {
+        } else if (auto* output = response.output();
+            output && item.done_ && (!item.request_end_flushed_ || value.application_error_code_)) {
             output->stop();
         }
     }
@@ -626,6 +670,48 @@ public:
         response.http3_datagram_bytes_ += value.payload_.size();
         response.data_signal_.notify();
     }
+    task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_timeout timeout) {
+        struct callback_guard final {
+            session& owner_;
+            http_client_response_state* response_;
+            ~callback_guard() {
+                --owner_.borrowed_operations_;
+                response_->release_reference();
+                owner_.changed_.notify();
+                if (owner_.race_signal_) {
+                    owner_.race_signal_->notify();
+                }
+            }
+        } guard{*this, response};
+        std::exception_ptr failure;
+        try {
+            co_await response->dispatch_informational(timeout);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        response->informational_active_ = false;
+        auto* item = find(id);
+        if (failure) {
+            response->failure_ = failure;
+            if (item && &item->response_ == response) {
+                item->failure_ = failure;
+                cancel(*item, error_code::cancelled);
+            }
+        } else if (item && &item->response_ == response) {
+            try {
+                read_progress(*item);
+            } catch (...) {
+                response->failure_ = std::current_exception();
+                item->failure_ = response->failure_;
+                cancel(*item, error_code::cancelled);
+            }
+        }
+        response->head_signal_.notify();
+        response->data_signal_.notify();
+        if (item && &item->response_ == response) {
+            item->signal_.notify();
+        }
+    }
     void consume_events() {
         if (early_started_ && !early_rejected_ && ngtcp2_conn_get_tls_early_data_rejected2(quic_->native_handle())) {
             early_rejected_ = true;
@@ -641,6 +727,27 @@ public:
         }
         while (auto event = quic_->next_event()) {
             std::visit([this](const auto& value) { consume_event(value); }, *event);
+            if (auto* head = std::get_if<http3_headers_event>(&*event);
+                head && !head->trailers_ && head->status_ && head->status_->value() < 200) {
+                auto* item = find(head->stream_id_);
+                if (item && !item->error_ && !item->failure_ && item->response_.informational_callback_ &&
+                    !item->response_.informational_active_) {
+                    auto& response = item->response_;
+                    response.informational_active_ = true;
+                    item->timer_.read_deadline_.reset();
+                    schedule(*item);
+                    response.retain_reference();
+                    ++borrowed_operations_;
+                    try {
+                        pool_.tasks().spawn(deliver_informational(item->id_, &response, item->timeout_));
+                    } catch (...) {
+                        --borrowed_operations_;
+                        response.release_reference();
+                        response.informational_active_ = false;
+                        throw;
+                    }
+                }
+            }
         }
         if (tls_state_.ticket_) {
             if (const auto settings = quic_->http3().peer_settings()) {
@@ -737,6 +844,7 @@ public:
                 std::size_t burst = 0;
                 for (; open_ && burst != 32; ++burst) {
                     const auto result = quic_->next_datagram(pool_.config().http3_.max_datagram_bytes_, http3_quic_now(), packet_);
+                    packet_pending_ = result.status_ == http3_quic_status::accepted;
                     step_quic(result.status_);
                     if (result.status_ == http3_quic_status::would_block) {
                         break;
@@ -749,6 +857,7 @@ public:
                     if (packet_.path_.path.local.addrlen == old_local_.size() &&
                         std::memcmp(packet_.path_.path.local.addr, old_local_.data(), old_local_.size()) == 0) {
                         if (!old_socket_ || !old_socket_->is_open()) {
+                            packet_pending_ = false;
                             continue;
                         }
                         output = old_socket_.get();
@@ -759,6 +868,7 @@ public:
                             asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
                     });
                     sending_socket_ = nullptr;
+                    packet_pending_ = false;
                     changed_.notify();
                     if (!open_) {
                         break;
@@ -785,6 +895,7 @@ public:
             }
         } catch (...) {
             sending_socket_ = nullptr;
+            packet_pending_ = false;
             if (open_) {
                 failure_ = std::current_exception();
                 close();
@@ -873,7 +984,7 @@ public:
         } connecting{connecting_stream_};
         item.error_.reset();
         worker_timer_registration timer;
-        const auto bound = acquire_timeout.constrained_by(pool_.config().connect_timeout_);
+        const auto bound = item.timeout_.constrained_by(acquire_timeout.remaining()).constrained_by(item.response_.effective_connect_timeout_);
         if (const auto deadline = bound.deadline()) {
             (void)pool_.worker().schedule_timer(timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
@@ -882,14 +993,23 @@ public:
             });
         }
         endpoint_host_.assign(host);
+        const auto connect_started = std::chrono::steady_clock::now();
         if (!connect_endpoint_) {
             throw std::logic_error("HTTP/3 connect requires a selected resolver endpoint");
+        }
+        if (pool_.config().address_validator_ &&
+            !pool_.config().address_validator_(connect_endpoint_->address().to_string(), connect_endpoint_->port())) {
+            throw http_client_error(error_code::resolve_failed, "HTTP/3 dial address rejected");
         }
         remote_ = *connect_endpoint_;
         socket_ = make_pmr_object<asio::ip::udp::socket>(process_resource(), pool_.io_context());
         socket_->open(remote_.protocol());
         socket_->connect(remote_);
+        peer_ip_ = remote_.address().to_string();
         local_ = socket_->local_endpoint();
+        connect_duration_ = std::chrono::steady_clock::now() - connect_started;
+        tls_started_at_ = std::chrono::steady_clock::now();
+        tls_duration_ = {};
         tls_.reset(SSL_new(tls_state_.context_.native_handle()));
         const auto identity = pool_.config().tls_.server_name_ ? std::string_view(*pool_.config().tls_.server_name_) : std::string_view(pool_.config().host_);
         if (!tls_ || prepare_client_tls_stream(*tls_, identity, {}) != client_tls_setup_error::none ||
@@ -928,6 +1048,7 @@ public:
         auto callbacks = crypto_callbacks();
         callbacks.handshake_completed = [](ngtcp2_conn*, void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
+            owner.tls_duration_ = std::chrono::steady_clock::now() - owner.tls_started_at_;
             if (tls_selected_alpn(*owner.tls_) != "h3") {
                 return NGTCP2_ERR_CALLBACK_FAILURE;
             }
@@ -957,7 +1078,7 @@ public:
             .destination_connection_id_ = random_cid(),
             .initial_path_ = path(local_, remote_),
             .initial_timestamp_ = http3_quic_now(),
-            .handshake_timeout_ = http3_quic_duration(config.connect_timeout_),
+            .handshake_timeout_ = bound.remaining() ? http3_quic_duration(*bound.remaining()) : UINT64_MAX,
             .idle_timeout_ = 0,
             .initial_max_data_ = receive_window,
             .initial_max_stream_data_ = 64 * 1024,
@@ -982,6 +1103,8 @@ public:
                                  tls_state_.ticket_settings_) == http3_quic_status::accepted;
         }
         next_nonzero_id(generation_);
+        connection_id_ = pool_.next_connection_id();
+        requests_ = 0;
         open_ = true;
         active_receive_buffer_ = 0;
         receive_buffers_[0].resize(http3_max_udp_payload_bytes);
@@ -1022,8 +1145,29 @@ public:
         writer_.notify();
         attempt.completed_ = true;
     }
+    task<void> flush_stream(stream& item) {
+        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(worker_timer_deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
+        schedule(item);
+        writer_.notify();
+        while ((!item.request_end_flushed_ && !quic_->http3().output_flushed(item.id_)) || packet_pending_) {
+            check(item);
+            if (item.retry_ || (item.write_stopped_ &&
+                                   (!item.request_end_submitted_ ||
+                                       item.stop_sending_error_ != static_cast<std::uint64_t>(http3_error_code::no_error)))) {
+                break;
+            }
+            co_await changed_.wait();
+        }
+        check(item);
+        if (item.request_end_submitted_ && !item.retry_ &&
+            quic_->http3().output_flushed(item.id_) && !packet_pending_) {
+            item.request_end_flushed_ = true;
+        }
+        item.timer_.write_deadline_.reset();
+        schedule(item);
+    }
     task<void> send_body(stream& item, std::string_view bytes) {
-        item.timer_.write_deadline_ = pool_.config().write_timeout_ ? std::optional(worker_timer_deadline_after(pool_.config().write_timeout_->value())) : std::nullopt;
+        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(worker_timer_deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
         schedule(item);
         while (!bytes.empty()) {
             check(item);
@@ -1036,8 +1180,8 @@ public:
             }
             bytes.remove_prefix(sent.accepted_bytes_);
             pool_.wire_counters().sent_ += sent.accepted_bytes_;
-            if (sent.accepted_bytes_ != 0 && pool_.config().write_timeout_) {
-                item.timer_.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
+            if (sent.accepted_bytes_ != 0 && item.response_.effective_write_timeout_) {
+                item.timer_.write_deadline_ = worker_timer_deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
             writer_.notify();
@@ -1053,8 +1197,8 @@ public:
             }
             co_await item.signal_.wait();
             const auto remaining = quic_->http3().pending_output_bytes(item.id_);
-            if (remaining < outstanding && pool_.config().write_timeout_) {
-                item.timer_.write_deadline_ = worker_timer_deadline_after(pool_.config().write_timeout_->value());
+            if (remaining < outstanding && item.response_.effective_write_timeout_) {
+                item.timer_.write_deadline_ = worker_timer_deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
             outstanding = remaining;
@@ -1085,6 +1229,12 @@ public:
     http3_quic_datagram packet_;
     std::exception_ptr failure_;
     std::uint64_t generation_{};
+    std::uint64_t connection_id_{};
+    std::pmr::string peer_ip_{process_resource()};
+    std::size_t requests_{};
+    std::chrono::steady_clock::time_point tls_started_at_;
+    std::chrono::steady_clock::duration connect_duration_{}, tls_duration_{};
+    bool packet_pending_{false};
     std::size_t io_tasks_{};
     std::size_t borrowed_operations_{};
     stream* connecting_stream_{};
@@ -1224,6 +1374,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         tls_->ticket_ && session_->connect_endpoint_ && tls_->ticket_host_ == host && tls_->ticket_port_ == port) {
         co_return;
     }
+    const auto selection_started = std::chrono::steady_clock::now();
     race.selecting_ = true;
     race.reason_.reset();
     race.failure_ = nullptr;
@@ -1234,7 +1385,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         race.pool_.cancellation_target(), race.cancellation_id_, response);
     cancellation.arm(stop);
     const auto bound = timeout.constrained_by(acquire_timeout.remaining())
-                           .constrained_by(race.pool_.config().connect_timeout_);
+                           .constrained_by(response.effective_connect_timeout_);
     worker_timer_registration deadline_timer;
     if (const auto deadline = bound.deadline()) {
         (void)race.pool_.worker().schedule_timer(deadline_timer, *deadline,
@@ -1271,15 +1422,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         if (race.reason_) {
             throw http_client_error(*race.reason_, "HTTP/3 endpoint selection stopped");
         }
-        client_resolve_result resolved;
-        {
-            auto pending = race.resolver_.resolve(host, port, bound);
-            if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
-                resolved = std::move(*immediate);
-            } else {
-                resolved = co_await std::move(std::get<task<client_resolve_result>>(pending));
-            }
-        }
+        auto resolved = co_await race.pool_.resolve_addresses(host, port, race.resolver_, bound);
         if (race.reason_) {
             throw http_client_error(*race.reason_, "HTTP/3 resolution stopped");
         }
@@ -1334,10 +1477,12 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                         live += other.running_;
                     }
                     const auto waves = (remaining + live + 1) / 2;
-                    const auto left = bound.remaining().value_or(race.pool_.config().connect_timeout_);
-                    const auto divisor = static_cast<std::int64_t>((std::min)(waves, static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())));
-                    const auto slice = (std::max)(client_connection_attempt_delay, left.value() / (std::max)(divisor, std::int64_t{1}));
-                    const auto candidate_bound = bound.constrained_by(slice);
+                    auto candidate_bound = bound;
+                    if (const auto left = bound.remaining()) {
+                        const auto divisor = static_cast<std::int64_t>((std::min)(waves, static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())));
+                        const auto slice = (std::max)(client_connection_attempt_delay, left->value() / (std::max)(divisor, std::int64_t{1}));
+                        candidate_bound = bound.constrained_by(slice);
+                    }
                     entry.running_ = true;
                     try {
                         race.pool_.tasks().spawn(race.run_candidate(index, host, port, candidate_bound, response));
@@ -1412,6 +1557,8 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
         }
         if (index == race.winner_) {
             session_ = std::move(entry.connection_);
+            session_->connect_duration_ = (std::max)(std::chrono::steady_clock::duration{},
+                std::chrono::steady_clock::now() - selection_started - session_->tls_duration_);
         } else {
             entry.connection_.reset();
         }
@@ -1456,6 +1603,28 @@ void http3_client_connection::close() noexcept {
     if (session_) {
         session_->close();
     }
+}
+void http3_client_connection::retire_addresses() noexcept {
+    if (race_->selecting_) {
+        race_->cancel(error_code::io_error);
+    }
+    if (!session_) {
+        return;
+    }
+    session_->draining_ = true;
+    session_->connect_endpoint_.reset();
+    for (auto* item : session_->streams_) {
+        if (item->response_.tunnel_) {
+            session_->cancel(*item, error_code::closing);
+        }
+    }
+    if (session_->streams_.empty()) {
+        session_->close();
+    }
+    session_->wake();
+}
+std::uint64_t http3_client_connection::connection_id() const noexcept {
+    return session_ && session_->open_ ? session_->connection_id_ : 0;
 }
 void http3_client_connection::shutdown() noexcept {
     race_->retired_ = true;
@@ -1537,7 +1706,13 @@ void http3_client_connection::release_data(http_client_response_state& response)
 task<bool> http3_client_connection::execute(const http_client_request_storage& request,
     std::string_view host, std::uint16_t port, bool fallback, const operation_timeout& timeout,
     const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& response) {
-    const bool may_send_early = is_http_method_safe(request.method()) &&
+    if (request.is_upgrade()) {
+        throw http_client_error(error_code::protocol_unavailable, "HTTP/1 Upgrade is unavailable over HTTP/3");
+    }
+    if (request.options_.fresh_connection_) {
+        close();
+    }
+    const bool may_send_early = !request.options_.fresh_connection_ && is_http_method_safe(request.method()) &&
                                 !request.has_body() && request.output() == nullptr && !request.is_tunnel();
     try {
         co_await select_endpoint(may_send_early, host, port, timeout, acquire_timeout, stop, response);
@@ -1599,6 +1774,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         throw;
     }
     response.connection_generation_ = self.generation_;
+    self.capture_connection_info(response, self.requests_ != 0);
     if (request.udp_tunnel()) {
         response.http3_datagrams_.emplace(response.resource_);
     }
@@ -1661,17 +1837,20 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         admission_timer.cancel();
         if (!item.retry_) {
             response.stream_id_ = static_cast<std::uint64_t>(item.id_);
+            const bool reused = self.requests_++ != 0;
+            self.capture_connection_info(response, reused);
             item.early_ = !self.quic_->handshake_completed();
             client_prepared_request_scratch scratch(process_resource());
             const auto prepared = self.pool_.policy().prepare_request(request, scratch);
             try {
                 self.submit_request_head(item, request, prepared.headers_);
-                self.writer_.notify();
+                co_await self.flush_stream(item);
                 if (!request.body().empty()) {
                     co_await self.send_body(item, request.body());
                     if (!item.retry_ && !item.write_stopped_) {
                         require_accepted(self.quic_->http3().finish_stream(item.id_));
-                        self.writer_.notify();
+                        item.request_end_submitted_ = true;
+                        co_await self.flush_stream(item);
                     }
                 }
                 self.read_progress(item);
@@ -1698,7 +1877,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                             } else {
                                 require_accepted(self.quic_->http3().finish_stream(item.id_));
                             }
-                            self.writer_.notify();
+                            item.request_end_submitted_ = true;
+                            co_await self.flush_stream(item);
                             co_return true;
                         });
                     if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_ &&
@@ -1706,7 +1886,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                         item.done_ = true;
                     }
                 }
-                while (!item.done_ && !item.retry_) {
+                while ((!item.done_ || response.informational_active_) && !item.retry_) {
                     self.check(item);
                     co_await item.signal_.wait();
                 }
@@ -1744,6 +1924,8 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         item.retry_425_ = false;
         item.rejected_ = false;
         item.write_stopped_ = false;
+        item.request_end_submitted_ = false;
+        item.request_end_flushed_ = false;
         item.stop_sending_error_.reset();
         item.error_.reset();
         response.headers_.clear();
@@ -1754,8 +1936,9 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         response.discard_response_body();
         if (!self.usable()) {
             co_await self.connect(
-                item, host, port, false, timeout.constrained_by(self.pool_.config().acquire_timeout_), stop);
+                item, host, port, false, timeout.constrained_by(response.effective_acquire_timeout_), stop);
             response.connection_generation_ = self.generation_;
+            self.capture_connection_info(response, false);
         }
     }
     throw http_client_error(error_code::protocol_error, "HTTP/3 request attempts exhausted");
@@ -1906,7 +2089,7 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
     if (bytes.size() > self.quic_->max_datagram_payload_size(item->id_) || !response.http3_native_datagrams_) {
         co_return false;
     }
-    const auto bound = item->timeout_.constrained_by(self.pool_.config().write_timeout_);
+    const auto bound = item->timeout_.constrained_by(response.effective_write_timeout_);
     worker_timer_registration timer;
     if (const auto deadline = bound.deadline()) {
         (void)self.pool_.worker().schedule_timer(timer, *deadline, [&self](worker_timer_outcome outcome) noexcept { if (outcome == worker_timer_outcome::expired) { self.changed_.notify(); } });

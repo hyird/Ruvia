@@ -150,6 +150,7 @@ public:
     void detach_context() noexcept;
     void wait_for_reservations() noexcept;
     [[nodiscard]] bool attached() const noexcept;
+    [[nodiscard]] asio::io_context::executor_type executor() const;
     [[nodiscard]] bool timers_stopping() const noexcept {
         return timers_stopping_.load(std::memory_order_acquire);
     }

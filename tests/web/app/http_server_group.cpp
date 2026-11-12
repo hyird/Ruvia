@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <future>
@@ -16,6 +17,9 @@
 #endif
 
 #include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
+#include <asio/ip/v6_only.hpp>
+#include <asio/read.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
@@ -28,6 +32,9 @@
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http2_wire_fixture.h"
+#endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_test_client.h"
 #endif
@@ -756,3 +763,267 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     refused.connect(port.endpoint(), error);
     EXPECT_EQ(error, asio::error::connection_refused);
 }
+
+TEST(Ruvia, independent_group_prepared_batch_defers_handlers_and_rolls_back_abandoned_commit) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation port(io), second(io), abandoned(io), abandoned_second(io);
+    std::atomic<unsigned> calls{};
+    std::atomic<bool> published{};
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+        EXPECT_TRUE(published.load());
+        ++calls;
+        co_await answer(stream);
+    }});
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    auto preparation = [&] {
+        std::string address = "127.0.0.1";
+        std::array configs{plain(port.endpoint().port()), plain(second.endpoint().port())};
+        for (auto& config : configs) {
+            config.address_ = address;
+        }
+        auto cold = group.prepare_listeners(caller, configs);
+        address.assign(address.size(), 'x');
+        return cold;
+    }();
+    auto prepared = runtime.loops_[0].start(std::move(preparation)).get();
+    std::array<asio::ip::tcp::socket, 2> queued{asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
+    const std::array endpoints{port.endpoint(), second.endpoint()};
+    constexpr std::string_view head = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    for (std::size_t index = 0; index != queued.size(); ++index) {
+        queued[index].connect(endpoints[index]);
+        asio::write(queued[index], asio::buffer(head));
+    }
+    const auto barrier = []() -> ruvia::task<void> { co_return; };
+    for (const auto& loop : runtime.loops_) {
+        loop.start(barrier()).get();
+    }
+    EXPECT_EQ(calls.load(), 0U);
+    published.store(true);
+    runtime.loops_[0].start(std::move(prepared).activate()).get();
+    for (auto& peer : queued) {
+        EXPECT_NE(ruvia::test::read_to_end(peer).find(" 200 "), std::string::npos);
+    }
+    EXPECT_EQ(calls.load(), 2U);
+    const std::array abandoned_configs{plain(abandoned.endpoint().port()), plain(abandoned_second.endpoint().port())};
+    {
+        auto pending = runtime.loops_[0].start(group.prepare_listeners(caller, abandoned_configs)).get();
+        auto cold_commit = std::move(pending).activate();
+    }
+    // The next transaction also joins the abandoned transaction's rollback.
+    auto replacement = runtime.loops_[0].start(group.prepare_listeners(caller, abandoned_configs)).get();
+    runtime.loops_[0].start(std::move(replacement).cancel()).get();
+    auto stopped = runtime.loops_[0].start(group.prepare_listeners(caller, abandoned_configs)).get();
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+    EXPECT_THROW(runtime.loops_[0].start(std::move(stopped).activate()).get(), std::logic_error);
+}
+
+TEST(Ruvia, independent_group_prepared_batch_second_bind_failure_rolls_back_without_interrupting_old_listener) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation original(io), first(io);
+    asio::ip::tcp::acceptor blocker(io, {asio::ip::address_v4::loopback(), 0});
+    const auto blocked = blocker.local_endpoint();
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = &answer});
+    group.listen(plain(original.endpoint().port()));
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    const std::array configs{plain(first.endpoint().port()), plain(blocked.port())};
+    EXPECT_THROW(runtime.loops_[0].start(group.prepare_listeners(caller, configs)).get(), std::system_error);
+    EXPECT_NE(request(original.endpoint().port()).find(" 200 "), std::string::npos);
+    asio::ip::tcp::socket refused(io);
+    asio::error_code error;
+    refused.connect(first.endpoint(), error);
+    EXPECT_EQ(error, asio::error::connection_refused);
+    blocker.close();
+    auto prepared = runtime.loops_[0].start(group.prepare_listeners(caller, configs)).get();
+    runtime.loops_[0].start(std::move(prepared).activate()).get();
+    EXPECT_NE(request(first.endpoint().port()).find(" 200 "), std::string::npos);
+    EXPECT_NE(request(blocked.port()).find(" 200 "), std::string::npos);
+    EXPECT_NE(request(original.endpoint().port()).find(" 200 "), std::string::npos);
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+}
+
+TEST(Ruvia, independent_group_force_remove_uses_listener_identity_not_reused_endpoint) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation first(io), second(io);
+    const auto config = [](std::uint16_t port) {
+        return ruvia::listen_config{.address_ = "127.0.0.1", .http_ = port, .dispatch_ = ruvia::listener_dispatch::connection};
+    };
+    ruvia::http_server_group group(runtime.loops_, {.connection_ = [](ruvia::server_connection& connection) -> ruvia::task<void> {
+        while (auto bytes = co_await connection.read()) {
+            co_await connection.write(*bytes);
+        }
+    }});
+    group.listen(config(first.endpoint().port()));
+    group.listen(config(second.endpoint().port()));
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    const auto echo_byte = [](asio::ip::tcp::socket& socket) {
+        const char sent = 'x';
+        char received = 0;
+        asio::write(socket, asio::buffer(&sent, 1));
+        asio::read(socket, asio::buffer(&received, 1));
+        EXPECT_EQ(sent, received);
+    };
+    asio::ip::tcp::socket old(io), unaffected(io), replacement(io);
+    old.connect(first.endpoint());
+    unaffected.connect(second.endpoint());
+    echo_byte(old);
+    echo_byte(unaffected);
+    const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = first.endpoint().port()};
+    runtime.loops_[0].start(group.remove_listener(caller, endpoint)).get();
+    runtime.loops_[0].start(group.add_listener(caller, config(first.endpoint().port()))).get();
+    replacement.connect(first.endpoint());
+    echo_byte(replacement);
+    runtime.loops_[0].start(group.remove_listener(caller, endpoint, {.close_connections_ = true})).get();
+    char byte = 0;
+    std::error_code error;
+    EXPECT_EQ(replacement.read_some(asio::buffer(&byte, 1), error), 0U);
+    EXPECT_TRUE(error == asio::error::eof || error == asio::error::connection_reset);
+    echo_byte(old);
+    echo_byte(unaffected);
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+    EXPECT_EQ(group.stats().active_connections_, 0U);
+}
+
+TEST(Ruvia, independent_group_ipv6_only_controls_tcp_and_quic_socket_families) {
+    external_loops runtime;
+    asio::io_context io;
+    asio::ip::tcp::acceptor available(io);
+    std::error_code error;
+    available.open(asio::ip::tcp::v6(), error);
+    if (error == asio::error::address_family_not_supported) {
+        GTEST_SKIP() << "IPv6 is unavailable";
+    }
+    ASSERT_FALSE(error);
+    available.close();
+    const ruvia::test::tls_identity identity("ipv6-listener", "DNS:localhost,IP:::1");
+    for (const bool only : {true, false}) {
+        ruvia::test::tcp_port_reservation tcp(io);
+        ruvia::test::udp_port_reservation udp(io);
+        auto config = secure(tcp.endpoint().port(), udp.endpoint().port(), identity);
+        config.address_ = "::";
+        config.ipv6_only_ = only;
+        ruvia::http_server_group group(runtime.loops_, {.request_stream_ = &answer});
+        group.listen(config);
+        const auto caller = runtime.loops_[0].handle();
+        runtime.loops_[0].start(group.start(caller)).get();
+        asio::ssl::context tls(asio::ssl::context::tls_client);
+        tls.load_verify_file(identity.ca_file_.string());
+        tls.set_verify_mode(asio::ssl::verify_peer);
+        asio::ssl::stream<asio::ip::tcp::socket> ipv6(io, tls);
+        ipv6.next_layer().connect({asio::ip::address_v6::loopback(), tcp.endpoint().port()});
+        ipv6.handshake(asio::ssl::stream_base::client);
+        EXPECT_NE(request_on(ipv6).find(" 200 "), std::string::npos);
+        asio::ip::tcp::socket ipv4(io);
+        ipv4.connect(tcp.endpoint(), error);
+        EXPECT_EQ(static_cast<bool>(error), only);
+#if defined(RUVIA_ENABLE_HTTP3)
+        ruvia::test::http3_test_client quic({asio::ip::address_v6::loopback(), udp.endpoint().port()}, identity.ca_file_, "localhost", 5s);
+        EXPECT_EQ(quic.request("GET", "/worker").status_, 200);
+#endif
+#if !defined(_WIN32)
+        auto duplicates = runtime.loops_[0].start(group.duplicate_listener_sockets(caller, {.address_ = "::", .port_ = tcp.endpoint().port()})).get();
+        for (const auto socket : duplicates.https_) {
+            asio::ip::tcp::acceptor owner(io);
+            owner.assign(asio::ip::tcp::v6(), socket);
+            asio::ip::v6_only value;
+            owner.get_option(value);
+            EXPECT_EQ(value.value(), only);
+        }
+        for (const auto socket : duplicates.http3_) {
+            asio::ip::udp::socket owner(io);
+            owner.assign(asio::ip::udp::v6(), socket);
+            asio::ip::v6_only value;
+            owner.get_option(value);
+            EXPECT_EQ(value.value(), only);
+        }
+#endif
+        runtime.loops_[0].start(group.shutdown(caller)).get();
+    }
+}
+
+#if defined(RUVIA_ENABLE_HTTP3)
+TEST(Ruvia, independent_group_force_remove_closes_tls_and_quic_but_keeps_other_listener) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation secure_port(io), other(io);
+    ruvia::test::udp_port_reservation udp(io);
+    const ruvia::test::tls_identity identity("forced-listener", "DNS:localhost");
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = &answer});
+    group.listen(secure(secure_port.endpoint().port(), udp.endpoint().port(), identity));
+    group.listen(plain(other.endpoint().port()));
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    asio::ssl::context tls(asio::ssl::context::tls_client);
+    tls.load_verify_file(identity.ca_file_.string());
+    tls.set_verify_mode(asio::ssl::verify_peer);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, tls);
+    stream.next_layer().connect(secure_port.endpoint());
+    stream.handshake(asio::ssl::stream_base::client);
+    ruvia::test::http3_test_client quic(udp.endpoint(), identity.ca_file_, "localhost", 5s);
+    EXPECT_EQ(quic.request("GET", "/worker").status_, 200);
+    runtime.loops_[0].start(group.remove_listener(caller, {.address_ = "127.0.0.1", .port_ = secure_port.endpoint().port()}, {.close_connections_ = true})).get();
+    char byte = 0;
+    std::error_code error;
+    EXPECT_EQ(stream.read_some(asio::buffer(&byte, 1), error), 0U);
+    EXPECT_TRUE(error);
+    EXPECT_ANY_THROW((void)quic.request("GET", "/worker"));
+    EXPECT_NE(request(other.endpoint().port()).find(" 200 "), std::string::npos);
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+}
+#endif
+
+TEST(Ruvia, independent_group_force_remove_from_its_own_handler_does_not_join_itself) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation port(io);
+    std::binary_semaphore removed{0};
+    ruvia::http_server_group* owner = nullptr;
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+        co_await owner->remove_listener(stream.worker(),
+            {.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
+        removed.release();
+    }});
+    owner = &group;
+    group.listen(plain(port.endpoint().port()));
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    asio::ip::tcp::socket peer(io);
+    peer.connect(port.endpoint());
+    constexpr std::string_view head = "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n";
+    asio::write(peer, asio::buffer(head));
+    EXPECT_TRUE(removed.try_acquire_for(5s));
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+}
+
+#if defined(RUVIA_ENABLE_HTTP2)
+TEST(Ruvia, independent_group_force_remove_closes_http2_connection_not_only_streams) {
+    external_loops runtime;
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation port(io), other(io);
+    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = &answer});
+    group.listen(plain(port.endpoint().port()));
+    group.listen(plain(other.endpoint().port()));
+    const auto caller = runtime.loops_[0].handle();
+    runtime.loops_[0].start(group.start(caller)).get();
+    asio::ip::tcp::socket peer(io);
+    peer.connect(port.endpoint());
+    std::pmr::string preface("PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n", ruvia::process_resource());
+    ruvia::test::append_frame(preface, ruvia::http2_frame_type::settings, 0, 0, {});
+    asio::write(peer, asio::buffer(preface));
+    const auto settings = ruvia::test::read_frame(peer, std::chrono::steady_clock::now() + 5s);
+    EXPECT_EQ(settings.header_.type_, static_cast<std::uint8_t>(ruvia::http2_frame_type::settings));
+    runtime.loops_[0].start(group.remove_listener(caller, {.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true})).get();
+    std::array<char, 1024> bytes{};
+    std::error_code error;
+    while (peer.read_some(asio::buffer(bytes), error) != 0) {
+    }
+    EXPECT_TRUE(error == asio::error::eof || error == asio::error::connection_reset);
+    EXPECT_NE(request(other.endpoint().port()).find(" 200 "), std::string::npos);
+    runtime.loops_[0].start(group.shutdown(caller)).get();
+}
+#endif

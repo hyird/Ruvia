@@ -63,7 +63,9 @@ http_client_request_storage::http_client_request_storage(
       tunnel_protocol_(method_.get_allocator().resource()) {}
 
 http_client_request_storage::http_client_request_storage(http_client_request_storage&& other) noexcept
-    : method_(std::move(other.method_)),
+    : options_(std::move(other.options_)),
+      pool_owner_(std::move(other.pool_owner_)),
+      method_(std::move(other.method_)),
       target_(std::move(other.target_)),
       headers_(std::move(other.headers_)),
       body_(std::move(other.body_)),
@@ -72,6 +74,7 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
       websocket_(std::move(other.websocket_)),
       host_stop_(std::move(other.host_stop_)),
       is_tunnel_(other.is_tunnel_),
+      is_upgrade_(other.is_upgrade_),
       tunnel_(std::exchange(other.tunnel_, nullptr)),
       has_body_(std::exchange(other.has_body_, false)),
       upload_(std::exchange(other.upload_, nullptr)) {
@@ -272,6 +275,81 @@ http_client_request& http_client_request::body(std::string_view value) {
 http_client_request& http_client_request::body(std::span<const std::byte> value) {
     return body(std::string_view(reinterpret_cast<const char*>(value.data()), value.size()));
 }
+http_client_request& http_client_request::configure(http_client_request_options options) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    if (options.field_source_ != http_request_field_source::generated &&
+        options.field_source_ != http_request_field_source::forwarded) {
+        throw std::invalid_argument("invalid HTTP request field source");
+    }
+    request_options_ = std::move(options);
+    return *this;
+}
+http_client_request& http_client_request::decode_content(bool enabled) {
+    auto options = request_options_;
+    options.decode_content_ = enabled;
+    return configure(std::move(options));
+}
+http_client_request& http_client_request::field_source(http_request_field_source source) {
+    auto options = request_options_;
+    options.field_source_ = source;
+    return configure(std::move(options));
+}
+http_client_request& http_client_request::fresh_connection(bool enabled) {
+    auto options = request_options_;
+    options.fresh_connection_ = enabled;
+    return configure(std::move(options));
+}
+http_client_request& http_client_request::timeouts(http_client_phase_timeouts timeouts) {
+    auto options = request_options_;
+    options.timeouts_ = timeouts;
+    return configure(std::move(options));
+}
+http_client_request& http_client_request::on_informational(http_client_informational_callback callback) {
+    auto options = request_options_;
+    options.informational_ = callback
+                                 ? std::allocate_shared<http_client_informational_callback>(
+                                       std::pmr::polymorphic_allocator<http_client_informational_callback>(process_resource()), std::move(callback))
+                                 : nullptr;
+    return configure(std::move(options));
+}
+http_client_request& http_client_request::redirect_policy(
+    move_only_function<task<bool>(http_origin_view, stop_token)> policy) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    redirect_policy_ = std::move(policy);
+    return *this;
+}
+
+task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_config config) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    client_.registration_.require_active();
+    if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
+        throw std::invalid_argument("invalid HTTP Upgrade tunnel policy");
+    }
+    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
+    detail::http_client_request_storage request(method_, target_, fields.view(), client_.resource_);
+    request.options_ = request_options_;
+    request.pool_owner_ = client_.pool_owner_;
+    request.set_host_stop(client_.host_stop_token_);
+    request.set_upgrade();
+    if (has_body_) {
+        request.set_body(body_);
+    }
+    auto operation = make_scoped_operation(client_.registration_.scope(),
+        client_.pool_->open_tunnel(std::move(request), config, client_.options_));
+    consumed_ = true;
+    std::pmr::string(method_.get_allocator()).swap(method_);
+    std::pmr::string(target_.get_allocator()).swap(target_);
+    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
+    std::pmr::string(body_.get_allocator()).swap(body_);
+    return operation;
+}
+
 std::pmr::vector<http_header_view> http_client_request::field_views() const {
     std::pmr::vector<http_header_view> fields(headers_.get_allocator().resource());
     fields.reserve(headers_.size());
@@ -312,7 +390,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 .headers_ = fields.view(),
                 .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
                                               : http_client_request_content_view::none()};
-            dispatched.emplace(request.client_.dispatch(view));
+            dispatched.emplace(request.client_.dispatch(view, request.request_options_));
         }
         if (redirects == request.max_redirects_) {
             std::pmr::string(request.method_.get_allocator()).swap(request.method_);
@@ -344,12 +422,41 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         if (next == nullptr) {
             co_return response;
         }
-        auto* next_pool = request.client_.pool_;
+        auto next_pool = request.client_.pool_owner_;
         if (next->cross_origin()) {
-            if (request.client_.scheme() == http_scheme::https && next->scheme() != http_scheme::https) {
+            if (request.redirect_policy_) {
+                stop_source deadline_stop;
+                stop_group cancellation{request.client_.options_.stop_token_, request.client_.host_stop_token_,
+                    deadline_stop.token()};
+                worker_timer_registration timer;
+                if (total) {
+                    (void)request.client_.pool_->worker().schedule_timer(timer, started + total->value(),
+                        [&deadline_stop](worker_timer_outcome outcome) noexcept {
+                            if (outcome == worker_timer_outcome::expired) {
+                                deadline_stop.request_stop();
+                            }
+                        });
+                }
+                const auto require_live_policy = [&]() {
+                    if (total && std::chrono::steady_clock::now() - started >= total->value()) {
+                        throw http_client_error(http_client_error::code_type::timeout,
+                            "HTTP redirect policy deadline expired", std::nullopt, &response.connection_info());
+                    }
+                    if (cancellation.token().stop_requested()) {
+                        throw http_client_error(http_client_error::code_type::cancelled,
+                            "HTTP redirect policy cancelled", std::nullopt, &response.connection_info());
+                    }
+                };
+                require_live_policy();
+                const auto accepted = co_await request.redirect_policy_(next->origin(), cancellation.token());
+                require_live_policy();
+                if (!accepted) {
+                    co_return response;
+                }
+                request.client_.registration_.require_active();
+            } else if (request.client_.scheme() == http_scheme::https && next->scheme() != http_scheme::https) {
                 co_return response;
             }
-            // Redirects cannot expand startup's configured destination set.
             if (request.client_.registry_ == nullptr) {
                 co_return response;
             }
@@ -381,7 +488,8 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
             request.has_body_ = false;
             std::pmr::string(request.body_.get_allocator()).swap(request.body_);
         }
-        request.client_.pool_ = next_pool;
+        request.client_.pool_owner_ = std::move(next_pool);
+        request.client_.pool_ = request.client_.pool_owner_.get();
     }
 }
 
@@ -393,7 +501,7 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
     const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
-    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config);
+    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config, request_options_);
     consumed_ = true;
     std::pmr::string(method_.get_allocator()).swap(method_);
     std::pmr::string(target_.get_allocator()).swap(target_);
@@ -443,6 +551,17 @@ http_client_connect_request& http_client_connect_request::headers(std::span<cons
     }
     return *this;
 }
+http_client_connect_request& http_client_connect_request::configure(http_client_request_options options) {
+    if (consumed_) {
+        throw std::logic_error("CONNECT builder was consumed");
+    }
+    if (options.field_source_ != http_request_field_source::generated &&
+        options.field_source_ != http_request_field_source::forwarded) {
+        throw std::invalid_argument("invalid HTTP request field source");
+    }
+    request_options_ = std::move(options);
+    return *this;
+}
 http_client_connect_request& http_client_connect_request::protocol(std::string_view value) {
     if (consumed_ || udp_) {
         throw std::logic_error("CONNECT protocol cannot be changed");
@@ -463,9 +582,9 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     }
     const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
     auto dispatched = udp_
-                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config)
+                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_)
                           : client_.dispatch_connect(
-                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config);
+                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_);
     consumed_ = true;
     std::pmr::string(authority_.get_allocator()).swap(authority_);
     std::pmr::string(protocol_.get_allocator()).swap(protocol_);
@@ -501,11 +620,20 @@ task<void> http_client_response::pipe_to(context& output) & {
         pipe_response_in_context(std::move(source)));
 }
 
+#ifdef RUVIA_ENABLE_HTTP3
+namespace {
+task<void> migrate_client_pool(std::shared_ptr<detail::http_client_pool> pool,
+    std::pmr::string address, std::uint16_t port, operation_options options, stop_token host_stop) {
+    co_await pool->migrate_http3(std::move(address), port, std::move(options), std::move(host_stop));
+}
+}  // namespace
+#endif
+
 task<void> http_client_handle::migrate(std::string_view local_address, std::uint16_t port) const {
     registration_.require_active();
 #ifdef RUVIA_ENABLE_HTTP3
     return make_scoped_operation(registration_.scope(),
-        pool_->migrate_http3(std::pmr::string(local_address, process_resource()), port, options_, host_stop_token_));
+        migrate_client_pool(pool_owner_, std::pmr::string(local_address, process_resource()), port, options_, host_stop_token_));
 #else
     (void)local_address;
     (void)port;

@@ -18,6 +18,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_signal.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/http2_connection.h"
 #endif
@@ -87,6 +88,13 @@ public:
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
     [[nodiscard]] http_client_stats stats() const noexcept;
+    [[nodiscard]] std::pmr::vector<http_client_endpoint_address> dns_snapshot() const;
+    void update_dns(std::span<const http_client_endpoint_address> addresses);
+    [[nodiscard]] task<void> refresh_dns(operation_options options);
+    [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
+    [[nodiscard]] std::uint64_t next_connection_id() noexcept;
+    [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port,
+        client_host_resolver& resolver, const operation_timeout& timeout);
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() {
         return advertisements_.next();
     }
@@ -172,6 +180,10 @@ public:
 private:
     using slot_pool_type = slot_pool<http_client_slot_policy>;
     void require_accepting() const;
+    void validate_addresses(const client_resolve_result& result) const;
+    void install_addresses(client_resolve_result result);
+    void schedule_dns_refresh();
+    [[nodiscard]] task<void> background_refresh_dns();
 #ifdef RUVIA_ENABLE_HTTP2
     struct http2_push_driver;
 #endif
@@ -199,7 +211,7 @@ private:
     void spawn_request(http_client_request_storage request, operation_options options,
         http_client_response_state& state_value);
     [[nodiscard]] http_client_connection& connection(std::size_t index) noexcept {
-        return *connections_[index % connections_.size()];
+        return *connections_[index];
     }
     [[nodiscard]] http_client_connection& connection_for_request(std::size_t index) noexcept;
 
@@ -211,10 +223,10 @@ private:
     };
     [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
-        stop_token stop, http_client_response_state& state);
+        stop_token stop, http_client_response_state& state, std::size_t slot_index);
 #endif
     asio::io_context& io_context_;
-    const worker_handle& worker_;
+    worker_handle worker_;
     http_client_config_storage config_;
     // Borrows config_.uri_host_; the pool is address-stable and never moved.
     http_origin_view origin_;
@@ -245,6 +257,12 @@ private:
     std::size_t idle_connections_with_pending_data_{0};
     bool prefers_http11_{false};
     bool background_joined_{false};
+    client_resolve_result dns_addresses_;
+    std::uint64_t dns_revision_{};
+    std::size_t dns_active_{};
+    worker_signal dns_changed_;
+    worker_timer_registration dns_refresh_timer_;
+    stop_source dns_stop_;
 };
 
 }  // namespace ruvia::detail

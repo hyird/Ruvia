@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <asio.hpp>
@@ -18,6 +19,7 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
@@ -145,7 +147,7 @@ public:
     stream_body_reader(stream_type& stream, std::pmr::polymorphic_allocator<char> allocator,
         std::string_view initial_body_and_pipeline, http1_request_body_plan body_plan,
         protocol_byte_limit body_limit_value, connection_scanner::entry& scanner_entry,
-        http_interim_response_output& interim_output)
+        http_interim_response_output& interim_output, const worker_handle& worker)
         : stream_(stream),
           buffer_(allocator),
           transfer_output_(allocator),
@@ -158,6 +160,7 @@ public:
           trailers_(allocator.resource()),
           scanner_entry_(scanner_entry),
           interim_output_(interim_output),
+          worker_(worker),
           state_(body_plan_.requires_consumption() ? state_type::active : state_type::finished) {
         const auto expectation_plan =
             body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
@@ -170,7 +173,11 @@ public:
                 allocator.resource(), body_limit_value);
         }
     }
-    ~stream_body_reader() = default;
+    ~stream_body_reader() {
+        if (cancellation_target_) {
+            cancellation_target_->detach(*this);
+        }
+    }
 
     stream_body_reader(const stream_body_reader&) = delete;
     stream_body_reader& operator=(const stream_body_reader&) = delete;
@@ -244,9 +251,27 @@ public:
         completion_observer_ = observer;
     }
 
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() {
+    // Cancellation abandons HTTP/1 input, not output. A later response can be
+    // sent, but incomplete framing must never re-enter the keep-alive loop.
+    void cancel_operation_by_id(std::uint64_t id) noexcept {
+        if (id != 0 && id == read_operation_id_) {
+            read_cancelled_ = true;
+            read_cancellation_.emit(asio::cancellation_type::terminal);
+        }
+    }
+
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token token = {}) {
         require_not_failed();
+        std::optional<worker_cancellation_registration<cancellation_target_type>> cancellation;
+        if (token.stoppable()) {
+            if (!cancellation_target_) {
+                cancellation_target_ = make_worker_cancellation_target(*this, worker_);
+            }
+            cancellation.emplace(cancellation_target_, read_operation_id_);
+            cancellation->arm(token);
+        }
         try {
+            require_not_cancelled();
             if (body_plan_.chunked() != nullptr) {
                 if (continue_pending_) {
                     co_await send_continue();
@@ -267,6 +292,9 @@ public:
             co_return co_await read_known_length(known_length->content_length());
         } catch (...) {
             state_ = state_type::failed;
+            if (read_cancelled_) {
+                scanner_entry_.set_phase(connection_scanner::phase::idle);
+            }
             throw;
         }
     }
@@ -326,8 +354,17 @@ private:
         finished,
         failed };
 
+    using cancellation_target_type = worker_cancellation_target<stream_body_reader>;
+
+    void require_not_cancelled() const {
+        if (read_cancelled_) {
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+        }
+    }
+
     task<void> send_continue() {
         co_await interim_output_.send_continue();
+        require_not_cancelled();
         continue_pending_ = false;
     }
 
@@ -411,10 +448,13 @@ private:
         }
 
         scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
+        require_not_cancelled();
         auto read_completion =
             co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
-                stream_.async_read_some(asio::buffer(read_space), std::move(handler));
+                stream_.async_read_some(asio::buffer(read_space),
+                    asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
             });
+        require_not_cancelled();
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();
         if (ec || bytes_read == 0) {
@@ -661,6 +701,11 @@ private:
     http_request_trailers trailers_;
     connection_scanner::entry& scanner_entry_;
     http_interim_response_output& interim_output_;
+    const worker_handle& worker_;
+    std::shared_ptr<cancellation_target_type> cancellation_target_;
+    asio::cancellation_signal read_cancellation_;
+    std::uint64_t read_operation_id_{};
+    bool read_cancelled_{};
     // Offset of the first unconsumed byte in the active source: the borrowed
     // initial view while it is set, buffer_ otherwise. Consumed buffer_ bytes are
     // dropped only when read_more() needs room for socket input.
@@ -679,9 +724,10 @@ public:
     lazy_buffered_body(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
         std::pmr::memory_resource* request_resource, std::string_view initial_body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output)
+        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output,
+        const worker_handle& worker)
         : reader_(stream, worker_allocator, initial_body_and_pipeline, body_plan, body_limit_value, scanner_entry,
-              interim_output),
+              interim_output, worker),
           body_(pmr_resource_or_default(request_resource)) {}
 
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {

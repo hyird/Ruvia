@@ -71,11 +71,13 @@ pool.join();
 | --- | --- | --- |
 | `"ruvia/core/event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final`、`class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量句柄（提供 `start(task<T>)`、`post(fn)`、`defer_cleanup(fn)`、`on_stop(fn)`、`handle()`、`io_context()`、`executor()`、`valid()`、`accepting()`、`is_current()`、`id()`、`report_failure(e)`；`post` 与状态查询转发到 `handle()` 返回的 `worker_handle`），以及将 Ruvia Worker 挂载到外部自管 `asio::io_context` 的适配器（`loop()`、`run()`、`stop()`、`valid()`） |
 | `"ruvia/core/event_loop_pool.h"` | `class event_loop_pool final`、`struct event_loop_pool_options` | 管理固定数量独立事件循环线程的池。提供 `start()`、`stop()`、`join()`、`loop_count()`、`loop(index)`、`next_loop()`、`loop_for(key)` |
-| `"ruvia/core/worker_handle.h"` | `class worker_handle final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
+| `"ruvia/core/worker_handle.h"` | `class worker_handle final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`executor()`、`post(fn)`、`post_factory(factory)`、`schedule_timer(...)` |
 | `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class worker_runtime_state` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`） |
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
 | `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_handle, [operation_options], fn)` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_handle::has_blocking_pool()` / `event_loop::has_blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待，非正超时或已停止的令牌同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
+- **原生执行器**：`worker_handle::executor()` 返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
+- **执行器寿命**：空句柄或已退役 Worker 获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
 - **外部循环失败出口**：`event_loop_attachment_options::failure_` 拥有接收 `std::exception_ptr` 的回调；未配置时保留默认诊断。具名 options 通过 `std::move` 交给 `attach_event_loop()`。
 - **失败交付线程**：先请求停止，再在报告线程锁外同步调用；可能跨线程并发或重入，接收器负责自身同步。回调异常仅进入诊断，不逃出宿主 `run()`，不打断清理。
 - **失败出口寿命**：回调保留到最后一个 loop-state owner 释放；借用捕获须覆盖该寿命，禁止捕获 owning loop 形成环。全部 owner 消失后的迟到根任务异常回落默认诊断。
@@ -331,6 +333,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **输出窗口 `take_output_batch()`**：部分批次只推进消费游标；在下一次追加或完整尾批存储交接时按摊销条件压缩前缀。
 - **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
+- **初始发送半边**：`http2_request_head_event::snapshot().initial_end_stream_` 保存初始 HEADERS 的 END_STREAM 位，包含 CONNECT；不随后续 DATA、Trailer 或复位改变。
 - **请求视图借用**：`build_request(..., borrowed_text body, ...) const&` 同时借用 head 租约与正文；两者均须覆盖返回请求的使用期。临时拥有型正文与右值 head 在编译期拒绝。
 - **Web 流资源**：运行时表统一确定元数据与入站正文 PMR；资源通过每流容器的 allocator 保留，不额外缓存指针。
 - **Web 正文队列**：待消费缓冲大小是积压额度的唯一计数来源，已交付的活跃缓冲不重复计入。
@@ -386,6 +389,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 | 传输反馈 | 契约 |
 | --- | --- |
 | `block_stream(id)` / `unblock_stream(id)` | QUIC 流信用耗尽／恢复时暂停／恢复发送调度；不提交字节，也不恢复应用正文源 |
+| `output_flushed(id)` | 当前已提交输出是否全部交给传输；不代表网络写完成或对端确认，也不禁止继续提交正文，已移除的流返回 `true` |
 | `shutdown_stream_read(id, error)` | 对端 RESET_STREAM 终止本地接收半边；不关闭发送半边 |
 | `shutdown_stream_write(id, error)` | 对端 STOP_SENDING 终止本地发送半边；不关闭接收半边 |
 | `set_max_client_streams_bidi(limit)` | 服务端接收 QUIC 单调递增的累计双向流上限，不是增量或并发流数 |
@@ -436,6 +440,7 @@ HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制�
 
 - **WebSocket 出站缓冲**：复用 `http_io_buffer`；部分写出只推进游标，追加优先使用尾部空间。
 - **WebSocket 帧提交**：为帧头、掩码与需复制的负载统一预留空间后才发布输出；分配失败保留已有队列。
+- **WebSocket 接收限额**：`websocket_connection_options::receive_message_limit_` 只收紧接收方向，与 `message_limit_` 取较小上限；分片累计及解压后消息同样受限，不降低发送上限。
 
 `websocket_connection::submit_close()` 接受 `websocket_close_code`；`from_value()` / `try_from_value()` 在整数窄化前校验，发送与接收的状态码判定共用该值类型。`websocket_close_status::{normal_closure, going_away, internal_error}` 提供现有生命周期使用的常量，其余支持值由工厂构造；范围、保留码和 Web 关闭配置的用法见[WebSocket 关闭 API](streaming-websocket.md#32-ruviawebsocket-与-ruviawebsocket_message-api)。服务端主动发送客户端专属 `1010` 仍返回 `invalid_code`，UTF-8 原因与控制帧大小均按协议校验。
 

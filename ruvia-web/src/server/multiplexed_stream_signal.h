@@ -4,6 +4,7 @@
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <memory_resource>
 #include <optional>
 #include <span>
@@ -18,6 +19,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_ascii.h"
@@ -591,17 +593,44 @@ private:
 template <typename derived_type>
 class multiplexed_request_body_reader_base {
 public:
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() {
+    ~multiplexed_request_body_reader_base() {
+        if (cancellation_target_) {
+            cancellation_target_->detach(*this);
+        }
+    }
+
+    void cancel_operation_by_id(std::uint64_t id) noexcept {
+        if (id == read_id_) {
+            signal_.wake();
+        }
+    }
+
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token stop = {}) {
+        using target_type = worker_cancellation_target<multiplexed_request_body_reader_base>;
+        std::optional<worker_cancellation_registration<target_type>> cancellation;
+        if (stop.stoppable()) {
+            if (!cancellation_target_) {
+                cancellation_target_ = make_worker_cancellation_target(*this, signal_.worker());
+            }
+            cancellation.emplace(cancellation_target_, read_id_);
+            cancellation->arm(stop);
+        }
+        if (stop.stop_requested()) {
+            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "request body read cancelled");
+        }
         throw_if_body_failed();
         if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
             co_await continue_output->send_continue();
         }
         for (;;) {
+            if (stop.stop_requested()) {
+                throw std::system_error(std::make_error_code(std::errc::operation_canceled), "request body read cancelled");
+            }
             throw_if_body_failed();
             if (signal_.terminated()) {
                 throw inbound_transport_error(signal_.terminal_error(), derived_type::terminated_error_message);
             }
-            if (derived().stream_aborted()) {
+            if (signal_.stopped() || derived().stream_aborted()) {
                 throw inbound_transport_error(
                     std::make_error_code(std::errc::connection_reset), derived_type::reset_error_message);
             }
@@ -627,6 +656,8 @@ protected:
 
     multiplexed_stream_signal& signal_;
     http_interim_response_output* continue_output_;
+    std::shared_ptr<worker_cancellation_target<multiplexed_request_body_reader_base>> cancellation_target_;
+    std::uint64_t read_id_{};
 
 private:
     [[nodiscard]] derived_type& derived() noexcept {

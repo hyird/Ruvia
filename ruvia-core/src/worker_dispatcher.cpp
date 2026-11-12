@@ -453,6 +453,14 @@ bool worker_dispatcher::attached() const noexcept {
     return context_attached_.load(std::memory_order_acquire);
 }
 
+asio::io_context::executor_type worker_dispatcher::executor() const {
+    const std::lock_guard lock(mutex_);
+    if (!context_attached_) {
+        throw std::logic_error("worker execution context is detached");
+    }
+    return io_context_.get_executor();
+}
+
 bool worker_dispatcher::begin_stopping(bool abandon_drain) noexcept {
     std::lock_guard lock(mutex_);
     return begin_stopping_locked(abandon_drain);
@@ -677,6 +685,13 @@ worker_id_type worker_handle::id() const noexcept {
 
 bool worker_handle::has_blocking_pool() const noexcept {
     return dispatcher_ && dispatcher_->blocking_pool() != nullptr;
+}
+
+asio::io_context::executor_type worker_handle::executor() const {
+    if (!dispatcher_) {
+        throw std::logic_error("worker has no execution context");
+    }
+    return dispatcher_->executor();
 }
 
 blocking_pool* detail::worker_handle_access::blocking_pool(const worker_handle& worker) noexcept {

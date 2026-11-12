@@ -12,9 +12,11 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/websocket_client_negotiation.h"
+#include "ruvia/web/http_client_types.h"
 
 namespace ruvia::detail {
 
+class http_client_pool;
 class http_client_tunnel_state;
 class http_client_upload_state;
 class http_client_output_queue;
@@ -66,6 +68,13 @@ public:
     [[nodiscard]] bool is_tunnel() const noexcept {
         return is_tunnel_;
     }
+    void set_upgrade() noexcept {
+        is_upgrade_ = true;
+        is_tunnel_ = true;
+    }
+    [[nodiscard]] bool is_upgrade() const noexcept {
+        return is_upgrade_;
+    }
     [[nodiscard]] std::string_view tunnel_authority() const& noexcept {
         return tunnel_authority_;
     }
@@ -105,6 +114,8 @@ public:
     [[nodiscard]] bool udp_tunnel() const noexcept {
         return tunnel_protocol_ == "connect-udp";
     }
+    http_client_request_options options_;
+    std::shared_ptr<http_client_pool> pool_owner_;
 
 private:
     http_client_request_storage(
@@ -119,6 +130,7 @@ private:
     std::shared_ptr<http_client_websocket_handshake> websocket_;
     stop_token host_stop_;
     bool is_tunnel_{};
+    bool is_upgrade_{false};
     http_client_tunnel_state* tunnel_{};
     bool has_body_{false};
     http_client_upload_state* upload_{};

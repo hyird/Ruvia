@@ -25,6 +25,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/web/http_client_websocket.h"
 #include "ruvia/web/http_server.h"
 
@@ -103,6 +104,9 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     if (path == "/heartbeat") {
         config.lifecycle_.heartbeat_ = {.ping_interval_ = 20ms, .pong_timeout_ = 40ms};
     }
+    if (path == "/limit") {
+        config.max_message_bytes_ = ruvia::protocol_byte_limit::limited(256);
+    }
     {
         auto discarded = request.accept_websocket(config);
     }
@@ -126,6 +130,17 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         (void)co_await request.response().commit();
     } catch (const std::logic_error&) {
         ++observed.exclusive_;
+    }
+    if (path == "/limit") {
+        const auto first = co_await websocket->read();
+        EXPECT_TRUE(first.has_value());
+        if (first) {
+            EXPECT_EQ(first->payload().size(), 256U);
+        }
+        // 本地接收上限不能限制本会话的发送方向。
+        co_await websocket->text(std::string(1024, 'r'), {.compress_ = false});
+        EXPECT_FALSE((co_await websocket->read()).has_value());
+        co_return;
     }
     if (path == "/close") {
         co_return;
@@ -171,14 +186,20 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     co_await websocket->text("binary:4");
 }
 
-std::string masked_frame(unsigned opcode, std::string_view payload) {
-    if (payload.size() > 125) {
-        throw std::invalid_argument("test control payload is too large");
+std::string masked_frame(unsigned opcode, std::string_view payload, bool final = true, bool compressed = false) {
+    if (payload.size() > 65535) {
+        throw std::invalid_argument("test frame payload is too large");
     }
     const std::array<unsigned char, 4> mask{0x37, 0xfa, 0x21, 0x3d};
     std::string bytes;
-    bytes.push_back(static_cast<char>(0x80U | opcode));
-    bytes.push_back(static_cast<char>(0x80U | payload.size()));
+    bytes.push_back(static_cast<char>((final ? 0x80U : 0U) | (compressed ? 0x40U : 0U) | opcode));
+    if (payload.size() <= 125) {
+        bytes.push_back(static_cast<char>(0x80U | payload.size()));
+    } else {
+        bytes.push_back(static_cast<char>(0xfe));
+        bytes.push_back(static_cast<char>(payload.size() >> 8U));
+        bytes.push_back(static_cast<char>(payload.size() & 0xffU));
+    }
     for (const auto byte : mask) {
         bytes.push_back(static_cast<char>(byte));
     }
@@ -456,6 +477,57 @@ void reject_invalid_extended_connect(const target& destination, const std::files
 
 ruvia::task<void> exercise(ruvia::http_client& client, const target& destination,
     ruvia::http_server& server, observation& observed, asio::io_context& io, const std::filesystem::path& ca_file) {
+    for (unsigned mode = 0; mode != 3; ++mode) {
+        observed.scenario_ = "/limit";
+        wire_peer peer(io);
+        co_await peer.open(client, destination, "/limit");
+        ruvia::websocket_deflate_codecs codecs(ruvia::process_resource());
+        const auto message_frame = [&](std::string_view payload, bool compressed) {
+            if (!compressed) {
+                return masked_frame(1, payload);
+            }
+            std::pmr::string encoded(ruvia::process_resource());
+            if (!codecs.deflate_message(payload, encoded, 6, 15)) {
+                throw std::runtime_error("test message compression failed");
+            }
+            EXPECT_LT(encoded.size(), 256U);
+            return masked_frame(1, encoded, true, true);
+        };
+        const auto first = message_frame(std::string(256, 'a'), mode == 1);
+        co_await peer.write(first);
+        const auto response = co_await peer.read_frame();
+        if (!response) {
+            throw std::runtime_error("missing response above the receive-only limit");
+        }
+        EXPECT_EQ(response->opcode_, 1U);
+        EXPECT_FALSE(response->compressed_);
+        EXPECT_EQ(response->payload_, std::string(1024, 'r'));
+        std::string oversized;
+        if (mode == 0) {
+            // 只发送声明257字节的帧头；不得等待或预分配完整正文才拒绝。
+            oversized.assign("\x81\xfe\x01\x01\0\0\0\0", 8);
+        } else if (mode == 1) {
+            // 压缩消息线面小于256字节，解压输出仍必须在本地限额处拒绝。
+            oversized = message_frame(std::string(8192, 'a'), true);
+        } else {
+            // 每片都合法，跨分片累计消息超过256字节时拒绝。
+            const std::string fragment(100, 'a');
+            oversized = masked_frame(1, fragment, false);
+            oversized += masked_frame(0, fragment, false);
+            oversized += masked_frame(0, fragment);
+        }
+        co_await peer.write(oversized);
+        // 协议失败允许服务器发Close后直接终结传输（RFC6455 §7.1.7）；
+        // 观察真实1009帧，不启动客户端自动Close回复写入已终结的隧道。
+        const auto close = co_await peer.read_frame();
+        if (!close) {
+            throw std::runtime_error("missing receive-limit Close");
+        }
+        EXPECT_EQ(close->opcode_, 8U);
+        EXPECT_FALSE(close->compressed_);
+        EXPECT_EQ(close->payload_, std::string("\x03\xf1", 2));
+        co_await await_retirement(server, observed);
+    }
     {
         observed.scenario_ = "/exchange";
         auto websocket = co_await client.client().websocket("/exchange").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();

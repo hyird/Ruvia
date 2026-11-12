@@ -64,7 +64,7 @@ private:
 };
 
 unique_udp_fd open_reuseport_udp_fd(
-    const asio::ip::udp& protocol, const sockaddr* address, socklen_t address_length) {
+    const asio::ip::udp& protocol, const sockaddr* address, socklen_t address_length, [[maybe_unused]] std::optional<bool> ipv6_only) {
 #if !defined(SO_REUSEPORT)
     (void)protocol;
     (void)address;
@@ -91,6 +91,12 @@ unique_udp_fd open_reuseport_udp_fd(
     }
     if (::setsockopt(fd.get(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
         throw std::system_error(errno, asio::system_category(), "failed to enable HTTP/3 listener SO_REUSEPORT");
+    }
+    if (ipv6_only) {
+        const int value = *ipv6_only ? 1 : 0;
+        if (::setsockopt(fd.get(), IPPROTO_IPV6, IPV6_V6ONLY, &value, sizeof(value)) != 0) {
+            throw std::system_error(errno, asio::system_category(), "failed to configure HTTP/3 IPV6_V6ONLY");
+        }
     }
     if (::bind(fd.get(), address, address_length) != 0) {
         throw std::system_error(errno, asio::system_category(), "failed to bind HTTP/3 UDP listener socket");
@@ -292,7 +298,7 @@ void http3_worker_directory::unregister_endpoint(std::size_t worker_index, http3
 #if !defined(_WIN32)
 void http3_worker_directory::open_listener_socket(std::size_t worker_index, std::size_t listener_index,
     const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
-    inherited_listener_sockets* inherited, asio::ip::udp::socket& socket) {
+    inherited_listener_sockets* inherited, asio::ip::udp::socket& socket, std::optional<bool> ipv6_only) {
     if (worker_index >= slots_.size()) {
         throw std::invalid_argument("invalid HTTP/3 worker index");
     }
@@ -316,7 +322,7 @@ void http3_worker_directory::open_listener_socket(std::size_t worker_index, std:
                 asio::ip::udp::endpoint bound_endpoint = configured_endpoint;
                 for (std::size_t index = 0; index < slots_.size(); ++index) {
                     auto fd = open_reuseport_udp_fd(configured_endpoint.protocol(), bound_endpoint.data(),
-                        static_cast<socklen_t>(bound_endpoint.size()));
+                        static_cast<socklen_t>(bound_endpoint.size()), ipv6_only);
                     if (index == 0) {
                         auto length = static_cast<socklen_t>(bound_endpoint.capacity());
                         if (::getsockname(fd.get(), bound_endpoint.data(), &length) != 0) {

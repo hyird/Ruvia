@@ -57,6 +57,7 @@ http_server_listener_definition http_server_listener_definition::clone(std::pmr:
         endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)), http3_);
     result_value.connection_ = clone_connection_dispatch(connection_, resource);
     result_value.inherited_sockets_ = inherited_sockets_;
+    result_value.ipv6_only_ = ipv6_only_;
     result_value.request_stream_ = request_stream_;
     return result_value;
 }
@@ -64,6 +65,7 @@ http_server_listener_definition http_server_listener_definition::clone(std::pmr:
 http_server_session_config::http_server_session_config(
     const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
     : transport_(clone_transport(definition.transport_, pmr_resource_or_default(resource))),
+      ipv6_only_(definition.ipv6_only_),
       http3_(definition.http3_),
       connection_(clone_connection_dispatch(definition.connection_, resource)),
       request_stream_(definition.request_stream_),

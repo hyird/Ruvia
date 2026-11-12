@@ -118,17 +118,28 @@ enum class client_tls_mode : std::uint8_t {
     disabled,
 };
 
+// TLS wire ProtocolVersion values; older versions are deliberately unsupported.
+enum class tls_version : std::uint16_t {
+    tls_1_1 = 0x0302,
+    tls_1_2 = 0x0303,
+    tls_1_3 = 0x0304,
+};
+
 // The one client TLS shape shared by database and Redis clients. TLS always
 // authenticates the peer. Redis clients read the CA bundle and identity once,
 // when the registration is created, and share them across workers; database
 // drivers read the files when connecting and do not accept an encrypted
-// private key. Redis clients negotiate TLS 1.1, 1.2 or 1.3, offer only ECDHE
-// with AEAD suites for TLS 1.2, and refuse renegotiation. Every client verifies
+// private key. Clients default to TLS 1.1 or newer for legacy compatibility;
+// minimum_version_ can require TLS 1.2 or 1.3. TLS 1.2 offers only ECDHE
+// with AEAD suites, and every version refuses renegotiation. Every client verifies
 // identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
 // IP literals match IP entries, the subject Common Name is never used, and DNS
 // wildcards cover only a complete left-most label.
 struct client_tls_config final {
     client_tls_mode mode_{client_tls_mode::verify_identity};
+    // Shared by HTTP, raw TCP, Redis and database clients. HTTP/2 and QUIC
+    // additionally enforce their own protocol minimum, never lowering this one.
+    tls_version minimum_version_{tls_version::tls_1_1};
     // The CA bundle that authenticates the server; nullopt selects the system
     // or driver trust store.
     std::optional<std::filesystem::path> ca_file_{};

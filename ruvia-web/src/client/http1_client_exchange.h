@@ -30,7 +30,7 @@ class tls_tunnel_output;
 
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
 // request head and content, a full-duplex streaming upload, the response head,
-// body and Content-Encoding, or an accepted CONNECT tunnel. The caller holds
+// body and Content-Encoding, or an accepted CONNECT/Upgrade byte tunnel. The caller holds
 // the connection's pool lease, and its cancellation, for the whole run.
 class http1_client_exchange final {
 public:
@@ -48,11 +48,7 @@ private:
     // Receives the final response head, then the body or an accepted tunnel.
     [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_timeout& timeout,
         http_client_response_state& state_value, http1_client_response_parser& parser);
-    // Parses the buffered bytes up to the final response head, retaining every
-    // interim head; empty while more input is needed.
-    [[nodiscard]] std::optional<http1_parsed_client_response_head> take_final_head(
-        http_client_response_state& state_value, http1_client_response_parser& parser);
-    // Waits until the consumer drains the producer queue below the byte limit.
+    // Waits until the consumer releases pending and borrowed response bytes.
     [[nodiscard]] task<void> wait_for_body_space(
         http_client_response_state& state_value, const operation_timeout& timeout);
     void expire_tunnel() noexcept;
@@ -60,6 +56,8 @@ private:
         tls_tunnel_output* tls, std::exception_ptr& failure);
     [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout,
         bool websocket);
+    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_timeout& timeout,
+        http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
     [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
         http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
     // One transport write of all `parts` (a head, or a framed upload chunk:
@@ -74,6 +72,7 @@ private:
 
     http_client_pool& pool_;
     http_client_connection& connection_;
+    const http_client_response_state* response_{};
 };
 
 }  // namespace ruvia::detail

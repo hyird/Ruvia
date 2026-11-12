@@ -5,6 +5,8 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <system_error>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -34,7 +36,7 @@ public:
           limit_(limit),
           bytes_(resource) {}
 
-    task<std::optional<std::span<const std::byte>>> read() {
+    task<std::optional<std::span<const std::byte>>> read(stop_token token = {}) {
         if (failure_) {
             std::rethrow_exception(failure_);
         }
@@ -44,7 +46,7 @@ public:
             co_return std::nullopt;
         }
         try {
-            auto chunk = co_await source_->read();
+            auto chunk = co_await source_->read(std::move(token));
             if (chunk && limit_) {
                 if (chunk->size() > *limit_ - consumed_) {
                     throw http_request_body_protocol_error(http_request_body_failure::too_large);
@@ -52,6 +54,12 @@ public:
                 consumed_ += chunk->size();
             }
             co_return chunk;
+        } catch (const std::system_error& error) {
+            // A cancelled multiplexed read leaves the underlying stream usable.
+            if (error.code() != std::errc::operation_canceled) {
+                failure_ = std::current_exception();
+            }
+            throw;
         } catch (...) {
             failure_ = std::current_exception();
             throw;

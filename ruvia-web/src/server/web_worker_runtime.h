@@ -57,6 +57,9 @@ public:
         return runtime_;
     }
     ruvia::worker_runtime& runtime() && = delete;
+    [[nodiscard]] stop_token cancellation() const noexcept {
+        return stop_token_;
+    }
     // Safe from any thread, at any point in the lifecycle.
     [[nodiscard]] http_server_stats stats() const noexcept;
     [[nodiscard]] web_worker_handle web_worker() const;
@@ -91,11 +94,11 @@ public:
     void open_listener(std::size_t index) noexcept {
         connections_.open_listener(index);
     }
-    void discard_listener(std::size_t index) noexcept {
-        connections_.discard_listener(index);
+    void discard_listener(std::size_t index, std::shared_ptr<void> receipt = {}) noexcept {
+        connections_.discard_listener(index, std::move(receipt));
     }
-    void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept {
-        connections_.remove_listener(index, std::move(receipt));
+    void remove_listener(std::size_t index, std::shared_ptr<void> receipt, listener_remove_options options = {}) noexcept {
+        connections_.remove_listener(index, std::move(receipt), options);
     }
     [[nodiscard]] bool close_connection(std::uint64_t connection_id) noexcept {
         return connections_.close_connection(connection_id);

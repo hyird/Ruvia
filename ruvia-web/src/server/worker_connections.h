@@ -129,16 +129,16 @@ public:
         http3_worker_directory* directory = nullptr
 #endif
     );
-    // Starts admitting a prepared listener. A failure to start fails the worker.
+    // 唤醒准备阶段已经创建的接入任务；提交不再分配监听资源。
     void open_listener(std::size_t index) noexcept;
     // Closes the sockets of a listener prepared but never opened and retires
     // it; an empty slot is left alone.
-    void discard_listener(std::size_t index) noexcept;
+    void discard_listener(std::size_t index, std::shared_ptr<void> receipt = {}) noexcept;
     // application::remove_listener(): stops admitting listener `index` and
     // closes its TCP socket at once, holding `receipt` until its accept loop
     // exited. Its connections are served on; its HTTP/3 endpoint stops
     // admitting and closes its socket after its last connection.
-    void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept;
+    void remove_listener(std::size_t index, std::shared_ptr<void> receipt, listener_remove_options options = {}) noexcept;
 #if !defined(_WIN32)
     // application::duplicate_listener_sockets(): this worker's sockets of
     // listener `index`, duplicated. Throws std::logic_error when it no longer
@@ -173,7 +173,8 @@ private:
               session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition, resource)),
               endpoint_(definition.endpoint_),
               tasks_(worker_value, {.resource_ = resource}),
-              retired_(worker_value)
+              retired_(worker_value),
+              activated_(worker_value)
 #if !defined(_WIN32)
               ,
               socket_(io),
@@ -194,6 +195,9 @@ private:
         task_scope tasks_;
         // Notified once removal or the worker's stop ended admission.
         worker_signal retired_;
+        worker_signal activated_;
+        // 取消准备持有至该监听的全部任务已 join；强制移除不等待调用它的会话自身。
+        std::shared_ptr<void> retirement_receipt_;
 #if defined(RUVIA_ENABLE_HTTP3)
         std::optional<std::size_t> http3_index_;
 #endif
@@ -218,7 +222,7 @@ private:
     // Builds the listener's TLS contexts, binds or adopts its sockets and
     // starts the task that retires it.
     void prepare_listener_resources(std::size_t index);
-    void start_listener(std::size_t index);
+    void start_listener(std::size_t index) noexcept;
     void close_listener_sockets(listener& configured) noexcept;
     // Awaits the listener's retired_, joins its tasks, then empties its slot.
     task<void> retire_listener(std::size_t index);

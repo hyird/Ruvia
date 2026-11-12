@@ -751,6 +751,18 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         const auto& resolution = stream_runtime->resolution();
         const auto expectation_plan = request_head->expectation_plan(http_unsupported_expectation_policy::reject);
         auto admission_services = base_services_;
+        const auto& initial = request_head->snapshot();
+        admission_services.bind_body_state({
+            .framing_ = initial.body_open_ ? request_body_framing::multiplexed : request_body_framing::none,
+            .content_length_ = initial.declared_content_length_,
+            .initial_end_stream_ = (stream_id & 1U) != 0 ? std::optional(initial.initial_end_stream_) : std::nullopt,
+        });
+        auto reset_request = [this, stream_id](std::optional<std::uint64_t> error) {
+            reset_stream_no_throw(stream_id, error ? static_cast<http2_error_code>(*error) : http2_error_code::cancel);
+        };
+        request_stream_control stream_control{
+            callback_access::bind<void(std::optional<std::uint64_t>)>(reset_request)};
+        admission_services.bind_stream_control(stream_control);
         admission_services.bind_request_channels({
             .interim_output_ = &interim_output,
             .connection_advertisements_ = &advertisements,

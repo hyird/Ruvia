@@ -38,6 +38,8 @@
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_identity.h"
+#include "server/owned_listen_configs.h"
+#include "server/prepared_listener_state.h"
 #include "util/config_validation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -165,6 +167,9 @@ private:
 void append_listen_config(
     std::pmr::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
     const auto address = normalize_listen_address(config.address_.view());
+    if (config.ipv6_only_ && !address.is_v6()) {
+        throw std::invalid_argument("IPV6_V6ONLY requires an IPv6 listen address");
+    }
     if (!config.http_.has_value() && !config.https_.has_value()) {
         throw std::invalid_argument("listen config must enable HTTP, HTTPS, or both");
     }
@@ -233,6 +238,7 @@ void append_listen_config(
         if (connection_alpn.has_value()) {
             replacement.back().connection_.emplace(std::string_view{}, replacement.get_allocator().resource());
         }
+        replacement.back().ipv6_only_ = config.ipv6_only_;
     }
     if (config.https_.has_value()) {
         const auto endpoint = asio::ip::tcp::endpoint(address, config.https_->value());
@@ -251,6 +257,7 @@ void append_listen_config(
             }
         }
         replacement.emplace_back(endpoint, std::move(tls), std::move(http3));
+        replacement.back().ipv6_only_ = config.ipv6_only_;
         replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
         if (connection_alpn.has_value()) {
             replacement.back().connection_.emplace(*connection_alpn, replacement.get_allocator().resource());
@@ -303,6 +310,35 @@ void ensure_distinct_inherited_sockets(std::span<const listen_config> configs) {
             throw std::invalid_argument("a listener socket was handed over twice");
         }
     });
+}
+
+void validate_owned_inherited_sockets(std::span<const listen_config> configs) {
+    ensure_distinct_inherited_sockets(configs);
+    for (const auto& config : configs) {
+        if (!config.inherited_sockets_) {
+            continue;
+        }
+        const auto address = normalize_listen_address(config.address_.view());
+        const auto& sockets = *config.inherited_sockets_;
+        const auto tcp = [&](const auto& handles, const auto& port) {
+            if (!handles.empty() && !port) {
+                throw std::invalid_argument("inherited TCP sockets require their service");
+            }
+            for (const auto socket : handles) {
+                detail::adopt_inherited_tcp_socket(socket, {address, port->value()},
+                    "inherited TCP socket does not serve its endpoint", config.ipv6_only_);
+            }
+        };
+        tcp(sockets.http_, config.http_);
+        tcp(sockets.https_, config.https_);
+        if (!sockets.http3_.empty() && !config.http3_) {
+            throw std::invalid_argument("inherited UDP sockets require HTTP/3");
+        }
+        for (const auto socket : sockets.http3_) {
+            detail::adopt_inherited_udp_socket(socket, {address, config.http3_->value()},
+                "inherited UDP socket does not serve its endpoint", config.ipv6_only_);
+        }
+    }
 }
 
 [[nodiscard]] bool holds_socket(std::span<const native_socket> sockets, native_socket socket) noexcept {
@@ -365,13 +401,14 @@ void adopt_inherited_sockets(std::span<detail::http_server_listener_definition> 
         for (const auto socket : tcp) {
             detail::adopt_inherited_tcp_socket(socket, definition.endpoint_,
                 https ? "inherited HTTPS sockets must listen on the configured address and port"
-                      : "inherited HTTP sockets must listen on the configured address and port");
+                      : "inherited HTTP sockets must listen on the configured address and port",
+                config.ipv6_only_);
         }
         if (!udp.empty()) {
             const asio::ip::udp::endpoint endpoint(definition.endpoint_.address(), definition.http3_->port_);
             for (const auto socket : udp) {
                 detail::adopt_inherited_udp_socket(
-                    socket, endpoint, "inherited HTTP/3 sockets must be UDP sockets bound to the configured address and port");
+                    socket, endpoint, "inherited HTTP/3 sockets must be UDP sockets bound to the configured address and port", config.ipv6_only_);
             }
         }
         auto* resource = process_resource();
@@ -443,45 +480,6 @@ struct owned_tls_config final {
         tls_secret_cleanser cleanser(config_);
     }
     tls_config config_;
-};
-
-// Own sockets and borrowed address text before returning a cold task. Even
-// dropping that task without awaiting closes the inherited handles.
-struct owned_listen_config final {
-    explicit owned_listen_config(listen_config config)
-        : config_(std::move(config)) {
-        try {
-            address_.assign(config_.address_.view());
-            config_.address_ = address_;
-        } catch (...) {
-            close_unowned_inherited_sockets(std::span<const listen_config>(&config_, 1), {});
-            tls_secret_cleanser cleanser(config_.tls_);
-            throw;
-        }
-    }
-    owned_listen_config(owned_listen_config&& other) noexcept
-        : config_(std::move(other.config_)),
-          address_(std::move(other.address_)) {
-        config_.address_ = address_;
-        other.config_.inherited_sockets_.reset();
-    }
-    ~owned_listen_config() {
-        close_unowned_inherited_sockets(std::span<const listen_config>(&config_, 1), {});
-        tls_secret_cleanser cleanser(config_.tls_);
-    }
-    [[nodiscard]] auto load() {
-        try {
-            auto result = detail::load_server_listeners(std::span<const listen_config>(&config_, 1));
-            config_.inherited_sockets_.reset();
-            return result;
-        } catch (...) {
-            // load_server_listeners already closed every unclaimed handle.
-            config_.inherited_sockets_.reset();
-            throw;
-        }
-    }
-    listen_config config_;
-    std::pmr::string address_{process_resource()};
 };
 
 // run_blocking can stop delivering before its callable finishes. A separate
@@ -719,6 +717,59 @@ std::pmr::vector<detail::http_server_listener_definition> detail::load_server_li
     return listeners;
 }
 
+detail::owned_listen_configs::owned_listen_configs(listen_config config) {
+    try {
+        configs_.reserve(1);
+        configs_.push_back(std::move(config));
+        own_addresses();
+        validate_owned_inherited_sockets(configs_);
+    } catch (...) {
+        close_unowned_inherited_sockets(configs_.empty() ? std::span<const listen_config>(&config, 1) : std::span<const listen_config>(configs_), {});
+        const tls_secret_span_cleanser owned_secrets(configs_);
+        const tls_secret_cleanser input_secrets(config.tls_);
+        throw;
+    }
+}
+
+detail::owned_listen_configs::owned_listen_configs(std::span<const listen_config> configs) {
+    try {
+        configs_.reserve(configs.size());
+        for (const auto& config : configs) {
+            configs_.push_back(config);
+        }
+        own_addresses();
+        validate_owned_inherited_sockets(configs_);
+    } catch (...) {
+        close_unowned_inherited_sockets(configs, {});
+        const tls_secret_span_cleanser owned_secrets(configs_);
+        throw;
+    }
+}
+
+void detail::owned_listen_configs::own_addresses() {
+    addresses_.reserve(configs_.size());
+    for (auto& config : configs_) {
+        addresses_.emplace_back(config.address_.view());
+        config.address_ = addresses_.back();
+    }
+}
+
+detail::owned_listen_configs::~owned_listen_configs() {
+    const tls_secret_span_cleanser secrets(configs_);
+    if (inherited_owned_) {
+        close_unowned_inherited_sockets(configs_, {});
+    }
+}
+
+std::pmr::vector<detail::http_server_listener_definition> detail::owned_listen_configs::load() {
+    inherited_owned_ = false;
+    return load_server_listeners(configs_);
+}
+
+bool detail::owned_listen_configs::needs_tls_preparation() const noexcept {
+    return std::ranges::any_of(configs_, [](const auto& config) { return config.https_.has_value(); });
+}
+
 application& application::listen(listen_config config) {
     return listen(std::span<const listen_config>(&config, 1));
 }
@@ -850,15 +901,17 @@ struct listener_addition_candidate final {
 }
 
 task<void> add_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, owned_listen_config input) {
+    std::shared_ptr<detail::app_state> state, worker_handle caller, detail::owned_listen_configs input,
+    std::shared_ptr<detail::prepared_listener_state> transaction) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be added only while the app is running");
     auto& runtime = active.runtime();
     const auto worker_count = runtime.workers_.size();
     const auto key_origin = runtime.tls_key_origin_;
     const bool needs_routes = !runtime.routes_enabled_;
-    const bool inexpensive = !input.config_.https_.has_value() &&
-                             (!needs_routes || input.config_.dispatch_ != listener_dispatch::routes);
+    const bool inexpensive = std::ranges::none_of(input.configs_, [needs_routes](const auto& config) {
+        return config.https_.has_value() || (needs_routes && config.dispatch_ == listener_dispatch::routes);
+    });
     auto prepare =
         [state, worker_count, key_origin, needs_routes, input = std::move(input)]() mutable {
             listener_addition_candidate result;
@@ -927,9 +980,9 @@ task<void> add_app_listener(
     if (candidate.routes_) {
         co_await enable_runtime_routes(caller, runtime, *candidate.routes_);
     }
-    const auto discard = [first_slot, count = prepared.size()](auto& target) noexcept {
+    const auto discard = [first_slot, count = prepared.size()](auto& target, const std::shared_ptr<void>& receipt) noexcept {
         for (std::size_t index = 0; index < count; ++index) {
-            target.discard_listener(first_slot + index);
+            target.discard_listener(first_slot + index, receipt);
         }
     };
     const auto open = [first_slot, count = prepared.size()](auto& target) noexcept {
@@ -956,7 +1009,7 @@ task<void> add_app_listener(
             }
         });
     make_worker_controls(discard_controls, runtime, discarded_completion,
-        [discard](detail::web_worker_runtime& worker, std::size_t) { discard(worker); });
+        [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::web_worker_runtime& worker, std::size_t) { discard(worker, receipt); });
     make_worker_controls(open_controls, runtime, opened_completion,
         [open](detail::web_worker_runtime& worker, std::size_t) { open(worker); });
 #if defined(_WIN32)
@@ -972,7 +1025,7 @@ task<void> add_app_listener(
             }
         });
     auto discard_acceptor = make_acceptor_control(*runtime.acceptor_, discarded_completion,
-        [discard](detail::windows_acceptor& acceptor) { discard(acceptor); });
+        [discard, receipt = std::make_shared<detail::runtime_control_completion::receipt>(discarded_completion.make_receipt())](detail::windows_acceptor& acceptor) { discard(acceptor, receipt); });
     detail::runtime_control_completion accepting_completion(caller);
     auto open_acceptor = make_acceptor_control(*runtime.acceptor_, accepting_completion,
         [open](detail::windows_acceptor& acceptor) { open(acceptor); });
@@ -987,6 +1040,13 @@ task<void> add_app_listener(
     co_await prepared_completion.wait();
     auto failure = control_round_failure(prepared_completion, posted, control_targets(runtime),
         "the app began stopping before every worker prepared the listeners");
+    if (!failure) {
+        try {
+            co_await transaction->checkpoint(runtime.workers_.front().runtime_->cancellation());
+        } catch (...) {
+            failure = std::current_exception();
+        }
+    }
     if (!failure) {
         {
             std::lock_guard lock(state->mutex_);
@@ -1047,13 +1107,25 @@ task<void> add_app_listener(
 }
 }  // namespace
 
+task<prepared_listener> application::prepare_listener(worker_handle caller, listen_config config) {
+    detail::owned_listen_configs input(std::move(config));
+    auto transaction = detail::prepared_listener_access::make(caller);
+    return detail::prepared_listener_access::launch(transaction,
+        add_app_listener(state_, std::move(caller), std::move(input), transaction));
+}
+task<prepared_listener> application::prepare_listeners(worker_handle caller, std::span<const listen_config> configs) {
+    detail::owned_listen_configs input(configs);
+    auto transaction = detail::prepared_listener_access::make(caller);
+    return detail::prepared_listener_access::launch(transaction,
+        add_app_listener(state_, std::move(caller), std::move(input), transaction));
+}
 task<void> application::add_listener(worker_handle caller, listen_config config) {
-    return add_app_listener(state_, std::move(caller), owned_listen_config(std::move(config)));
+    return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
 }
 
 namespace {
 task<void> remove_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target) {
+    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
     std::optional<detail::http_server_listener_definition> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be removed only while the app is running");
@@ -1082,8 +1154,8 @@ task<void> remove_app_listener(
     control_list controls(process_resource());
     auto lifetime = std::make_shared<detail::runtime_control_completion::receipt>(completion.make_receipt());
     make_worker_controls(controls, runtime, completion,
-        [slot, receipt = std::move(lifetime)](detail::web_worker_runtime& worker, std::size_t) {
-            worker.remove_listener(slot, receipt);
+        [slot, receipt = std::move(lifetime), options](detail::web_worker_runtime& worker, std::size_t) {
+            worker.remove_listener(slot, receipt, options);
         });
     bool posted = false;
     {
@@ -1109,9 +1181,9 @@ task<void> remove_app_listener(
 }
 }  // namespace
 
-task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint) {
+task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options) {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
-    return remove_app_listener(state_, std::move(caller), target);
+    return remove_app_listener(state_, std::move(caller), target, options);
 }
 
 #if !defined(_WIN32)

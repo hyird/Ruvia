@@ -138,6 +138,7 @@ struct http3_headers_event final {
     // status is retained; status_->status() applies RFC 9110 §15 semantics.
     // Official nghttp3 rejects 000..099 before callbacks; 600..999 map to 500.
     std::optional<http_received_status> status_{};
+    std::optional<std::uint64_t> content_length_{};
     // Server, set by http3_quic_connection: some of the stream's data arrived
     // in 0-RTT packets before the handshake completed (RFC 9001 §4.6.1), so
     // the request may be a replay (RFC 8470 §5, RFC 9001 §9.2).
@@ -400,6 +401,9 @@ public:
     // DATA payload submitted on the stream and not yet acknowledged.
     [[nodiscard]] std::size_t pending_output_bytes(
         std::int64_t stream_id) const noexcept;
+    // 当前排队的 HEADERS/DATA/尾部已全部交给 QUIC；不表示对端已确认，
+    // 也不表示之后不能继续提交正文。已移除的流返回 true。
+    [[nodiscard]] bool output_flushed(std::int64_t stream_id) const noexcept;
     // Remaining DATA capacity; unavailable and ended streams have no capacity.
     [[nodiscard]] std::size_t available_output_bytes(std::int64_t stream_id) const noexcept;
     // Ends the content. A declared content length that the submitted DATA

@@ -27,6 +27,7 @@ namespace {
     if (config.port_.value() == 0) {
         throw std::invalid_argument("TCP port must not be zero");
     }
+    validate_client_tls_config(config.tls_);
     validate_client_tcp_config(config.tcp_);
     validate_operation_options({.timeout_ = config.connect_timeout_});
     validate_operation_options({.timeout_ = config.read_timeout_});

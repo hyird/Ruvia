@@ -13,8 +13,8 @@
 namespace ruvia::detail {
 
 template <typename reader_type>
-[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target) {
-    return static_cast<reader_type*>(target)->read();
+[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target, stop_token stop) {
+    return static_cast<reader_type*>(target)->read(std::move(stop));
 }
 
 template <typename reader_type>

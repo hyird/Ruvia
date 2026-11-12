@@ -29,9 +29,10 @@ struct http_lazy_buffered_body_route_state final {
     void emplace(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
         std::pmr::memory_resource* request_resource, std::string_view body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output) {
+        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output,
+        const worker_handle& worker) {
         body_.emplace(stream, worker_allocator, request_resource, body_and_pipeline, body_plan, body_limit_value,
-            scanner_entry, interim_output);
+            scanner_entry, interim_output, worker);
     }
 
     [[nodiscard]] context_services with_loader(const context_services& base_services) noexcept {
@@ -62,7 +63,7 @@ template <typename stream_type>
         // Every HTTP/1 request's services carry its session's interim lane.
         state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
             body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_,
-            *d.base_route_services_.interim_output());
+            *d.base_route_services_.interim_output(), d.base_route_services_.worker());
         return nullptr;
     } catch (...) {
         return std::current_exception();

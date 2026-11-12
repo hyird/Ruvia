@@ -28,6 +28,9 @@ struct websocket_connection_options final {
     // input buffer's resource.
     std::pmr::memory_resource* resource_{nullptr};
     protocol_byte_limit message_limit_{protocol_byte_limit::limited(default_max_websocket_message_bytes)};
+    // Additional receive-only ceiling, including message aggregation and inflation.
+    // The smaller of this limit and message_limit_ applies to input; output is unchanged.
+    protocol_byte_limit receive_message_limit_{};
     websocket_compression compression_{(websocket_compression{})};
     websocket_connection_role role_{websocket_connection_role::server};
     websocket_mask_key_generator_type mask_key_generator_{nullptr};

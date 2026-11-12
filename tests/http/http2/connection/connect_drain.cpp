@@ -183,6 +183,7 @@ TEST(Ruvia, http2_connect_data_before_accept_is_held_and_delivered_as_tunnel_dat
         while (auto event = server.next_event()) {
             if (auto* request = event->request_head()) {
                 EXPECT_TRUE(request->snapshot().connect_pending_);
+                EXPECT_FALSE(request->snapshot().initial_end_stream_);
                 head.emplace(std::move(*request));
             } else if (auto* data = event->tunnel_data()) {
                 EXPECT_EQ(data->stream_id(), 1U);

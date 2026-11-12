@@ -13,6 +13,7 @@
 #include <vector>
 
 #include <asio/ip/tcp.hpp>
+#include <asio/ip/v6_only.hpp>
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
@@ -399,3 +400,149 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
     root.get();
     EXPECT_TRUE(retired);
 }
+
+TEST(Ruvia, independent_server_prepared_batch_cancel_and_shutdown_are_owning_transactions) {
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker = attachment.loop().handle();
+    ruvia::test::tcp_port_reservation port(io), second(io);
+    unsigned calls = 0;
+    bool published = false;
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
+            EXPECT_TRUE(published);
+            ++calls;
+            co_await answer(stream);
+        }});
+        co_await server.start();
+        const ruvia::listen_config config{.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream};
+        const std::array configs{config, ruvia::listen_config{.address_ = "127.0.0.1", .http_ = second.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream}};
+        auto cancelled = co_await server.prepare_listeners(configs);
+        co_await std::move(cancelled).cancel();
+        auto prepared = co_await server.prepare_listeners(configs);
+        std::array<asio::ip::tcp::socket, 2> peers{asio::ip::tcp::socket(io), asio::ip::tcp::socket(io)};
+        const std::array endpoints{port.endpoint(), second.endpoint()};
+        constexpr std::string_view head = "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        for (std::size_t index = 0; index != peers.size(); ++index) {
+            peers[index].connect(endpoints[index]);
+            asio::write(peers[index], asio::buffer(head));
+        }
+        (void)co_await ruvia::sleep_for(worker, 1ms);
+        EXPECT_EQ(calls, 0U);
+        published = true;
+        co_await std::move(prepared).activate();
+        for (auto& peer : peers) {
+            std::array<char, 512> bytes{};
+            const auto received = co_await ruvia::async_asio<std::size_t>([&](auto completion) {
+                asio::async_read(peer, asio::buffer(bytes), asio::transfer_at_least(16), std::move(completion));
+            });
+            EXPECT_FALSE(received.error_code());
+            EXPECT_NE(std::string_view(bytes.data(), received.result()).find(" 200 "), std::string_view::npos);
+        }
+        EXPECT_EQ(calls, 2U);
+        server.remove_listener({.address_ = "127.0.0.1", .port_ = port.endpoint().port()}, {.close_connections_ = true});
+        server.remove_listener({.address_ = "127.0.0.1", .port_ = second.endpoint().port()}, {.close_connections_ = true});
+        auto pending = co_await server.prepare_listeners(configs);
+        co_await server.shutdown();
+        bool rejected = false;
+        try {
+            co_await std::move(pending).activate();
+        } catch (const std::logic_error&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_socket) {
+    asio::io_context io;
+    asio::ip::tcp::acceptor inherited(io);
+    std::error_code error;
+    inherited.open(asio::ip::tcp::v6(), error);
+    if (error == asio::error::address_family_not_supported) {
+        GTEST_SKIP() << "IPv6 is unavailable";
+    }
+    ASSERT_FALSE(error);
+    inherited.set_option(asio::ip::v6_only(true));
+    inherited.bind({asio::ip::address_v6::loopback(), 0});
+    inherited.listen();
+    const auto port = inherited.local_endpoint().port();
+    const auto socket = inherited.release();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer});
+    EXPECT_THROW((void)server.prepare_listener({.address_ = "::1", .ipv6_only_ = false, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {socket}}}),
+        std::invalid_argument);
+    asio::ip::tcp::acceptor released(io);
+    released.open(asio::ip::tcp::v6());
+    released.set_option(asio::ip::v6_only(true));
+    EXPECT_NO_THROW(released.bind({asio::ip::address_v6::loopback(), port}));
+    const auto run = [&]() -> ruvia::task<void> {
+        co_await server.start();
+        bool rejected = false;
+        try {
+            auto invalid = co_await server.prepare_listener({.address_ = "127.0.0.1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+        released.listen();
+        auto matching = co_await server.prepare_listener({.address_ = "::1", .ipv6_only_ = true, .http_ = port, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http_ = {released.release()}}});
+        co_await std::move(matching).activate();
+        const std::string origin = "http://[::1]:" + std::to_string(port);
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin});
+        co_await check_response(client, ruvia::http_protocol_version::http11);
+        co_await client.shutdown();
+        co_await server.shutdown();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+#if defined(RUVIA_ENABLE_HTTP3)
+TEST(Ruvia, independent_server_ipv6_only_validates_inherited_quic_socket_before_loading_tls) {
+    asio::io_context io;
+    asio::ip::udp::socket socket(io);
+    std::error_code error;
+    socket.open(asio::ip::udp::v6(), error);
+    if (error == asio::error::address_family_not_supported) {
+        GTEST_SKIP() << "IPv6 is unavailable";
+    }
+    ASSERT_FALSE(error);
+    socket.set_option(asio::ip::v6_only(false));
+    socket.bind({asio::ip::address_v6::any(), 0});
+    const auto endpoint = socket.local_endpoint();
+    ruvia::test::tls_identity identity("localhost");
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::http_server server(attachment.loop(), {.request_stream_ = &answer});
+    const auto shutdown = [&]() -> ruvia::task<void> {
+        co_await server.start();
+        bool rejected = false;
+        std::exception_ptr failure;
+        try {
+            auto prepared = co_await server.prepare_listener({.address_ = "::", .ipv6_only_ = true, .https_ = endpoint.port(), .http3_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream, .inherited_sockets_ = ruvia::listener_sockets{.http3_ = {socket.release()}}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        EXPECT_TRUE(rejected);
+        asio::ip::udp::socket replacement(io);
+        replacement.open(asio::ip::udp::v6());
+        EXPECT_NO_THROW(replacement.bind(endpoint));
+        co_await server.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(shutdown());
+    attachment.run();
+    root.get();
+}
+#endif

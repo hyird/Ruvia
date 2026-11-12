@@ -47,11 +47,24 @@ detail::http_client_response_state& require_response_body_state(
     return state;
 }
 
+task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, operation_options options, stop_token host_stop) {
+    stop_group cancellation(host_stop, options.stop_token_);
+    options.stop_token_ = cancellation.token();
+    co_await pool->refresh_dns(std::move(options));
+}
+
 }  // namespace
 
 http_client_response::http_client_response(detail::http_client_pool& pool)
     : state_(pool.response_memory().create_state(pool)),
-      body_(state_) {}
+      body_(state_) {
+    const auto& config = pool.config();
+    state_->effective_connect_timeout_ = config.connect_timeout_;
+    state_->effective_read_timeout_ = config.read_timeout_;
+    state_->effective_write_timeout_ = config.write_timeout_;
+    state_->effective_acquire_timeout_ = config.acquire_timeout_;
+    state_->decode_content_ = config.decode_content_;
+}
 
 http_client_response::http_client_response(detail::http_client_response_state* state_value) noexcept
     : state_(state_value),
@@ -115,6 +128,15 @@ http_received_status http_client_response::received_status() const {
 http_protocol_version http_client_response::protocol_version() const {
     return require_response_state(state_).protocol_version_;
 }
+http_client_response_framing http_client_response::framing() const {
+    return require_response_state(state_).framing_;
+}
+std::optional<std::uint64_t> http_client_response::content_length() const {
+    return require_response_state(state_).content_length_;
+}
+const http_client_connection_info& http_client_response::connection_info() const& {
+    return require_response_state(state_).connection_info_;
+}
 void http_client_response::reprioritize(http_priority priority) & {
     auto& state_value = require_response_state(state_);
     check_response_operation_affinity(&state_value);
@@ -123,7 +145,8 @@ void http_client_response::reprioritize(http_priority priority) & {
         return;
     }
     if (state_value.abandoned_ || state_value.pool_ == nullptr) {
-        throw http_client_error(http_client_error::code_type::closing, "response transport is retired");
+        throw http_client_error(http_client_error::code_type::closing, "response transport is retired", std::nullopt,
+            state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
     }
     state_value.pool_->reprioritize(state_value, priority);
 }
@@ -158,17 +181,66 @@ void detail::http_client_response_state::notify_producer_space() noexcept {
 
 void detail::http_client_response_state::rethrow_response_failure() const {
     if (failure_) {
-        std::rethrow_exception(failure_);
+        try {
+            std::rethrow_exception(failure_);
+        } catch (const http_client_error& error) {
+            if (error.connection_info() == nullptr && connection_info_.id_ != 0) {
+                throw http_client_error(error.code(), error.what(), error.status(), &connection_info_);
+            }
+            throw;
+        }
+    }
+}
+
+task<void> detail::http_client_response_state::dispatch_informational(const operation_timeout& timeout) {
+    while (informational_delivered_ < informational_.size()) {
+        const auto index = informational_delivered_++;
+        auto callback = informational_callback_;
+        if (!callback || !*callback) {
+            continue;
+        }
+        if (!informational_abort_) {
+            informational_abort_.emplace();
+        }
+        if (informational_stop_requested_) {
+            informational_abort_->request_stop();
+        }
+        stop_source deadline_stop;
+        stop_group cancellation{informational_stop_, informational_abort_->token(), deadline_stop.token()};
+        worker_timer_registration timer;
+        if (const auto deadline = timeout.deadline()) {
+            (void)memory_domain_.worker().schedule_timer(timer, *deadline,
+                [&deadline_stop](worker_timer_outcome outcome) noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        deadline_stop.request_stop();
+                    }
+                });
+        }
+        if (timeout.expired()) {
+            throw http_client_error(http_client_error::code_type::timeout, "informational callback deadline expired");
+        }
+        if (cancellation.token().stop_requested()) {
+            throw http_client_error(http_client_error::code_type::cancelled, "informational callback cancelled");
+        }
+        // 每头字段独立拥有；外层 vector 的移动不改变字段 span 的地址。
+        co_await (*callback)(informational_[index].status(), informational_[index].headers(), cancellation.token());
+        if (timeout.expired()) {
+            throw http_client_error(http_client_error::code_type::timeout, "informational callback deadline expired");
+        }
+        if (cancellation.token().stop_requested()) {
+            throw http_client_error(http_client_error::code_type::cancelled, "informational callback cancelled");
+        }
     }
 }
 
 task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
-    while (!head_ready_ && !failure_ && !pool_closed_) {
+    while ((!head_ready_ || informational_active_) && !failure_ && !pool_closed_) {
         co_await head_signal_.wait();
     }
     rethrow_response_failure();
     if (pool_closed_) {
-        throw http_client_error(http_client_error::code_type::closing, head_message);
+        throw http_client_error(http_client_error::code_type::closing, head_message, std::nullopt,
+            connection_info_.id_ != 0 ? &connection_info_ : nullptr);
     }
     if ((tunnel_ && tunnel_->accepted_) || !body_decode_required_) {
         co_return;
@@ -182,7 +254,8 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     }
     rethrow_response_failure();
     if (pool_closed_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client encoded response failed");
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client encoded response failed", std::nullopt,
+            connection_info_.id_ != 0 ? &connection_info_ : nullptr);
     }
 }
 
@@ -247,7 +320,8 @@ bool http_client_response_body::complete() const {
     }
     state_->rethrow_response_failure();
     if (state_->pool_closed_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed");
+        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed", std::nullopt,
+            state_->connection_info_.id_ != 0 ? &state_->connection_info_ : nullptr);
     }
     return true;
 }
@@ -281,7 +355,8 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
             state_value.rethrow_response_failure();
             if (state_value.pool_closed_) {
                 constexpr auto message = std::is_void_v<view> ? "HTTP response body forwarding failed" : "HTTP response body read failed";
-                throw http_client_error(http_client_error::code_type::closing, message);
+                throw http_client_error(http_client_error::code_type::closing, message, std::nullopt,
+                    state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
             }
             state_value.discard_response_body();
             if constexpr (std::is_void_v<view>) {
@@ -330,14 +405,16 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     }
     state_value.rethrow_response_failure();
     if (state_value.pool_closed_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed");
+        throw http_client_error(http_client_error::code_type::closing, "HTTP response body read failed", std::nullopt,
+            state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
     }
     const auto remaining = state_value.buffered_.size() - state_value.offset_;
     const auto effective_limit = std::min(max_bytes, state_value.buffered_limit_);
     if (state_value.pending_.size() > effective_limit ||
         remaining > effective_limit - state_value.pending_.size()) {
         throw http_client_error(http_client_error::code_type::response_too_large,
-            "HTTP response body exceeds read_all byte limit");
+            "HTTP response body exceeds read_all byte limit", std::nullopt,
+            state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
     }
     const auto total_remaining = remaining + state_value.pending_.size();
     if (total_remaining == 0) {
@@ -348,7 +425,8 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
         state_value.memory_domain_.result_budget_domain_, total_remaining);
     if (!reservation) {
         throw http_client_error(http_client_error::code_type::result_budget_exceeded,
-            "HTTP client retained result byte budget is exhausted");
+            "HTTP client retained result byte budget is exhausted", std::nullopt,
+            state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
     }
     http_client_response_bytes result_value(total_remaining, std::move(*reservation));
     if (remaining != 0) {
@@ -401,6 +479,7 @@ http_client_handle::http_client_handle(detail::http_client_pool& pool,
 
 http_client_handle::http_client_handle(const http_client_handle& other)
     : pool_(other.pool_),
+      pool_owner_(other.pool_owner_),
       resource_(other.resource_),
       options_(other.options_),
       host_stop_token_(other.host_stop_token_),
@@ -408,7 +487,9 @@ http_client_handle::http_client_handle(const http_client_handle& other)
       registry_(other.registry_) {}
 
 void http_client_handle::expire_capability(void* target) noexcept {
-    static_cast<http_client_handle*>(target)->pool_ = nullptr;
+    auto& self = *static_cast<http_client_handle*>(target);
+    self.pool_ = nullptr;
+    self.pool_owner_.reset();
 }
 
 http_client_handle http_client_handle::with_options(operation_options options) const {
@@ -420,10 +501,12 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 }
 
 task<http_client_response> http_client_handle::dispatch(
-    const http_client_request_view& view) const {
+    const http_client_request_view& view, const http_client_request_options& request_options) const {
     registration_.require_active();
     validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
+    request.options_ = request_options;
+    request.pool_owner_ = pool_owner_;
     request.set_host_stop(host_stop_token_);
     if (const auto* bytes = view.content_.borrowed_bytes()) {
         request.set_body(bytes->value());
@@ -432,18 +515,20 @@ task<http_client_response> http_client_handle::dispatch(
         registration_.scope(), pool_->execute(std::move(request), options_));
 }
 
-task<http_client_exchange> http_client_handle::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload) const {
+task<http_client_exchange> http_client_handle::dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& request_options) const {
     registration_.require_active();
     if (head.content_.borrowed_bytes() != nullptr || upload.max_chunk_bytes_ == 0 || upload.continue_timeout_.value() <= std::chrono::milliseconds::zero() ||
         (upload.expectation_ != http_client_request_expectation::none && upload.expectation_ != http_client_request_expectation::continue_value)) {
         throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
     }
     detail::http_client_request_storage request(head.method_.view(), head.target_.view(), head.headers_, resource_);
+    request.options_ = request_options;
+    request.pool_owner_ = pool_owner_;
     request.set_host_stop(host_stop_token_);
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_request(std::move(request), upload, options_));
 }
 
-task<http_client_tunnel_result> http_client_handle::dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config) const {
+task<http_client_tunnel_result> http_client_handle::dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options) const {
     registration_.require_active();
     if (!is_valid_http_origin_form_target(head.target_) || config.max_chunk_bytes_ == 0 ||
         config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
@@ -475,10 +560,10 @@ task<http_client_tunnel_result> http_client_handle::dispatch_udp(const http_clie
         fields = heap_fields;
     }
     // The dispatch owns fields before temporary preparation storage dies.
-    return dispatch_connect({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config);
+    return dispatch_connect({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config, request_options);
 }
 
-task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config) const {
+task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options) const {
     registration_.require_active();
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes ||
         (head.protocol_.empty() ? (!is_valid_http_connect_authority(head.authority_) || !head.target_.empty()) : (!is_valid_http_method_token(head.protocol_) || !is_valid_http_origin_form_target(head.target_) || !parse_http_authority(head.authority_)))) {
@@ -494,6 +579,8 @@ task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_
         throw std::invalid_argument("invalid CONNECT-UDP request head");
     }
     detail::http_client_request_storage request("CONNECT", head.target_.view(), head.headers_, pmr_resource_or_default(resource_));
+    request.options_ = request_options;
+    request.pool_owner_ = pool_owner_;
     request.set_tunnel(head.authority_.view(), head.protocol_.view());
     request.set_host_stop(host_stop_token_);
     return ::ruvia::make_scoped_operation(registration_.scope(), pool_->open_tunnel(std::move(request), config, options_));
@@ -502,6 +589,23 @@ task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_
 http_client_stats http_client_handle::stats() const {
     registration_.require_active();
     return pool_->stats();
+}
+
+std::pmr::vector<http_client_endpoint_address> http_client_handle::dns_snapshot() const {
+    registration_.require_active();
+    return pool_->dns_snapshot();
+}
+void http_client_handle::update_dns(std::span<const http_client_endpoint_address> addresses) const {
+    registration_.require_active();
+    pool_->update_dns(addresses);
+}
+task<void> http_client_handle::refresh_dns() const {
+    registration_.require_active();
+    return make_scoped_operation(registration_.scope(), refresh_client_dns(pool_owner_, options_, host_stop_token_));
+}
+bool http_client_handle::close_connection(std::uint64_t id) const {
+    registration_.require_active();
+    return pool_->close_connection(id);
 }
 std::optional<http_client_push> http_client_handle::next_push() const {
     registration_.require_active();

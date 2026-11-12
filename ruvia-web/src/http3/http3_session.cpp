@@ -1048,6 +1048,17 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             nullptr);
         const auto expectation_plan = head.expectation_plan(http_unsupported_expectation_policy::reject);
         auto admission_services = *base_services_;
+        admission_services.bind_body_state({
+            .framing_ = head.connect() || head.stream_ended() ? request_body_framing::none : request_body_framing::multiplexed,
+            .content_length_ = head.declared_content_length(),
+            .initial_end_stream_ = head.stream_ended(),
+        });
+        auto reset_request = [this, stream_id](std::optional<std::uint64_t> error) {
+            reset_stream(stream_id, error ? static_cast<http3_error_code>(*error) : http3_error_code::request_cancelled);
+        };
+        request_stream_control stream_control{
+            callback_access::bind<void(std::optional<std::uint64_t>)>(reset_request)};
+        admission_services.bind_stream_control(stream_control);
         admission_services.bind_early_data(head.early_data());
         admission_services.bind_request_channels({
             .interim_output_ = &interim_output,

@@ -78,10 +78,9 @@ public:
     // `ping_interval` bounds silence: no received frame for one interval sends
     // a PING, and another silent interval fails the session with timeout.
     http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
-        const worker_handle& worker_value, std::optional<timeout_duration> write_timeout,
-        std::optional<timeout_duration> ping_interval);
+        const worker_handle& worker_value, std::optional<timeout_duration> ping_interval);
     http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_handle&&,
-        std::optional<timeout_duration>, std::optional<timeout_duration>) = delete;
+        std::optional<timeout_duration>) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
     http2_client_session& operator=(const http2_client_session&) = delete;
@@ -292,7 +291,6 @@ private:
     client_tcp_transport& transport_;
     task_scope& tasks_;
     const worker_handle& worker_;
-    std::optional<timeout_duration> write_timeout_;
     std::optional<timeout_duration> ping_interval_;
     std::optional<::ruvia::http2_connection> connection_;
     http_io_buffer read_buffer_;
@@ -376,6 +374,11 @@ public:
 #endif
 
     http_client_connection(http_client_pool& pool, std::size_t index);
+    void capture_connection_info(http_client_response_state& response, bool reused) const;
+    void retire_addresses() noexcept;
+    [[nodiscard]] std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
     ~http_client_connection();
     http_client_connection(const http_client_connection&) = delete;
     http_client_connection& operator=(const http_client_connection&) = delete;
@@ -456,6 +459,8 @@ public:
 
     // http2_client_session handler.
     void on_http2_event(http2_event& event);
+    [[nodiscard]] task<void> deliver_http2_informational(std::uint32_t stream_id);
+    [[nodiscard]] std::optional<timeout_duration> http2_write_timeout() const noexcept;
     void on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept;
 #endif
 
@@ -478,6 +483,8 @@ public:
     protocol_type protocol_{protocol_type::unknown};
     bool connected_{false};
     bool retired_{false};
+    bool address_retired_{false};
+    bool fresh_{false};
 
 private:
 #ifdef RUVIA_ENABLE_HTTP2
@@ -522,6 +529,8 @@ private:
 
     http_client_pool& pool_;
     std::size_t index_;
+    std::uint64_t connection_id_{};
+    std::pmr::string peer_ip_{process_resource()};
 #ifdef RUVIA_ENABLE_HTTP2
     std::pmr::vector<http2_stream*> http2_streams_;
     http2_stream* last_http2_stream_{nullptr};

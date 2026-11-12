@@ -158,7 +158,7 @@ public:
     // Starts accepting for (and receiving datagrams of) a prepared listener.
     void open_listener(std::size_t index) noexcept;
     // Closes the sockets of a listener prepared but never opened.
-    void discard_listener(std::size_t index) noexcept;
+    void discard_listener(std::size_t index, std::shared_ptr<void> receipt = {}) noexcept;
     // application::remove_listener(): stops accepting for listener `index`
     // and closes its TCP socket, holding `receipt` until its accepts ended.
     // Its UDP socket keeps receiving for the established QUIC connections
@@ -192,7 +192,8 @@ private:
 #if defined(RUVIA_ENABLE_HTTP3)
     void open_udp_listener(udp_listener& listener);
 #endif
-    void start_listener(tcp_listener& listener);
+    void prepare_listener_tasks(tcp_listener& listener);
+    void start_listener(tcp_listener& listener) noexcept;
     void serve_on_context();
     void close_admission() noexcept;
     task<void> run_accepts(tcp_listener& listener);

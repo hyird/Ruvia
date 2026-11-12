@@ -53,7 +53,12 @@ void initialize_quic_crypto() {
 
 http3_endpoint::http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
     asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks)
+#if !defined(_WIN32)
+    : activated_(services.worker_),
+      services_(services),
+#else
     : services_(services),
+#endif
       session_(session),
       configured_endpoint_(endpoint),
       listener_index_(listener_index),
@@ -83,7 +88,7 @@ void http3_endpoint::open([[maybe_unused]] inherited_listener_sockets* inherited
 #else
     receive_buffer_.resize(http3_max_udp_payload_bytes);
     services_.placement_.directory_->open_listener_socket(
-        services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), inherited, socket_);
+        services_.placement_.worker_index_, listener_index_, configured_endpoint_, secret(), inherited, socket_, session_.ipv6_only_);
     local_endpoint_ = socket_.local_endpoint();
     enable_http3_packet_info(socket_);
 #endif
@@ -91,12 +96,15 @@ void http3_endpoint::open([[maybe_unused]] inherited_listener_sockets* inherited
         local_endpoint_, session_.http3_->secret_, listener_index_);
     registered_ = true;
     open_ = true;
-}
-
-void http3_endpoint::start() {
-    admitting_ = true;
 #if !defined(_WIN32)
     tasks_.spawn(run_receive_loop());
+#endif
+}
+
+void http3_endpoint::start() noexcept {
+    admitting_ = true;
+#if !defined(_WIN32)
+    activated_.notify();
 #endif
 }
 
@@ -123,6 +131,7 @@ void http3_endpoint::close() noexcept {
     admitting_ = false;
     open_ = false;
 #if !defined(_WIN32)
+    activated_.notify();
     std::error_code ignored;
     socket_.close(ignored);
 #endif
@@ -170,6 +179,7 @@ void http3_endpoint::unregister_connection_id(const http3_cid_key& key) noexcept
 
 #if !defined(_WIN32)
 task<void> http3_endpoint::run_receive_loop() {
+    co_await activated_.wait();
     try {
         while (socket_.is_open()) {
             const auto completion = co_await ruvia::async_asio([this](auto handler) {
@@ -370,7 +380,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         return;
     }
     try {
-        connection_lifecycle lifecycle(services_.registry_, std::move(event),
+        connection_lifecycle lifecycle(services_.registry_, &session_, std::move(event),
             services_.options_.connection_open_, services_.options_.connection_close_, interface_index);
         auto session = make_pmr_object<http3_session>(process_resource(), *this,
             connection_slot(services_.connection_count_), header, remote, original_dcid, retry_scid, retry_token,

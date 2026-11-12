@@ -1,9 +1,13 @@
 #pragma once
 
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
+#include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,6 +15,9 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/move_only_function.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
@@ -33,6 +40,97 @@ enum class http_client_protocol : std::uint8_t {
 enum class http_client_received_cookie_policy : std::uint8_t {
     ignore,
     retain_and_send,
+};
+
+// 默认继承；disabled() 只禁用这一阶段，不修改总截止期或宿主取消。
+class http_client_timeout_override final {
+public:
+    http_client_timeout_override() noexcept = default;
+    [[nodiscard]] static http_client_timeout_override disabled() noexcept {
+        return http_client_timeout_override(std::nullopt);
+    }
+    [[nodiscard]] static http_client_timeout_override after(timeout_duration duration) {
+        if (duration.value().count() <= 0) {
+            throw std::invalid_argument("HTTP phase timeout must be positive");
+        }
+        return http_client_timeout_override(duration);
+    }
+    [[nodiscard]] std::optional<timeout_duration> resolve(std::optional<timeout_duration> inherited) const noexcept {
+        return overridden_ ? duration_ : inherited;
+    }
+
+private:
+    explicit http_client_timeout_override(std::optional<timeout_duration> duration) noexcept
+        : duration_(duration),
+          overridden_(true) {}
+    std::optional<timeout_duration> duration_;
+    bool overridden_{false};
+};
+
+struct http_client_phase_timeouts final {
+    http_client_timeout_override connect_;
+    http_client_timeout_override read_;
+    http_client_timeout_override write_;
+    http_client_timeout_override acquire_;
+};
+
+using http_client_informational_callback = move_only_function<task<void>(http_status_code, std::span<const http_header>, stop_token)>;
+
+struct http_client_request_options final {
+    // nullopt 继承 origin 默认；false 为保留编码字段的原样流。
+    std::optional<bool> decode_content_;
+    http_request_field_source field_source_{http_request_field_source::generated};
+    // 独立物理连接，既不借业务连接，也不归还业务复用池。
+    bool fresh_connection_{false};
+    http_client_phase_timeouts timeouts_;
+    std::shared_ptr<http_client_informational_callback> informational_;
+};
+
+enum class http_client_response_framing : std::uint8_t {
+    none,
+    fixed_length,
+    chunked,
+    close_delimited,
+    stream,
+    tunnel,
+    protocol_upgrade
+};
+
+struct http_client_connection_info final {
+    explicit http_client_connection_info(std::pmr::memory_resource* resource = process_resource())
+        : peer_ip_(pmr_resource_or_default(resource)) {}
+    http_client_connection_info(const http_client_connection_info& other)
+        : http_client_connection_info(other.peer_ip_.get_allocator().resource()) {
+        *this = other;
+    }
+    http_client_connection_info(http_client_connection_info&&) noexcept = default;
+    http_client_connection_info& operator=(const http_client_connection_info&) = default;
+    http_client_connection_info& operator=(http_client_connection_info&&) = default;
+
+    // 物理连接身份，不是槽位。重新拨号产生新 id，旧 id 不能关闭新连接。
+    std::uint64_t id_{};
+    std::pmr::string peer_ip_{process_resource()};
+    std::uint16_t peer_port_{};
+    bool reused_{false};
+    std::chrono::steady_clock::duration connect_duration_{};
+    std::chrono::steady_clock::duration tls_duration_{};
+};
+
+struct http_client_endpoint_address final {
+    explicit http_client_endpoint_address(std::pmr::memory_resource* resource = process_resource())
+        : ip_(pmr_resource_or_default(resource)) {}
+    http_client_endpoint_address(std::string_view ip, port_number port,
+        std::pmr::memory_resource* resource = process_resource())
+        : ip_(ip, pmr_resource_or_default(resource)),
+          port_(port) {}
+    http_client_endpoint_address(const http_client_endpoint_address& other)
+        : http_client_endpoint_address(other.ip_, other.port_, other.ip_.get_allocator().resource()) {}
+    http_client_endpoint_address(http_client_endpoint_address&&) noexcept = default;
+    http_client_endpoint_address& operator=(const http_client_endpoint_address&) = default;
+    http_client_endpoint_address& operator=(http_client_endpoint_address&&) = default;
+
+    std::pmr::string ip_{process_resource()};
+    port_number port_{};
 };
 
 // Connection advertisements are optional observations. They do not change the
@@ -89,6 +187,13 @@ struct http_client_http3_config final {
 struct http_client_config final {
     borrowed_text alias_{"default"};
     borrowed_text base_url_{};
+    // 仅控制物理拨号；逻辑 origin、默认 SNI 和证书验证名始终来自 base_url_。
+    std::optional<borrowed_text> dial_host_;
+    std::optional<port_number> dial_port_;
+    // 接收已经解析的数值地址；拒绝的候选绝不交给 connect。
+    std::function<bool(std::string_view, std::uint16_t)> address_validator_;
+    std::optional<timeout_duration> dns_refresh_interval_;
+    bool decode_content_{true};
     std::size_t connection_count_{1};
     std::size_t max_concurrent_http2_streams_per_connection_{100};
     std::size_t max_buffered_requests_{1024};
@@ -170,10 +275,28 @@ public:
         message_too_large,
     };
 
-    http_client_error(code_type code, std::string_view message, std::optional<http_status_code> status = std::nullopt)
+    http_client_error(code_type code, std::string_view message, std::optional<http_status_code> status = std::nullopt,
+        const http_client_connection_info* connection = nullptr)
         : std::runtime_error(std::string(message)),
           code_(code),
-          status_(status) {}
+          status_(status) {
+        capture_connection(connection);
+    }
+    http_client_error(const http_client_error& other)
+        : std::runtime_error(other),
+          code_(other.code_),
+          status_(other.status_) {
+        capture_connection(other.connection_info());
+    }
+    http_client_error(http_client_error&&) noexcept = default;
+    http_client_error& operator=(const http_client_error& other) {
+        std::runtime_error::operator=(other);
+        code_ = other.code_;
+        status_ = other.status_;
+        capture_connection(other.connection_info());
+        return *this;
+    }
+    http_client_error& operator=(http_client_error&&) = default;
 
     [[nodiscard]] code_type code() const noexcept {
         return code_;
@@ -181,10 +304,27 @@ public:
     [[nodiscard]] std::optional<http_status_code> status() const noexcept {
         return status_;
     }
+    /// 已建立连接的失败保留快照；拨号尚未建立连接时为空。
+    [[nodiscard]] const http_client_connection_info* connection_info() const& noexcept RUVIA_LIFETIMEBOUND {
+        return connection_ ? &*connection_ : nullptr;
+    }
+    const http_client_connection_info* connection_info() const&& = delete;
 
 private:
+    void capture_connection(const http_client_connection_info* connection) {
+        if (connection == nullptr) {
+            connection_.reset();
+            return;
+        }
+        if (!connection_) {
+            connection_.emplace();
+        }
+        // 错误可比 response 存活更久，文本提升到 process_resource。
+        *connection_ = *connection;
+    }
     code_type code_;
     std::optional<http_status_code> status_;
+    std::optional<http_client_connection_info> connection_;
 };
 
 struct http_client_stats final {

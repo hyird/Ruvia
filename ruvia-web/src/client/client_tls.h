@@ -13,6 +13,9 @@
 #include <openssl/types.h>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/tls_config.h"
 
@@ -42,6 +45,14 @@ inline void validate_client_tls_config(const client_tls_config& config) {
     validate_tls_record_limit(config.max_outgoing_records_);
     if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::disabled) {
         throw std::invalid_argument("invalid client TLS mode");
+    }
+    switch (config.minimum_version_) {
+        case tls_version::tls_1_1:
+        case tls_version::tls_1_2:
+        case tls_version::tls_1_3:
+            break;
+        default:
+            throw std::invalid_argument("invalid client TLS minimum version");
     }
     if (config.server_name_.has_value()) {
         if (config.server_name_->find('\0') != std::string_view::npos) {
@@ -81,6 +92,7 @@ struct client_tls_config_storage final {
 
     // Copies share the parsed trust store and identity; no file is re-read.
     client_tls_config_storage(const client_tls_config_storage& source_value, std::pmr::memory_resource* resource);
+    void parse_files(std::string_view private_key_password);
 
     // SNI and verified peer name: the configured override, else the origin host.
     [[nodiscard]] std::string_view tls_host(std::string_view configured_host) const noexcept {
@@ -88,6 +100,7 @@ struct client_tls_config_storage final {
     }
 
     client_tls_mode mode_;
+    tls_version minimum_version_;
     std::uint64_t max_outgoing_records_;
     // nullopt selects the system or driver trust store.
     std::optional<tls_file_name> ca_file_;
@@ -98,6 +111,13 @@ struct client_tls_config_storage final {
     std::optional<tls_trust_store> trust_store_;
     std::optional<tls_certificate> certificate_;
 };
+
+// Owns paths and password before returning the cold task. Blocking work owns
+// only TLS material, never a client's worker-affine configuration or callbacks.
+// A started parser is joined even after cancellation; callers reject publication.
+[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(
+    worker_handle worker, client_tls_config_storage config,
+    std::string_view private_key_password, stop_token stop);
 
 enum class client_tls_setup_error : std::uint8_t {
     none,
