@@ -167,6 +167,9 @@ ruvia::app().listen({
   - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
   - `expose_headers_`：`std::vector<std::string>`
   - `max_age_`：`std::optional<std::chrono::seconds>`
+  - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；缺少任一项仍按普通 CORS 响应处理。
+  - **完整校验**：策略在新增授权头前校验 `Origin` 与 `OPTIONS` 的预检字段；请求首部列表即使采用固定授权模式也须完整合法。
+  - **反射与优先级**：反射模式将通过全量校验的跨行 `Access-Control-Request-Headers` 合并为单一响应字段，不覆盖应用已设置的响应头。
 - `trusted_proxy_config`：`cidrs_`（受信任代理网段列表，如 `{"127.0.0.1/32", "10.0.0.0/8"}`）、`trust_x_forwarded_proto_`（是否信任代理传入的 `X-Forwarded-Proto`）。
 
 ---

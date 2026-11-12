@@ -343,6 +343,27 @@ TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
                 head.find("\r\naccess-control-allow-headers:", first + 1) == std::string::npos);
 }
 
+TEST(Ruvia, http1_cors_requires_options_origin_and_requested_method_for_preflight) {
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const auto& [method, fields] : {
+             std::array<std::string_view, 2>{"OPTIONS", "Origin: https://client.test\r\n"},
+             {"OPTIONS", "Access-Control-Request-Method: GET\r\n"},
+             {"GET", "Origin: https://client.test\r\nAccess-Control-Request-Method: GET\r\n"}}) {
+        const auto response = ::exchange(server.endpoint(),
+            std::string(method) + " /policy-stream HTTP/1.1\r\nHost: localhost\r\n" +
+                std::string(fields) + "Access-Control-Request-Headers: x-token\r\nConnection: close\r\n\r\n");
+        ASSERT_TRUE(response.has_value());
+        const auto& output = *response;
+        EXPECT_TRUE(output.starts_with(method == "OPTIONS" ? "HTTP/1.1 204 " : "HTTP/1.1 200 "));
+        const auto head = lower_head(output);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-origin: *\r\n") != std::string::npos) << output;
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-methods:") == std::string::npos) << output;
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-headers:") == std::string::npos) << output;
+    }
+    server.finish();
+}
+
 TEST(Ruvia, http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory_resource>
-#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -56,8 +55,8 @@ void add_vary_tokens(http_response& response, const std::string_view* tokens, st
     return origin == "null" || ::ruvia::is_valid_http_serialized_origin(origin);
 }
 
-// Validates Origin, Access-Control-Request-Method and the complete
-// Access-Control-Request-Headers list, folding reflected header names in one pass.
+// Keeps the validated preflight decision and reflected field names. Raw
+// request metadata is borrowed only while the scan is running.
 struct cors_request_fields final {
     explicit cors_request_fields(std::pmr::memory_resource* resource)
         : reflected_headers_(resource) {}
@@ -75,8 +74,7 @@ struct cors_request_fields final {
 
     std::string_view reflected_headers() const&& = delete;
 
-    std::optional<std::string_view> origin_{};
-    std::optional<std::string_view> requested_method_{};
+    bool preflight_{false};
     inline_text_buffer<256> reflected_headers_;
 };
 
@@ -86,27 +84,21 @@ struct cors_request_fields final {
     // metadata may reach the handler but must not generate cross-origin grants.
     // Never select one origin from a multi-origin value for a CORS decision.
     const auto origin = request.header("Origin");
-    if (origin.has_value()) {
-        if (!is_valid_cors_origin(*origin)) {
-            return false;
-        }
-        result.origin_ = *origin;
+    if (origin.has_value() && !is_valid_cors_origin(*origin)) {
+        return false;
     }
     if (!options) {
         return true;
     }
     const auto requested_method = request.header("Access-Control-Request-Method");
-    if (requested_method.has_value()) {
-        if (!is_valid_http_method_token(*requested_method)) {
-            return false;
-        }
-        result.requested_method_ = *requested_method;
+    if (requested_method.has_value() && !is_valid_http_method_token(*requested_method)) {
+        return false;
     }
+    result.preflight_ = origin.has_value() && requested_method.has_value();
     if (!request.header("Access-Control-Request-Headers").has_value()) {
         return true;
     }
     std::size_t request_header_names_size = 0;
-    bool first_header_name = true;
     for (const auto& field : request.headers()) {
         if (field.name().size() != 30U ||
             !http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
@@ -116,14 +108,13 @@ struct cors_request_fields final {
         bool saw_name = false;
         while (const auto header_name = names.next()) {
             saw_name = true;
-            const auto separator_size = first_header_name ? std::size_t{0} : std::size_t{2};
+            const auto separator_size = request_header_names_size == 0 ? std::size_t{0} : std::size_t{2};
             const auto maximum = (std::numeric_limits<std::size_t>::max)();
             if (header_name->size() > maximum - separator_size ||
                 request_header_names_size > maximum - separator_size - header_name->size()) {
                 return false;
             }
             request_header_names_size += separator_size + header_name->size();
-            first_header_name = false;
             if (reflect_headers) {
                 result.append_header_name(*header_name);
             }
@@ -248,8 +239,6 @@ void apply_cors_headers(const http_request& request, http_response& response, co
     if (!scan_cors_request_fields(request, options, reflect_headers, request_fields)) {
         return;
     }
-    const auto origin = request_fields.origin_.value_or(std::string_view{});
-    const auto& requested_method = request_fields.requested_method_;
     const bool wildcard_origin = cors.origin_mode_ == cors_origin_mode::any;
     std::array<std::string_view, 3> vary_tokens{};
     std::size_t vary_token_count = 0;
@@ -270,9 +259,7 @@ void apply_cors_headers(const http_request& request, http_response& response, co
         set_response_header_if_missing(response, "Access-Control-Allow-Credentials", "true");
     }
 
-    const bool preflight = options && !origin.empty() && requested_method.has_value() &&
-                           !requested_method->empty();
-    if (preflight) {
+    if (request_fields.preflight_) {
         if (const auto allow = response.header("Allow"); allow.has_value() && !allow->empty()) {
             set_response_header_if_missing(response, "Access-Control-Allow-Methods", *allow);
         }
