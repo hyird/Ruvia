@@ -59,7 +59,7 @@ public:
         for (std::size_t i = 0; i < held_.size(); ++i) {
             if (held_[i] == stream_id) {
                 cancelled_[i] = true;
-                if (submitted_[i] == 0) {
+                if (progress_[i].submitted_ == 0) {
                     clear(i);
                 }
                 return;
@@ -70,7 +70,7 @@ public:
     void note_data_submitted(std::uint32_t stream_id, std::size_t bytes_value) noexcept {
         for (std::size_t i = 0; i < held_.size(); ++i) {
             if (held_[i] == stream_id) {
-                submitted_[i] += bytes_value;
+                progress_[i].submitted_ += bytes_value;
                 return;
             }
         }
@@ -79,8 +79,8 @@ public:
     void note_data_output(std::uint32_t stream_id, std::size_t bytes_value) noexcept {
         for (std::size_t i = 0; i < held_.size(); ++i) {
             if (held_[i] == stream_id) {
-                emitted_[i] += bytes_value;
-                batch_output_[i] += bytes_value;
+                progress_[i].emitted_ += bytes_value;
+                progress_[i].batch_output_ += bytes_value;
                 return;
             }
         }
@@ -102,15 +102,16 @@ public:
             if (stream_id == 0) {
                 continue;
             }
+            auto& progress = progress_[i];
             if (socket_write_completed) {
-                written_[i] += batch_output_[i];
-                batch_output_[i] = 0;
+                progress.written_ += progress.batch_output_;
+                progress.batch_output_ = 0;
             }
             // Stream removal is not evidence that serialized DATA was written.
             // Keep its credit until every submitted payload byte crossed the socket.
-            if ((cancelled_[i] && written_[i] >= emitted_[i] &&
+            if ((cancelled_[i] && progress.written_ >= progress.emitted_ &&
                     connection.pending_data_output_bytes(stream_id) == 0) ||
-                (!cancelled_[i] && written_[i] >= submitted_[i] &&
+                (!cancelled_[i] && progress.written_ >= progress.submitted_ &&
                     connection.pending_data_output_bytes(stream_id) == 0)) {
                 clear(i);
             }
@@ -122,23 +123,24 @@ public:
     }
 
 private:
+    struct credit_progress final {
+        std::size_t submitted_{};
+        std::size_t emitted_{};
+        std::size_t written_{};
+        std::size_t batch_output_{};
+    };
+
     void clear(std::size_t i) noexcept {
         held_[i] = 0;
-        submitted_[i] = 0;
-        emitted_[i] = 0;
-        written_[i] = 0;
+        progress_[i] = {};
         cancelled_[i] = false;
-        batch_output_[i] = 0;
         changed_.notify();
     }
 
     worker_signal changed_;
     std::array<std::uint32_t, http2_data_output_credit_slots> held_{};
-    std::array<std::size_t, http2_data_output_credit_slots> submitted_{};
-    std::array<std::size_t, http2_data_output_credit_slots> emitted_{};
-    std::array<std::size_t, http2_data_output_credit_slots> written_{};
+    std::array<credit_progress, http2_data_output_credit_slots> progress_{};
     std::array<bool, http2_data_output_credit_slots> cancelled_{};
-    std::array<std::size_t, http2_data_output_credit_slots> batch_output_{};
 };
 
 }  // namespace ruvia::detail

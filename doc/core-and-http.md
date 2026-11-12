@@ -325,6 +325,8 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
 - **DATA 部分消费 `submit_data(stream_id, bytes, end_stream, max_payload_bytes)`**：返回 `http2_data_submit_result{consumed_bytes_, status_}`，本次只编码 `min(bytes.size(), max_payload_bytes, 连接窗口, 流窗口)` 字节；帧头开销另计。`complete` 只表示这次输入全部消费，不表示 socket 已写完；`backpressured` 可以消费零字节或一个前缀。协议层既不借用也不复制未消费后缀，调用方必须保存后缀并按实际消费量推进，取得输出预算或收到 `WINDOW_UPDATE` / `SETTINGS` 后显式重试。窗口更新不会自动产生 DATA；调用方须显式重试提交。`expectation_pending` 和 `closed` 均消费零字节；前者等待 `100 Continue` 或显式 `release_request_content()`，后者停止发送。`pending_data_output_bytes()` 与输出批次 observer 仍用于已编码 DATA 和 socket 写完成记账；它们不能代替应用层输出预算。
 - **Web DATA 驱动**：缓冲与文件响应共用写入状态；参数绑定直接返回底层冷任务，不另建状态转换协程。
+- **Web 信用记账**：每份信用集中保存提交、序列化、写出和当前批次进度，复位时整体清零。
+- **Web 信用回收**：流重置后仍保留在途 socket 批次的信用，批次完成后才回收。
 - **长度与终结**：每次先验证完整输入及其终结意图是否符合 `Content-Length`，非法长度不提交任何前缀。长度计数只推进 `consumed_bytes_`。`END_STREAM` 仅在终结输入全部消费后提交；结束后不能重复终结。
 - **空 DATA 终结与规范边界**：[RFC 9113 §6.9.1](https://www.rfc-editor.org/rfc/rfc9113.html#section-6.9.1) 允许（`MAY`）、但不要求在零窗口发送空 `END_STREAM DATA`。当前 `nghttp2` 后端等待连接与流的发送窗口都为正；这是实现限制，不是 RFC 要求。任一窗口不为正时，`submit_data()` 返回 `{0, backpressured}` 且不改变状态；调用方等待 `send_window_state()` 报告 `available_ != 0` 后重试。
 - **Trailers 与 finish**：所有正文都消费完后才调用 `finish_request()` / `finish_response()` 提交 trailers，保证 terminal HEADERS 排在正文之后；finish 不排队等待未消费正文。不带 trailers 时 finish 以空 DATA 帧结束流，遵循同一窗口规则，窗口不足时返回 `http2_finish_status::backpressured` 且不改变状态，调用方等待窗口后重试。`ruvia-web` 的服务端流式响应按此等待现有的发送窗口信号，等待时长受写超时或请求超时约束。
