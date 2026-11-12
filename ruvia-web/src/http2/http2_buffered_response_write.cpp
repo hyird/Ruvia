@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <string>
 #include <string_view>
 #include <utility>
 
@@ -16,6 +15,23 @@
 #include "http2/http2_sans_io_stream_runtime.h"
 
 namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] bool data_write_failed(http2_stream_data_write_status status) noexcept {
+    switch (status) {
+        case http2_stream_data_write_status::completed:
+        case http2_stream_data_write_status::local_aborted:
+        case http2_stream_data_write_status::session_terminated:
+        case http2_stream_data_write_status::peer_closed:
+            return false;
+        case http2_stream_data_write_status::invalid_state:
+        case http2_stream_data_write_status::content_length_exceeded:
+            return true;
+    }
+    return true;
+}
+
+}  // namespace
 
 http2_buffered_response_writer::http2_buffered_response_writer(http2_sans_io_session_engine& session,
     ruvia::http2_connection& connection, http2_sans_io_stream_runtime_table& stream_runtimes,
@@ -40,24 +56,12 @@ bool http2_buffered_response_writer::stream_ended(std::uint32_t stream_id) const
     return signal != nullptr && signal->terminated();
 }
 
-task<http2_buffered_response_writer::data_write_result_type> http2_buffered_response_writer::write_data(
+task<http2_stream_data_write_status> http2_buffered_response_writer::write_data(
     std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream) {
     auto* runtime = stream_runtimes_.find(stream_id);
     auto* signal = runtime != nullptr ? runtime->signal() : nullptr;
-    const auto status = co_await write_http2_stream_data(
+    return write_http2_stream_data(
         connection_, stream_id, signal, write_signal_, output_budget_, chunk, end_stream);
-    switch (status) {
-        case http2_stream_data_write_status::completed:
-            co_return data_write_result_type::completed;
-        case http2_stream_data_write_status::local_aborted:
-        case http2_stream_data_write_status::session_terminated:
-        case http2_stream_data_write_status::peer_closed:
-            co_return data_write_result_type::peer_aborted;
-        case http2_stream_data_write_status::invalid_state:
-        case http2_stream_data_write_status::content_length_exceeded:
-            co_return data_write_result_type::failed;
-    }
-    co_return data_write_result_type::failed;
 }
 
 task<multiplexed_buffered_response_write_result> http2_buffered_response_writer::write_file_body(
@@ -104,7 +108,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
             co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status, .file_failure_ = *source.failure()};
         }
         if (chunk.kind() == response_body_chunk::kind_type::end) {
-            if (co_await write_data(stream_id, {}, http2_end_stream::end_stream) != data_write_result_type::completed) {
+            if (co_await write_data(stream_id, {}, http2_end_stream::end_stream) != http2_stream_data_write_status::completed) {
                 fail_after_commit();
             }
             co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
@@ -115,11 +119,10 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
         }
         const auto result_value = co_await write_data(stream_id, bytes, http2_end_stream::keep_open);
         source.release_buffer();
-        if (result_value == data_write_result_type::peer_aborted) {
-            co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
-        }
-        if (result_value == data_write_result_type::failed) {
-            fail_after_commit();
+        if (result_value != http2_stream_data_write_status::completed) {
+            if (data_write_failed(result_value)) {
+                fail_after_commit();
+            }
             co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
         }
     }
@@ -181,8 +184,8 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
         co_return co_await write_file_body(stream_id, *source, committed_status);
     }
 
-    // Keep the first DATA submission synchronous: responses that fit the
-    // current window and one credit avoid both nested DATA coroutine frames.
+    // Keep the first DATA submission synchronous: a response fitting the
+    // current window and one output credit needs no DATA coroutine.
     auto body = response.body_bytes();
     if (!body.empty() && signal != nullptr && !signal->terminated() && !connection_.stream_aborted(stream_id)) {
         const auto window = connection_.send_window_state(stream_id);
@@ -205,10 +208,7 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     }
     if (!body.empty()) {
         const auto result_value = co_await write_data(stream_id, body, http2_end_stream::end_stream);
-        if (result_value == data_write_result_type::peer_aborted) {
-            co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
-        }
-        if (result_value == data_write_result_type::failed) {
+        if (data_write_failed(result_value)) {
             co_return fail_after_commit();
         }
     }

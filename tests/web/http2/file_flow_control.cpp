@@ -294,6 +294,115 @@ TEST(Ruvia, http2_file_response_end_waits_for_exhausted_stream_window) {
     http2_file_flow_control_test::check_file_end(false);
 }
 
+TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
+    using namespace http2_file_flow_control_test;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::http_server_fixture server(io);
+    std::exception_ptr failure;
+    bool expired = false;
+    bool ended = false;
+    bool credited = false;
+    std::pmr::string status{ruvia::process_resource()};
+    std::pmr::string body{ruvia::process_resource()};
+    auto run = [&]() -> ruvia::task<void> {
+        asio::ip::tcp::socket socket(io);
+        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        watchdog.async_wait([&](std::error_code error) {
+            if (!error) {
+                expired = true;
+                ruvia::close_socket(socket);
+            }
+        });
+        try {
+            const auto connected = co_await ruvia::async_asio([&](auto handler) {
+                socket.async_connect(server.endpoint(), std::move(handler));
+            });
+            if (connected.error_code()) {
+                throw std::system_error(connected.error_code());
+            }
+            std::pmr::unsynchronized_pool_resource resource;
+            std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+            append_frame(wire, ruvia::http2_frame_type::settings, 0, 0,
+                std::string_view("\0\4\0\0\0\1", 6));
+            std::pmr::string block(&resource);
+            ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+            ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+            ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+            ruvia::hpack_encoder::encode_header(block, ":path", "/http2-file-ok");
+            append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+            const auto written = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(socket, asio::buffer(wire), std::move(handler));
+            });
+            if (written.error_code()) {
+                throw std::system_error(written.error_code());
+            }
+            ruvia::hpack_decoder decoder({.resource_ = &resource});
+            while (!ended) {
+                const auto frame = co_await read_frame(socket);
+                std::pmr::string reply(ruvia::process_resource());
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
+                    (frame.header_.flags_ & 0x1) == 0) {
+                    append_frame(reply, ruvia::http2_frame_type::settings, 0x1, 0, {});
+                }
+                if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) ||
+                    frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+                    throw std::runtime_error("HTTP/2 buffered response aborted");
+                }
+                if (frame.header_.stream_id_ == 1) {
+                    if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+                        const auto decoded = decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
+                            if (name == ":status") {
+                                status = value;
+                            }
+                            return true;
+                        });
+                        if (decoded.has_value()) {
+                            throw std::runtime_error("invalid HTTP/2 buffered response headers");
+                        }
+                        ended = (frame.header_.flags_ & 0x1) != 0;
+                    } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
+                        body.append(frame.payload_);
+                        ended = (frame.header_.flags_ & 0x1) != 0;
+                        if (!credited && !body.empty()) {
+                            EXPECT_EQ(body, std::string_view("a"));
+                            EXPECT_FALSE(ended);
+                            credited = true;
+                            append_frame(reply, ruvia::http2_frame_type::window_update, 0, 1,
+                                std::string_view("\0\0\0\4", 4));
+                        }
+                    }
+                }
+                if (!reply.empty()) {
+                    const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                        asio::async_write(socket, asio::buffer(reply), std::move(handler));
+                    });
+                    if (sent.error_code()) {
+                        throw std::system_error(sent.error_code());
+                    }
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        ruvia::close_socket(socket);
+        (void)watchdog.cancel();
+        server.finish();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    io.run();
+    root.get();
+    EXPECT_EQ(status, std::string_view("200"));
+    EXPECT_EQ(body, std::string_view("alive"));
+    EXPECT_TRUE(credited);
+    EXPECT_TRUE(ended);
+    EXPECT_FALSE(expired);
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 // A file body is validated before HEADERS but read only once the peer grants
 // send window: bytes the file held before the window opened are never sent.
 // Truncating the file between HEADERS and the first WINDOW_UPDATE therefore

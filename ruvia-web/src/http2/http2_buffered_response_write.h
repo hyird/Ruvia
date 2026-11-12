@@ -2,9 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <optional>
 #include <string_view>
-#include <type_traits>
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
@@ -20,6 +18,7 @@ class http_buffered_response_write_plan;
 }  // namespace ruvia
 
 namespace ruvia::detail {
+enum class http2_stream_data_write_status : std::uint8_t;
 class http2_sans_io_session_engine;
 class http2_sans_io_stream_runtime_table;
 
@@ -54,11 +53,7 @@ public:
         const http_response& response, http_buffered_response_write_plan write_plan);
 
 private:
-    enum class data_write_result_type : std::uint8_t { completed,
-        peer_aborted,
-        failed };
-
-    [[nodiscard]] task<data_write_result_type> write_data(
+    [[nodiscard]] task<http2_stream_data_write_status> write_data(
         std::uint32_t stream_id, std::string_view chunk, http2_end_stream end_stream);
     [[nodiscard]] task<multiplexed_buffered_response_write_result> write_file_body(
         std::uint32_t stream_id, response_file_source& source, http_status_code committed_status);
