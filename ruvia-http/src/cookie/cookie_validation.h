@@ -77,7 +77,8 @@ inline constexpr std::size_t max_cookie_attribute_value_bytes = 1024;
     throw std::invalid_argument("invalid cookie attribute policy");
 }
 
-// `secure` and `partitioned` are the already resolved attribute policies.
+// `secure` and `partitioned` are resolved attribute policies; the plan also
+// checks Max-Age before converting it to unsigned storage.
 inline void validate_cookie(std::string_view name, std::string_view value, const cookie_options& options,
     bool secure, bool partitioned) {
     if (!is_valid_http_header_name(name)) {
@@ -100,11 +101,6 @@ inline void validate_cookie(std::string_view name, std::string_view value, const
     }
     if (!is_valid_cookie_domain(options.domain_)) {
         throw std::invalid_argument("invalid cookie domain");
-    }
-    if (options.max_age_.has_value()) {
-        if (options.max_age_->count() < 0) {
-            throw std::invalid_argument("cookie Max-Age must not be negative");
-        }
     }
     if (options.expires_.has_value()) {
         using namespace std::chrono;

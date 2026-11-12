@@ -175,7 +175,8 @@ pool.join();
 - **HTTP/2 与 HTTP/3 字段名规范化**：共用单遍 ASCII 转换；已小写名称在暂存阶段直接借用，需转换时写入拥有缓冲。
 - **字段名称权威**：请求、响应与连接控制规则共用按长度索引的字段名称表；响应位标记与二进制协议的小写名称由同一表导出。
 - **Accept 参数值比较**：`charset` 及 `text/plain` 的 `format`、`delsp` 值忽略 ASCII 大小写（[RFC 3676 §4](https://www.rfc-editor.org/rfc/rfc3676.html#section-4)）；其他参数值保持大小写敏感，带引号值按解码后的字节比较。
-- **Cookie Max-Age**：十进制校验与转换单遍完成，仅对完整数值应用饱和；非法的后续 `Max-Age` 不覆盖此前有效值。
+- **Cookie Max-Age 接收**：十进制校验与转换单遍完成，仅对完整数值应用饱和；非法的后续 `Max-Age` 不覆盖此前有效值。
+- **Cookie Max-Age 写出**：负值在转为无符号计数前拒绝，仅正值写出该属性；删除行为见[响应 Cookie](web-guide.md#32-构造响应与设置响应元数据)。
 - **Cookie 写出原子性**：`write_cookie_request_pair()` 与 `append_cookie_request_pair()` 失败保留原内容；追加器扩容可能使旧借用视图失效，重试时重新获取视图。
 - **Cookie 快照预算**：仅暂存与输出重叠的输入；未重叠输入不占临时内存预算，双重叠共享一份快照。
 

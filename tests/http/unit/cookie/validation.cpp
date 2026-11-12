@@ -237,6 +237,9 @@ TEST(Ruvia, cookie_validation_rejects_injection_and_bad_options) {
     ruvia::cookie_options bad_partitioned;
     bad_partitioned.partitioned_ = static_cast<ruvia::cookie_attribute_policy>(255);
     EXPECT_TRUE(rejects_cookie("sid", "value", bad_partitioned));
+    ruvia::cookie_options negative_max_age;
+    negative_max_age.max_age_ = std::chrono::seconds{-1};
+    EXPECT_TRUE(rejects_cookie("sid", "value", negative_max_age));
 }
 
 TEST(Ruvia, cookie_secure_prefix_requires_secure) {

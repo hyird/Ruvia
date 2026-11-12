@@ -29,12 +29,11 @@ set_cookie_plan::set_cookie_plan(
       prefix_text_(options.prefix_ ? http_cookie_prefix_text(*options.prefix_) : std::string_view{}),
       priority_text_(options.priority_ ? detail::cookie_priority_token(*options.priority_) : std::string_view{}),
       same_site_text_(options.same_site_ ? detail::cookie_same_site_token(*options.same_site_) : std::string_view{}),
-      // max-age-av starts with a non-zero digit (RFC 6265 section 4.1.1);
-      // an immediate expiry is written as the past deletion Expires instead.
-      has_max_age_(options.max_age_.has_value() && options.max_age_->count() != 0),
       http_only_(detail::cookie_attribute_emitted(options.http_only_)),
       secure_(detail::cookie_attribute_emitted(options.secure_)),
       partitioned_(detail::cookie_attribute_emitted(options.partitioned_)) {
+    // max-age-av starts with a non-zero digit (RFC 6265 section 4.1.1);
+    // an immediate expiry is written as the past deletion Expires instead.
     const bool expire_now = options.max_age_.has_value() && options.max_age_->count() == 0;
     if (expire_now || options.expires_.has_value()) {
         const auto expires = expire_now ? cookie_deletion_expires : *options.expires_;
@@ -49,7 +48,7 @@ set_cookie_plan::set_cookie_plan(
         expires_size_ = date->size();
         std::memcpy(expires_buffer_.data(), date->data(), expires_size_);
     }
-    if (has_max_age_) {
+    if (options.max_age_.has_value() && options.max_age_->count() != 0) {
         if (options.max_age_->count() < 0) {
             throw std::invalid_argument("cookie Max-Age must not be negative");
         }
@@ -79,7 +78,7 @@ set_cookie_plan::set_cookie_plan(
         add_size(std::string_view("; Domain=").size());
         add_size(domain_.size());
     }
-    if (has_max_age_) {
+    if (max_age_value_ != 0) {
         add_size(std::string_view("; Max-Age=").size());
         add_size(http_unsigned_decimal_size(max_age_value_));
     }
@@ -173,7 +172,7 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
         fields.domain_ = {sink.position(), domain_.size()};
         sink.append(domain_);
     }
-    if (has_max_age_) {
+    if (max_age_value_ != 0) {
         // The constructor sized this slice with http_unsigned_decimal_size().
         sink.append("; Max-Age=");
         sink.append_unsigned(max_age_value_);

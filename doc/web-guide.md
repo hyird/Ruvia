@@ -461,6 +461,8 @@ const auto& user = c.request_state<current_user>();
 
 会话仅接受固定 48 位小写十六进制 ID，其他长度或字符按不存在的会话处理，不读取或修改其拼接的 Redis key。会话按 `key_prefix_ + ID` 存储。固定长度防止不同前缀通过变长 ID 穿透命名空间；使用同一 Redis 数据库和相同前缀则共享会话命名空间，隔离责任由配置方承担。
 
+- **显式会话轮换**：`regenerate()` 仅重新安排已加载会话：非空数据轮换 ID，空数据清除旧 ID；未加载会话或已有待提交动作时保持原计划。
+
 CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字段，例如 `X-App-CSRF` 或 `CSRF-Token`。构造时拒绝 CORS-safelisted、浏览器保留及已知自动生成/代理字段，如 `Accept`、`Content-Type`、`Origin`、`Sec-*`、`X-Forwarded-*`，前后端须使用同一 token 字段。这里依赖 [Fetch 的自定义请求头与预检边界](https://fetch.spec.whatwg.org/#cors-safelisted-request-header)，不是给任意等值字段赋予认证意义。部署方须保证代理不注入所选 token 字段，且仅向可信 origin 授予携带凭据的 CORS 权限；该中间件不替代用户认证，也不隔离已经被应用信任的跨源脚本。
 
 ---

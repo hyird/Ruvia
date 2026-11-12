@@ -229,7 +229,6 @@ private:
     std::uint64_t max_age_value_{0};
     std::size_t expires_size_{0};
     std::size_t size_{0};
-    bool has_max_age_{false};
     bool http_only_{false};
     bool secure_{false};
     bool partitioned_{false};

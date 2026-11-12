@@ -125,28 +125,17 @@ void context_session_state::clear() {
 
 void context_session_state::regenerate() {
     require_mutable();
-    const auto regenerate_existing = [this](auto& state_value) {
-        auto old_id = std::move(state_value.id_);
-        auto data = std::move(state_value.data_);
-        if (data.empty()) {
-            value_.template emplace<session_clear>(
-                std::optional<std::pmr::string>(std::move(old_id)));
-        } else {
-            value_.template emplace<session_rotate>(std::move(old_id), std::move(data));
-        }
-    };
-    if (auto* loaded_state = std::get_if<session_loaded>(&value_)) {
-        regenerate_existing(*loaded_state);
+    auto* loaded_state = std::get_if<session_loaded>(&value_);
+    if (loaded_state == nullptr) {
         return;
     }
-    if (std::holds_alternative<session_clear>(value_) ||
-        std::holds_alternative<session_rotate>(value_) ||
-        std::holds_alternative<session_persist_new>(value_)) {
-        return;
-    }
-    const auto current_data = data();
-    if (!current_data.empty()) {
-        value_.template emplace<session_persist_new>(copy(current_data));
+    auto old_id = std::move(loaded_state->id_);
+    auto data = std::move(loaded_state->data_);
+    if (data.empty()) {
+        value_.template emplace<session_clear>(
+            std::optional<std::pmr::string>(std::move(old_id)));
+    } else {
+        value_.template emplace<session_rotate>(std::move(old_id), std::move(data));
     }
 }
 
