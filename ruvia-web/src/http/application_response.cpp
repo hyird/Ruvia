@@ -1,4 +1,5 @@
 #include <string_view>
+#include <variant>
 
 #include "context/context_services.h"
 #include "http/http_cors.h"
@@ -44,24 +45,25 @@ http_response_preparation http_response_tail::prepare(
             return http_response_preparation(prepared_application_response{
                 plan_buffered_http_response_write(request.known_method(), response), false});
         }
-        return http_response_preparation(first_pass, policy, recovery, step);
+        return http_response_preparation(policy, recovery, step);
     }
-    return http_response_preparation(first_pass, coding_policy_);
+    return http_response_preparation(coding_policy_);
 }
 
 task<prepared_application_response> http_response_tail::finish_prepare(const http_response_preparation& preparation,
     http_response& response, const http_server_options& options, const route_table& routes, request_memory& memory,
     const context_services& services) const {
     const auto& request = *request_;
-    auto policy = preparation.policy_;
-    auto recovery = preparation.recovery_;
-    auto pass = preparation.first_pass_;
-    auto pending_step = preparation.pending_step_;
+    const auto& deferred = std::get<http_response_preparation::deferred_type>(preparation.state_);
+    auto policy = deferred.policy_;
+    auto recovery = deferred.recovery_;
+    const auto* pending_step = deferred.pending_step_ ? &*deferred.pending_step_ : nullptr;
+    http_buffered_compression_step pass{http_response_compression_status::not_applicable, true};
     for (;;) {
         buffered_response_recovery_step step;
-        if (pending_step.has_value()) {
+        if (pending_step != nullptr) {
             step = *pending_step;
-            pending_step.reset();
+            pending_step = nullptr;
         } else {
             auto compression = pass.status_;
             if (pass.offload_) {

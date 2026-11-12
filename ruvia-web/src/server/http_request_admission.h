@@ -6,6 +6,7 @@
 #include <memory_resource>
 #include <optional>
 #include <string_view>
+#include <variant>
 
 #include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/task.h"
@@ -109,34 +110,34 @@ private:
 class http_response_preparation final {
 public:
     [[nodiscard]] const prepared_application_response* ready() const& noexcept RUVIA_LIFETIMEBOUND {
-        return ready_ ? &*ready_ : nullptr;
+        return std::get_if<prepared_application_response>(&state_);
     }
     const prepared_application_response* ready() const&& = delete;
+
+    http_response_preparation(const http_response_preparation&) = default;
+    http_response_preparation(http_response_preparation&&) = default;
+    http_response_preparation& operator=(const http_response_preparation&) = delete;
+    http_response_preparation& operator=(http_response_preparation&&) = delete;
 
 private:
     friend class http_response_tail;
 
-    explicit http_response_preparation(prepared_application_response ready) noexcept
-        : ready_(ready),
-          first_pass_{http_response_compression_status::not_applicable, false},
-          policy_(http_response_coding_policy::disabled()) {}
-    http_response_preparation(http_buffered_compression_step first_pass,
-        http_response_coding_policy policy) noexcept
-        : first_pass_(first_pass),
-          policy_(policy) {}
-    http_response_preparation(http_buffered_compression_step first_pass,
-        http_response_coding_policy policy, buffered_response_recovery recovery,
-        buffered_response_recovery_step pending_step) noexcept
-        : first_pass_(first_pass),
-          policy_(policy),
-          recovery_(recovery),
-          pending_step_(pending_step) {}
+    struct deferred_type final {
+        http_response_coding_policy policy_;
+        buffered_response_recovery recovery_;
+        // Without a saved recovery step, encode on the blocking pool first.
+        std::optional<buffered_response_recovery_step> pending_step_;
+    };
 
-    std::optional<prepared_application_response> ready_;
-    http_buffered_compression_step first_pass_;
-    http_response_coding_policy policy_;
-    buffered_response_recovery recovery_;
-    std::optional<buffered_response_recovery_step> pending_step_;
+    explicit http_response_preparation(prepared_application_response ready) noexcept
+        : state_(ready) {}
+    explicit http_response_preparation(http_response_coding_policy policy) noexcept
+        : state_(deferred_type{policy, {}, std::nullopt}) {}
+    http_response_preparation(http_response_coding_policy policy, buffered_response_recovery recovery,
+        buffered_response_recovery_step pending_step) noexcept
+        : state_(deferred_type{policy, recovery, pending_step}) {}
+
+    std::variant<prepared_application_response, deferred_type> state_;
 };
 
 // The post-response tail: final representation preparation (CORS,

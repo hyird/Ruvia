@@ -155,6 +155,7 @@ ruvia::app().listen({
   - **验证器与范围**：框架编码时弱化强 `ETag`、删除不是带引号 entity-tag 的 `ETag`，并删除不再适用于编码表示的 `Accept-Ranges`。
   - **阻塞卸载**：`sync_bytes_` 是事件循环内联编码上限；更大的缓冲体在启用阻塞池时卸载编码，未启用时保持 identity，拒绝 identity 则回 `406`，不在事件循环上编码。
   - **状态归属**：每种算法的缓冲上下文与流式空闲池归同一 Worker 所有；卸载任务使用独立编码器，不借用 Worker 状态。
+  - **准备结果**：结果固定构造期类别；已完成响应与续处理状态不同时存在。
   - **提交失败**：缓冲压缩与 HEAD 编码元数据提交失败均保持原表示；成功响应允许 identity 时回退，拒绝时返回 `500 response_compression_failed`。
   - **流式阈值**：响应头声明 `Content-Length` 时，按与缓冲体相同的 `min_bytes_` / `max_bytes_` 规则决定是否编码。
   - **分片与 flush**：每次应用写入按 16 KiB 输入分片编码，仅在该次写入末尾 flush 一次；HTTP/1 与 HTTP/2 一致。
