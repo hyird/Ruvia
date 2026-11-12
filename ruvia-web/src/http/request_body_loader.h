@@ -24,12 +24,11 @@ public:
     [[nodiscard]] task<std::string_view> read_all() {
         switch (state_) {
             case state_type::available:
-                state_ = state_type::reading;
+                state_ = state_type::consuming;
                 break;
             case state_type::buffered:
                 co_return buffered_body_;
-            case state_type::reading:
-            case state_type::discarding:
+            case state_type::consuming:
                 throw std::logic_error("request body consumption is already in progress");
             case state_type::discarded:
                 throw std::logic_error("request body was discarded");
@@ -45,13 +44,12 @@ public:
     task<void> discard() {
         switch (state_) {
             case state_type::available:
-                state_ = state_type::discarding;
+                state_ = state_type::consuming;
                 break;
             case state_type::buffered:
             case state_type::discarded:
                 co_return;
-            case state_type::reading:
-            case state_type::discarding:
+            case state_type::consuming:
                 throw std::logic_error("request body consumption is already in progress");
             case state_type::failed:
                 throw std::logic_error("request body consumption previously failed");
@@ -64,9 +62,8 @@ public:
 private:
     enum class state_type : std::uint8_t {
         available,
-        reading,
+        consuming,
         buffered,
-        discarding,
         discarded,
         failed,
     };
@@ -77,19 +74,17 @@ private:
             : state_(state_value) {}
 
         ~operation_guard_type() {
-            if (!committed_) {
+            if (state_ == state_type::consuming) {
                 state_ = state_type::failed;
             }
         }
 
         void commit(state_type state_value) noexcept {
             state_ = state_value;
-            committed_ = true;
         }
 
     private:
         state_type& state_;
-        bool committed_{false};
     };
 
     void* target_;

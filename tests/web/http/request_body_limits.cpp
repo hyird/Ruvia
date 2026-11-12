@@ -66,6 +66,8 @@ class body_lane_routes final {
     RUVIA_POST("/server-small-chunk-body", read_small_chunks, ruvia::stream_body);
     RUVIA_GET("/server-small-chunk-next", small_chunk_next);
     RUVIA_POST("/server-pipelined-echo", pipelined_echo);
+    RUVIA_POST("/server-buffered-body/:operation", consume_buffered);
+    RUVIA_POST("/server-buffered-body-failure/:operation", fail_buffered);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> read_multipart_reader(ruvia::context& context_value) {
@@ -173,6 +175,70 @@ class body_lane_routes final {
 
     ruvia::task<ruvia::http_response> pipelined_echo(ruvia::context& context_value) {
         co_return context_value.text(co_await context_value.req().text());
+    }
+
+    ruvia::task<ruvia::http_response> consume_buffered(ruvia::context& context_value) {
+        const bool discard = context_value.req().param("operation") == "discard";
+        std::string_view buffered;
+        ruvia::task_scope consumers(context_value.worker());
+        const auto consume = [&]() -> ruvia::task<void> {
+            if (discard) {
+                co_await context_value.req().discard_body();
+            } else {
+                buffered = co_await context_value.req().text();
+            }
+        };
+        consumers.spawn(consume());
+        unsigned overlap_rejected{};
+        try {
+            (void)co_await context_value.req().text();
+        } catch (const std::logic_error&) {
+            ++overlap_rejected;
+        }
+        try {
+            co_await context_value.req().discard_body();
+        } catch (const std::logic_error&) {
+            ++overlap_rejected;
+        }
+        co_await context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints));
+        co_await consumers.join();
+        co_await context_value.req().discard_body();
+        if (discard) {
+            bool reread_rejected{};
+            try {
+                (void)co_await context_value.req().text();
+            } catch (const std::logic_error&) {
+                reread_rejected = true;
+            }
+            co_return context_value.text(overlap_rejected == 2 && reread_rejected ? "discarded" : "invalid-discard");
+        }
+        const auto retained = co_await context_value.req().text();
+        co_return context_value.text(overlap_rejected == 2 && retained == buffered ? retained : std::string_view("invalid-read"));
+    }
+
+    ruvia::task<ruvia::http_response> fail_buffered(ruvia::context& context_value) {
+        bool failed{};
+        try {
+            if (context_value.req().param("operation") == "discard") {
+                co_await context_value.req().discard_body();
+            } else {
+                (void)co_await context_value.req().text();
+            }
+        } catch (const ruvia::http_protocol_error&) {
+            failed = true;
+        }
+        unsigned rejected{};
+        try {
+            (void)co_await context_value.req().text();
+        } catch (const std::logic_error&) {
+            ++rejected;
+        }
+        try {
+            co_await context_value.req().discard_body();
+        } catch (const std::logic_error&) {
+            ++rejected;
+        }
+        co_return context_value.text(failed && rejected == 2 ? "failed" : "invalid-failure");
     }
 };
 
@@ -394,6 +460,25 @@ TEST(Ruvia, streamed_request_body_stays_failed_after_truncated_read) {
     // The body was never consumed, so the connection cannot be reused.
     EXPECT_TRUE(response.find("\r\nConnection: close\r\n") != std::pmr::string::npos);
     EXPECT_TRUE(response.ends_with("reread-observed"));
+}
+
+TEST(Ruvia, buffered_body_read_excludes_discard_and_retains_completed_content) {
+    exercise_lazy_body_reads("/server-buffered-body/read", "retained-body", "retained-body");
+}
+
+TEST(Ruvia, buffered_body_discard_excludes_read_and_permanently_rejects_content_reads) {
+    exercise_lazy_body_reads("/server-buffered-body/discard", "discarded-body", "discarded");
+}
+
+TEST(Ruvia, buffered_body_consumption_failure_rejects_both_read_and_discard) {
+    for (const std::string_view operation : {"read", "discard"}) {
+        SCOPED_TRACE(operation);
+        std::pmr::string head("POST /server-buffered-body-failure/", ruvia::process_resource());
+        head.append(operation).append(" HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\n\r\n");
+        const auto response = exchange_raw_request(head, {}, false, true);
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.ends_with("\r\n\r\nfailed"));
+    }
 }
 
 TEST(Ruvia, streamed_chunked_body_of_small_chunks_keeps_trailers_and_pipeline) {
