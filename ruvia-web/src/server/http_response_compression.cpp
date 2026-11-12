@@ -38,16 +38,11 @@ namespace {
 // request-resource failure leaves the identity response usable for the typed
 // 500 path instead of exposing a mixed body/metadata state.
 [[nodiscard]] http_response_compression_status commit_compressed_body(
-    http_response& response, http_content_coding coding, std::optional<std::pmr::string>&& encoding) noexcept {
+    http_response& response, http_content_coding coding, std::optional<std::pmr::string>&& encoding) {
     if (!encoding.has_value()) {
         return http_response_compression_status::not_applicable;
     }
-    try {
-        response.replace_body_with_content_encoding(std::move(*encoding), http_content_coding_token(coding));
-    } catch (...) {
-        ruvia::report_unhandled_failure("response compression", std::current_exception());
-        return http_response_compression_status::failed;
-    }
+    response.replace_body_with_content_encoding(std::move(*encoding), http_content_coding_token(coding));
     return http_response_compression_status::compressed;
 }
 
@@ -137,12 +132,7 @@ namespace {
     if (!encode) {
         return {http_response_compression_status::not_applicable, false};
     }
-    try {
-        response.apply_content_encoding(http_content_coding_token(selection.coding()));
-    } catch (...) {
-        ruvia::report_unhandled_failure("response compression", std::current_exception());
-        return {http_response_compression_status::failed, false};
-    }
+    response.apply_content_encoding(http_content_coding_token(selection.coding()));
     return {http_response_compression_status::compressed, false};
 }
 
@@ -194,34 +184,35 @@ http_buffered_compression_step apply_response_compression(const http_response_co
     const auto decision = prepare_response_compression(selection, request_method, response,
         http_response_compression_source::buffered,
         http_response_coding_availability::identity_and_compression);
-    if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
-        body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
-        const auto declared = declared_content_length(response);
-        if (declared != std::uint64_t{0}) {
-            return apply_head_content_encoding(selection, response, options, declared);
-        }
-    }
-    if (decision != http_response_compression_decision::encode ||
-        !declared_length_permits_encoding(selection, options, body.size())) {
-        return not_applicable;
-    }
-    // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
-    // pool; without one they stay identity (or 406 when identity is refused)
-    // rather than stall the event loop.
-    if (body.size() > options.sync_bytes_) {
-        return {http_response_compression_status::not_applicable, offload_available};
-    }
-
-    const auto coding = selection.coding();
-    std::optional<std::pmr::string> encoding;
+    // Negotiation errors above still propagate; only encoding and publication
+    // failures become a typed compression result.
     try {
-        encoding = codecs.encoder(coding).encode(
+        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
+            body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+            const auto declared = declared_content_length(response);
+            if (declared != std::uint64_t{0}) {
+                return apply_head_content_encoding(selection, response, options, declared);
+            }
+        }
+        if (decision != http_response_compression_decision::encode ||
+            !declared_length_permits_encoding(selection, options, body.size())) {
+            return not_applicable;
+        }
+        // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
+        // pool; without one they stay identity (or 406 when identity is refused)
+        // rather than stall the event loop.
+        if (body.size() > options.sync_bytes_) {
+            return {http_response_compression_status::not_applicable, offload_available};
+        }
+
+        const auto coding = selection.coding();
+        auto encoding = codecs.encoder(coding).encode(
             body, compressed_body_options(body, selection.identity_accepted(), response.memory_resource()));
+        return {commit_compressed_body(response, coding, std::move(encoding)), false};
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
         return {http_response_compression_status::failed, false};
     }
-    return {commit_compressed_body(response, coding, std::move(encoding)), false};
 }
 
 task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
@@ -248,8 +239,8 @@ task<http_response_compression_status> compress_response_offloaded(http_response
         co_return commit_compressed_body(response, coding, std::move(result_value).take_value());
     } catch (...) {
         ruvia::report_unhandled_failure("response compression", std::current_exception());
-        // Failure to allocate/copy the request-owned input or create the
-        // one-shot transport leaves the original identity body intact.
+        // Input ownership, encoder execution and representation publication
+        // leave the original identity body intact on failure.
         co_return http_response_compression_status::failed;
     }
 }

@@ -33,8 +33,10 @@
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/streaming.h"
 
+#include "failing_memory_resource.h"
 #include "http_server_fixture.h"
 #include "scoped_temp_directory.h"
+#include "stl_allocation_fixture.h"
 #include "test_io_context.h"
 
 // Inline buffered-response compression on one worker, whose encoders are
@@ -44,7 +46,7 @@
 namespace {
 
 [[maybe_unused]] const bool compression_configured = [] {
-    ruvia::app().compression({.min_bytes_ = 16});
+    ruvia::app().compression({.min_bytes_ = 16, .sync_bytes_ = 64 * 1024});
     return true;
 }();
 
@@ -58,9 +60,10 @@ namespace {
     return body;
 }
 
-// Both stay below the default 64 KiB synchronous limit, so neither is offloaded.
+// Cover both sides of the configured inline ceiling without changing policy between cases.
 const std::pmr::string small_body(make_body(3'000, 1), ruvia::process_resource());
 const std::pmr::string large_body(make_body(60'000, 2), ruvia::process_resource());
+const std::pmr::string offloaded_body(make_body(128 * 1024, 3), ruvia::process_resource());
 
 [[nodiscard]] const std::filesystem::path& file_dir() {
     static const ruvia::test::scoped_temp_directory directory("ruvia-response-compression");
@@ -74,6 +77,9 @@ class response_compression_routes final {
     RUVIA_ROUTES_BEGIN(response_compression_routes)
     RUVIA_GET("/compression-small", small);
     RUVIA_GET("/compression-large", large);
+    RUVIA_GET("/compression-offloaded", offloaded);
+    RUVIA_GET("/compression-failure", compression_failure);
+    RUVIA_HEAD("/compression-failure", compression_failure);
     RUVIA_GET("/compression-tiny", tiny);
     RUVIA_GET("/compression-digest", digest);
     RUVIA_GET("/compression-file", file);
@@ -111,6 +117,29 @@ class response_compression_routes final {
 
     ruvia::task<ruvia::http_response> large(ruvia::context& context_value) {
         co_return context_value.text(std::string_view(large_body));
+    }
+
+    ruvia::task<ruvia::http_response> offloaded(ruvia::context& context_value) {
+        co_return context_value.text(std::string_view(offloaded_body));
+    }
+
+    ruvia::task<ruvia::http_response> compression_failure(ruvia::context& context_value) {
+        ruvia::http_response response(&compression_failure_resource_);
+        response.header("Content-Type", "text/plain");
+        // Keep negotiation allocation-free so failure belongs to encoding or
+        // publication, not the preceding representation selection.
+        response.header("Vary", "Accept-Encoding");
+        response.header("ETag", "\"identity-before-compression\"");
+        response.header("Accept-Ranges", "bytes");
+        const auto& body = context_value.req().query("offload").has_value() ? offloaded_body : small_body;
+        if (context_value.req().known_method() == ruvia::http_known_method::head) {
+            response.header("Content-Length", std::to_string(body.size()));
+            response.head_metadata_body();
+        } else {
+            response.body(std::string_view(body));
+        }
+        compression_failure_resource_.fail_after_stl_operation(0);
+        co_return response;
     }
 
     ruvia::task<ruvia::http_response> head_declared(ruvia::context& context_value) {
@@ -247,6 +276,9 @@ class response_compression_routes final {
     ruvia::task<ruvia::http_response> coded_static_file(ruvia::context& context_value) {
         co_return co_await context_value.static_file(*coded_root, {.relative_path_ = "asset.txt"});
     }
+
+private:
+    ruvia::test::failing_memory_resource compression_failure_resource_;
 };
 
 // Sends one request and returns every byte the server wrote before closing,
@@ -399,6 +431,84 @@ TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
     EXPECT_EQ(*body, small_body);
     server.finish();
     EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+}
+
+TEST(Ruvia, http1_compression_failure_preserves_identity_or_returns_typed_error) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "noexcept debug iterator metadata prevents allocation failure injection";
+    }
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const struct {
+        std::string_view failing_target_;
+        std::string_view following_target_;
+        std::string_view body_;
+    } cases[]{
+        {"/compression-failure", "/compression-small", small_body},
+        {"/compression-failure?offload=1", "/compression-offloaded", offloaded_body},
+    };
+    for (const auto& test_case : cases) {
+        SCOPED_TRACE(test_case.failing_target_);
+        const auto fallback = fetch_response(server.endpoint(),
+            get_request(test_case.failing_target_, "Accept-Encoding: gzip\r\n"));
+        ASSERT_TRUE(fallback.has_value());
+        EXPECT_NE(std::string_view(*fallback).substr(0, fallback->find("\r\n")).find(" 200 "), std::string_view::npos);
+        const auto fields = head_fields(*fallback);
+        EXPECT_FALSE(has_field(fields, "content-encoding:"));
+        EXPECT_TRUE(has_field(fields, "etag: \"identity-before-compression\""));
+        EXPECT_TRUE(has_field(fields, "accept-ranges: bytes"));
+        EXPECT_EQ(response_body(*fallback), test_case.body_);
+
+        const auto refused = fetch_response(server.endpoint(),
+            get_request(test_case.failing_target_, "Accept-Encoding: gzip, identity;q=0\r\n"));
+        ASSERT_TRUE(refused.has_value());
+        EXPECT_NE(std::string_view(*refused).substr(0, refused->find("\r\n")).find(" 500 "), std::string_view::npos);
+        const auto error_coding = has_field(head_fields(*refused), "content-encoding: gzip")
+                                      ? ruvia::http_content_coding::gzip
+                                      : ruvia::http_content_coding::identity;
+        const auto decoded_error = ruvia::decode_http_content(
+            std::array{error_coding}, response_body(*refused),
+            {.max_decoded_bytes_ = 1024 * 1024, .resource_ = ruvia::process_resource()});
+        const auto* error_body = std::get_if<std::pmr::string>(&decoded_error);
+        ASSERT_NE(error_body, nullptr);
+        EXPECT_NE(error_body->find("response_compression_failed"), std::pmr::string::npos);
+
+        const auto following = fetch_response(server.endpoint(),
+            get_request(test_case.following_target_, "Accept-Encoding: gzip\r\n"));
+        ASSERT_TRUE(following.has_value());
+        EXPECT_TRUE(has_field(head_fields(*following), "content-encoding: gzip"));
+        const auto decoded = ruvia::decode_http_content(
+            std::array{ruvia::http_content_coding::gzip}, response_body(*following),
+            {.max_decoded_bytes_ = test_case.body_.size(), .resource_ = ruvia::process_resource()});
+        const auto* body = std::get_if<std::pmr::string>(&decoded);
+        ASSERT_NE(body, nullptr);
+        EXPECT_EQ(*body, test_case.body_);
+    }
+    server.finish();
+}
+
+TEST(Ruvia, http1_head_compression_publication_failure_preserves_identity_or_returns_error) {
+    if (!ruvia::test::stl_allocation_failure_injection_enabled()) {
+        GTEST_SKIP() << "noexcept debug iterator metadata prevents allocation failure injection";
+    }
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    for (const bool identity_accepted : {true, false}) {
+        const auto response = fetch_response(server.endpoint(), head_request("/compression-failure",
+                                                                    identity_accepted ? "Accept-Encoding: gzip\r\n" : "Accept-Encoding: gzip, identity;q=0\r\n"));
+        ASSERT_TRUE(response.has_value());
+        EXPECT_NE(std::string_view(*response).substr(0, response->find("\r\n")).find(identity_accepted ? " 200 " : " 500 "),
+            std::string_view::npos);
+        EXPECT_TRUE(response_body(*response).empty());
+        if (identity_accepted) {
+            const auto fields = head_fields(*response);
+            EXPECT_FALSE(has_field(fields, "content-encoding:"));
+            EXPECT_TRUE(has_field(fields, "etag: \"identity-before-compression\""));
+            EXPECT_TRUE(has_field(fields, "accept-ranges: bytes"));
+            EXPECT_TRUE(has_field(fields, "content-length: " + std::to_string(small_body.size())));
+        }
+    }
+    server.finish();
 }
 
 TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
