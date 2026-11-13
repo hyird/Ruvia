@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/http/detail/borrowed_view.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_field_section.h"

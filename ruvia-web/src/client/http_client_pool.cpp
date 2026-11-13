@@ -21,7 +21,6 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/client_tls.h"
-#include "client/http1_client_exchange.h"
 #include "client/http_client_connection.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"

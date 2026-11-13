@@ -40,7 +40,6 @@
 
 #include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"

@@ -40,9 +40,9 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "body/http_body_buffer.h"
 #include "client/http_client_request_storage.h"
 #include "integration/operation_interrupt.h"
+#include "server/inbound_buffer_budget.h"
 
 namespace ruvia {
 class response_stream_writer;

@@ -38,11 +38,11 @@
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
 
-#include "body/http_request_body_facade.h"
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
+#include "http/request_body_loader.h"
 #include "http3/http3_endpoint.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_resolution.h"

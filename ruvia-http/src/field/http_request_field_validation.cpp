@@ -3,7 +3,6 @@
 #include <stdexcept>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_field_section.h"

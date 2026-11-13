@@ -18,7 +18,7 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/detail/middleware/middleware_descriptor.h"
+#include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"

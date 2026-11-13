@@ -1,4 +1,3 @@
-#include "client/http1_client_exchange.h"
 
 #include <algorithm>
 #include <array>
@@ -30,7 +29,6 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "body/http_body_buffer.h"
 #include "client/http_client_connection.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_decoding.h"
@@ -40,6 +38,7 @@
 #include "http/http_stream_end.h"
 #include "http/inline_http_header_views.h"
 #include "http/tls_tunnel_output.h"
+#include "server/inbound_buffer_budget.h"
 
 namespace ruvia::detail {
 namespace {

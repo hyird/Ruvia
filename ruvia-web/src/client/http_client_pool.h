@@ -21,13 +21,18 @@
 #include "ruvia/http/http2_connection.h"
 #endif
 #include <array>
+#include <exception>
 #include <span>
 #include <string_view>
 
+#include <asio/buffer.hpp>
 #include <asio/ip/address.hpp>
 
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/http_client.h"
 
@@ -473,6 +478,77 @@ private:
     worker_signal dns_changed_;
     worker_timer_registration dns_refresh_timer_;
     stop_source dns_stop_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+class http1_request_content_writer;
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+class http_client_connection;
+class http_client_output_queue;
+class http_client_pool;
+class http_client_request_storage;
+class http_client_response_state;
+class tls_tunnel_output;
+
+// One serialized HTTP/1 exchange on a connected http_client_connection: the
+// request head and content, a full-duplex streaming upload, the response head,
+// body and Content-Encoding, or an accepted CONNECT/Upgrade byte tunnel. The caller holds
+// the connection's pool lease, and its cancellation, for the whole run.
+class http1_client_exchange final {
+public:
+    http1_client_exchange(http_client_pool& pool, http_client_connection& connection) noexcept
+        : pool_(pool),
+          connection_(connection) {}
+
+    http1_client_exchange(const http1_client_exchange&) = delete;
+    http1_client_exchange& operator=(const http1_client_exchange&) = delete;
+
+    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_deadline& timeout,
+        stop_token stop_token_value, http_client_response_state& state_value);
+
+private:
+    // Receives the final response head, then the body or an accepted tunnel.
+    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_deadline& timeout,
+        http_client_response_state& state_value, http1_client_response_parser& parser);
+    // Waits until the consumer releases pending and borrowed response bytes.
+    [[nodiscard]] task<void> wait_for_body_space(
+        http_client_response_state& state_value, const operation_deadline& timeout);
+    void expire_tunnel() noexcept;
+    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_deadline& timeout,
+        tls_tunnel_output* tls, std::exception_ptr& failure);
+    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout,
+        bool websocket);
+    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_deadline& timeout,
+        http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
+    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_deadline& timeout,
+        http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
+    // One transport write of all `parts` (a head, or a framed upload chunk:
+    // prefix, payload, suffix) under the write timeout.
+    [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout);
+    // Restarts the exchange-level inactivity bound, when armed: read
+    // inactivity counted from the last progress in either direction.
+    void restart_inactivity() noexcept;
+    void stop_inactivity() noexcept;
+    // Appends at most `max_bytes` read from the transport to `target` under the
+    // read inactivity bound; returns the read, which is not ok() at the peer's
+    // end of stream, and throws any other transport failure.
+    [[nodiscard]] task<client_transport_result> read_append(
+        http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout,
+        bool read_inactivity_bound = true);
+
+    http_client_pool& pool_;
+    http_client_connection& connection_;
+    http_client_response_state* response_{};
+    // Armed while request content may still be sent before the final response
+    // head (read_timeout_), and through an accepted tunnel (its idle_timeout_).
+    std::optional<timeout_duration> inactivity_bound_;
+    // Last: destroyed first, so its expiry never sees a retiring exchange.
+    worker_timer_registration inactivity_timer_;
 };
 
 }  // namespace ruvia::detail

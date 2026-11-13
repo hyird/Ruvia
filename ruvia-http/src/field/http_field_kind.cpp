@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"

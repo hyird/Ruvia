@@ -1,6 +1,7 @@
 #include <array>
 #include <bit>
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <exception>
 #include <memory>
@@ -10,9 +11,18 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/failure_report.h"
+#include <asio/bind_executor.hpp>
+#include <asio/post.hpp>
 
+#include "ruvia/core/async.h"
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/core/timer.h"
+
+#include "app/app_runtime_graph.h"
+#include "app/web_worker_dispatch.h"
 #include "ratelimit/rate_limiter.h"
+#include "router/route_table.h"
 #include "server/config_validation.h"
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
@@ -217,6 +227,384 @@ void validate_server_limits(const server_config& config) {
 [[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options) {
     return validated_http_server_configuration(listeners, std::move(options));
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+namespace {
+
+using snapshot_owner = std::unique_ptr<static_root>;
+
+// Snapshots are released by whichever thread drops the last reference, so the
+// control block and the root both come from the process resource.
+[[nodiscard]] document_root_snapshot share_snapshot(snapshot_owner owner) {
+    return document_root_snapshot(std::move(owner));
+}
+
+}  // namespace
+
+document_root_publisher::document_root_publisher(const std::filesystem::path& root,
+    const static_root_config_storage& config, std::chrono::milliseconds interval,
+    static_root_precompression_options precompression, static_root_resident_options resident,
+    std::size_t worker_count)
+    : root_(root),
+      interval_(interval),
+      precompression_(precompression),
+      resident_(resident),
+      mailboxes_(worker_count) {
+    auto initial = static_root_access::make(root, config);
+    static_root_access::install_resident_bodies(*initial, nullptr, resident_);
+    static_root_access::install_precompressed_variants(*initial, nullptr, precompression_);
+    current_ = share_snapshot(std::move(initial));
+}
+
+document_root_publisher::~document_root_publisher() = default;
+
+document_root_publisher::mailbox::~mailbox() {
+    // The graph has joined every worker before destroying the mailbox host.
+    delete pending_.exchange(nullptr);
+}
+
+document_root_publisher::mailbox& document_root_publisher::register_worker() noexcept {
+    if (registered_workers_ == mailboxes_.size()) {
+        std::terminate();
+    }
+    return mailboxes_[registered_workers_++];
+}
+
+void document_root_publisher::record_failure(std::exception_ptr failure) noexcept {
+    failures_.fetch_add(1, std::memory_order_relaxed);
+    ruvia::report_unhandled_failure("document root refresh", std::move(failure));
+}
+
+void document_root_publisher::publish(document_root_snapshot snapshot) {
+    std::vector<publication_owner> publication;
+    publication.reserve(mailboxes_.size());
+    for (std::size_t i = 0; i < mailboxes_.size(); ++i) {
+        publication.push_back(std::make_unique<document_root_snapshot>(snapshot));
+    }
+    // Every allocation has succeeded before any worker can see this snapshot.
+    commit_publication(std::move(snapshot), publication);
+}
+
+void document_root_publisher::commit_publication(document_root_snapshot snapshot,
+    std::vector<publication_owner>& publication) noexcept {
+    current_.swap(snapshot);
+    for (std::size_t i = 0; i < mailboxes_.size(); ++i) {
+        publication_owner superseded(
+            mailboxes_[i].pending_.exchange(publication[i].release(), std::memory_order_acq_rel));
+    }
+    // Unread nodes are reclaimed by the next publish; adopted snapshots live
+    // only as long as a worker's current generation or request leases need them.
+}
+
+task<void> document_root_publisher::refresh(
+    const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop) {
+    // Shared ownership lets the blocking jobs read the previous snapshot while
+    // workers keep serving it, and lets resident bytes and precompression
+    // reuse its unchanged file versions.
+    const auto previous = current_;
+    snapshot_owner candidate(nullptr);
+    try {
+        // The unchanged-snapshot comparison walks every entry, so it runs on
+        // the pool with the rebuild; an unchanged root yields no candidate.
+        auto rebuilt = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [previous, root = root_] {
+            auto built = static_root_access::make(root,
+                static_root_access::copy_config(*previous));
+            if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) &&
+                static_root_access::same_snapshot(*built, *previous)) {
+                built.reset();
+            }
+            return built;
+        });
+        if (!rebuilt.completed()) {
+            // A refresh is transactional: keep serving the last complete
+            // index, but expose filesystem/permission failures to metrics
+            // instead of silently turning them into stale content. A rejected
+            // offload (pool stopping) is not a refresh failure.
+            if (rebuilt.failed()) {
+                record_failure(rebuilt.error());
+            }
+            co_return;
+        }
+        candidate = std::move(rebuilt).take_value();
+    } catch (...) {
+        // The offload wrapper reports pool shutdown as a status, but creating
+        // its one-shot channel or transporting a result can still throw.
+        record_failure(std::current_exception());
+        co_return;
+    }
+
+    if (candidate == nullptr || !http_server_worker_running(state)) {
+        co_return;
+    }
+
+    if (precompression_.enabled() || resident_.enabled()) {
+        try {
+            auto prepared = co_await ruvia::run_blocking(worker, {.stop_token_ = stop},
+                [candidate = std::move(candidate), previous, precompression = precompression_,
+                    resident = resident_]() mutable {
+                    static_root_access::install_resident_bodies(*candidate, previous.get(), resident);
+                    static_root_access::install_precompressed_variants(
+                        *candidate, previous.get(), precompression);
+                    return std::move(candidate);
+                });
+            if (!prepared.completed()) {
+                if (prepared.failed()) {
+                    record_failure(prepared.error());
+                }
+                co_return;
+            }
+            candidate = std::move(prepared).take_value();
+        } catch (...) {
+            record_failure(std::current_exception());
+            co_return;
+        }
+        if (!http_server_worker_running(state)) {
+            co_return;
+        }
+    }
+
+    try {
+        publish(share_snapshot(std::move(candidate)));
+    } catch (...) {
+        record_failure(std::current_exception());
+    }
+}
+
+static_root_runtime::static_root_runtime(http_server_options& options, const worker_ref& worker_value,
+    const http_server_worker_state& state_value)
+    : options_(options),
+      publisher_(options.document_root_.publisher()),
+      mailbox_(publisher_ == nullptr ? nullptr : &publisher_->register_worker()),
+      worker_(worker_value),
+      state_(state_value),
+      pending_(nullptr),
+      current_(nullptr),
+      retired_(),
+      refreshes_(publisher_ != nullptr && mailbox_ == publisher_->mailboxes_.data()) {
+    if (publisher_ != nullptr) {
+        // Worker construction is serialized before startup; no publisher can
+        // replace this shared_ptr while its initial reference is copied.
+        current_ = std::make_unique<document_root_generation>(publisher_->current_);
+        options_.document_root_.publish(*current_);
+    }
+}
+
+static_root_runtime::~static_root_runtime() = default;
+
+void static_root_runtime::adopt_published() {
+    if (auto* published = mailbox_->pending_.exchange(nullptr, std::memory_order_acq_rel);
+        published != nullptr) {
+        pending_.reset(published);
+    }
+    if (pending_ == nullptr) {
+        return;
+    }
+    // The exchanged node is exclusively ours, so copying its shared_ptr cannot
+    // race the publisher reclaiming or replacing the source object.
+    auto next = std::make_unique<document_root_generation>(*pending_);
+    if (current_->leased()) {
+        // If vector growth fails both current_ and pending_ remain owned here;
+        // adoption retries next interval, or skips to a newer mailbox node.
+        retired_.push_back(std::move(current_));
+    }
+    current_ = std::move(next);
+    options_.document_root_.publish(*current_);
+    pending_.reset();
+}
+
+task<void> static_root_runtime::refresh(const stop_token& stop) {
+    if (publisher_ == nullptr) {
+        std::terminate();
+    }
+    const auto interval = publisher_->interval();
+    for (;;) {
+        if (!http_server_worker_running(state_)) {
+            co_return;
+        }
+        if (co_await sleep_for(worker_, interval, stop) == timer_sleep_result::stop_requested) {
+            co_return;
+        }
+        if (!http_server_worker_running(state_)) {
+            co_return;
+        }
+
+        std::erase_if(retired_, [](const generation_owner& generation) { return !generation->leased(); });
+
+        if (refreshes_) {
+            co_await publisher_->refresh(worker_, state_, stop);
+            if (!http_server_worker_running(state_)) {
+                co_return;
+            }
+        }
+        try {
+            adopt_published();
+        } catch (...) {
+            // This worker keeps serving its last generation and retains the
+            // exclusively claimed publication node for the next interval.
+            publisher_->record_failure(std::current_exception());
+        }
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
+    const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool,
+    std::size_t worker_index
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_placement http3_placement
+#endif
+    )
+    : web_worker_runtime(configuration.listeners(), routes_value, capabilities, configuration.options(), pool,
+          worker_index
+#if defined(RUVIA_ENABLE_HTTP3)
+          ,
+          http3_placement
+#endif
+      ) {
+}
+
+web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_definition> listeners,
+    const route_table& routes_value, worker_capability_definitions capabilities,
+    http_server_options validated_options, blocking_pool* pool, std::size_t worker_index
+#if defined(RUVIA_ENABLE_HTTP3)
+    ,
+    http3_worker_placement http3_placement
+#endif
+    )
+    : runtime_({.queue_capacity_ = validated_options.server_.worker_queue_capacity_,
+          .io_policy_ = ruvia::worker_io_policy::single_owner,
+          .blocking_pool_ = pool}),
+      io_context_(runtime_.io_context()),
+      finalize_signal_(runtime_.worker()),
+      routes_(routes_value),
+      inbound_budget_(validated_options.server_.max_inbound_buffer_bytes_per_worker_),
+      background_tasks_(runtime_.worker()),
+      options_(std::move(validated_options)),
+      static_roots_(options_, runtime_.worker(), worker_state_),
+      capabilities_(io_context_, runtime_.worker(), capabilities,
+          worker_capability_options{
+              .default_rate_limit_ = options_.default_rate_limit_per_worker_,
+              .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
+                                                                   : route_rate_limit_presence::absent,
+              .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
+              .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+              .http_client_worker_ = options_.server_.http_client_worker_,
+              .env_ = options_.env_,
+              .trusted_proxies_ =
+                  options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
+              .precompressed_static_files_ = options_.compression_.has_value(),
+              .file_io_timeout_ = options_.server_.write_timeout_,
+              .connection_failure_ = &options_.connection_failure_,
+          }),
+      connections_(io_context_, runtime_.worker(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
+          worker_failure_sink{.target_ = &runtime_,
+              .invoke_ = [](void* target, const std::exception_ptr& failure) noexcept {
+                  (void)static_cast<ruvia::worker_runtime*>(target)->fail(failure);
+              }},
+          worker_index
+#if defined(RUVIA_ENABLE_HTTP3)
+          ,
+          http3_placement
+#endif
+          ),
+      web_worker_dispatch_(std::make_shared<web_worker_dispatch>(runtime_, capabilities_, background_tasks_, stop_token_)) {
+    options_.inbound_budget_ = &inbound_budget_;
+    options_.codecs_ = &codecs_;
+    runtime_.configure({
+        .startup_ = [this] {
+            worker_state_ = http_server_worker_state::running;
+            // Startup runs before the context does; the task starts in its first turn.
+            asio::post(io_context_, [this] {
+                ruvia::async_start(run_worker(), asio::bind_executor(io_context_, [this](std::exception_ptr failure) noexcept {
+                    if (failure) {
+                        (void)runtime_.fail(failure);
+                    }
+                }));
+            }); },
+        .serve_ = [this] { serve_on_context(); },
+        .stop_admission_ = [this] { stop_admission_on_context(); },
+        .finalize_ = [this] { finalize_on_context(); },
+        .failure_ = [this](std::exception_ptr failure) noexcept {
+            worker_failures_.fetch_add(1, std::memory_order_relaxed);
+            options_.failure_.notify(failure); },
+        .shutdown_ = [this]() noexcept {
+            connections_.retire_tls();
+            worker_state_ = http_server_worker_state::stopped; },
+    });
+}
+
+web_worker_runtime::~web_worker_runtime() {
+    runtime_.request_stop();
+    runtime_.finalize();
+    runtime_.join();
+}
+
+http_server_stats web_worker_runtime::stats() const {
+    auto stats = connections_.stats();
+    stats.worker_failures_ = worker_failures_.load(std::memory_order_relaxed);
+    return stats;
+}
+
+web_worker_ref web_worker_runtime::web_worker() const {
+    return web_worker_dispatch::make_ref(web_worker_dispatch_);
+}
+
+void web_worker_runtime::serve_on_context() {
+    if (static_roots_.enabled()) {
+        background_tasks_.spawn(static_roots_.refresh(stop_token_));
+    }
+    connections_.open_admission();
+}
+
+void web_worker_runtime::stop_admission_on_context() noexcept {
+    worker_state_ = http_server_worker_state::stopped;
+    stop_source_.request_stop();
+    connections_.stop();
+    runtime_.finalize();
+}
+
+void web_worker_runtime::finalize_on_context() noexcept {
+    capabilities_.close_now();
+    finalize_signal_.notify();
+}
+
+task<void> web_worker_runtime::run_worker() {
+    try {
+        // A stop applied before this task first runs has already stopped the
+        // worker timers; starting the scanner or capability I/O would fail.
+        if (!stop_token_.stop_requested()) {
+            connections_.prepare();
+            co_await capabilities_.start();
+            // Ignored once stopping: core has already aborted the barrier.
+            runtime_.mark_ready();
+        }
+    } catch (...) {
+        // A stop during startup closes the capabilities whose connect is still
+        // pending; that abort is the requested cancellation, not a failure.
+        if (!stop_token_.stop_requested()) {
+            (void)runtime_.fail(std::current_exception());
+        }
+    }
+    // Retain worker-local state until finalization joins sessions and pending
+    // listener operations on this same owner.
+    co_await finalize_signal_.wait();
+    try {
+        co_await background_tasks_.join();
+    } catch (...) {
+        (void)runtime_.fail(std::current_exception());
+    }
+    try {
+        co_await capabilities_.stop();
+    } catch (...) {
+        (void)runtime_.fail(std::current_exception());
+    }
 }
 
 }  // namespace ruvia::detail

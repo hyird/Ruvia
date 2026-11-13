@@ -33,7 +33,6 @@
 #include "ruvia/web/detail/decimal_number.h"
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/json/json_scan.h"
-#include "ruvia/web/detail/json/json_traversal.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/integer.h"
 

@@ -1,17 +1,21 @@
 #include <algorithm>
 #include <bit>
+#include <cstddef>
 #include <cstdint>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
 
 #include "router/path_segments.h"
+#include "router/route_table.h"
 #include "router/router_impl.h"
 
 namespace ruvia {
@@ -321,6 +325,592 @@ void detail::router::build_extension_index() {
         }
         return compare_uri_paths(left_route.path(), right_route.path()) < 0;
     });
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+namespace {
+
+// How much of a route's request-path space one path-scoped middleware covers.
+enum class middleware_scope_coverage : std::uint8_t {
+    // No request the route can match is under the scope: the frame is omitted.
+    none,
+    // Some matched requests are under the scope and some are not: the frame is
+    // kept with its scope and checked against the request path at dispatch.
+    partial,
+    // Every request the route can match is under the scope: the frame is
+    // unconditional.
+    full,
+};
+
+// Classifies a route pattern against a normalized scope prefix with the
+// matcher's own segment rules, so the answer holds for the request paths the
+// route actually serves rather than for the pattern text. A request is under
+// the scope exactly when its leading segments are equivalent to the prefix's
+// segments (path_is_under_prefix); a literal route segment matches exactly the
+// request segments of the same canonical form (uri_paths_equivalent), so
+// comparing it with that equivalence is exact.
+[[nodiscard]] middleware_scope_coverage route_scope_coverage(
+    std::string_view pattern, bool dynamic, std::string_view prefix) noexcept {
+    if (!dynamic) {
+        // A static route serves exactly its own path.
+        return detail::path_is_under_prefix(pattern, prefix) ? middleware_scope_coverage::full
+                                                             : middleware_scope_coverage::none;
+    }
+    if (prefix.empty()) {
+        return middleware_scope_coverage::full;
+    }
+
+    // Set once a parameter faces a prefix segment: it may or may not capture
+    // that exact text, so only the request can decide.
+    bool request_dependent = false;
+    for (;;) {
+        std::string_view prefix_segment;
+        std::string_view prefix_rest;
+        if (!detail::split_path_segment(prefix, prefix_segment, prefix_rest)) {
+            return request_dependent ? middleware_scope_coverage::partial : middleware_scope_coverage::full;
+        }
+        std::string_view pattern_segment;
+        std::string_view pattern_rest;
+        if (!detail::split_path_segment(pattern, pattern_segment, pattern_rest)) {
+            // Every matched request ends above the scope.
+            return middleware_scope_coverage::none;
+        }
+        const auto kind = detail::classify_route_segment(pattern_segment);
+        if (kind == detail::route_segment_kind::wildcard) {
+            // The capture may be empty or may spell out the rest of the prefix.
+            return middleware_scope_coverage::partial;
+        }
+        if (kind == detail::route_segment_kind::param) {
+            if (prefix_segment.empty()) {
+                // A parameter never matches an empty segment.
+                return middleware_scope_coverage::none;
+            }
+            request_dependent = true;
+        } else if (!uri_paths_equivalent(pattern_segment, prefix_segment)) {
+            return middleware_scope_coverage::none;
+        }
+        prefix = prefix_rest;
+        pattern = pattern_rest;
+    }
+}
+
+[[nodiscard]] std::string describe_route(http_known_method method, std::string_view path) {
+    std::string text(known_http_method_token(method));
+    text.push_back(' ');
+    text.append(path);
+    return text;
+}
+
+}  // namespace
+
+detail::route_table::route_table(
+    const compiled_route_plan& plan, const controller_store& controllers)
+    : route_table(plan) {
+    handler_targets_.reserve(plan.routes_.size());
+    for (const auto& route : plan.routes_) {
+        handler_targets_.push_back(controllers.instance(route.controller()));
+    }
+    build_middleware_instances();
+}
+
+detail::route_table::route_table(const compiled_route_plan& plan, std::span<void* const> targets)
+    : route_table(plan) {
+    handler_targets_.reserve(plan.routes_.size());
+    for (const auto& route : plan.routes_) {
+        if (route.controller() >= targets.size() || targets[route.controller()] == nullptr) {
+            throw std::invalid_argument("route handler slot is not bound");
+        }
+        handler_targets_.push_back(targets[route.controller()]);
+    }
+    build_middleware_instances();
+}
+
+detail::route_table::route_table(const compiled_route_plan& plan)
+    : plan_(&plan),
+      handler_targets_(),
+      middleware_instances_(),
+      middleware_frames_() {}
+
+void detail::route_table::build_middleware_instances() {
+    const auto& plan = *plan_;
+
+    middleware_instances_.reserve(plan.middleware_instances_.size());
+    middleware_frames_.reserve(plan.middleware_frame_instances_.size());
+    try {
+        for (const auto& descriptor : plan.middleware_instances_) {
+            middleware_instances_.push_back(descriptor.create()(descriptor.args()));
+        }
+    } catch (...) {
+        for (std::size_t i = middleware_instances_.size(); i != 0; --i) {
+            plan.middleware_instances_[i - 1].destroy()(middleware_instances_[i - 1]);
+        }
+        middleware_instances_.clear();
+        throw;
+    }
+
+    for (const auto instance : plan.middleware_frame_instances_) {
+        middleware_frames_.push_back(callback_access::make<task<void>(context&, next&)>(
+            middleware_instances_[instance], plan.middleware_instances_[instance].invoke()));
+    }
+}
+
+detail::route_table::~route_table() {
+    for (std::size_t i = middleware_instances_.size(); i != 0; --i) {
+        plan_->middleware_instances_[i - 1].destroy()(middleware_instances_[i - 1]);
+    }
+}
+
+void detail::route_table::swap(route_table& other) noexcept {
+    std::swap(plan_, other.plan_);
+    handler_targets_.swap(other.handler_targets_);
+    middleware_instances_.swap(other.middleware_instances_);
+    middleware_frames_.swap(other.middleware_frames_);
+}
+
+void detail::router::validate_no_dynamic_route_conflict() const {
+    const auto& routes = plan_->routes_;
+    for (std::size_t i = 0; i < routes.size(); ++i) {
+        const auto& left = routes[i];
+        if (!left.dynamic()) {
+            continue;
+        }
+        const auto* left_tunnel = left.endpoint().tunnel();
+        for (std::size_t j = i + 1; j < routes.size(); ++j) {
+            const auto& right = routes[j];
+            if (!right.dynamic() || left.method() != right.method()) {
+                continue;
+            }
+            // Upgrade-protocol tunnel routes (connect-udp) share one lookup trie
+            // per protocol; every other dynamic route shares one per method.
+            // Routes in different tries never compete for a request.
+            const auto* right_tunnel = right.endpoint().tunnel();
+            if ((left_tunnel == nullptr) != (right_tunnel == nullptr) ||
+                (left_tunnel != nullptr && left_tunnel->protocol() != right_tunnel->protocol())) {
+                continue;
+            }
+            if (route_patterns_equivalent(left.path(), right.path(), /*compare_param_names=*/false)) {
+                throw std::invalid_argument(("conflicting dynamic routes match the same requests with equal precedence: " +
+                                             describe_route(left.method(), left.path()) + " and " +
+                                             describe_route(right.method(), right.path()))
+                        .c_str());
+            }
+        }
+    }
+}
+
+void detail::router::build_middleware_frames() {
+    auto& plan = *plan_;
+    // Instances: the app-wide middlewares first (one each, shared by every
+    // route of a worker), then every route's own middlewares in registration
+    // order (one instance per route registration).
+    const auto global_count = global_middleware_descriptors_.size();
+    plan.middleware_instances_.reserve(global_count + route_middleware_descriptors_.size());
+    plan.middleware_instances_.assign(global_middleware_descriptors_.begin(), global_middleware_descriptors_.end());
+    plan.middleware_instances_.insert(plan.middleware_instances_.end(), route_middleware_descriptors_.begin(),
+        route_middleware_descriptors_.end());
+
+    const auto frame_capacity =
+        plan.routes_.size() * global_count + route_middleware_descriptors_.size() + global_count;
+    plan.middleware_frame_instances_.reserve(frame_capacity);
+    plan.middleware_scopes_.reserve(frame_capacity);
+    for (auto& route : plan.routes_) {
+        // App-wide middleware runs before controller/route middleware on every
+        // matched route: each route's contiguous frame range starts with the
+        // shared global instances.
+        //
+        // A path-scoped registration (use_at) applies to the request paths
+        // under its prefix, decided here once per route against every path the
+        // route can match: a route entirely inside the scope gets an
+        // unconditional frame, a route entirely outside gets none, and only a
+        // route that serves paths on both sides (a parameter or wildcard facing
+        // the prefix) keeps the frame with its scope for a dispatch-time check.
+        const auto offset = plan.middleware_frame_instances_.size();
+        bool conditional_middleware = false;
+        for (std::size_t i = 0; i < global_count; ++i) {
+            const auto scope = global_middleware_descriptors_[i].prefix();
+            const auto coverage = route_scope_coverage(route.path(), route.dynamic(), scope);
+            if (coverage == middleware_scope_coverage::none) {
+                continue;
+            }
+            const auto conditional = coverage == middleware_scope_coverage::partial;
+            conditional_middleware = conditional_middleware || conditional;
+            plan.middleware_frame_instances_.push_back(i);
+            plan.middleware_scopes_.push_back(conditional ? scope : std::string_view{});
+        }
+        const auto range = route_middleware_ranges_[route.index()];
+        for (std::size_t i = 0; i < range.count_; ++i) {
+            plan.middleware_frame_instances_.push_back(global_count + range.offset_ + i);
+            plan.middleware_scopes_.emplace_back();
+        }
+        route.middleware_offset_ = offset;
+        route.middleware_count_ = plan.middleware_frame_instances_.size() - offset;
+        route.conditional_middleware_ = conditional_middleware;
+    }
+
+    // The unmatched-request block, appended once after every route's range so
+    // it stays contiguous and no route can accidentally include it.
+    plan.unmatched_middleware_offset_ = plan.middleware_frame_instances_.size();
+    for (std::size_t i = 0; i < global_count; ++i) {
+        if (global_middleware_descriptors_[i].runs_on_unmatched_requests()) {
+            plan.middleware_frame_instances_.push_back(i);
+            plan.middleware_scopes_.emplace_back();
+        }
+    }
+    plan.unmatched_middleware_count_ = plan.middleware_frame_instances_.size() - plan.unmatched_middleware_offset_;
+}
+
+void detail::router::build_url_patterns() {
+    auto& patterns = plan_->url_patterns_;
+    patterns.reserve(plan_->routes_.size());
+    for (const auto& route : plan_->routes_) {
+        const auto* tunnel = route.endpoint().tunnel();
+        if (tunnel != nullptr && tunnel->protocol().empty()) {
+            continue;
+        }
+        patterns.push_back(route.path());
+    }
+    std::ranges::sort(patterns);
+    const auto duplicates = std::ranges::unique(patterns);
+    patterns.erase(duplicates.begin(), duplicates.end());
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+namespace {
+
+struct dynamic_route_upper_bounds final {
+    std::size_t nodes_{0};
+    std::size_t param_names_{0};
+};
+
+[[nodiscard]] dynamic_route_upper_bounds dynamic_upper_bounds(std::string_view path) noexcept {
+    dynamic_route_upper_bounds bounds;
+    while (true) {
+        std::string_view segment;
+        std::string_view rest;
+        if (!detail::split_path_segment(path, segment, rest)) {
+            return bounds;
+        }
+        const auto kind = detail::classify_route_segment(segment);
+        if (kind == detail::route_segment_kind::wildcard) {
+            ++bounds.param_names_;
+        } else {
+            ++bounds.nodes_;
+            if (kind == detail::route_segment_kind::param) {
+                ++bounds.param_names_;
+            }
+        }
+        if (rest.empty()) {
+            return bounds;
+        }
+        path = rest;
+    }
+}
+
+// Templated so the plan's private node type is never named outside its friends.
+// Literal children sort by canonical form, the order find_dynamic_static_child
+// searches in.
+template <typename node_type>
+void sort_dynamic_node(node_type& node_value) {
+    std::ranges::sort(node_value.static_children_, [](const auto& left, const auto& right) {
+        return compare_uri_paths(left.segment_, right.segment_) < 0;
+    });
+    for (auto& child : node_value.static_children_) {
+        sort_dynamic_node(*child.node_);
+    }
+    if (node_value.param_child_) {
+        sort_dynamic_node(*node_value.param_child_);
+    }
+}
+
+}  // namespace
+
+void detail::router::build_dynamic_routes() {
+    auto& plan = *plan_;
+    plan.connect_protocols_.reserve(plan.connect_route_indices_.size());
+
+    std::size_t dynamic_node_capacity = 0;
+    std::size_t param_name_capacity = 0;
+    for (const auto& route : plan.routes_) {
+        if (route.dynamic()) {
+            const auto bounds = dynamic_upper_bounds(route.path());
+            dynamic_node_capacity += bounds.nodes_;
+            param_name_capacity += bounds.param_names_;
+        }
+    }
+    // Both reserved up front: trie nodes and parameter-name views are borrowed
+    // by address, so neither vector may reallocate while it is filled.
+    plan.dynamic_node_arena_.reserve(dynamic_node_capacity);
+    plan.param_names_.reserve(param_name_capacity);
+
+    for (auto& route : plan.routes_) {
+        if (!route.dynamic()) {
+            continue;
+        }
+        if (const auto* tunnel = route.endpoint().tunnel()) {
+            const auto protocol = tunnel->protocol();
+            auto found = std::ranges::find(
+                plan.connect_protocols_, protocol, &compiled_route_plan::connect_protocol_index_type::protocol_);
+            if (found == plan.connect_protocols_.end()) {
+                found = plan.connect_protocols_.emplace(plan.connect_protocols_.end(), protocol);
+            }
+            insert_dynamic(found->root_, route);
+        } else {
+            const auto method = route_table::method_index(route.method());
+            plan.dynamic_method_mask_ |= 1U << method;
+            insert_dynamic(plan.dynamic_roots_[method], route);
+        }
+    }
+    for (auto& protocol : plan.connect_protocols_) {
+        sort_dynamic_node(protocol.root_);
+    }
+    for (auto& root : plan.dynamic_roots_) {
+        sort_dynamic_node(root);
+    }
+}
+
+bool detail::router::is_dynamic_path(std::string_view path) noexcept {
+    while (!path.empty()) {
+        std::string_view segment;
+        std::string_view rest;
+        if (!split_path_segment(path, segment, rest)) {
+            return false;
+        }
+        if (classify_route_segment(segment) != route_segment_kind::literal) {
+            return true;
+        }
+        path = rest;
+    }
+
+    return false;
+}
+
+void detail::router::append_dynamic_param_name(route_entry& route, std::string_view name) {
+    auto& names_storage = plan_->param_names_;
+    const auto names = route.param_names();
+    if (names.size() >= max_route_params) {
+        throw std::invalid_argument("route has too many parameters");
+    }
+
+    const auto offset =
+        names.empty() ? names_storage.size() : static_cast<std::size_t>(names.data() - names_storage.data());
+    names_storage.push_back(name);
+    route.param_names_ = std::span<const std::string_view>(names_storage.data() + offset, names.size() + 1);
+}
+
+void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root, route_entry& route) {
+    auto path = route.path();
+    auto* node_value = &root;
+    auto& plan = *plan_;
+
+    while (true) {
+        std::string_view segment;
+        std::string_view rest;
+        if (!split_path_segment(path, segment, rest)) {
+            node_value->route_index_ = route.index();
+            return;
+        }
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard) {
+            if (!rest.empty()) {
+                throw std::invalid_argument("wildcard route segment must be final");
+            }
+            append_dynamic_param_name(route, "*");
+            node_value->wildcard_route_index_ = route.index();
+            return;
+        }
+        if (kind == route_segment_kind::param) {
+            if (segment.size() == 1) {
+                throw std::invalid_argument("route parameter name must not be empty");
+            }
+            append_dynamic_param_name(route, segment.substr(1));
+            if (!node_value->param_child_) {
+                plan.dynamic_node_arena_.emplace_back();
+                node_value->param_child_ = &plan.dynamic_node_arena_.back();
+            }
+            node_value = node_value->param_child_;
+        } else {
+            compiled_route_plan::dynamic_node_type* child_node = nullptr;
+            for (auto& child_value : node_value->static_children_) {
+                if (uri_paths_equivalent(child_value.segment_, segment)) {
+                    child_node = child_value.node_;
+                    break;
+                }
+            }
+            if (child_node == nullptr) {
+                plan.dynamic_node_arena_.emplace_back();
+                child_node = &plan.dynamic_node_arena_.back();
+                node_value->static_children_.push_back(
+                    compiled_route_plan::dynamic_static_child_type{segment, child_node});
+            }
+            node_value = child_node;
+        }
+
+        if (rest.empty()) {
+            node_value->route_index_ = route.index();
+            return;
+        }
+        path = rest;
+    }
+}
+
+}  // namespace ruvia
+
+// Substitute parameters and percent-encode path values while preserving the
+// same segments used to build and resolve the registered route.
+
+namespace ruvia {
+
+namespace {
+
+// RFC 3986 pchar minus pct-encoded: bytes a path segment may carry verbatim.
+[[nodiscard]] constexpr bool is_url_for_segment_byte(char value) noexcept {
+    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') ||
+           (value >= '0' && value <= '9') || value == '-' || value == '.' || value == '_' ||
+           value == '~' || value == '!' || value == '$' || value == '&' || value == '\'' ||
+           value == '(' || value == ')' || value == '*' || value == '+' || value == ',' ||
+           value == ';' || value == '=' || value == ':' || value == '@';
+}
+
+[[nodiscard]] constexpr std::size_t url_for_encoded_size(
+    std::string_view value, bool keep_slashes) noexcept {
+    std::size_t size = value.size();
+    for (const char byte : value) {
+        if (!is_url_for_segment_byte(byte) && !(keep_slashes && byte == '/')) {
+            size += 2U;
+        }
+    }
+    return size;
+}
+
+void append_url_for_value(std::string& output, std::string_view value, bool keep_slashes) {
+    while (!value.empty()) {
+        const auto escaped = std::ranges::find_if_not(value, [keep_slashes](char byte) noexcept {
+            return is_url_for_segment_byte(byte) || (keep_slashes && byte == '/');
+        });
+        const auto plain_size = static_cast<std::size_t>(escaped - value.begin());
+        if (plain_size != 0) {
+            output.append(value.data(), plain_size);
+        }
+        if (escaped == value.end()) {
+            return;
+        }
+        http_append_percent_byte(output, static_cast<unsigned char>(*escaped));
+        value.remove_prefix(plain_size + 1);
+    }
+}
+
+// RFC 3986 5.2.4 resolvers remove "." and ".." segments, and WHATWG URL
+// parsers treat "%2E" spellings the same way, so encoding cannot keep them.
+[[nodiscard]] constexpr bool is_url_for_dot_segment(std::string_view segment) noexcept {
+    return segment == "." || segment == "..";
+}
+
+[[nodiscard]] bool has_url_for_dot_segment(std::string_view value) noexcept {
+    while (true) {
+        const auto slash = value.find('/');
+        if (is_url_for_dot_segment(value.substr(0, slash))) {
+            return true;
+        }
+        if (slash == std::string_view::npos) {
+            return false;
+        }
+        value.remove_prefix(slash + 1);
+    }
+}
+
+}  // namespace
+
+std::string detail::route_table::url_for(std::string_view pattern,
+    std::span<const std::string_view> values) const {
+    if (!std::ranges::binary_search(plan_->url_patterns_, pattern)) {
+        throw std::invalid_argument("url_for pattern is not a registered route");
+    }
+
+    // Validate every segment and value before allocating, and size the buffer
+    // from the actual parameter values so short URLs stay in SSO and rejected
+    // calls never touch a monotonic arena.
+    std::size_t next_value = 0;
+    std::size_t estimated_size = 0;
+    auto remaining = pattern;
+    std::string_view segment;
+    std::string_view rest;
+    while (detail::split_path_segment(remaining, segment, rest)) {
+        remaining = rest;
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard && remaining.empty()) {
+            if (next_value >= values.size()) {
+                throw std::invalid_argument("url_for is missing a value for '*'");
+            }
+            const auto value = values[next_value++];
+            if (has_url_for_dot_segment(value)) {
+                throw std::invalid_argument("url_for '*' value must not contain a '.' or '..' segment");
+            }
+            if (value.find('\\') != std::string_view::npos || (estimated_size == 0 && value.starts_with('/'))) {
+                throw std::invalid_argument("url_for '*' value has a separator the route cannot capture");
+            }
+            if (!value.empty()) {
+                estimated_size += 1U + url_for_encoded_size(value, /*keep_slashes=*/true);
+            } else if (estimated_size == 0) {
+                estimated_size += 1U;
+            }
+            continue;
+        }
+        if (estimated_size == 0 && segment.empty()) {
+            throw std::invalid_argument("url_for pattern must not start with an empty segment");
+        }
+        estimated_size += 1U;
+        if (kind == route_segment_kind::param) {
+            if (next_value >= values.size()) {
+                throw std::invalid_argument("url_for is missing a route parameter value");
+            }
+            const auto value = values[next_value++];
+            if (value.empty()) {
+                throw std::invalid_argument("url_for route parameter value must not be empty");
+            }
+            if (is_url_for_dot_segment(value)) {
+                throw std::invalid_argument("url_for route parameter value must not be '.' or '..'");
+            }
+            estimated_size += url_for_encoded_size(value, /*keep_slashes=*/false);
+        } else {
+            estimated_size += segment.size();
+        }
+    }
+    if (next_value != values.size()) {
+        throw std::invalid_argument("url_for received more values than the pattern has parameters");
+    }
+
+    std::string url;
+    if (estimated_size > 15U) {
+        url.reserve(estimated_size);
+    }
+
+    next_value = 0;
+    remaining = pattern;
+    while (detail::split_path_segment(remaining, segment, rest)) {
+        remaining = rest;
+        const auto kind = classify_route_segment(segment);
+        if (kind == route_segment_kind::wildcard && remaining.empty()) {
+            const auto value = values[next_value++];
+            if (!value.empty()) {
+                url.push_back('/');
+                append_url_for_value(url, value, /*keep_slashes=*/true);
+            } else if (url.empty()) {
+                url.push_back('/');
+            }
+            continue;
+        }
+        url.push_back('/');
+        if (kind == route_segment_kind::param) {
+            append_url_for_value(url, values[next_value++], /*keep_slashes=*/false);
+        } else {
+            url.append(segment.data(), segment.size());
+        }
+    }
+    return url;
 }
 
 }  // namespace ruvia

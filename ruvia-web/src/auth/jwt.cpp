@@ -23,7 +23,7 @@
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_utf8.h"
-#include "ruvia/web/detail/json/json_traversal.h"
+#include "ruvia/web/detail/json/json_scan.h"
 
 #include "auth/constant_time.h"
 #include "auth/hmac.h"

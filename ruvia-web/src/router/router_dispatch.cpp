@@ -17,6 +17,28 @@
 // document-root fallback, or nothing -- and running a buffered handler once one
 // is chosen.
 
+#include <cstddef>
+#include <exception>
+#include <memory>
+#include <new>
+#include <stdexcept>
+
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/web/detail/router/prefix_fallback.h"
+#include "ruvia/web/error.h"
+#include "ruvia/web/session.h"
+#include "ruvia/web/streaming.h"
+
+#include "http/http_error_response.h"
+#include "http/session_access.h"
+#include "http/unsupported_request_content_coding.h"
+#include "ratelimit/rate_limiter.h"
+#include "server/inbound_buffer_budget.h"
+#include "server/inbound_transport_error.h"
+
 namespace ruvia {
 
 namespace {
@@ -244,6 +266,622 @@ task<http_response> detail::route_table::dispatch_bound_buffered(const resolved_
         exception = std::current_exception();
     }
     co_return co_await finalize_failure(context_value, exception);
+}
+
+}  // namespace ruvia
+
+// Turning a failed request into a response: the error a thrown exception really
+// carries, the metadata that survives onto the response, and the scoped error /
+// not-found handlers that get the last word.
+
+namespace ruvia {
+
+namespace {
+
+// The error a thrown exception really carries, owned by the request arena so
+// an application error handler may suspend while it is read.
+struct classified_error final {
+    http_error error_;
+    std::string_view accepted_codings_{};
+    std::optional<detail::rate_limit_rejection> rate_limit_rejection_{};
+    // Not an HTTP-mapped failure: answered with a generic 500.
+    bool unexpected_{false};
+};
+
+[[nodiscard]] classified_error classify_exception(
+    const std::exception_ptr& exception) {
+    try {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error,
+                    .message_ = "unhandled exception"})};
+    } catch (const detail::inbound_transport_error&) {
+        throw;
+    } catch (const detail::unsupported_request_content_coding& error) {
+        return {.error_ = http_error({.status_ = http_unsupported_content_coding::status(),
+                    .code_ = "unsupported_content_coding",
+                    .message_ = error.what()}),
+            .accepted_codings_ = error.accepted_codings()};
+    } catch (const detail::rate_limit_rejected& rejected) {
+        const auto error = detail::rate_limit_rejection_error();
+        return {.error_ = http_error(
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}),
+            .rate_limit_rejection_ = rejected.rejection()};
+    } catch (const http_error& error) {
+        return {.error_ = http_error(error)};
+    } catch (const http_protocol_error& error) {
+        return {.error_ = http_error(
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.what()})};
+    } catch (const detail::inbound_buffer_limit_error&) {
+        return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
+                    .code_ = "inbound_buffer_limit",
+                    .message_ = "inbound buffer capacity exhausted"})};
+    } catch (const blocking_operation_rejected& error) {
+        // The blocking pool refused the work or the worker is going away. That
+        // is capacity, not a bug in the request: answer it like any other
+        // overload instead of a 500. The message is the framework's own and
+        // names no application internals.
+        return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
+                    .code_ = "blocking_pool_unavailable",
+                    .message_ = error.what()})};
+    } catch (...) {
+        // An unexpected exception (e.g. a database/library error) may carry
+        // internal detail -- table names, query fragments, file paths. Do NOT echo
+        // what() to the client: an info without a message renders the generic
+        // "Internal Server Error" body. The exception_ptr is still set on the context, so an on_error
+        // handler can log or inspect the full detail server-side; without one it
+        // is reported to stderr (report_unexpected_failure).
+        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error}),
+            .unexpected_ = true};
+    }
+}
+
+// An unexpected exception answered without an application error handler would
+// otherwise leave no server-side trace at all.
+void report_unexpected_failure(const classified_error& error_info, const std::exception_ptr& exception,
+    detail::http_error_handler_ref error_handler) noexcept {
+    if (error_info.unexpected_ && error_handler == nullptr) {
+        ruvia::report_unhandled_failure("request handler", exception);
+    }
+}
+
+void apply_exception_response_metadata(http_response& response, const classified_error& error_info) {
+    if (!error_info.accepted_codings_.empty()) {
+        response.header_stable_view("Accept-Encoding", error_info.accepted_codings_);
+    } else if (error_info.rate_limit_rejection_.has_value()) {
+        detail::apply_rate_limit_rejection_headers(response, *error_info.rate_limit_rejection_);
+    }
+}
+
+}  // namespace
+
+detail::default_exception_response detail::make_default_exception_response(
+    const std::exception_ptr& exception) {
+    const auto error_info = classify_exception(exception);
+    auto response = make_default_error_response(error_info.error_.info());
+    apply_exception_response_metadata(response, error_info);
+    return {.response_ = std::move(response), .unexpected_ = error_info.unexpected_};
+}
+
+task<http_response> detail::route_table::handle_error(const http_request& request, http_error_info error, const context_services& services) const {
+    // A request stream request reaches neither the error handler nor the
+    // unmatched middleware: its listener serves no application route.
+    const bool request_stream = static_cast<bool>(services.request_stream());
+    const auto error_handler = request_stream ? nullptr : error_handler_for(request.path());
+    // Nothing to wrap and no handler: the original allocation-free path.
+    if (error_handler == nullptr && (request_stream || plan_->unmatched_middleware_count_ == 0)) {
+        auto response = make_default_error_response(error);
+        co_return response;
+    }
+
+    auto context_value = detail::context_access::make(request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
+    auto terminal = [error, error_handler](context& terminal_context) -> task<http_response> {
+        if (error_handler == nullptr) {
+            co_return make_default_error_response(error);
+        }
+        co_return co_await invoke_error_handler(terminal_context, error, error_handler);
+    };
+    // Drivers call this to answer a rejection or a recovery outcome, so it must
+    // always produce a response: a failure escaping the wrapping middleware
+    // chain (for example a middleware that neither responds nor awaits next())
+    // is answered the way dispatch answers it, without re-entering the chain.
+    std::exception_ptr exception;
+    try {
+        auto response = co_await run_unmatched_chain(
+            context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+        co_return response;
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await finalize_failure(context_value, exception);
+}
+
+task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const {
+    return handle_exception(request, std::move(exception), services,
+        services.request_stream() ? nullptr : error_handler_for(request.path()));
+}
+
+task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services,
+    http_error_handler_ref error_handler) const {
+    if (error_handler == nullptr) {
+        auto answer = make_default_exception_response(exception);
+        if (answer.unexpected_) {
+            ruvia::report_unhandled_failure("request handler", exception);
+        }
+        co_return std::move(answer.response_);
+    }
+
+    auto context_value = detail::context_access::make(request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
+    auto response = co_await handle_exception(context_value, exception, error_handler);
+    detail::context_access::apply_response_policy(context_value, response);
+    co_return response;
+}
+
+task<http_response> detail::route_table::handle_not_found(
+    const http_request& request, const context_services& services) const {
+    const auto not_found_handler = not_found_handler_for(request.path());
+    if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
+        co_return make_route_not_found_response();
+    }
+
+    auto context_value = detail::context_access::make(request, services);
+    detail::context_access::services(context_value).bind_routes(*this);
+    // The handler's own failure keeps going through handle_exception, exactly as
+    // before; wrapping it in the chain must not change which layer answers it.
+    auto terminal = [this, not_found_handler](context& terminal_context) -> task<http_response> {
+        if (not_found_handler == nullptr) {
+            co_return make_route_not_found_response();
+        }
+        std::exception_ptr exception;
+        try {
+            co_return co_await not_found_handler(terminal_context);
+        } catch (...) {
+            exception = std::current_exception();
+        }
+        co_return co_await handle_exception(terminal_context, exception);
+    };
+    std::exception_ptr exception;
+    try {
+        co_return co_await run_unmatched_chain(
+            context_value, callback_access::bind<task<http_response>(context&)>(terminal));
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    co_return co_await finalize_failure(context_value, exception);
+}
+
+task<http_response> detail::route_table::handle_exception(
+    context& context_value, std::exception_ptr exception) const {
+    return handle_exception(context_value, std::move(exception),
+        error_handler_for(detail::context_access::request(context_value).path()));
+}
+
+task<http_response> detail::route_table::handle_exception(context& context_value,
+    std::exception_ptr exception, http_error_handler_ref error_handler) const {
+    const auto error_info = classify_exception(exception);
+    detail::context_access::set_error(context_value, exception);
+    detail::context_access::discard_draft(context_value);
+    report_unexpected_failure(error_info, exception, error_handler);
+
+    auto response = co_await invoke_error_handler(context_value, error_info.error_.info(), error_handler);
+    apply_exception_response_metadata(response, error_info);
+    co_return response;
+}
+
+// Which handler answers a failure on a given path: the most specific prefix
+// scope that covers it, or the plan-wide fallback.
+
+namespace {
+
+// Deepest-first stored order: the first hit is the tightest scope. Matching
+// follows path_is_under_prefix: whole, percent-decoded path segments, so "/api"
+// scopes "/api" and "/api/x" but never "/apix".
+template <typename stored_type>
+[[nodiscard]] auto select_prefix_handler(
+    const std::vector<stored_type>& stored, std::string_view path) noexcept {
+    for (const auto& candidate : stored) {
+        const std::string_view prefix(candidate.prefix_);
+        if (detail::path_is_under_prefix(path, prefix)) {
+            return candidate.handler_;
+        }
+    }
+    return decltype(stored.front().handler_){nullptr};
+}
+
+}  // namespace
+
+detail::http_error_handler_ref detail::route_table::error_handler_for(
+    std::string_view path) const noexcept {
+    const auto handler = select_prefix_handler(plan_->prefix_error_handlers_, path);
+    return handler != nullptr ? handler : plan_->error_handler_;
+}
+
+detail::http_not_found_handler_ref detail::route_table::not_found_handler_for(
+    std::string_view path) const noexcept {
+    const auto handler = select_prefix_handler(plan_->prefix_not_found_handlers_, path);
+    return handler != nullptr ? handler : plan_->not_found_handler_;
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace detail {
+
+struct next_access final {
+    [[nodiscard]] static next& make_at(void* storage, next_state state_value, next_invoke_type invoke) noexcept {
+        return *::new (storage) next(state_value, invoke);
+    }
+};
+
+}  // namespace detail
+
+namespace {
+
+void store_next_misuse_error(context& context_value, const char* message, std::string_view code) {
+    detail::context_access::set_error(context_value, std::make_exception_ptr(std::logic_error(message)));
+    detail::context_access::set_response(
+        context_value, detail::make_default_error_response(http_error_info({.status_ = ruvia::http_status::internal_server_error,
+                           .code_ = code,
+                           .message_ = message})));
+}
+
+[[nodiscard]] bool validate_next_invocation(const detail::next_state& state_value) {
+    auto& context_value = *state_value.context_;
+    if (state_value.invocation_ != detail::next_state::invocation_type::ready) {
+        store_next_misuse_error(context_value, "next() called multiple times", "next_called_multiple_times");
+        return false;
+    }
+    if (detail::context_access::has_response(context_value)) {
+        store_next_misuse_error(context_value, "next() called after respond()", "next_called_after_response");
+        return false;
+    }
+    return true;
+}
+
+task<void> ignore_expired_next(detail::next_state) {
+    co_return;
+}
+
+// Expires a hop's next() when the frame that received it completes, so a
+// stored next() called later is ignored.
+class next_control_scope final {
+public:
+    explicit next_control_scope(detail::next_state::control_type& control) noexcept
+        : control_(&control) {}
+
+    next_control_scope(const next_control_scope&) = delete;
+    next_control_scope& operator=(const next_control_scope&) = delete;
+
+    ~next_control_scope() {
+        control_->expire();
+    }
+
+private:
+    detail::next_state::control_type* control_;
+};
+
+// One hop's control block and the next() handed to its frame share a single
+// request-arena allocation; both outlive the frame so a late next() stays safe.
+struct next_hop_layout final {
+    static constexpr std::size_t next_offset =
+        (sizeof(detail::next_state::control_type) + alignof(next) - 1) / alignof(next) * alignof(next);
+    static constexpr std::size_t size = next_offset + sizeof(next);
+    static constexpr std::size_t alignment = alignof(next) > alignof(detail::next_state::control_type)
+                                                 ? alignof(next)
+                                                 : alignof(detail::next_state::control_type);
+};
+
+task<void> run_chain_hop(detail::next_state state_value);
+
+[[nodiscard]] std::size_t applicable_frame(
+    const detail::middleware_chain& chain, std::size_t index, const context& context_value) noexcept {
+    if (chain.scopes_.empty()) {
+        return index;
+    }
+    // The same path the route table resolved this request against.
+    const auto path = detail::context_access::request(context_value).path();
+    while (index < chain.frames_.size() && !detail::path_is_under_prefix(path, chain.scopes_[index])) {
+        ++index;
+    }
+    return index;
+}
+
+// One coroutine per hop: the entry hop (no control) lets failures propagate to
+// the dispatcher; every hop reached through next() validates the single-shot
+// invocation first and contains failures below it through the chain's policy.
+task<void> run_chain_hop(detail::next_state state_value) {
+    auto& context_value = *state_value.context_;
+    const auto& chain = *state_value.chain_;
+    const bool contained = state_value.control_ != nullptr;
+    if (contained && !validate_next_invocation(state_value)) {
+        co_return;
+    }
+    std::exception_ptr exception;
+    try {
+        const auto index = applicable_frame(chain, state_value.index_, context_value);
+        if (index >= chain.frames_.size()) {
+            co_await chain.terminal_(context_value);
+        } else {
+            auto* storage = static_cast<std::byte*>(
+                detail::context_access::allocate_request_storage(context_value, next_hop_layout::size, next_hop_layout::alignment));
+            auto& control = *std::construct_at(reinterpret_cast<detail::next_state::control_type*>(storage));
+            const next_control_scope control_scope(control);
+            auto& next_value = detail::next_access::make_at(storage + next_hop_layout::next_offset,
+                detail::next_state{
+                    .chain_ = &chain, .context_ = &context_value, .control_ = &control, .index_ = index + 1},
+                &run_chain_hop);
+            co_await chain.frames_[index](context_value, next_value);
+        }
+    } catch (...) {
+        if (!contained) {
+            throw;
+        }
+        exception = std::current_exception();
+    }
+    if (exception != nullptr) {
+        co_await chain.failure_(*chain.table_, context_value, exception);
+    }
+}
+
+}  // namespace
+
+next::awaitable next::operator()() & {
+    auto state_value = state_;
+    auto* control = state_value.control_;
+    state_value.invocation_ =
+        control == nullptr ? detail::next_state::invocation_type::expired : control->begin_invocation();
+    if (state_value.invocation_ == detail::next_state::invocation_type::expired) {
+        return awaitable(state_value, &ignore_expired_next);
+    }
+    return awaitable(state_value, invoke_);
+}
+
+task<void> detail::run_chain(const middleware_chain& chain, context& context_value) {
+    return run_chain_hop(next_state{.chain_ = &chain, .context_ = &context_value});
+}
+
+detail::middleware_chain detail::route_table::route_chain(const route_entry& route) const noexcept {
+    const auto offset = route.middleware_offset();
+    const auto count = route.middleware_count();
+    return middleware_chain{.table_ = this,
+        .frames_ = std::span<const route_middleware>(middleware_frames_).subspan(offset, count),
+        .scopes_ = route.has_conditional_middleware()
+                       ? std::span<const std::string_view>(plan_->middleware_scopes_).subspan(offset, count)
+                       : std::span<const std::string_view>{},
+        .terminal_ = {},
+        .failure_ = &route_table::contain_failure};
+}
+
+namespace {
+
+task<http_response> mark_explicit_head_route_response(task<http_response> operation) {
+    auto response = co_await std::move(operation);
+    if (!response.has_file_representation() && response.body_bytes().empty() &&
+        !response.status().is_redirection() && !response.status().is_error()) {
+        response.head_metadata_body();
+    }
+    co_return response;
+}
+
+}  // namespace
+
+task<http_response> detail::route_table::invoke_route(const resolved_route& resolved, context& context_value) const {
+    const auto& route = resolved.route();
+    if (route.endpoint().buffered() == nullptr) {
+        throw std::logic_error("route is not a buffered-response route");
+    }
+    // Hot path: a route with no middleware goes straight to the handler. The
+    // context response slot is only needed when middleware can observe the
+    // downstream response through context::response().
+    auto operation = !route.has_middleware()
+                         ? resolved.handler()(context_value)
+                         : respond_through_chain(route_chain(route), context_value, resolved.handler());
+    if (route.method() == http_known_method::head) {
+        return mark_explicit_head_route_response(std::move(operation));
+    }
+    return operation;
+}
+
+task<http_response> detail::route_table::respond_through_chain(
+    middleware_chain chain, context& context_value, route_handler terminal) const {
+    auto respond = [terminal](context& terminal_context) -> task<void> {
+        detail::context_access::set_response(terminal_context, co_await terminal(terminal_context));
+    };
+    chain.terminal_ = callback_access::bind<task<void>(context&)>(respond);
+    co_await run_chain(chain, context_value);
+    if (detail::context_access::has_response(context_value)) {
+        co_return detail::context_access::release_response(context_value);
+    }
+    if (auto exception = context_value.exception()) {
+        co_return co_await finalize_failure(context_value, exception);
+    }
+    throw std::logic_error("context is not finalized; middleware must set a response or await next()");
+}
+
+task<http_response> detail::route_table::run_unmatched_chain(
+    context& context_value, route_handler terminal) const {
+    return respond_through_chain(
+        middleware_chain{.table_ = this,
+            .frames_ = std::span<const route_middleware>(middleware_frames_)
+                .subspan(plan_->unmatched_middleware_offset_, plan_->unmatched_middleware_count_),
+            .scopes_ = {},
+            .terminal_ = {},
+            .failure_ = &route_table::contain_failure},
+        context_value, terminal);
+}
+
+task<void> detail::route_table::contain_failure(
+    const route_table& table, context& context_value, std::exception_ptr exception) {
+    if (detail::context_access::output_committed(context_value)) {
+        detail::context_access::set_error(context_value, std::move(exception));
+        co_return;
+    }
+    auto response = co_await table.handle_exception(context_value, exception);
+    detail::context_access::set_response(context_value, std::move(response));
+}
+
+task<http_response> detail::route_table::finalize_failure(context& context_value, std::exception_ptr exception) const {
+    co_await contain_failure(*this, context_value, std::move(exception));
+    co_return detail::context_access::release_response(context_value);
+}
+
+}  // namespace ruvia
+
+// Running a route that streams its response: binding the writer to the context
+// for the handler's lifetime, producing the head the HTTP/1 sink commits, and
+// unwinding when the handler throws after bytes are already on the wire.
+
+namespace ruvia {
+
+namespace {
+
+class response_stream_context_binding final {
+public:
+    explicit response_stream_context_binding(response_stream_writer* writer) noexcept
+        : writer_(writer) {}
+
+    ~response_stream_context_binding() {
+        if (writer_ != nullptr) {
+            detail::streaming_access::release_context(*writer_);
+        }
+    }
+
+    response_stream_context_binding(const response_stream_context_binding&) = delete;
+    response_stream_context_binding& operator=(const response_stream_context_binding&) = delete;
+
+private:
+    response_stream_writer* writer_;
+};
+
+}  // namespace
+
+task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
+    const http_request& request, const resolved_route& resolved,
+    route_stream_handler handler, const context_services& services,
+    response_stream_writer* response_stream) const {
+    const auto& route = resolved.route();
+    auto context_value = make_route_context(request, resolved, services);
+    auto& context_services_value = detail::context_access::services(context_value);
+    context_services_value.bind_routes(*this);
+    context_services_value.bind_route_body_limit(route.max_request_body_bytes());
+    if (response_stream != nullptr) {
+        context_services_value.bind_response_stream(*response_stream);
+    }
+    const auto* response_stream_output = context_services_value.response_output().response_stream();
+    auto* const bound_writer = response_stream_output != nullptr ? &response_stream_output->writer() : nullptr;
+    response_stream_context_binding stream_context_binding(bound_writer);
+    if (bound_writer != nullptr) {
+        detail::streaming_access::bind_context(*bound_writer, context_value, context_value.stop_token());
+    }
+    co_return co_await dispatch_bound_stream(resolved, context_value, handler);
+}
+
+task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(
+    const resolved_route& resolved, context& context_value, route_stream_handler handler) const {
+    const auto& route = resolved.route();
+    auto& context_services_value = detail::context_access::services(context_value);
+    const auto* response_stream_output = context_services_value.response_output().response_stream();
+    auto* const bound_writer = response_stream_output != nullptr ? &response_stream_output->writer() : nullptr;
+
+    // Records that next() reached the handler even when it emitted no bytes.
+    bool handler_invoked = false;
+    std::exception_ptr exception;
+    try {
+        if (!route.has_middleware()) {
+            handler_invoked = true;
+            co_await handler(context_value);
+        } else {
+            // The stream terminal: a websocket or tunnel upgrade commits the
+            // session the middleware chain opened before its handshake head,
+            // then the handler runs. A response stream commits it explicitly
+            // with commit() (or end() for an empty response).
+            auto terminal = [&handler_invoked, &handler, &route](context& terminal_context) -> task<void> {
+                if (route.endpoint().response_stream() == nullptr && session_access::available(terminal_context)) {
+                    co_await session_access::commit(terminal_context);
+                }
+                handler_invoked = true;
+                co_await handler(terminal_context);
+            };
+            auto chain = route_chain(route);
+            chain.terminal_ = callback_access::bind<task<void>(context&)>(terminal);
+            co_await run_chain(chain, context_value);
+            if (!detail::context_access::has_response(context_value)) {
+                if (auto context_exception = context_value.exception()) {
+                    std::rethrow_exception(context_exception);
+                }
+                if (!handler_invoked && !detail::context_access::output_committed(context_value)) {
+                    throw std::logic_error(
+                        "context is not finalized; stream middleware must select a response, "
+                        "commit the stream, or await next()");
+                }
+            }
+        }
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    if (context_services_value.connection_aborted() || context_services_value.request_reset()) {
+        if (exception != nullptr) {
+            std::rethrow_exception(exception);
+        }
+        if (auto context_exception = context_value.exception()) {
+            std::rethrow_exception(context_exception);
+        }
+        co_return std::nullopt;
+    }
+
+    if (exception != nullptr) {
+        if (detail::context_access::output_committed(context_value)) {
+            std::rethrow_exception(exception);
+        }
+        auto response = co_await finalize_failure(context_value, exception);
+        co_return std::move(response);
+    }
+
+    // The middleware chain converts a handler exception into a buffered error
+    // response and records it via context.exception() (contain_failure
+    // -> handle_exception -> set_error), so a mid-request failure does not surface as
+    // a local exception above. Once the output is committed -- a started stream or
+    // a websocket/tunnel handshake -- that buffered response can no longer be sent,
+    // and finalizing the stream with a clean terminator would frame a truncated
+    // body as complete. Rethrow so the driver closes the connection, exactly as
+    // the no-middleware path does above. Middleware may
+    // still replace an uncommitted response stream, or a websocket terminal that
+    // failed during handshake preparation, with a buffered response after `next()`.
+    const bool output_committed = detail::context_access::output_committed(context_value);
+    if (output_committed) {
+        if (auto context_exception = context_value.exception()) {
+            std::rethrow_exception(context_exception);
+        }
+    } else if (detail::context_access::has_response(context_value)) {
+        co_return detail::context_access::release_response(context_value);
+    }
+    if (handler_invoked || output_committed) {
+        // The bound context is local to this coroutine. Finish a response stream
+        // before it is destroyed so an empty/bodyless handler cannot leave the
+        // sink with a dangling context* that a higher layer later dereferences.
+        // Reaching this common point gives middleware post-processing its full
+        // chance to adjust an uncommitted head; an already committed writer no
+        // longer needs the context.
+        if (bound_writer != nullptr && (!output_committed || bound_writer->committed())) {
+            try {
+                co_await bound_writer->end();
+            } catch (...) {
+                exception = std::current_exception();
+            }
+            if (exception != nullptr) {
+                if (detail::context_access::output_committed(context_value)) {
+                    std::rethrow_exception(exception);
+                }
+                co_return co_await finalize_failure(context_value, exception);
+            }
+        }
+        co_return std::nullopt;
+    }
+    throw std::logic_error("stream route completed without a response or handled output");
 }
 
 }  // namespace ruvia
