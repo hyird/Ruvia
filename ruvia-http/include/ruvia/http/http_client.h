@@ -507,8 +507,6 @@ struct http1_client_request_wire_policy final {
 
 namespace detail {
 
-struct http1_client_request_prepare_result_access;
-
 }  // namespace detail
 
 struct http1_client_request_head_view final {
@@ -2496,8 +2494,6 @@ private:
     // The owned Sec-WebSocket-Protocol request value; empty when none is offered.
     std::string_view offered_subprotocols_{};
 };
-
-class http1_parsed_client_response_head;
 
 // RFC 6455 section 4.1 opening handshake over HTTP/1.1 Upgrade. The caller
 // owns the base64-encoded 16-byte nonce (`encoded_key`), the negotiation and the

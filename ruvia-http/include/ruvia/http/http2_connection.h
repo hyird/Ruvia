@@ -547,9 +547,7 @@ struct http2_header_metadata final {
 using http2_frame_observer_type = void (*)(void*, const http2_frame_metadata&) noexcept;
 using http2_header_observer_type = void (*)(void*, const http2_header_metadata&) noexcept;
 
-class http2_connection;
 namespace detail {
-class http2_connection;
 class http2_connection_owner_endpoint;
 }  // namespace detail
 

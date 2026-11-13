@@ -693,12 +693,10 @@ class redis_session;
 namespace detail {
 class redis_client_runtime;
 class redis_client_state;
-class redis_pool;
 struct request_io_metrics;
 struct redis_orm_script;
 class redis_subscription_connection;
 class redis_subscription_set;
-struct redis_types_access;
 class worker_client_registry_view;
 
 // One textual argument the variadic Redis entry points accept. A span of

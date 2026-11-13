@@ -1740,7 +1740,6 @@ enum class worker_runtime_state : std::uint8_t {
     stopped,
 };
 
-class blocking_pool;
 class event_loop;
 class worker_group;
 class worker_runtime_context;
@@ -1896,8 +1895,6 @@ private:
 
     std::unique_ptr<impl_type> impl_;
 };
-
-class worker_runtime;
 
 // Sequences a set of worker_runtime owners through one lifecycle:
 // - start(): launches every member and waits until all are ready;
@@ -3897,7 +3894,6 @@ private:
 };
 
 class scoped_capability_registration;
-class worker_ref;
 
 namespace detail {
 class scoped_operation_registration;
@@ -5028,8 +5024,6 @@ class event_loop;
 
 namespace detail {
 
-struct event_loop_state;
-
 // Routes an unobserved root-task failure through the loop's own failure sink,
 // borrowed from the live loop state instead of copied into every task. A
 // retired loop falls back to the unhandled-failure diagnostic.
@@ -5287,7 +5281,6 @@ private:
 };
 
 namespace detail {
-struct event_loop_state;
 class event_loop_stop_listener;
 template <typename t_type>
 struct root_task_launch_guard;
@@ -5624,8 +5617,6 @@ private:
 [[nodiscard]] event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options = {});
 
-class blocking_pool;
-
 struct event_loop_pool_options final {
     std::size_t loop_count_{0};
     std::size_t queue_capacity_{1024};
@@ -5664,7 +5655,6 @@ private:
     std::shared_ptr<impl_type> impl_;
 };
 
-class event_loop;
 class worker_runtime;
 
 struct worker_notification_options final {

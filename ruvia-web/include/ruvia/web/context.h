@@ -389,8 +389,6 @@ private:
     bool initialized_{false};
 };
 
-class worker_state_registry;
-
 // A request and a posted job borrow the same worker-owned capabilities. No
 // dispatcher or cancellation ownership is copied until an explicit offload.
 class worker_context_capabilities final {
@@ -759,8 +757,6 @@ concept route_modifier = middleware<modifier_type> || route_policy<modifier_type
 
 // Internal startup-time middleware descriptor.
 
-class context;
-
 namespace detail {
 
 class controller_middleware_descriptor;
@@ -1116,7 +1112,6 @@ private:
     std::string header_name_;
 };
 
-class context;
 struct security_header final {
     std::string name_{};
     std::string value_{};
@@ -1187,8 +1182,6 @@ private:
     std::string permissions_policy_;
     std::vector<http_header> custom_headers_;
 };
-
-class context;
 
 // Buffer capacity required by format_rate_limit_address_key ("v6s/" + 32 hex
 // digits + '/' + up to 10 scope digits).
@@ -1374,7 +1367,6 @@ struct session_access;
 
 namespace ruvia {
 
-class context;
 class next;
 
 // A request-local capability bound by session_middleware. The handle borrows
@@ -1458,8 +1450,6 @@ private:
 #endif  // RUVIA_ENABLE_REDIS
 
 namespace ruvia {
-
-class context;
 
 // Route-level policy declaration that switches the matched route's request body
 // from buffered to streamed (read via c.req().body_reader() or
@@ -2446,23 +2436,16 @@ private:
     scoped_capability_registration registration_;
 };
 
-class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
 // where they are used: context.h and http_client.h.
 class http_client_ref;
 class http_client_response;
-class websocket;
-class http_tunnel;
 class test_app;
 class session;
-class body_reader;
-class response_stream_writer;
 class tls_client_hello_record;
 class server_connection;
-class sse_writer;
-class multipart_reader;
 class multipart_part;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_session;
@@ -3763,8 +3746,6 @@ private:
 };
 
 // Internal startup-time controller registration contracts.
-
-class router;
 
 template <typename controller_type>
 class controller_registration_access;

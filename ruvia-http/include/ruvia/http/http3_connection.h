@@ -121,7 +121,6 @@ private:
     const http3_request_head& head, const http_request& request,
     websocket_handshake_validation_options options = {}) noexcept;
 
-class http3_connection;
 class http3_quic_connection;
 namespace detail {
 class http3_received_data_ledger;

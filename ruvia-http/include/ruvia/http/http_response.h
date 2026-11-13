@@ -2007,8 +2007,6 @@ private:
     const http_byte_range_set& ranges, http_content_length representation_length,
     std::string_view media_type, std::string_view boundary);
 
-class http_request;
-
 // Metadata for an already selected, existing origin representation. This plan
 // does not describe cache misses or select a representation. ETag text is
 // borrowed only during planning; the resulting plan retains no input views.
@@ -2104,8 +2102,6 @@ private:
 
 enum class http_connect_udp_error : std::uint8_t;
 class http1_response_head_plan;
-class http_request;
-class http_response;
 class http_response_headers;
 
 enum class http_response_content_semantics : std::uint8_t {
@@ -3055,8 +3051,6 @@ inline void http_visit_cookie_pairs(std::string_view value, visitor_type&& visit
     }
 }
 
-class http_response_headers;
-
 // Validates and fixes the exact Set-Cookie field-value shape before a runtime
 // allocates its output buffer. The plan borrows name, value, path and domain
 // unchanged until write() completes, so owning-string and cookie_options
@@ -3344,9 +3338,6 @@ inline constexpr std::size_t http_imf_fixdate_size = 29;
 // Parse an HTTP-date (RFC 7231 section 7.1.1.1: IMF-fixdate / RFC 850 / asctime) as used by Date,
 // Expires, Last-Modified, If-Modified-Since. Returns std::nullopt if malformed.
 [[nodiscard]] std::optional<std::time_t> parse_http_date(std::string_view value) noexcept;
-
-class http_response;
-class http_response_headers;
 
 enum class cache_control_directive : std::uint16_t {
     no_store = 1U << 0,

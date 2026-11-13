@@ -321,7 +321,8 @@ ruvia::task<void> handle_connect(ruvia::context& c) {
 }
 ```
 
-- **HTTP/2 隧道乐观数据**：HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度；非 2xx 响应发送完毕后服务端以 `RST_STREAM(NO_ERROR)` 结束该流（RFC 9113 §8.1），而不是等待客户端结束请求半边。RFC 8441 WebSocket（`:protocol = websocket`）同样处理：RFC 6455 §4.1 要求客户端等待 2xx，但这是对发送方的约束，提前到达的 `DATA` 在流控窗口内保留，握手接受后按序交给 WebSocket 会话。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃；`ALTSVC`、`ORIGIN` 帧也一样忽略（RFC 7838 §4、RFC 8336 §2.1），不复位隧道流。
+- **HTTP/2 隧道乐观数据**：HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度；非 2xx 响应发送完毕后服务端以 `RST_STREAM(NO_ERROR)` 结束该流（RFC 9113 §8.1），而不是等待客户端结束请求半边。
+- **Extended CONNECT WebSocket 提前数据**：RFC 8441 WebSocket（`:protocol = websocket`）同样处理：RFC 6455 §4.1 要求客户端等待 2xx，但这是对发送方的约束，提前到达的 `DATA` 在流控窗口内保留，握手接受后按序交给 WebSocket 会话。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃；`ALTSVC`、`ORIGIN` 帧也一样忽略（RFC 7838 §4、RFC 8336 §2.1），不复位隧道流。
 
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
@@ -479,7 +480,8 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
 - **重定向策略与跨源凭据剥离**：自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。
-- **重定向回调与跳数追踪**：`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+- **重定向回调与跳数追踪**：`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。
+- **流式上传重定向与跨源剥离**：`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |

@@ -3739,8 +3739,6 @@ inline void validate_client_tcp_config(const client_tcp_config& config) {
     return error;
 }
 
-class connection_lifecycle;
-
 // Intrusive, worker-affine registry. No lock is held while invoking user code
 // or releasing state. IDs are retired before close callbacks can reenter.
 class connection_registry final {
@@ -6057,12 +6055,9 @@ class env;
 
 namespace ruvia::detail {
 
-class rate_limiter;
 class http_interim_response_output;
-class inbound_buffer_account;
 class route_table;
 struct connection_failure_sink;
-class tls_served_certificate;
 class worker_state_registry;
 class borrowed_clients;
 
@@ -8219,8 +8214,6 @@ class env;
 namespace ruvia::detail {
 
 class document_root_publisher;
-class inbound_buffer_budget;
-class worker_codecs;
 
 struct access_log_sink final {
     access_log_callback_ref callback_;
@@ -9023,8 +9016,6 @@ struct prepared_application_response final {
     http_buffered_response_write_plan write_plan_;
     bool recovered_;
 };
-
-class connection_lifecycle;
 
 // Activated after the CONNECT head has been flushed and before tunnel I/O starts.
 // Only the TLS write BIO changes: Asio retains its read BIO and buffered input.
@@ -11762,8 +11753,6 @@ struct associator<associator_type, ruvia::detail::client_tls_write_handler<handl
 
 namespace ruvia::detail {
 
-class client_happy_eyeballs;
-
 // Why an owner stopped a transport. The latest non-none reason wins until the
 // owner starts a new operation with reset_abort().
 enum class client_abort_reason : std::uint8_t { none,
@@ -12295,8 +12284,6 @@ private:
     std::size_t bytes_{0};
 };
 
-class http_client_pool;
-
 // Worker-affine bounds shared by every HTTP client alias of one owner (a
 // standalone http_client, or one application worker): idle connections across
 // aliases, ordered by one idle clock, and concurrent background DNS refreshes.
@@ -12340,8 +12327,6 @@ struct http_client_worker_services final {
 // Validates `config`; throws std::invalid_argument.
 [[nodiscard]] http_client_worker_services make_http_client_worker_services(const http_client_worker_config& config);
 
-struct http_client_config_storage;
-class http_client_request_storage;
 struct client_received_cookie;
 
 struct client_prepared_request_scratch final {
@@ -12385,9 +12370,7 @@ class operation_deadline;
 
 namespace ruvia::detail {
 
-class client_request_policy;
 class http_client_response_state;
-struct http_client_websocket_handshake;
 
 // One received final response head, after its protocol driver stored the
 // response fields in the state's headers_.
@@ -12426,10 +12409,6 @@ void accept_extended_connect_websocket_response(http_client_websocket_handshake&
 // during decoding.
 void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
     bool content_semantics_present, std::size_t max_decoded_bytes);
-
-class http_client_pool;
-class http_client_response_state;
-class http_client_result_budget_domain;
 
 // Response storage and in-flight budget accounting of one client pool, plus the
 // registry of live response states so the pool can retire their transport
@@ -12878,11 +12857,6 @@ class response_stream_writer;
 }
 
 namespace ruvia::detail {
-
-struct http_client_route;
-
-class http_client_pool;
-class http_client_response_memory_domain;
 
 inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
     if (++value == 0) {
@@ -13392,12 +13366,6 @@ private:
     http_client_response_state& response_;
     worker_cancellation_registration<target_type> registration_;
 };
-
-class http_client_output_queue;
-class http_client_request_storage;
-class http_client_pool;
-class http_client_response_state;
-struct http_client_websocket_handshake;
 
 #ifdef RUVIA_ENABLE_HTTP2
 enum class http2_client_session_start_status : std::uint8_t {
@@ -14091,11 +14059,8 @@ private:
     std::size_t dropped_{};
 };
 
-class http_client_connection;
 struct http_tunnel_input;
-class http_client_response_state;
 
-class http_client_pool;
 using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
 
 // The one retry rule of both wire protocols for a request that failed on a
@@ -14399,13 +14364,6 @@ class http1_request_content_writer;
 
 namespace ruvia::detail {
 
-class http_client_connection;
-class http_client_output_queue;
-class http_client_pool;
-class http_client_request_storage;
-class http_client_response_state;
-class tls_tunnel_output;
-
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
 // request head and content, a full-duplex streaming upload, the response head,
 // body and Content-Encoding, or an accepted CONNECT/Upgrade byte tunnel. The caller holds
@@ -14461,8 +14419,6 @@ private:
     // Last: destroyed first, so its expiry never sees a retiring exchange.
     worker_timer_registration inactivity_timer_;
 };
-
-class http_client_pool;
 
 // Every pool of one owner shares the owner's worker services (result budget
 // and worker limits): one per standalone client, one per application worker. Process-lifetime storage
@@ -19918,7 +19874,6 @@ private:
     std::size_t middleware_count_{0};
     bool conditional_middleware_{false};
 };
-class route_table;
 
 // The one immutable route plan of a process run, compiled once at startup and
 // shared by every worker: every route with its endpoint metadata, limits and
@@ -20051,7 +20006,6 @@ using compiled_route_plan_ptr_type =
 // rejected; the payload for another alternative is not observable.
 
 inline constexpr std::size_t max_route_params = 16;
-class route_entry;
 
 class route_match final {
 public:
@@ -20233,8 +20187,6 @@ private:
     value_type value_;
 };
 
-class route_table;
-
 struct middleware_chain final {
     using terminal_type = callback_ref<task<void>(context&)>;
     using failure_type = task<void> (*)(const route_table&, context&, std::exception_ptr);
@@ -20256,7 +20208,6 @@ struct route_request_view final {
 };
 
 class controller_store;
-class router;
 
 // The framework's own answer to a failed request, consulting no application
 // error handler: the status an http_error or protocol failure carries, else a
@@ -20609,7 +20560,6 @@ private:
 namespace ruvia::detail {
 
 class http1_deferred_access_log;
-class route_table;
 
 // The deployment limits that shape admission. Servers build it from their
 // options; a subrequest builds it from its parent (no rate limit and no
@@ -21279,8 +21229,6 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
 // every request to in place of the route table, and the one run of the
 // application's request_stream callback every transport reaches through it.
 
-class route_entry;
-
 // A request stream route runs no middleware and declares no body limit. A
 // tunnel request -- CONNECT, extended CONNECT, or an HTTP/1.1 Upgrade without
 // content -- resolves to an upgrade route whose callback commits the tunnel
@@ -21730,8 +21678,6 @@ template <typename stream_type, typename commit_upgrade_type>
 
 namespace ruvia {
 
-class context;
-
 namespace detail {
 
 class response_stream_state final {
@@ -22094,7 +22040,6 @@ private:
 }  // namespace ruvia::detail
 
 namespace ruvia {
-class context;
 }
 
 namespace ruvia::detail {
@@ -23957,7 +23902,6 @@ private:
 namespace ruvia::detail {
 
 class http1_request_buffer_completion;
-struct access_log_sink;
 
 // Initial read capacity for an active connection. Growth is bounded by pending
 // input, and destruction returns the buffer to the worker resource on idle.
@@ -24386,11 +24330,8 @@ class worker_runtime;
 namespace ruvia::detail {
 
 using tcp_socket_type = asio::ip::tcp::socket;
-class accepted_connection_lease;
-class context_services;
 template <typename stream_type>
 struct http1_connection_session;
-class route_table;
 struct server_connection_fields;
 class worker_capabilities;
 
@@ -24656,13 +24597,9 @@ private:
 }  // namespace ruvia::detail
 
 namespace ruvia {
-class env;
 }  // namespace ruvia
 
 namespace ruvia::detail {
-
-class context_services;
-struct connection_failure_sink;
 
 struct worker_capability_definitions final {
 #ifdef RUVIA_ENABLE_DATABASE
@@ -24745,7 +24682,6 @@ private:
 
 namespace ruvia {
 
-class http_client;
 class worker_ref;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_client;
@@ -24986,9 +24922,6 @@ struct env_state final {
 // through the ANSI code page, which throws or yields non-UTF-8 error text.
 [[nodiscard]] std::string dotenv_path_message(std::string_view prefix, const std::filesystem::path& path);
 
-class worker_capabilities;
-class worker_state_registry;
-
 // The endpoint behind every web_worker_ref. Core owns admission: posts go
 // through worker_ref::post_payload and accepted jobs start only while that
 // worker accepts and its stop token is clear. Started jobs run in the worker's
@@ -25042,12 +24975,9 @@ private:
 }  // namespace ruvia::detail
 
 namespace ruvia {
-class worker_ref;
 }  // namespace ruvia
 
 namespace ruvia::detail {
-
-struct http_server_options;
 
 // The application's one document-root refresher. The first registered worker
 // walks the root, reads small files into the snapshot and precompresses changed files
@@ -25160,10 +25090,6 @@ private:
     std::vector<generation_owner> retired_;
     const bool refreshes_;
 };
-
-class route_table;
-class validated_http_server_configuration;
-class web_worker_dispatch;
 
 // One server worker: its core worker_runtime plus the HTTP domain state that
 // runtime's hooks compose. Core owns the generic lifecycle (launch, ready/serve

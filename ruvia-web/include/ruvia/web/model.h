@@ -6307,7 +6307,6 @@ template <typename t_type>
     ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
 
 namespace ruvia {
-class context;
 
 namespace detail {
 

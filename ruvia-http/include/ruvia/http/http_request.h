@@ -3481,8 +3481,6 @@ enum class http_request_target_form : std::uint8_t {
     http3,
 };
 
-class http_request;
-
 namespace detail {
 
 enum class http_field_kind : std::uint8_t;
