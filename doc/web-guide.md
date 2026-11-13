@@ -73,7 +73,7 @@ int main() {
 
 ---
 
-### 1.2 服务器、监听、TLS、压缩与 CORS 配置（`"ruvia/web/http_server.h"`）
+### 1.2 服务器、监听、TLS、压缩与 CORS 配置（`"ruvia/web/app.h"`）
 
 #### `ruvia::server_config`
 
@@ -330,7 +330,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 ---
 
-### 1.6 连接观察钩子（`"ruvia/web/http_server.h"`）
+### 1.6 连接观察钩子（`"ruvia/web/app.h"`）
 
 #### 1.6.1 原始与结构化协议观察
 
@@ -364,7 +364,7 @@ ruvia::app()
 - **连接标识**：`c.conn().connection_id()` 在进程内跨 worker、宿主与重新启动保持唯一，退役 ID 永不复用；同一连接上的全部请求与观察记录共享。已服务连接永不为 0，`test_app` 请求无连接，恒为 0。
 - **结构化 HTTP/2**：要求 `RUVIA_ENABLE_HTTP2`；帧与字段观察直接复用协议解析器，适合提取 Akamai 指纹所需事实，不重建请求字段顺序。字段、序号、规范化 flags 与无效输入的可观察范围见 [Sans-I/O 观察契约](core-and-http.md#421-帧与字段观察)；原始线上字节仍使用 `on_http2_input()`。
 
-#### 1.6.2 准入、生命周期与主动断连（`"ruvia/web/http_server.h"`）
+#### 1.6.2 准入、生命周期与主动断连（`"ruvia/web/app.h"`）
 
 | 应用注册入口 | `http_server_callbacks` 字段 | 契约 |
 | --- | --- | --- |
@@ -387,7 +387,7 @@ ruvia::app()
 
 - **返回值**：`true` 表示找到已登记连接并请求关闭，不表示任务已全部回收；未知或已退役 ID 返回 `false`。违反上述调用边界抛 `std::logic_error`，请求内自断连使用 `abort_connection()`。
 
-### 1.7 原始连接分发（`"ruvia/web/http_server.h"`）
+### 1.7 原始连接分发（`"ruvia/web/app.h"`）
 
 `listen_config::dispatch_ = ruvia::listener_dispatch::connection` 的监听器把每个已接受的连接交给 `on_connection()` 注册的处理器：明文监听器交付 socket 字节，HTTPS 监听器在握手完成后交付解密字节流，服务器不解析 HTTP。同一应用可同时拥有 `routes` 与 `connection` 监听器；`app.h` 已包含该头。
 
@@ -427,7 +427,7 @@ ruvia::app()
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
 - **平台**：Windows 与 POSIX 语义一致，连接同样经 Acceptor 交给业务 worker 后处理。
 
-### 1.8 请求流分发（`"ruvia/web/http_server.h"`）
+### 1.8 请求流分发（`"ruvia/web/app.h"`）
 
 `listen_config::dispatch_ = ruvia::listener_dispatch::request_stream` 的监听器把每个 HTTP 请求（HTTP/1.1、明文 prior-knowledge 与 TLS 上的 HTTP/2、配对的 HTTP/3）交给 `on_request_stream()` 注册的处理器，不经过路由。同一应用可同时拥有 `routes`、`request_stream` 与 `connection` 监听器；`app.h` 已包含该头。
 
@@ -500,7 +500,7 @@ ruvia::app()
 - **WebSocket**：使用与路由相同的 `websocket_route_config`、子协议、压缩、心跳和关闭握手；会话只在回调期间有效，回调结束时复用正常会话收尾。文件工厂与接受操作的未启动冷任务随请求作用域失效，在途操作在销毁请求前取消并收束。
 - **平台**：Windows 与 POSIX 语义一致，请求在接受连接（或 HTTP/3 连接）所属的业务 worker 上处理。
 
-### 1.9 独立入站宿主（`"ruvia/web/http_server.h"`）
+### 1.9 独立入站宿主（`"ruvia/web/app.h"`）
 
 外部项目通过 `http_server(event_loop, http_server_callbacks, server_config = {})` 复用入站驱动，不创建 `application`、不接触全局控制器注册表、不接管进程信号。链接 `ruvia::web`；事件循环可来自 `event_loop_pool` 或 `attach_event_loop()`。
 
@@ -522,7 +522,7 @@ ruvia::app()
 
 ```cpp
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/http_server.h"
+#include "ruvia/web/app.h"
 
 ruvia::task<void> answer(ruvia::request_stream& stream) {
     if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
@@ -642,7 +642,7 @@ int main() {
 
 ```cpp
 #include "ruvia/web/context.h"
-#include "ruvia/web/http_server.h"
+#include "ruvia/web/app.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/middleware.h"
 
@@ -1028,7 +1028,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 ## 6. 静态文件服务与内存级测试
 
-### 6.1 静态文件服务（`"ruvia/web/http_server.h"`）
+### 6.1 静态文件服务（`"ruvia/web/app.h"`）
 
 Ruvia 提供三种静态文件服务方式：
 

@@ -1,5 +1,3 @@
-#include "ruvia/core/stop_token.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>

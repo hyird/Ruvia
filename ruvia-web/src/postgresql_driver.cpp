@@ -19,7 +19,6 @@
 
 #include "ruvia/http/borrowed_text.h"
 
-#include "context_access.h"
 #include "route_table.h"
 namespace ruvia::detail {
 namespace {

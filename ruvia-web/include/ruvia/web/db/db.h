@@ -28,9 +28,9 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"

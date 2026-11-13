@@ -26,13 +26,12 @@
 #include <openssl/evp.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "context_access.h"
 #include "route_table.h"
 namespace ruvia::detail {
 namespace {

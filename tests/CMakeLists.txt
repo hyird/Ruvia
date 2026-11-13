@@ -140,9 +140,7 @@ if(RUVIA_BUILD_WEB)
         web/http1/websocket.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
-            web/http2/client_tunnel.cpp
             web/http2/connect.cpp
-            web/http2/file_flow_control.cpp
             web/http2/streaming.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60

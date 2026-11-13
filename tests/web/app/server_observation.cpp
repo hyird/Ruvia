@@ -27,7 +27,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"

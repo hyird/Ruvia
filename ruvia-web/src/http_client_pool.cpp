@@ -36,7 +36,6 @@
 #include <openssl/x509v3.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
@@ -47,12 +46,11 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
 #include "ruvia/web/streaming.h"
 
-#include "context_access.h"
 #include "route_table.h"
 
 namespace ruvia::detail {

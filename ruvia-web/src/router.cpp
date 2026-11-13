@@ -26,13 +26,12 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "context_access.h"
 #include "route_table.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -51,8 +50,8 @@
 #include <random>
 #include <type_traits>
 
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/model.h"
 
@@ -62,7 +61,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "context_access.h"
+#include "route_table.h"
 #endif
 
 #include <atomic>

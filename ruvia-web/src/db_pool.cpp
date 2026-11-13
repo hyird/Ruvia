@@ -34,14 +34,13 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "context_access.h"
-
+#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

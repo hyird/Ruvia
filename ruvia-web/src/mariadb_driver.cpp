@@ -31,7 +31,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/db/db.h"
 
-#include "context_access.h"
 #include "route_table.h"
 namespace ruvia::detail {
 namespace {

@@ -18,7 +18,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_ref.h"
 
 namespace ruvia {

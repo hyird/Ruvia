@@ -64,9 +64,8 @@ using ruvia::http_header_view;
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/web/app.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_server.h"
-
 namespace {
 
 template <typename headers_type = std::initializer_list<http_header_view>>

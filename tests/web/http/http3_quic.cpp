@@ -44,8 +44,8 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"

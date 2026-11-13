@@ -4,19 +4,24 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
+#include <fstream>
+#include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/db/db.h"
 
 #include "backend_client_fixture.h"
 #include "worker_task_fixture.h"
+
 #ifdef RUVIA_ENABLE_POSTGRESQL
 namespace pipeline_test {
 
@@ -901,5 +906,2255 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     EXPECT_TRUE((pipeline_test::parsed_sql(peer) ==
                  std::vector<std::string>({std::string("BEGIN"), std::string("SELECT v FROM s"), std::string("BEGIN"), std::string("COMMIT")})));
     EXPECT_EQ(peer.startups(), std::size_t{2});
+}
+#endif
+
+#ifdef RUVIA_ENABLE_MARIADB
+namespace mariadb_pipeline_test {
+
+using pipeline_test::peer_type;
+using reply = peer_type::maria_reply;
+
+[[nodiscard]] inline ruvia::db_config config(peer_type& peer) {
+    auto value = peer.config();
+    value.driver_ = ruvia::db_driver::mariadb;
+    value.username_ = "test";
+    return value;
+}
+
+inline ruvia::task<void> query_with(
+    ruvia::db_session handle, std::string_view sql, std::string_view param, pipeline_test::outcome& result) {
+    try {
+        const ruvia::db_rows rows = co_await handle.query(sql, param);
+        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+}
+
+inline ruvia::task<void> transaction_query(ruvia::db_transaction& transaction, pipeline_test::outcome& result, bool& completed) {
+    try {
+        const auto rows = co_await transaction.query("SELECT v FROM delayed_transaction");
+        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+    completed = true;
+}
+
+inline ruvia::task<void> finish_stream(ruvia::db_stream_result& stream, bool close,
+    pipeline_test::outcome& result, bool& completed) {
+    try {
+        if (close) {
+            co_await stream.close();
+            result.value_ = "closed";
+        } else {
+            const auto row = co_await stream.read();
+            result.value_ = row ? "unexpected row" : "eof";
+        }
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+    completed = true;
+}
+
+}  // namespace mariadb_pipeline_test
+
+// Concurrent statements on a pool of one connection are all sent before the
+// first reply arrives -- the peer answers nothing until it has read all four
+// commands -- and each caller gets its own result.
+TEST(Ruvia, db_mariadb_concurrent_statements_are_pipelined_on_one_connection) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 4}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .affected_rows_ = 3},
+                       {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
+        statements.spawn(pipeline_test::execute(handle, "UPDATE c SET v = 1", outcomes[2]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{3});
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM b"), std::string("UPDATE c SET v = 1"), std::string("SELECT v FROM d")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// The server runs each command on its own, so a statement it rejects fails
+// alone with its own error; the statements around it and the connection are
+// unaffected.
+TEST(Ruvia, db_mariadb_failed_pipelined_statement_does_not_fail_the_others) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3},
+                       {.error_ = std::string("Table 'bench.b' doesn't exist"), .code_ = 1146, .sql_state_ = std::string("42S02")},
+                       {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        co_await statements.join();
+        co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "42S02");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// Affected rows and insert ids are read from each statement's own response,
+// in send order.
+TEST(Ruvia, db_mariadb_pipelined_executes_report_their_own_affected_rows_and_insert_ids) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .affected_rows_ = 1, .insert_id_ = 7, .batch_ = 3},
+                       {.column_ = std::string(""), .affected_rows_ = 2}, {.column_ = std::string(""), .affected_rows_ = 300, .insert_id_ = 9}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::execute(handle, "INSERT INTO a (v) VALUES (1)", outcomes[0]));
+        statements.spawn(pipeline_test::execute(handle, "UPDATE b SET v = 2", outcomes[1]));
+        statements.spawn(pipeline_test::execute(handle, "INSERT INTO c (v) SELECT v FROM d", outcomes[2]));
+        co_await statements.join();
+    });
+    EXPECT_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE(outcomes[0].insert_id_ == std::uint64_t{7});
+    EXPECT_EQ(outcomes[1].affected_rows_, std::uint64_t{2});
+    EXPECT_TRUE(!outcomes[1].insert_id_.has_value());
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{300});
+    EXPECT_TRUE(outcomes[2].insert_id_ == std::uint64_t{9});
+}
+
+// A procedure call ends with a status result after its row set; it is read
+// before the next statement's response, which follows unaffected.
+TEST(Ruvia, db_mariadb_procedure_results_are_drained_before_the_next_statement) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("p")}), .procedure_ = true, .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("after")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 2> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "CALL p()", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "p");
+    EXPECT_TRUE(outcomes[1].value_ == "after");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// Both EOF and an explicit close consume the procedure's trailing status
+// before buffered queries share the same connection again. Retained rows
+// must not borrow either the streamed row storage or a later result.
+TEST(Ruvia, db_mariadb_stream_completion_preserves_result_boundaries_and_pipeline_reuse) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const bool close_early : {false, true}) {
+        for (const bool empty : {false, true}) {
+            peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("kept"), std::string("also kept")})},
+                               {.rows_ = std::vector<std::string>(empty ? std::vector<std::string>() : std::vector<std::string>({std::string("first"), std::string("second")})),
+                                   .procedure_ = true},
+                               {.rows_ = std::vector<std::string>({std::string("after a")}), .batch_ = 2}, {.rows_ = std::vector<std::string>({std::string("after b")})}}),
+                peer_type::after_startup::idle);
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+            std::array<pipeline_test::outcome, 2> outcomes;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+                const auto kept = co_await handle.query("SELECT v FROM retained");
+                auto stream = co_await handle.query_stream("CALL streamed_rows()");
+                const auto names = stream.column_names();
+                EXPECT_EQ(names.size(), std::size_t{1});
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
+                if (close_early) {
+                    co_await stream.close();
+                } else {
+                    std::vector<std::string> values{};
+                    while (auto row = co_await stream.read()) {
+                        values.emplace_back((*row)["v"].as<std::string_view>().value_or(""));
+                    }
+                    EXPECT_TRUE((values == (empty ? std::vector<std::string>()
+                                                  : std::vector<std::string>({std::string("first"), std::string("second")}))));
+                }
+                EXPECT_TRUE(!stream.active());
+                co_await stream.close();
+                EXPECT_EQ(stream.column_names().data(), names.data());
+                EXPECT_TRUE(!names.empty() && names.front() == "v");
+                task_scope statements(connected.worker());
+                statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_a", outcomes[0]));
+                statements.spawn(pipeline_test::query(handle, "SELECT v FROM after_b", outcomes[1]));
+                co_await statements.join();
+                EXPECT_EQ(kept.size(), std::size_t{2});
+                EXPECT_TRUE(kept[0]["v"].as<std::string_view>() == "kept");
+                EXPECT_TRUE(kept[1]["v"].as<std::string_view>() == "also kept");
+            });
+            EXPECT_TRUE(outcomes[0].value_ == "after a");
+            EXPECT_TRUE(outcomes[1].value_ == "after b");
+            EXPECT_EQ(peer.startups(), std::size_t{1});
+        }
+    }
+}
+
+// Fetching the row-set EOF and draining a CALL's final status belong to the
+// same read(). The peer sends legal packets on each side of that boundary:
+// resetting the deadline at EOF would let the final OK turn a timeout into EOF.
+TEST(Ruvia, db_mariadb_stream_eof_and_procedure_status_share_one_read_deadline) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                       {.rows_ = std::vector<std::string>({std::string("clean")})}}),
+        peer_type::after_startup::reaccept);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_.reset();
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_status = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
+                          .query_stream("CALL delayed_status()");
+        const auto first = co_await stream.read();
+        EXPECT_TRUE(first.has_value());
+        if (first) {
+            EXPECT_TRUE((*first)["v"].as<std::string_view>() == "first");
+        }
+        task_scope reading(connected.worker());
+        reading.spawn(mariadb_pipeline_test::finish_stream(stream, false, result, completed));
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(120));
+        peer.release_hold(1);
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(160));
+        completed_before_status = completed;
+        peer.release_hold(2);
+        co_await reading.join();
+        EXPECT_TRUE(!stream.active());
+        co_await stream.close();
+        co_await pipeline_test::query(handle, "SELECT v FROM after_stream_timeout", next);
+    });
+    EXPECT_TRUE(completed_before_status);
+    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.value_.empty());
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("CALL delayed_status()"), std::string("SELECT v FROM after_stream_timeout")})));
+}
+
+// A separate close() gets a fresh operation budget, even after the stream has
+// been idle longer than that budget. It still drains both result boundaries.
+TEST(Ruvia, db_mariadb_explicit_stream_close_has_its_own_operation_deadline) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("first")}), .procedure_ = true, .row_end_hold_ = 1, .procedure_status_hold_ = 2},
+                       {.rows_ = std::vector<std::string>({std::string("clean")})}}),
+        peer_type::after_startup::idle);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_.reset();
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_status = true;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto stream = co_await handle.with_options({.timeout_ = std::chrono::milliseconds(200)})
+                          .query_stream("CALL close_after_idle()");
+        const auto first = co_await stream.read();
+        EXPECT_TRUE(first.has_value());
+        if (first) {
+            EXPECT_TRUE((*first)["v"].as<std::string_view>() == "first");
+        }
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(250));
+        EXPECT_TRUE(stream.active());
+        task_scope closing(connected.worker());
+        closing.spawn(mariadb_pipeline_test::finish_stream(stream, true, result, completed));
+        peer.release_hold(1);
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(80));
+        completed_before_status = completed;
+        peer.release_hold(2);
+        co_await closing.join();
+        EXPECT_TRUE(!stream.active());
+        co_await stream.close();
+        co_await pipeline_test::query(handle, "SELECT v FROM after_explicit_close", next);
+    });
+    EXPECT_TRUE(!completed_before_status);
+    EXPECT_TRUE(!result.error_.has_value());
+    EXPECT_TRUE(result.value_ == "closed");
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("CALL close_after_idle()"), std::string("SELECT v FROM after_explicit_close")})));
+}
+
+// A rejected result shape still ran its SQL. BEGIN and disabled autocommit
+// cannot leak through that error to the next borrower, while an ordinary
+// completed write leaves its connection reusable.
+TEST(Ruvia, db_mariadb_rowless_stream_checks_session_state_before_releasing_its_connection) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const std::uint16_t status : {std::uint16_t{2}, std::uint16_t{3}, std::uint16_t{0}}) {
+        const std::string_view sql = status == 3   ? "START TRANSACTION"
+                                     : status == 0 ? "SET autocommit = 0"
+                                                   : "UPDATE t SET v = 1";
+        peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = status}, {.rows_ = std::vector<std::string>({std::string("next")})}}),
+            status == 2 ? peer_type::after_startup::idle : peer_type::after_startup::reaccept);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+        pipeline_test::outcome next;
+        bool refused = false;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+            try {
+                (void)co_await handle.query_stream(sql);
+            } catch (const std::invalid_argument&) {
+                refused = true;
+            }
+            co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
+        });
+        EXPECT_TRUE(refused);
+        EXPECT_TRUE(next.value_ == "next");
+        EXPECT_EQ(peer.startups(), status == 2 ? std::size_t{1} : std::size_t{2});
+    }
+}
+
+// Procedures can return rows and leave a transaction open or autocommit
+// disabled. Draining every result is necessary but not sufficient for reuse.
+TEST(Ruvia, db_mariadb_stream_completion_retires_transactional_connections) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const std::uint16_t status : {std::uint16_t{3}, std::uint16_t{0}}) {
+        for (const bool close_early : {false, true}) {
+            peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("first"), std::string("second")}), .status_ = status, .procedure_ = true},
+                               {.rows_ = std::vector<std::string>({std::string("next")})}}),
+                peer_type::after_startup::reaccept);
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+            pipeline_test::outcome next;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+                auto stream = co_await handle.query_stream(
+                    status == 3 ? "CALL begin_and_select()" : "CALL disable_autocommit_and_select()");
+                auto first = co_await stream.read();
+                EXPECT_TRUE(first && (*first)["v"].as<std::string_view>() == "first");
+                if (close_early) {
+                    co_await stream.close();
+                } else {
+                    auto second = co_await stream.read();
+                    EXPECT_TRUE(second && (*second)["v"].as<std::string_view>() == "second");
+                    EXPECT_TRUE(!(co_await stream.read()));
+                }
+                EXPECT_TRUE(!stream.active());
+                co_await pipeline_test::query(handle, "SELECT v FROM next_borrower", next);
+            });
+            EXPECT_TRUE(next.value_ == "next");
+            EXPECT_EQ(peer.startups(), std::size_t{2});
+        }
+    }
+}
+
+// A row set execute() did not ask for, or a missing one query() needs,
+// refuses that statement once its response was read; the next statement on
+// the connection is unaffected.
+TEST(Ruvia, db_mariadb_pipelined_statement_of_the_wrong_shape_is_refused_alone) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")}), .batch_ = 3}, {.column_ = std::string(""), .affected_rows_ = 1}, {.rows_ = std::vector<std::string>({std::string("z")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::execute(handle, "SELECT v FROM x", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "UPDATE y SET v = 1", outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM z", outcomes[2]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(outcomes[0].refused_);
+    EXPECT_TRUE(outcomes[1].refused_);
+    EXPECT_TRUE(outcomes[2].value_ == "z");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A pending statement whose caller stops it, or whose timeout passes, leaves
+// alone with its usual error -- whether it was reading the connection's
+// responses (the first) or waiting for another statement to read them (the
+// second). One stopped before its command went out is never sent; one already
+// sent has its response read and discarded. The connection is kept.
+TEST(Ruvia, db_mariadb_abandoned_pipelined_statement_does_not_affect_the_others) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    constexpr std::array<std::string_view, 3> sql{"SELECT v FROM a", "SELECT v FROM b", "SELECT v FROM c"};
+    constexpr std::array<std::string_view, 3> values{"a", "b", "c"};
+    for (const std::size_t abandoned_index : {std::size_t{0}, std::size_t{1}}) {
+        for (const bool cancel : {true, false}) {
+            // The first statement's command goes out as it arrives; the others
+            // wait for the reader's next turn, which comes after the stop.
+            const bool unsent = cancel && abandoned_index == 1;
+            std::vector<mariadb_pipeline_test::reply> replies({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = unsent ? std::size_t{2} : std::size_t{3}}});
+            if (!unsent) {
+                replies.push_back({.rows_ = {"b"}});
+            }
+            replies.push_back({.rows_ = {"c"}});
+            replies.push_back({.rows_ = {"d"}});
+            peer_type peer(std::move(replies), peer_type::after_startup::idle);
+            auto& context_value = test::new_test_io_context();
+            auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+            db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+            std::array<pipeline_test::outcome, 4> outcomes;
+            test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+                const auto handle = connected.db();
+                stop_source stop;
+                const auto abandoning = cancel ? handle.with_options({.stop_token_ = stop.token()})
+                                               : handle.with_options({.timeout_ = std::chrono::milliseconds(100)});
+                task_scope others(connected.worker());
+                task_scope abandoned(connected.worker());
+                for (std::size_t index = 0; index < sql.size(); ++index) {
+                    if (index == abandoned_index) {
+                        abandoned.spawn(pipeline_test::query(abandoning, sql[index], outcomes[index]));
+                    } else {
+                        others.spawn(pipeline_test::query(handle, sql[index], outcomes[index]));
+                    }
+                }
+                stop.request_stop();
+                // The peer answers nothing before the statement has left.
+                co_await abandoned.join();
+                peer.release_replies();
+                co_await others.join();
+                co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
+            });
+            for (std::size_t index = 0; index < sql.size(); ++index) {
+                if (index == abandoned_index) {
+                    EXPECT_TRUE(outcomes[index].error_ ==
+                                (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+                    EXPECT_TRUE(outcomes[index].value_.empty());
+                } else {
+                    EXPECT_TRUE(outcomes[index].value_ == values[index]);
+                }
+            }
+            EXPECT_TRUE(outcomes[3].value_ == "d");
+            const auto queries = peer.maria_queries();
+            EXPECT_EQ(queries.size(), unsent ? std::size_t{3} : std::size_t{4});
+            EXPECT_EQ(peer.startups(), std::size_t{1});
+        }
+    }
+}
+
+// Once every pending statement has been abandoned nobody reads their
+// responses, so the connection is closed and the next statement connects
+// again.
+TEST(Ruvia, db_mariadb_connection_is_closed_when_every_pipelined_statement_is_abandoned) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db();
+        stop_source stop;
+        const auto stoppable = handle.with_options({.stop_token_ = stop.token()});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(stoppable, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::query(stoppable, "SELECT v FROM b", outcomes[1]));
+        stop.request_stop();
+        co_await statements.join();
+        peer.release_replies();
+        co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
+    });
+    EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    // The second statement was stopped before its command went out.
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("SELECT v FROM c")})));
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+}
+
+// While a transaction waits for the only connection, shared statements stop
+// joining its group, so the group drains to the transaction; statements that
+// arrive meanwhile follow it.
+TEST(Ruvia, db_mariadb_waiting_transaction_is_not_starved_by_pipelined_statements) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true}, {.column_ = std::string(""), .status_ = 3}, {.column_ = std::string("")},
+                       {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope work(connected.worker());
+        work.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        work.spawn(pipeline_test::begin_and_commit(handle, outcomes[4]));
+        work.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
+        work.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        work.spawn(pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]));
+        peer.release_replies();
+        co_await work.join();
+    });
+    EXPECT_TRUE(outcomes[4].value_ == "committed");
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SELECT v FROM a"), std::string("START TRANSACTION"), std::string("COMMIT"),
+                                             std::string("SELECT v FROM b"), std::string("SELECT v FROM c"), std::string("SELECT v FROM d")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A lost connection fails every statement still in flight on it, whether or
+// not statements ahead of them already got their results.
+TEST(Ruvia, db_mariadb_lost_connection_fails_every_pipelined_statement) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    for (const bool first_answered : {false, true}) {
+        std::vector<mariadb_pipeline_test::reply> replies{};
+        if (first_answered) {
+            replies.push_back({.rows_ = {"a"}});
+        }
+        replies.push_back({.batch_ = first_answered ? std::size_t{2} : std::size_t{3}, .drop_ = true});
+        peer_type peer(std::move(replies), peer_type::after_startup::idle);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+        std::array<pipeline_test::outcome, 3> outcomes;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+            task_scope statements(connected.worker());
+            statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+            statements.spawn(pipeline_test::execute(handle, "UPDATE b SET v = 1", outcomes[1]));
+            statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+            co_await statements.join();
+        });
+        if (first_answered) {
+            EXPECT_TRUE(outcomes[0].value_ == "a");
+        } else {
+            EXPECT_TRUE(outcomes[0].error_ == db_error::code_type::io_error);
+        }
+        EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+        EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::io_error);
+    }
+}
+
+// close() reaches statements in every phase -- reading the responses, waiting
+// for the reader, and parked beyond the pipeline depth -- and the client
+// still shuts down cleanly.
+TEST(Ruvia, db_mariadb_close_ends_pipelined_statements_in_every_phase) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    constexpr std::size_t statement_count = 40;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")}), .deferred_ = true}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::vector<pipeline_test::outcome> outcomes(statement_count);
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db();
+        task_scope statements(connected.worker());
+        for (auto& result : outcomes) {
+            statements.spawn(pipeline_test::query(handle, "SELECT v FROM t", result));
+        }
+        connected.close();
+        co_await statements.join();
+    });
+    for (const auto& result : outcomes) {
+        EXPECT_TRUE(result.error_ == db_error::code_type::cancelled || result.error_ == db_error::code_type::closing);
+    }
+}
+
+// A read timeout means the connection made no progress: every statement in
+// flight on it fails, and the next statement connects again.
+TEST(Ruvia, db_mariadb_read_timeout_fails_every_pipelined_statement) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .deferred_ = true, .batch_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})},
+                       {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::reaccept);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_ = std::chrono::milliseconds(100);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db();
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        // The peer answers only once every statement has failed.
+        co_await statements.join();
+        peer.release_replies();
+        co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
+    });
+    for (std::size_t index = 0; index < 3; ++index) {
+        EXPECT_TRUE(outcomes[index].error_ == db_error::code_type::timeout);
+    }
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+}
+
+// The transaction's exclusive lane must honor the millisecond socket-wait
+// limit, not libmariadb's whole-second native timer or the five-second query
+// budget. A late valid reply cannot revive its retired transaction/lease.
+TEST(Ruvia, db_mariadb_transaction_read_timeout_is_millisecond_bounded_and_retires_its_lease) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3},
+                       {.rows_ = std::vector<std::string>({std::string("late")}), .status_ = 3, .hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("clean")})}}),
+        peer_type::after_startup::reaccept);
+    auto config = mariadb_pipeline_test::config(peer);
+    config.read_timeout_ = std::chrono::milliseconds(100);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config);
+    pipeline_test::outcome result;
+    pipeline_test::outcome next;
+    bool completed = false;
+    bool completed_before_reply = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto transaction = co_await handle.begin_transaction();
+        EXPECT_TRUE(transaction.active());
+        task_scope querying(connected.worker());
+        querying.spawn(mariadb_pipeline_test::transaction_query(transaction, result, completed));
+        (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(350));
+        completed_before_reply = completed;
+        peer.release_hold(1);
+        co_await querying.join();
+        EXPECT_TRUE(!transaction.active());
+        if (!transaction.active()) {
+            co_await pipeline_test::query(handle, "SELECT v FROM after_transaction_timeout", next);
+        }
+    });
+    EXPECT_TRUE(completed_before_reply);
+    EXPECT_TRUE(result.error_ == db_error::code_type::timeout);
+    EXPECT_TRUE(result.value_.empty());
+    EXPECT_TRUE(next.value_ == "clean");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("START TRANSACTION"), std::string("SELECT v FROM delayed_transaction"),
+                     std::string("SELECT v FROM after_transaction_timeout")})));
+}
+
+// A statement that leaves its connection inside a transaction (BEGIN through
+// execute()) must not hand it to the next caller: the connection is closed
+// when its group dissolves.
+TEST(Ruvia, db_mariadb_connection_left_inside_a_transaction_is_closed) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("fresh")})}}), peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 2> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::execute(handle, "BEGIN", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+    });
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "fresh");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+}
+
+// Parameters are interpolated with the escaping of the connection the
+// statement is sent on.
+TEST(Ruvia, db_mariadb_pipelined_parameters_are_interpolated) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    pipeline_test::outcome result;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 42, result);
+    });
+    EXPECT_TRUE(result.value_ == "x");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SELECT v FROM t WHERE id = 42")})));
+}
+
+// MariaDB numbers server errors above the client library's range as well
+// (4025, a violated CHECK constraint): the statement fails alone with its
+// own error, and the connection is kept.
+TEST(Ruvia, db_mariadb_pipelined_server_error_above_the_client_range_fails_alone) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 3},
+                       {.error_ = std::string("CONSTRAINT `t.v` failed for `db`.`t`"), .code_ = 4025, .sql_state_ = std::string("23000")},
+                       {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::execute(handle, "INSERT INTO t (v) VALUES (-1)", outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        co_await statements.join();
+        co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A server error after which the server ends the session (1927, the
+// connection was killed) leaves nothing to read the next response from: it
+// fails as an I/O error, and the connection is not used again.
+TEST(Ruvia, db_mariadb_server_error_ending_the_session_closes_the_connection) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")}), .batch_ = 2},
+                       {.error_ = std::string("Connection was killed"), .code_ = 1927, .sql_state_ = std::string("70100")},
+                       {.rows_ = std::vector<std::string>({std::string("fresh")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
+        co_await statements.join();
+        co_await pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::io_error);
+    EXPECT_TRUE(outcomes[2].value_ == "fresh");
+    EXPECT_EQ(peer.startups(), std::size_t{2});
+}
+
+// A statement pipelined behind a change of sql_mode is read in the new mode.
+// A string without a backslash is quoted alike in every mode and goes out
+// with the SET -- the peer answers nothing before it has read both -- while
+// one with a backslash waits for the SET's response and is escaped for
+// NO_BACKSLASH_ESCAPES, which that response reports.
+TEST(Ruvia, db_mariadb_statement_behind_an_sql_mode_change_is_escaped_for_the_new_mode) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    constexpr std::uint16_t no_backslash_escapes = 512;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 2 | no_backslash_escapes, .batch_ = 2},
+                       {.rows_ = std::vector<std::string>({std::string("x")}), .status_ = 2 | no_backslash_escapes},
+                       {.rows_ = std::vector<std::string>({std::string("y")}), .status_ = 2 | no_backslash_escapes}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::execute(handle, "SET sql_mode = 'NO_BACKSLASH_ESCAPES'", outcomes[0]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "x' , 1 AS w -- ", outcomes[1]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "y\\' , 2 AS w -- ", outcomes[2]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("SET sql_mode = 'NO_BACKSLASH_ESCAPES'"), std::string("SELECT 'x'' , 1 AS w -- ' AS v"),
+                     std::string("SELECT 'y\\'' , 2 AS w -- ' AS v")})));
+}
+
+// MariaDB connections disable LOCAL INFILE (MYSQL_OPT_LOCAL_INFILE = 0), so
+// even when a leading LOAD DATA LOCAL INFILE names an existing local file and
+// the peer asks for it, the client refuses to send any file bytes, fails only
+// that statement, and runs the queued statements around it on the same session.
+TEST(Ruvia, db_mariadb_disables_local_infile_even_for_leading_load_command) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    test::scoped_temp_directory directory("ruvia-mariadb-infile");
+    const auto path = (directory.path() / "load_data_local.txt").generic_string();
+    {
+        std::ofstream file(path, std::ios::binary | std::ios::trunc);
+        file << "row1\nrow2\n";
+    }
+    const auto load = std::string("LOAD DATA LOCAL INFILE '") + std::string(path) + "' INTO TABLE t";
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.column_ = std::string(""), .affected_rows_ = 2, .local_infile_ = std::string(path)}, {.rows_ = std::vector<std::string>({std::string("c")})},
+                       {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::execute(handle, load, outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        co_await statements.join();
+        co_await pipeline_test::query(handle, "SELECT v FROM d", outcomes[3]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE(outcomes[3].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM a"), std::string("query:") + load,
+                                              std::string("infile:"), std::string("query:SELECT v FROM c"), std::string("query:SELECT v FROM d")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// libmariadb sends a file for LOAD DATA LOCAL INFILE only when the command
+// starts with LOAD; behind whitespace it answers the server's request with an
+// empty file and fails the statement (CR_UNKNOWN_ERROR). Its response was
+// read, so only that statement fails: the one behind it, still unsent, runs
+// on the same connection.
+TEST(Ruvia, db_mariadb_refused_load_data_local_infile_fails_alone) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    const auto load = std::string("  LOAD DATA LOCAL INFILE '/nonexistent/ruvia' INTO TABLE t");
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.column_ = std::string(""), .local_infile_ = std::string("/nonexistent/ruvia")}, {.rows_ = std::vector<std::string>({std::string("c")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
+        statements.spawn(pipeline_test::execute(handle, load, outcomes[1]));
+        statements.spawn(pipeline_test::query(handle, "SELECT v FROM c", outcomes[2]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM a"), std::string("query:") + load,
+                                              std::string("infile:"), std::string("query:SELECT v FROM c")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A backslash escape that follows a byte above 0x7F depends on the session's
+// client character set: in GBK, 0xBF 0x5C is one character, and a backslash
+// put before its 0x5C would leave the one after it to escape the closing
+// quote. Such a statement reads the character set from the server first,
+// even with session tracking off, and is escaped by it; a backslash after an
+// ASCII byte needs no character set.
+TEST(Ruvia, db_mariadb_backslash_escape_reads_the_sessions_character_set) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("gbk")})}, {.rows_ = std::vector<std::string>({std::string("x")})}, {.rows_ = std::vector<std::string>({std::string("y")})}}),
+        peer_type::after_startup::idle, 1, false);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(pipeline_test::execute(handle, "SET NAMES gbk", outcomes[0]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "\xbf\\' , 1 -- ", outcomes[1]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "a\\b", outcomes[2]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(!outcomes[0].error_.has_value());
+    EXPECT_TRUE(outcomes[1].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE((peer.maria_queries() == std::vector<std::string>({std::string("SET NAMES gbk"), std::string("SELECT @@character_set_client"),
+                                             std::string("SELECT '\xbf\\'' , 1 -- ' AS v"), std::string("SELECT 'a\\\\b' AS v")})));
+}
+
+// In UTF-8 no byte of a multibyte character is 0x5C, so a backslash after
+// one escapes as after an ASCII byte. While session tracking says the client
+// character set is still utf8mb4, such a parameter is escaped without asking
+// the server; once a report names another one, or a CALL may have turned
+// tracking off unreported, the character set is read first again.
+TEST(Ruvia, db_mariadb_tracked_utf8mb4_session_escapes_without_reading_its_character_set) {
+    using namespace ruvia;
+    using mariadb_pipeline_test::peer_type;
+    const std::vector<std::pair<std::string, std::string>> gbk({{std::string("character_set_client"), std::string("gbk")}, {std::string("character_set_connection"), std::string("gbk")}});
+    const std::vector<std::pair<std::string, std::string>> utf8mb4({{std::string("character_set_client"), std::string("utf8mb4")}, {std::string("character_set_connection"), std::string("utf8mb4")}});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>(gbk)}, {.rows_ = std::vector<std::string>({std::string("gbk")})}, {.rows_ = std::vector<std::string>({std::string("y")})},
+                       {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>(utf8mb4)}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("utf8mb4")})},
+                       {.rows_ = std::vector<std::string>({std::string("z")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_pipeline_test::config(peer));
+    std::array<pipeline_test::outcome, 6> outcomes;
+    const std::string jose("Jos\xc3\xa9\\x");
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        task_scope statements(connected.worker());
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", jose, outcomes[0]));
+        statements.spawn(pipeline_test::execute(handle, "SET NAMES gbk", outcomes[1]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS v", "\xbf\\' , 1 -- ", outcomes[2]));
+        statements.spawn(pipeline_test::execute(handle, "SET NAMES utf8mb4", outcomes[3]));
+        statements.spawn(pipeline_test::execute(handle, "CALL p()", outcomes[4]));
+        statements.spawn(mariadb_pipeline_test::query_with(handle, "SELECT ? AS w", jose, outcomes[5]));
+        co_await statements.join();
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "x");
+    EXPECT_TRUE(outcomes[2].value_ == "y");
+    EXPECT_TRUE(outcomes[5].value_ == "z");
+    EXPECT_TRUE((peer.maria_queries() ==
+                 std::vector<std::string>({std::string("SELECT 'Jos\xc3\xa9\\\\x' AS v"), std::string("SET NAMES gbk"), std::string("SELECT @@character_set_client"),
+                     std::string("SELECT '\xbf\\'' , 1 -- ' AS v"), std::string("SET NAMES utf8mb4"), std::string("CALL p()"), std::string("SELECT @@character_set_client"),
+                     std::string("SELECT 'Jos\xc3\xa9\\\\x' AS w")})));
+}
+#endif
+
+#ifdef RUVIA_ENABLE_MARIADB
+namespace mariadb_statement_test {
+
+using pipeline_test::peer_type;
+using reply = peer_type::maria_reply;
+using column = peer_type::maria_column;
+using binary_row = std::vector<std::optional<std::string>>;
+
+// MariaDB type codes and column flags of the binary protocol.
+constexpr std::uint8_t type_long = 3;
+constexpr std::uint8_t type_float = 4;
+constexpr std::uint8_t type_double = 5;
+constexpr std::uint8_t type_longlong = 8;
+constexpr std::uint8_t type_date = 10;
+constexpr std::uint8_t type_time = 11;
+constexpr std::uint8_t type_datetime = 12;
+constexpr std::uint8_t type_year = 13;
+constexpr std::uint8_t type_newdecimal = 0xf6;
+constexpr std::uint8_t type_blob = 0xfc;
+constexpr std::uint16_t unsigned_flag = 32;
+constexpr std::uint16_t zerofill_flag = 64;
+constexpr std::uint8_t not_fixed = 31;
+
+// @@session_track_system_variables as MariaDB 11.8 reads it back after the
+// client's setup: the same names, sorted.
+constexpr std::string_view server_tracked_list =
+    "character_set_client,character_set_connection,character_set_results,default_week_format,"
+    "div_precision_increment,group_concat_max_len,lc_time_names,max_sort_length,old_mode,session_track_schema,"
+    "session_track_system_variables,sql_mode,time_zone";
+
+[[nodiscard]] inline ruvia::db_config config(peer_type& peer) {
+    auto value = peer.config();
+    value.driver_ = ruvia::db_driver::mariadb;
+    value.username_ = "test";
+    return value;
+}
+
+[[nodiscard]] inline std::string little(std::uint64_t value, int width) {
+    std::string bytes{};
+    for (int index = 0; index < width; ++index) {
+        bytes.push_back(static_cast<char>((value >> (8 * index)) & 255));
+    }
+    return bytes;
+}
+
+[[nodiscard]] inline std::string real(double value) {
+    std::uint64_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return little(bits, 8);
+}
+
+[[nodiscard]] inline std::string single(float value) {
+    std::uint32_t bits = 0;
+    std::memcpy(&bits, &value, sizeof(bits));
+    return little(bits, 4);
+}
+
+[[nodiscard]] inline std::string text(std::string_view value) {
+    std::string bytes(1, static_cast<char>(value.size()));
+    bytes.append(value);
+    return bytes;
+}
+
+// DATE, DATETIME and TIMESTAMP: a length, then year, month, day, hour,
+// minute, second and microseconds as far as they are not zero.
+[[nodiscard]] inline std::string datetime(unsigned year, unsigned month, unsigned day, unsigned hour = 0,
+    unsigned minute = 0, unsigned second = 0, unsigned microsecond = 0) {
+    if (year == 0 && month == 0 && day == 0 && hour == 0 && minute == 0 && second == 0 && microsecond == 0) {
+        return std::string(1, '\0');
+    }
+    std::string bytes(little(year, 2) + static_cast<char>(month) + static_cast<char>(day));
+    if (hour != 0 || minute != 0 || second != 0 || microsecond != 0) {
+        bytes += std::string({static_cast<char>(hour), static_cast<char>(minute), static_cast<char>(second)});
+        if (microsecond != 0) {
+            bytes += little(microsecond, 4);
+        }
+    }
+    return static_cast<char>(bytes.size()) + bytes;
+}
+
+// TIME: a length, then the sign, days, hours, minutes, seconds and
+// microseconds.
+[[nodiscard]] inline std::string time(
+    bool negative, unsigned days, unsigned hour, unsigned minute, unsigned second, unsigned microsecond = 0) {
+    std::string bytes(1, negative ? '\1' : '\0');
+    bytes += little(days, 4);
+    bytes += std::string({static_cast<char>(hour), static_cast<char>(minute), static_cast<char>(second)});
+    if (microsecond != 0) {
+        bytes += little(microsecond, 4);
+    }
+    return static_cast<char>(bytes.size()) + bytes;
+}
+
+// Runs `sql` twice alone: the first use as text, the second prepared.
+inline ruvia::task<void> twice(ruvia::db_session handle, std::string_view sql, std::optional<ruvia::db_rows>& text,
+    std::optional<ruvia::db_rows>& prepared) {
+    text.emplace(co_await handle.query(sql));
+    prepared.emplace(co_await handle.query(sql));
+}
+
+[[nodiscard]] inline std::vector<std::optional<std::string>> values(const ruvia::db_rows& rows) {
+    std::vector<std::optional<std::string>> result{};
+    for (std::size_t row = 0; row < rows.size(); ++row) {
+        for (std::size_t field = 0; field < rows[row].size(); ++field) {
+            const auto value = rows[row][field].value();
+            result.push_back(value.has_value() ? std::optional<std::string>(std::string(*value)) : std::nullopt);
+        }
+    }
+    return result;
+}
+
+// The first row's fields, joined by '|'.
+[[nodiscard]] inline std::string first_row(const ruvia::db_rows& rows) {
+    if (rows.empty()) {
+        return std::string("<no rows>");
+    }
+    std::string joined{};
+    for (std::size_t field = 0; field < rows.front().size(); ++field) {
+        joined += field == 0 ? "" : "|";
+        joined += rows.front()[field].value().value_or("");
+    }
+    return joined;
+}
+
+template <typename... param_types>
+inline ruvia::task<void> query_with(
+    ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+    try {
+        result.value_ = first_row(co_await handle.query(sql, params...));
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+}
+
+template <typename... param_types>
+inline ruvia::task<void> execute_with(
+    ruvia::db_session handle, std::string_view sql, pipeline_test::outcome& result, param_types... params) {
+    try {
+        const auto executed = co_await handle.execute(sql, params...);
+        result.affected_rows_ = executed.affected_rows();
+    } catch (const ruvia::db_error& error) {
+        pipeline_test::record_failure(error, result);
+    }
+}
+
+}  // namespace mariadb_statement_test
+
+// A statement is prepared on its second use and executed in the binary
+// protocol from then on, while it runs alone on its connection.
+TEST(Ruvia, db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : outcomes) {
+            co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 7, result);
+        }
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t WHERE id = 7"), std::string("prepare:SELECT v FROM t WHERE id = ?"),
+                     std::string("execute:1:i:7"), std::string("execute:1:i:7")})));
+}
+
+// Parameters travel in the binary protocol with the types their literals
+// read as: an unsigned integer within INT64_MAX is a signed BIGINT, as its
+// literal is.
+TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<std::string, 2> results{std::string(), std::string()};
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : results) {
+            const auto rows = co_await handle.query(
+                "SELECT v FROM t WHERE a = ? AND b = ? AND c = ? AND d <=> ? "
+                "AND e = ? AND f = ?",
+                std::int64_t{42}, std::string_view("it's"), 1.5, nullptr, true, std::uint64_t{7});
+            result = std::string(rows.front()["v"].value().value_or(""));
+        }
+    });
+    EXPECT_TRUE(results[0] == "a");
+    EXPECT_TRUE(results[1] == "b");
+    const auto commands = peer.maria_commands();
+    EXPECT_EQ(commands.size(), std::size_t{3});
+    EXPECT_TRUE(commands.front() ==
+                "query:SELECT v FROM t WHERE a = 42 AND b = 'it''s' AND c = 1.5e0 AND d <=> NULL "
+                "AND e = 1 AND f = 7");
+    EXPECT_TRUE(commands.back() == "execute:1:i:42,s:it's,d:1.5,null,t:1,i:7");
+}
+
+// Values read in the binary protocol become the text the text protocol sends
+// for them. Each expected text below was read from MariaDB 11.8's text
+// protocol for the same stored value.
+TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<std::pair<double, std::string>> doubles({{0.1, std::string("0.1")}, {1e20, std::string("1e20")}, {1e15, std::string("1e15")},
+        {123456789012345.0, std::string("123456789012345")}, {1.5e-15, std::string("0.0000000000000015")}, {1e-5, std::string("0.00001")},
+        {-0.000123, std::string("-0.000123")}, {1.0 / 3, std::string("0.3333333333333333")}, {1e-14, std::string("0.00000000000001")},
+        {2.5e300, std::string("2.5e300")}, {12345678901234567890.0, std::string("1.2345678901234567e19")}, {1e16, std::string("1e16")},
+        // dtoa reports an overflow for infinity and NaN, which the server
+        // writes as 0 (VARIANCE() of values near DBL_MAX overflows).
+        {std::numeric_limits<double>::infinity(), "0"}, {-std::numeric_limits<double>::infinity(), std::string("0")},
+        {std::numeric_limits<double>::quiet_NaN(), std::string("0")}});
+    const std::vector<std::pair<float, std::string>> floats({{0.1F, std::string("0.1")}, {3.14159265F, std::string("3.14159")},
+        {16777217.0F, std::string("16777200")}, {-1.17549435e-38F, std::string("-1.17549e-38")}, {3.4e38F, std::string("3.4e38")}, {1e-5F, std::string("0.00001")},
+        {0.33333334F, std::string("0.333333")}, {1e-7F, std::string("0.0000001")}, {1234567.0F, std::string("1234570")}, {1e10F, std::string("10000000000")},
+        {123456.0F, std::string("123456")}, {2.5F, std::string("2.5")}, {std::numeric_limits<float>::infinity(), std::string("0")},
+        {-std::numeric_limits<float>::infinity(), std::string("0")}, {std::numeric_limits<float>::quiet_NaN(), std::string("0")}});
+    std::vector<binary_row> rows{};
+    std::vector<std::optional<std::string>> expected{};
+    for (std::size_t index = 0; index < doubles.size(); ++index) {
+        rows.push_back(binary_row({real(doubles[index].first), single(floats[index].first)}));
+        expected.emplace_back(std::in_place, doubles[index].second);
+        expected.emplace_back(std::in_place, floats[index].second);
+    }
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})},
+                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>({{.name_ = std::string("d"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22},
+                            {.name_ = std::string("f"), .type_ = type_float, .decimals_ = not_fixed, .length_ = 12}}),
+                           .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::optional<db_rows> text_rows;
+    std::optional<db_rows> prepared_rows;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals",
+            text_rows, prepared_rows);
+    });
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
+}
+
+TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20},
+        {.name_ = std::string("fd"), .type_ = type_float, .decimals_ = 3, .length_ = 9},
+        {.name_ = std::string("z"), .type_ = type_long, .flags_ = unsigned_flag | zerofill_flag, .length_ = 8},
+        {.name_ = std::string("dt3"), .type_ = type_datetime, .decimals_ = 3, .length_ = 23},
+        {.name_ = std::string("t3"), .type_ = type_time, .decimals_ = 3, .length_ = 14},
+        {.name_ = std::string("t"), .type_ = type_time, .length_ = 10},
+        {.name_ = std::string("da"), .type_ = type_date, .length_ = 10},
+        {.name_ = std::string("de"), .type_ = type_newdecimal, .decimals_ = 10, .length_ = 32},
+        {.name_ = std::string("bu"), .type_ = type_longlong, .flags_ = unsigned_flag, .length_ = 20},
+        {.name_ = std::string("b"), .type_ = type_longlong, .length_ = 20},
+        {.name_ = std::string("bl"), .type_ = type_blob, .flags_ = 128, .length_ = 65535},
+        {.name_ = std::string("n"), .type_ = type_double, .decimals_ = not_fixed, .length_ = 22}});
+    const std::vector<binary_row> rows({binary_row({std::string(real(1.5)), std::string(single(1.5F)), std::string(little(42, 4)), std::string(datetime(2001, 2, 3, 4, 5, 6, 789000)), std::string(time(true, 34, 22, 59, 59, 500000)),
+                                            std::string(time(false, 1, 1, 0, 0)), std::string(datetime(0, 0, 0)), std::string(text("-1.5000000000")), std::string(little(18446744073709551615ULL, 8)),
+                                            std::string(little(static_cast<std::uint64_t>(INT64_MIN), 8)), std::string(text(std::string("\0\xff\x10", 3))), std::nullopt}),
+        binary_row({std::string(real(123456789.123457)), std::string(single(0.1F)), std::string(little(0, 4)), std::string(datetime(0, 0, 0)), std::string(time(true, 0, 0, 0, 0, 500000)),
+            std::string(time(false, 34, 22, 59, 59)), std::string(datetime(2024, 2, 29)), std::string(text("0.0000000001")), std::string(little(0, 8)), std::string(little(7, 8)),
+            std::string(text("")), std::string(real(0.1))}),
+        binary_row({std::string(real(1e10)), std::string(single(2.001F)), std::string(little(99999999, 4)), std::string(datetime(2038, 1, 19, 3, 14, 7, 999000)),
+            std::string(time(false, 0, 12, 34, 56, 1000)), std::string(time(false, 0, 0, 0, 1)), std::string(datetime(9999, 12, 31)),
+            std::string(text("12345678901234567890.0000000000")), std::string(little(1, 8)), std::string(little(static_cast<std::uint64_t>(-1), 8)),
+            std::string(text("x")), std::nullopt})});
+    const std::vector<std::optional<std::string>> expected({std::string("1.500000"), std::string("1.500"), std::string("00000042"), std::string("2001-02-03 04:05:06.789"),
+        std::string("-838:59:59.500"), std::string("25:00:00"), std::string("0000-00-00"), std::string("-1.5000000000"), std::string("18446744073709551615"), std::string("-9223372036854775808"),
+        std::string("\0\xff\x10", 3), std::nullopt, std::string("123456789.123457"), std::string("0.100"), std::string("00000000"), std::string("0000-00-00 00:00:00.000"),
+        std::string("-00:00:00.500"), std::string("838:59:59"), std::string("2024-02-29"), std::string("0.0000000001"), std::string("0"), std::string("7"), std::string(""), std::string("0.1"), std::string("10000000000.000000"), std::string("2.001"),
+        std::string("99999999"), std::string("2038-01-19 03:14:07.999"), std::string("12:34:56.001"), std::string("00:00:01"), std::string("9999-12-31"),
+        std::string("12345678901234567890.0000000000"), std::string("1"), std::string("-1"), std::string("x"), std::nullopt});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::optional<db_rows> text_rows;
+    std::optional<db_rows> prepared_rows;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        co_await twice(
+            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
+    });
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
+    EXPECT_TRUE((prepared_rows->front()["dt3"].value() == std::optional<std::string_view>("2001-02-03 04:05:06.789")));
+}
+
+// A statement the server will not prepare runs as text from then on.
+TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})},
+                       {.error_ = std::string("This command is not supported in the prepared statement protocol yet"),
+                           .code_ = 1295,
+                           .sql_state_ = std::string("HY000"),
+                           .prepare_fails_ = true},
+                       {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : outcomes) {
+            co_await pipeline_test::query(handle, "SHOW v", result);
+        }
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SHOW v"), std::string("prepare:SHOW v"), std::string("query:SHOW v"), std::string("query:SHOW v")})));
+}
+
+// A statement the server no longer holds is prepared and run once more; the
+// handle it dropped is closed on the server.
+TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    const peer_type::maria_reply unknown{
+        .error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("c")})}, unknown, unknown}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : outcomes) {
+            co_await pipeline_test::query(handle, "SELECT v FROM t", result);
+        }
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(outcomes[2].value_ == "c");
+    // Stale again on its retry: the error reaches the caller.
+    EXPECT_TRUE(outcomes[3].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                     std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:"), std::string("execute:2:"), std::string("close:2"),
+                     std::string("prepare:SELECT v FROM t"), std::string("execute:3:")})));
+}
+
+// A cached statement alone on its connection runs prepared; the statements
+// arriving while it runs wait for its response, then go out together as
+// pipelined text, since the binary protocol cannot share the connection. The
+// peer holds the prepared execution's response until the others have
+// arrived, so the first is still running when they do.
+TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("c")}), .hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("d")}), .batch_ = 2},
+                       {.rows_ = std::vector<std::string>({std::string("e")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+        task_scope together(connected.worker());
+        for (std::size_t index = 2; index < outcomes.size(); ++index) {
+            together.spawn(pipeline_test::query(handle, "SELECT v FROM t", outcomes[index]));
+        }
+        peer.release_hold(1);
+        co_await together.join();
+    });
+    for (std::size_t index = 0; index < outcomes.size(); ++index) {
+        EXPECT_TRUE(outcomes[index].value_ == std::string(1, static_cast<char>('a' + index)));
+    }
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"),
+                                              std::string("execute:1:"), std::string("execute:1:"), std::string("query:SELECT v FROM t"),
+                                              std::string("query:SELECT v FROM t")})));
+}
+
+// Inside a transaction a statement is prepared on its second use as well.
+TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("a")}), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("b")}), .status_ = 3},
+                       {.column_ = std::string("")}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<std::string, 2> results{std::string(), std::string()};
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        auto transaction = co_await connected.db().with_options({.timeout_ = std::chrono::seconds(5)}).begin_transaction();
+        for (auto& result : results) {
+            const auto rows = co_await transaction.query("SELECT v FROM t WHERE id = ?", std::int64_t{3});
+            result = std::string(rows.front()["v"].value().value_or(""));
+        }
+        co_await transaction.commit();
+    });
+    EXPECT_TRUE(results[0] == "a");
+    EXPECT_TRUE(results[1] == "b");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT v FROM t WHERE id = 3"),
+                     std::string("prepare:SELECT v FROM t WHERE id = ?"), std::string("execute:1:i:3"), std::string("query:COMMIT")})));
+}
+
+// The least recently used statement is closed on the server when a new one
+// needs its room.
+TEST(Ruvia, db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_new_one) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    constexpr std::size_t statements = 129;
+    std::vector<peer_type::maria_reply> replies(statements * 2, peer_type::maria_reply{.rows_ = std::vector<std::string>({std::string("v")})});
+    peer_type peer(std::move(replies), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::size_t failures = 0;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (std::size_t index = 0; index < statements; ++index) {
+            const auto sql = "SELECT v FROM t" + std::string(std::to_string(index));
+            for (int use = 0; use < 2; ++use) {
+                pipeline_test::outcome result;
+                co_await pipeline_test::query(handle, sql, result);
+                failures += result.value_ == "v" ? 0 : 1;
+            }
+        }
+    });
+    EXPECT_EQ(failures, std::size_t{0});
+    const auto commands = peer.maria_commands();
+    EXPECT_EQ(commands.size(), statements * 3 + 1);
+    // The first statement's handle goes before the last one is prepared.
+    EXPECT_TRUE(commands[commands.size() - 3] == "close:1");
+    EXPECT_TRUE(commands[commands.size() - 2] == "prepare:SELECT v FROM t128");
+}
+
+// A server error numbered above the client library's range (4025, a violated
+// CHECK constraint) is the prepared statement's own failure, as it is for the
+// statement run as text; the connection is kept.
+TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_statements_own) {
+    using namespace ruvia;
+    using mariadb_statement_test::peer_type;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .affected_rows_ = 1},
+                       {.column_ = std::string(""),
+                           .error_ = std::string("CONSTRAINT `t.v` failed for `db`.`t`"),
+                           .code_ = 4025,
+                           .sql_state_ = std::string("23000")},
+                       {.column_ = std::string(""), .affected_rows_ = 1}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), mariadb_statement_test::config(peer));
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : outcomes) {
+            co_await pipeline_test::execute(handle, "INSERT INTO t (v) VALUES (1)", result);
+        }
+    });
+    EXPECT_EQ(outcomes[0].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "23000");
+    EXPECT_EQ(outcomes[2].affected_rows_, std::uint64_t{1});
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:INSERT INTO t (v) VALUES (1)"),
+                     std::string("prepare:INSERT INTO t (v) VALUES (1)"), std::string("execute:1:"), std::string("execute:1:")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A call runs prepared only with parameters the server reads as it reads
+// their literals, and a statement is prepared for each set of parameter
+// types, since the server fixes result types when it prepares. A negative
+// number reads as a literal's unary minus, which binds looser than COLLATE
+// and turns -? of INT64_MIN into an overflow only as a parameter; an
+// unsigned value above INT64_MAX makes arithmetic unsigned only as a
+// parameter (3 - ? with 5 is -2 as text, an error prepared). Those calls run
+// as text, while the statement stays prepared for the others.
+TEST(Ruvia, db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    constexpr std::string_view sql = "SELECT v FROM t WHERE a = ?";
+    peer_type peer(std::vector<reply>(10, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 10> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await query_with(handle, sql, outcomes[0], std::int64_t{5});
+        co_await query_with(handle, sql, outcomes[1], std::int64_t{6});
+        co_await query_with(handle, sql, outcomes[2], std::int64_t{-1});
+        co_await query_with(handle, sql, outcomes[3], (std::numeric_limits<std::int64_t>::min)());
+        co_await query_with(handle, sql, outcomes[4], (std::numeric_limits<std::uint64_t>::max)());
+        co_await query_with(handle, sql, outcomes[5], std::uint64_t{7});
+        co_await query_with(handle, sql, outcomes[6], 1.5);
+        co_await query_with(handle, sql, outcomes[7], 2.5);
+        co_await query_with(handle, sql, outcomes[8], -2.5);
+        co_await query_with(handle, sql, outcomes[9], -0.0);
+    });
+    for (const auto& result : outcomes) {
+        EXPECT_TRUE(result.value_ == "v");
+    }
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t WHERE a = 5"), std::string("prepare:SELECT v FROM t WHERE a = ?"),
+                     std::string("execute:1:i:6"), std::string("query:SELECT v FROM t WHERE a = -1"),
+                     std::string("query:SELECT v FROM t WHERE a = -9223372036854775808"),
+                     std::string("query:SELECT v FROM t WHERE a = 18446744073709551615"), std::string("execute:1:i:7"),
+                     std::string("query:SELECT v FROM t WHERE a = 1.5e0"), std::string("prepare:SELECT v FROM t WHERE a = ?"), std::string("execute:2:d:2.5"),
+                     std::string("query:SELECT v FROM t WHERE a = -2.5e0"), std::string("query:SELECT v FROM t WHERE a = -0e0")})));
+}
+
+// Where the text protocol takes only an integer literal (LIMIT, OFFSET and
+// FETCH counts), it refuses a string, a real, NULL or a negative number with
+// a syntax error, while a parameter there would take them: such a call runs
+// as text. Parameters elsewhere in the statement are not restricted.
+TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    constexpr std::string_view limit = "SELECT v FROM t LIMIT ?";
+    constexpr std::string_view filtered = "SELECT v FROM t WHERE w = ? LIMIT ?, ?";
+    constexpr std::string_view fetch = "SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY";
+    peer_type peer(std::vector<reply>(19, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 19> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto* result = outcomes.data();
+        co_await query_with(handle, limit, *result++, std::int64_t{2});
+        co_await query_with(handle, limit, *result++, std::int64_t{3});
+        for (int use = 0; use < 2; ++use) {
+            co_await query_with(handle, limit, *result++, std::string_view("4"));
+            co_await query_with(handle, limit, *result++, 1.5);
+            co_await query_with(handle, limit, *result++, nullptr);
+            co_await query_with(handle, limit, *result++, true);
+        }
+        co_await query_with(handle, limit, *result++, std::uint64_t{5});
+        for (int use = 0; use < 2; ++use) {
+            co_await query_with(handle, filtered, *result++, std::string_view("x"), std::int64_t{1}, std::int64_t{2});
+        }
+        for (int use = 0; use < 2; ++use) {
+            co_await query_with(handle, filtered, *result++, std::string_view("x"), std::string_view("1"), std::int64_t{2});
+        }
+        for (int use = 0; use < 2; ++use) {
+            co_await query_with(handle, fetch, *result++, std::int64_t{1}, std::int64_t{2});
+        }
+        for (int use = 0; use < 2; ++use) {
+            co_await query_with(handle, fetch, *result++, std::int64_t{1}, 2.0);
+        }
+    });
+    for (const auto& result : outcomes) {
+        EXPECT_TRUE(result.value_ == "v");
+    }
+    const std::vector<std::string> expected({std::string("query:SELECT v FROM t LIMIT 2"), std::string("prepare:SELECT v FROM t LIMIT ?"),
+        std::string("execute:1:i:3"), std::string("query:SELECT v FROM t LIMIT '4'"), std::string("query:SELECT v FROM t LIMIT 1.5e0"),
+        std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"), std::string("query:SELECT v FROM t LIMIT '4'"),
+        std::string("query:SELECT v FROM t LIMIT 1.5e0"), std::string("query:SELECT v FROM t LIMIT NULL"), std::string("query:SELECT v FROM t LIMIT 1"),
+        std::string("execute:1:i:5"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT 1, 2"),
+        std::string("prepare:SELECT v FROM t WHERE w = ? LIMIT ?, ?"), std::string("execute:2:s:x,i:1,i:2"),
+        std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"), std::string("query:SELECT v FROM t WHERE w = 'x' LIMIT '1', 2"),
+        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2 ROWS ONLY"),
+        std::string("prepare:SELECT v FROM t ORDER BY v OFFSET ? ROWS FETCH FIRST ? ROWS ONLY"), std::string("execute:3:i:1,i:2"),
+        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY"),
+        std::string("query:SELECT v FROM t ORDER BY v OFFSET 1 ROWS FETCH FIRST 2e0 ROWS ONLY")});
+    EXPECT_TRUE((peer.maria_commands() == expected));
+}
+
+// Statements the binary protocol cannot run as the text protocol does are
+// never prepared, however they are written: a CALL (its OUT parameters come
+// back as an extra result set only when prepared) also behind a comment, a
+// statement with RETURNING (a re-run after its result changed shape would
+// repeat its writes), one led by an executable comment, whose content the
+// server runs, and a LOAD. A statement in parentheses is prepared as usual.
+TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_prepared) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    constexpr std::array<std::string_view, 4> text_only{"/* note */ CALL p()",
+        "INSERT INTO t (v) VALUES (1) RETURNING v", "/*!100000 SELECT v FROM t */", "LOAD XML INFILE 'x' INTO TABLE t"};
+    // The tenth answers the read-back of the tracked variables after the
+    // CALL and the executable comment.
+    std::vector<reply> replies(12, reply{.rows_ = std::vector<std::string>({std::string("v")})});
+    replies[9] = {.rows_ = {"*"}};
+    peer_type peer(std::move(replies), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 11> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        auto* result = outcomes.data();
+        for (const auto sql : text_only) {
+            for (int use = 0; use < 2; ++use) {
+                co_await pipeline_test::query(handle, sql, *result++);
+            }
+        }
+        for (int use = 0; use < 3; ++use) {
+            co_await pipeline_test::query(handle, "(SELECT v FROM t)", *result++);
+        }
+    });
+    for (const auto& result : outcomes) {
+        EXPECT_TRUE(result.value_ == "v");
+    }
+    std::vector<std::string> expected{};
+    for (const auto sql : text_only) {
+        expected.insert(expected.end(), 2, "query:" + std::string(sql));
+    }
+    expected.insert(expected.end(), {"query:(SELECT v FROM t)", "query:SELECT @@session_track_system_variables",
+                                        "prepare:(SELECT v FROM t)", "execute:1:", "execute:1:"});
+    EXPECT_TRUE((peer.maria_commands() == expected));
+}
+
+// Values of a column without a fixed scale read as the text protocol sends
+// them: a DATETIME or TIME of AUTO_SEC_PART_DIGITS shows six fractional
+// digits when the value has a fraction and none otherwise; a non-finite
+// DOUBLE, also of a fixed scale, is written as 0.
+TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_protocol_sends_them) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    constexpr std::uint8_t auto_digits = 39;
+    const std::vector<column> columns({{.name_ = std::string("dd"), .type_ = type_double, .decimals_ = 6, .length_ = 20},
+        {.name_ = std::string("dt"), .type_ = type_datetime, .decimals_ = auto_digits, .length_ = 26},
+        {.name_ = std::string("t"), .type_ = type_time, .decimals_ = auto_digits, .length_ = 17}});
+    const std::vector<binary_row> rows({binary_row({std::string(real(std::numeric_limits<double>::infinity())), std::string(datetime(1970, 1, 1, 0, 0, 1, 500000)),
+                                            std::string(time(false, 0, 0, 0, 1, 500000))}),
+        binary_row({std::string(real(std::numeric_limits<double>::quiet_NaN())), std::string(datetime(1970, 1, 1, 0, 0, 1)), std::string(time(false, 0, 1, 2, 3))}),
+        binary_row({std::string(real(-std::numeric_limits<double>::infinity())), std::string(datetime(2020, 1, 1, 10, 0, 0, 10)),
+            std::string(time(true, 1, 10, 0, 0, 250000))})});
+    const std::vector<std::optional<std::string>> expected({std::string("0"), std::string("1970-01-01 00:00:01.500000"), std::string("00:00:01.500000"), std::string("0"),
+        std::string("1970-01-01 00:00:01"), std::string("01:02:03"), std::string("0"), std::string("2020-01-01 10:00:00.000010"), std::string("-34:00:00.250000")});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(columns), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>(rows)}}), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::optional<db_rows> text_rows;
+    std::optional<db_rows> prepared_rows;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        co_await twice(
+            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
+    });
+    EXPECT_TRUE(prepared_rows.has_value());
+    EXPECT_TRUE((values(*prepared_rows) == expected));
+}
+
+// The text protocol pads a YEAR column's value to four digits when it comes
+// from a table column and not when it comes from an expression, under the
+// same metadata without ZEROFILL, and the metadata of the prepare is not that
+// of the execution: a UNION of YEAR columns is prepared with ZEROFILL and
+// runs without it. A statement whose prepared result holds a YEAR runs as
+// text.
+TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<column> padded({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag | zerofill_flag, .length_ = 4}});
+    const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0000")})},
+                       {.rows_ = std::vector<std::string>({std::string("0000")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded)},
+                       {.rows_ = std::vector<std::string>({std::string("0000")})}, {.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")}), .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain)}, {.rows_ = std::vector<std::string>({std::string("0")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 6> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (std::size_t index = 0; index < 3; ++index) {
+            co_await query_with(handle, "SELECT y FROM t UNION ALL SELECT y FROM u", outcomes[index]);
+        }
+        for (std::size_t index = 3; index < 6; ++index) {
+            co_await query_with(handle, "SELECT MIN(y) AS y FROM t", outcomes[index]);
+        }
+    });
+    for (const std::size_t index : {0, 1, 2}) {
+        EXPECT_TRUE(outcomes[index].value_ == "0000");
+    }
+    for (const std::size_t index : {3, 4, 5}) {
+        EXPECT_TRUE(outcomes[index].value_ == "0");
+    }
+    EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>({std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
+                                              std::string("prepare:SELECT y FROM t UNION ALL SELECT y FROM u"),
+                                              std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
+                                              std::string("query:SELECT y FROM t UNION ALL SELECT y FROM u"),
+                                              std::string("query:SELECT MIN(y) AS y FROM t"), std::string("close:1"),
+                                              std::string("prepare:SELECT MIN(y) AS y FROM t"), std::string("query:SELECT MIN(y) AS y FROM t"),
+                                              std::string("query:SELECT MIN(y) AS y FROM t")})));
+}
+
+// A YEAR the prepare did not describe (the column was altered to YEAR since,
+// and the server prepared the statement anew inside the execution): one
+// with ZEROFILL reads padded, as the text protocol sends it; one without it
+// cannot be told from its binary value, and the server has run the statement
+// already, so it fails once and runs as text from its next use.
+TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_once) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<column> number({{.name_ = std::string("y"), .type_ = type_long, .length_ = 11}});
+    const std::vector<column> padded({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag | zerofill_flag, .length_ = 4}});
+    const std::vector<column> plain({{.name_ = std::string("y"), .type_ = type_year, .flags_ = unsigned_flag, .length_ = 4}});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("x")})},
+                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(padded),
+                           .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))}), std::vector<std::optional<std::string>>({std::string(little(2155, 2))})}),
+                           .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)},
+                       {.rows_ = std::vector<std::string>({std::string("y")})},
+                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(plain), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(little(0, 2))})}), .prepare_columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(number)},
+                       {.rows_ = std::vector<std::string>({std::string("0")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::optional<db_rows> padded_rows;
+    std::array<pipeline_test::outcome, 3> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        std::optional<db_rows> text_rows;
+        co_await twice(handle, "SELECT y FROM t", text_rows, padded_rows);
+        co_await query_with(handle, "SELECT y FROM u", outcomes[0]);
+        co_await query_with(handle, "SELECT y FROM u", outcomes[1]);
+        co_await query_with(handle, "SELECT y FROM u", outcomes[2]);
+    });
+    EXPECT_TRUE(padded_rows.has_value());
+    EXPECT_TRUE((values(*padded_rows) == std::vector<std::optional<std::string>>({std::string("0000"), std::string("2155")})));
+    EXPECT_TRUE(outcomes[0].value_ == "y");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_ == "0");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT y FROM t"), std::string("prepare:SELECT y FROM t"), std::string("execute:1:"),
+                     std::string("query:SELECT y FROM u"), std::string("prepare:SELECT y FROM u"), std::string("execute:2:"), std::string("query:SELECT y FROM u")})));
+}
+
+// A table that gained a column since the statement was prepared: the server
+// prepares it anew, runs it, and its result has a column the handle was not
+// prepared for (CR_NEW_STMT_METADATA). The server has run it, and running it
+// again would repeat what it did (NEXTVAL() in a SELECT): the statement fails
+// once, as a statement, with its result read past, and is prepared anew on
+// its next use.
+TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_prepared_anew) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<column> one({{.name_ = std::string("v")}});
+    const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})}, {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})},
+                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("2")), std::string(text("2"))}), std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("4"))})})},
+                       {.columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("3")), std::string(text("2"))})})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        for (auto& result : outcomes) {
+            co_await query_with(handle, "SELECT NEXTVAL(s), t.* FROM t", result);
+        }
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].value_ == "1");
+    EXPECT_TRUE(outcomes[2].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[2].value_.empty());
+    EXPECT_TRUE(outcomes[3].value_ == "3|2");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT NEXTVAL(s), t.* FROM t"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"),
+                     std::string("execute:1:"), std::string("execute:1:"), std::string("close:1"), std::string("prepare:SELECT NEXTVAL(s), t.* FROM t"), std::string("execute:2:")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// Inside a transaction the statement whose result changed shape fails as a
+// statement, not as a lost connection: the transaction rolls back on the
+// same connection, and the statement is prepared anew on its next use.
+TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_transaction) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<column> one({{.name_ = std::string("v")}});
+    const std::vector<column> two({{.name_ = std::string("v")}, {.name_ = std::string("w")}});
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.column_ = std::string(""), .status_ = 3}, {.rows_ = std::vector<std::string>({std::string("1")}), .status_ = 3},
+                       {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(one), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1"))})})},
+                       {.status_ = 3, .columns_ = std::vector<ruvia::test::backend_startup_peer::maria_column>(two), .binary_rows_ = std::vector<std::vector<std::optional<std::string>>>({std::vector<std::optional<std::string>>({std::string(text("1")), std::string(text("2"))})})},
+                       {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("after")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::vector<std::string> results{};
+    std::optional<db_error::code_type> failure;
+    pipeline_test::outcome after;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        try {
+            auto transaction = co_await handle.begin_transaction();
+            for (int use = 0; use < 3; ++use) {
+                results.push_back(first_row(co_await transaction.query("SELECT * FROM t")));
+            }
+            co_await transaction.commit();
+        } catch (const db_error& error) {
+            failure = error.code();
+        }
+        co_await pipeline_test::query(handle, "SELECT * FROM t", after);
+    });
+    EXPECT_TRUE((results == std::vector<std::string>({std::string("1"), std::string("1")})));
+    EXPECT_TRUE(failure == db_error::code_type::statement_failed);
+    EXPECT_TRUE(after.value_ == "after");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:START TRANSACTION"), std::string("query:SELECT * FROM t"), std::string("prepare:SELECT * FROM t"),
+                     std::string("execute:1:"), std::string("execute:1:"), std::string("query:ROLLBACK"), std::string("close:1"), std::string("prepare:SELECT * FROM t"),
+                     std::string("execute:2:")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A prepare whose command is still being written when its statement is
+// stopped is finished by the next statement on the connection, from the
+// statement text the connection's cache owns: the stopped caller's text is
+// gone by then. The peer reads nothing until the caller has left, so the
+// write is suspended when it does.
+TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_text) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    std::string sql("SELECT v FROM t /* ");
+    // More than the socket buffers of both ends hold.
+    sql.append(std::size_t{15} * 1024 * 1024, 'x');
+    sql.append(" */");
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("text")})}, {.rows_ = std::vector<std::string>({std::string("second")}), .read_hold_ = 1}, {.rows_ = std::vector<std::string>({std::string("third")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(20)});
+        co_await pipeline_test::query(handle, sql, outcomes[0]);
+        stop_source stop;
+        const auto stoppable = handle.with_options({.stop_token_ = stop.token()});
+        task_scope first(connected.worker());
+        task_scope second(connected.worker());
+        first.spawn(pipeline_test::query(stoppable, sql, outcomes[1]));
+        second.spawn(pipeline_test::query(handle, "SELECT v FROM t", outcomes[2]));
+        stop.request_stop();
+        co_await first.join();
+        peer.release_hold(1);
+        co_await second.join();
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "text");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::cancelled);
+    EXPECT_TRUE(outcomes[2].value_ == "second");
+    EXPECT_TRUE(outcomes[3].value_ == "third");
+    const auto commands = peer.maria_commands();
+    EXPECT_EQ(commands.size(), std::size_t{5});
+    if (commands.size() == 5) {
+        EXPECT_TRUE(commands[1] == std::string("prepare:") + sql);
+        EXPECT_TRUE((std::vector<std::string>(commands.begin() + 2, commands.end()) ==
+                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
+    }
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A prepared statement whose rows end in an error (a DOUBLE out of range)
+// fails alone and leaves nothing pending: it is reset to its prepared state,
+// and another statement found stale afterwards is still closed on the server
+// and prepared anew.
+TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_usable) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const reply unknown{.error_ = "Unknown prepared statement handler", .code_ = 1243, .sql_state_ = "HY000"};
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
+                       {.rows_ = std::vector<std::string>({std::string("2")}),
+                           .error_ = std::string("DOUBLE value is out of range"),
+                           .code_ = 1690,
+                           .sql_state_ = std::string("22003"),
+                           .error_after_rows_ = true},
+                       {.rows_ = std::vector<std::string>({std::string("b")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, unknown, {.rows_ = std::vector<std::string>({std::string("b")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT v * 3 FROM t", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v * 3 FROM t", outcomes[1]);
+        for (std::size_t index = 2; index < outcomes.size(); ++index) {
+            co_await pipeline_test::query(handle, "SELECT v FROM u", outcomes[index]);
+        }
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "22003");
+    EXPECT_TRUE(outcomes[2].value_ == "b");
+    EXPECT_TRUE(outcomes[3].value_ == "b");
+    EXPECT_TRUE(outcomes[4].value_ == "b");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v * 3 FROM t"), std::string("prepare:SELECT v * 3 FROM t"), std::string("execute:1:"),
+                     std::string("reset:1"), std::string("query:SELECT v FROM u"), std::string("prepare:SELECT v FROM u"), std::string("execute:2:"), std::string("execute:2:"),
+                     std::string("close:2"), std::string("prepare:SELECT v FROM u"), std::string("execute:3:")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// The same prepared statement runs again after its rows failed (1242, a
+// subquery returning more than one row): its next execution goes out and
+// reads its own response, and the statements behind it get theirs, on the
+// same connection.
+TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
+                       {.rows_ = std::vector<std::string>({std::string("2")}),
+                           .error_ = std::string("Subquery returns more than 1 row"),
+                           .code_ = 1242,
+                           .sql_state_ = std::string("21000"),
+                           .error_after_rows_ = true},
+                       {.rows_ = std::vector<std::string>({std::string("3")})}, {.rows_ = std::vector<std::string>({std::string("f1")})}, {.rows_ = std::vector<std::string>({std::string("f2")})}}),
+        peer_type::after_startup::reaccept);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT (SELECT v FROM t)", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT (SELECT v FROM t)", outcomes[1]);
+        task_scope together(connected.worker());
+        together.spawn(pipeline_test::query(handle, "SELECT (SELECT v FROM t)", outcomes[2]));
+        together.spawn(pipeline_test::query(handle, "SELECT v FROM f1", outcomes[3]));
+        together.spawn(pipeline_test::query(handle, "SELECT v FROM f2", outcomes[4]));
+        co_await together.join();
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "1");
+    EXPECT_TRUE(outcomes[1].error_ == db_error::code_type::statement_failed);
+    EXPECT_TRUE(outcomes[1].sql_state_ == "21000");
+    EXPECT_TRUE(outcomes[2].value_ == "3");
+    EXPECT_TRUE(outcomes[3].value_ == "f1");
+    EXPECT_TRUE(outcomes[4].value_ == "f2");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT (SELECT v FROM t)"), std::string("prepare:SELECT (SELECT v FROM t)"),
+                     std::string("execute:1:"), std::string("reset:1"), std::string("execute:1:"), std::string("query:SELECT v FROM f1"), std::string("query:SELECT v FROM f2")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// A cached statement keeps the session state it was prepared in, so a change
+// the session reports (here sql_mode: PIPES_AS_CONCAT, ANSI_QUOTES) drops
+// every cached statement: it is closed on the server, runs as text, and is
+// prepared anew under the new state on its second use after the change.
+TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(
+        std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
+            {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,ANSI_QUOTES,STRICT_TRANS_TABLES")}})},
+            {.rows_ = std::vector<std::string>({std::string("c")})}, {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
+        co_await pipeline_test::execute(
+            handle, "SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')", outcomes[2]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[4]);
+    });
+    EXPECT_TRUE(outcomes[0].value_ == "a");
+    EXPECT_TRUE(outcomes[1].value_ == "b");
+    EXPECT_TRUE(!outcomes[2].error_.has_value());
+    EXPECT_TRUE(outcomes[3].value_ == "c");
+    EXPECT_TRUE(outcomes[4].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"),
+                     std::string("execute:1:"), std::string("query:SET SESSION sql_mode = CONCAT(@@sql_mode, ',PIPES_AS_CONCAT,ANSI_QUOTES')"),
+                     std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
+    EXPECT_EQ(peer.maria_session_setups(), std::size_t{1});
+}
+
+// A rowless stream still executed SET before its shape was refused. A
+// non-transactional session flag must not retire the connection, and its
+// tracked sql_mode change must invalidate statements prepared in the old mode.
+TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_prepared_statements) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(
+        std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("0")})}, {.rows_ = std::vector<std::string>({std::string("0")})},
+            {.column_ = std::string(""), .status_ = 514, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES")}})},
+            {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}, {.rows_ = std::vector<std::string>({std::string("ab")}), .status_ = 514}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 4> outcomes;
+    bool refused = false;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
+        try {
+            (void)co_await handle.query_stream("SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'");
+        } catch (const std::invalid_argument&) {
+            refused = true;
+        }
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[2]);
+        co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[3]);
+    });
+    EXPECT_TRUE(refused);
+    EXPECT_TRUE(outcomes[0].value_ == "0");
+    EXPECT_TRUE(outcomes[1].value_ == "0");
+    EXPECT_TRUE(outcomes[2].value_ == "ab");
+    EXPECT_TRUE(outcomes[3].value_ == "ab");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT 'a' || 'b' AS v"), std::string("prepare:SELECT 'a' || 'b' AS v"),
+                     std::string("execute:1:"), std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT,NO_BACKSLASH_ESCAPES'"),
+                     std::string("query:SELECT 'a' || 'b' AS v"), std::string("close:1"), std::string("prepare:SELECT 'a' || 'b' AS v"), std::string("execute:2:")})));
+    EXPECT_EQ(peer.startups(), std::size_t{1});
+}
+
+// While the session's client character set is not the utf8mb4 the
+// connection opened with, nothing runs prepared: the binary protocol converts
+// parameters otherwise than the text protocol does literals. Back on utf8mb4,
+// statements are prepared again.
+TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_differs) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::vector<std::pair<std::string, std::string>> gbk({{std::string("character_set_client"), std::string("gbk")}, {std::string("character_set_connection"), std::string("gbk")}, {std::string("character_set_results"), std::string("gbk")}});
+    const std::vector<std::pair<std::string, std::string>> utf8mb4({{std::string("character_set_client"), std::string("utf8mb4")},
+        {std::string("character_set_connection"), std::string("utf8mb4")}, {std::string("character_set_results"), std::string("utf8mb4")}});
+    std::vector<reply> replies({{.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>(gbk)}});
+    replies.insert(replies.end(), 3, reply{.rows_ = std::vector<std::string>({std::string("v")})});
+    replies.push_back({.column_ = "", .tracked_ = utf8mb4});
+    replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("v")})});
+    peer_type peer(std::move(replies), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 7> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::execute(handle, "SET NAMES gbk", outcomes[0]);
+        for (std::size_t index = 1; index < 4; ++index) {
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[index]);
+        }
+        co_await pipeline_test::execute(handle, "SET NAMES utf8mb4", outcomes[4]);
+        for (std::size_t index = 5; index < 7; ++index) {
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[index]);
+        }
+    });
+    for (const std::size_t index : {1, 2, 3, 5, 6}) {
+        EXPECT_TRUE(outcomes[index].value_ == "v");
+    }
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SET NAMES gbk"), std::string("query:SELECT v FROM t"), std::string("query:SELECT v FROM t"),
+                     std::string("query:SELECT v FROM t"), std::string("query:SET NAMES utf8mb4"), std::string("query:SELECT v FROM t"),
+                     std::string("prepare:SELECT v FROM t"), std::string("execute:1:")})));
+}
+
+// SET and USE change the session every cached statement was prepared in, so
+// they run as text however often they are used; the change a SET reports
+// drops the cached statements as any other does.
+TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.column_ = std::string("")}, {.column_ = std::string("")},
+                       {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("sql_mode"), std::string("PIPES_AS_CONCAT")}})}, {.rows_ = std::vector<std::string>({std::string("c")})},
+                       {.rows_ = std::vector<std::string>({std::string("d")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 8> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+        co_await pipeline_test::execute(handle, "USE other", outcomes[2]);
+        co_await pipeline_test::execute(handle, "USE other", outcomes[3]);
+        co_await execute_with(handle, "SET SESSION sql_mode = ?", outcomes[4], std::string_view("STRICT_TRANS_TABLES"));
+        co_await execute_with(handle, "SET SESSION sql_mode = ?", outcomes[5], std::string_view("PIPES_AS_CONCAT"));
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[6]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[7]);
+    });
+    for (std::size_t index = 2; index < 6; ++index) {
+        EXPECT_TRUE(!outcomes[index].error_.has_value());
+    }
+    EXPECT_TRUE(outcomes[6].value_ == "c");
+    EXPECT_TRUE(outcomes[7].value_ == "d");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                     std::string("query:USE other"), std::string("query:USE other"), std::string("query:SET SESSION sql_mode = 'STRICT_TRANS_TABLES'"),
+                     std::string("query:SET SESSION sql_mode = 'PIPES_AS_CONCAT'"), std::string("query:SELECT v FROM t"), std::string("close:1"),
+                     std::string("prepare:SELECT v FROM t"), std::string("execute:2:")})));
+}
+
+// Either of character_set_client and character_set_connection alone off
+// utf8mb4 keeps every statement on text: the binary protocol converts a
+// parameter's invalid bytes otherwise than the text protocol does a literal's.
+TEST(Ruvia, db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as_text) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    const std::string invalid(
+        "a\xff"
+        "b");
+    for (const auto* variable : {"character_set_client", "character_set_connection"}) {
+        std::vector<reply> replies({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string(variable), std::string("gbk")}})}});
+        replies.insert(replies.end(), 3, reply{.rows_ = std::vector<std::string>({std::string("x")})});
+        replies.push_back({.column_ = "", .tracked_ = {{variable, "utf8mb4"}}});
+        replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("y")})});
+        peer_type peer(std::move(replies), peer_type::after_startup::idle);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), config(peer));
+        std::array<pipeline_test::outcome, 5> outcomes;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+            pipeline_test::outcome ignored;
+            co_await pipeline_test::query(handle, "SELECT v FROM t", ignored);
+            co_await pipeline_test::query(handle, "SELECT v FROM t", ignored);
+            co_await pipeline_test::execute(handle, std::string("SET SESSION ") + variable + " = gbk", ignored);
+            for (std::size_t index = 0; index < 3; ++index) {
+                co_await query_with(handle, "SELECT ? AS v", outcomes[index], std::string_view(invalid));
+            }
+            co_await pipeline_test::execute(handle, std::string("SET SESSION ") + variable + " = utf8mb4", ignored);
+            for (std::size_t index = 3; index < 5; ++index) {
+                co_await query_with(handle, "SELECT ? AS v", outcomes[index], std::string_view(invalid));
+            }
+        });
+        for (std::size_t index = 0; index < 3; ++index) {
+            EXPECT_TRUE(outcomes[index].value_ == "x");
+        }
+        EXPECT_TRUE(outcomes[3].value_ == "y");
+        EXPECT_TRUE(outcomes[4].value_ == "y");
+        const auto text =
+            "query:SELECT 'a\xff"
+            "b' AS v";
+        EXPECT_TRUE((peer.maria_commands() ==
+                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                         std::string("query:SET SESSION ") + variable + " = gbk", std::string(text), std::string(text), std::string(text),
+                         std::string("query:SET SESSION ") + variable + " = utf8mb4", std::string(text), std::string("close:1"), std::string("prepare:SELECT ? AS v"),
+                         std::string("execute:2:s:a\xff"
+                                     "b")})));
+    }
+}
+
+// A server that does not track its session, or a session whose tracking a
+// statement turned off (the server does not report that change), runs nothing
+// prepared: a later change of its state could not be heard.
+TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    {
+        peer_type peer(std::vector<reply>(3, reply{.rows_ = std::vector<std::string>({std::string("v")})}), peer_type::after_startup::idle, 1, false);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), config(peer));
+        std::array<pipeline_test::outcome, 3> outcomes;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+            for (auto& result : outcomes) {
+                co_await pipeline_test::query(handle, "SELECT v FROM t", result);
+            }
+        });
+        for (const auto& result : outcomes) {
+            EXPECT_TRUE(result.value_ == "v");
+        }
+        EXPECT_TRUE(peer.maria_session_setups() == 0);
+        EXPECT_TRUE((peer.maria_commands() == std::vector<std::string>(3, "query:SELECT v FROM t")));
+    }
+    {
+        std::vector<reply> replies({{.rows_ = std::vector<std::string>({std::string("v")})}, {.rows_ = std::vector<std::string>({std::string("v")})}, {.column_ = std::string("")}});
+        replies.insert(replies.end(), 2, reply{.rows_ = std::vector<std::string>({std::string("v")})});
+        peer_type peer(std::move(replies), peer_type::after_startup::idle);
+        auto& context_value = test::new_test_io_context();
+        auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), config(peer));
+        std::array<pipeline_test::outcome, 5> outcomes;
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+            co_await pipeline_test::execute(handle, "SET SESSION session_track_system_variables = ''", outcomes[2]);
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
+            co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[4]);
+        });
+        EXPECT_TRUE(!outcomes[2].error_.has_value());
+        EXPECT_TRUE(outcomes[3].value_ == "v");
+        EXPECT_TRUE(outcomes[4].value_ == "v");
+        EXPECT_TRUE((peer.maria_commands() ==
+                     std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                         std::string("query:SET SESSION session_track_system_variables = ''"), std::string("query:SELECT v FROM t"),
+                         std::string("query:SELECT v FROM t")})));
+    }
+}
+
+// A statement that never runs prepared is remembered as such without taking
+// one of the cache's places, also on its second use: a full cache of
+// prepared statements outlives any number of CALLs, none evicted or closed.
+// The first prepared execution after them reads the tracked variables back,
+// since a procedure may have changed them unreported.
+TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    constexpr std::size_t cached = 128;
+    constexpr std::size_t calls = 130;
+    std::vector<reply> replies(cached * 2 + calls * 2 + 1 + cached, reply{.rows_ = std::vector<std::string>({std::string("v")})});
+    replies[cached * 2 + calls * 2] = {.rows_ = {std::string(server_tracked_list)}};
+    peer_type peer(std::move(replies), peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::size_t failures = 0;
+    const auto select = [](std::size_t index) { return "SELECT v FROM t" + std::string(std::to_string(index)); };
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        const auto run = [&](std::string sql) -> task<void> {
+            pipeline_test::outcome result;
+            co_await pipeline_test::query(handle, sql, result);
+            failures += result.value_ == "v" ? 0 : 1;
+        };
+        for (std::size_t index = 0; index < cached; ++index) {
+            co_await run(select(index));
+            co_await run(select(index));
+        }
+        for (std::size_t index = 0; index < calls; ++index) {
+            co_await run("CALL p" + std::string(std::to_string(index)) + "()");
+            co_await run("CALL p" + std::string(std::to_string(index)) + "()");
+        }
+        for (std::size_t index = 0; index < cached; ++index) {
+            co_await run(select(index));
+        }
+    });
+    EXPECT_EQ(failures, std::size_t{0});
+    const auto commands = peer.maria_commands();
+    EXPECT_EQ(commands.size(), std::size_t{cached * 3 + calls * 2 + 1 + cached});
+    EXPECT_TRUE(std::ranges::none_of(commands, [](const std::string& command) { return command.starts_with("close:"); }));
+    EXPECT_TRUE(commands[cached * 3 + calls * 2] == "query:SELECT @@session_track_system_variables");
+    std::size_t unexpected = 0;
+    for (std::size_t index = 0; index < cached; ++index) {
+        unexpected += commands[cached * 3 + calls * 2 + 1 + index] == "execute:" + std::string(std::to_string(index + 1)) + ":" ? 0 : 1;
+    }
+    EXPECT_EQ(unexpected, std::size_t{0});
+}
+
+// Reports of variables no statement depends on leave the cache alone: with
+// binary logging on, the server reports last_gtid after every committed
+// write, and a cache dropped on each would close and prepare its statements
+// anew all the time.
+TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})},
+                       {.column_ = std::string(""), .affected_rows_ = 1, .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("last_gtid"), std::string("0-1-5")}})},
+                       {.column_ = std::string(""), .tracked_ = std::vector<std::pair<std::string, std::string>>({{std::string("autocommit"), std::string("OFF")}})}, {.rows_ = std::vector<std::string>({std::string("c")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 5> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+        co_await pipeline_test::execute(handle, "INSERT INTO t (v) VALUES ('w')", outcomes[2]);
+        co_await pipeline_test::execute(handle, "SET autocommit = 0", outcomes[3]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[4]);
+    });
+    EXPECT_TRUE(outcomes[2].affected_rows_ == 1);
+    EXPECT_TRUE(outcomes[4].value_ == "c");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                     std::string("query:INSERT INTO t (v) VALUES ('w')"), std::string("query:SET autocommit = 0"), std::string("execute:1:")})));
+}
+
+// A stored procedure may turn session tracking off without a report, so the
+// first prepared execution after a CALL reads the tracked variables back:
+// still tracked, the cached statement runs; no longer, every statement runs
+// as text on that connection.
+TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
+    using namespace ruvia;
+    using namespace mariadb_statement_test;
+    peer_type peer(std::vector<ruvia::test::backend_startup_peer::maria_reply>({{.rows_ = std::vector<std::string>({std::string("a")})}, {.rows_ = std::vector<std::string>({std::string("b")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string(server_tracked_list)})},
+                       {.rows_ = std::vector<std::string>({std::string("c")})}, {.column_ = std::string("")}, {.rows_ = std::vector<std::string>({std::string("time_zone")})}, {.rows_ = std::vector<std::string>({std::string("d")})}, {.rows_ = std::vector<std::string>({std::string("e")})}}),
+        peer_type::after_startup::idle);
+    auto& context_value = test::new_test_io_context();
+    auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
+    db_client client(attachment.loop(), config(peer));
+    std::array<pipeline_test::outcome, 7> outcomes;
+    test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
+        co_await pipeline_test::execute(handle, "CALL p()", outcomes[2]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[3]);
+        co_await pipeline_test::execute(handle, "CALL p()", outcomes[4]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[5]);
+        co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[6]);
+    });
+    EXPECT_TRUE(outcomes[3].value_ == "c");
+    EXPECT_TRUE(outcomes[5].value_ == "d");
+    EXPECT_TRUE(outcomes[6].value_ == "e");
+    EXPECT_TRUE((peer.maria_commands() ==
+                 std::vector<std::string>({std::string("query:SELECT v FROM t"), std::string("prepare:SELECT v FROM t"), std::string("execute:1:"),
+                     std::string("query:CALL p()"), std::string("query:SELECT @@session_track_system_variables"), std::string("execute:1:"), std::string("query:CALL p()"),
+                     std::string("query:SELECT @@session_track_system_variables"), std::string("query:SELECT v FROM t"),
+                     std::string("query:SELECT v FROM t")})));
 }
 #endif
