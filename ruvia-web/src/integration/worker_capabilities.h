@@ -13,7 +13,7 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/web/detail/worker_state.h"
+#include "ruvia/web/web_worker.h"
 
 #include "client/http_client_registry.h"
 #include "client/http_client_worker_limits.h"

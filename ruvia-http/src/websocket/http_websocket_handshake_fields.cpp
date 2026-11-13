@@ -10,7 +10,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_field_section.h"

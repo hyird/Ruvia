@@ -36,12 +36,11 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"
-#include "ruvia/web/detail/request_fields_access.h"
-#include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
+#include "ruvia/web/web_worker.h"
 namespace ruvia {
 
 class context;

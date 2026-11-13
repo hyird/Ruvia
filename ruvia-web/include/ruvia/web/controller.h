@@ -18,8 +18,7 @@
 #include <memory>
 #include <string>
 
-#include "ruvia/web/detail/callback_ref.h"
-#include "ruvia/web/detail/middleware_registration.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"

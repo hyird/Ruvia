@@ -7,7 +7,7 @@
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/ip_address.h"
-#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/error.h"
 
 namespace ruvia {
 

@@ -10,9 +10,9 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/borrowed_view.h"
-#include "ruvia/http/detail/http_field_list_grammar.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_field_values.h"
 
 #include "parser/field_line_folding.h"
 

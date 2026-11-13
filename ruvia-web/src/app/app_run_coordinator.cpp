@@ -19,7 +19,7 @@
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 #include "http/static_root_index.h"
-#include "router/router_impl.h"
+#include "router/route_table.h"
 #include "server/http_server_options_validation.h"
 
 namespace ruvia {

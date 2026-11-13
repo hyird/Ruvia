@@ -45,7 +45,6 @@
 #include "http/request_body_loader.h"
 #include "http3/http3_endpoint.h"
 #include "integration/worker_capabilities.h"
-#include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"

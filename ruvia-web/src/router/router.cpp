@@ -1,3 +1,5 @@
+#include "ruvia/web/router.h"
+
 #include <algorithm>
 #include <bit>
 #include <cstddef>
@@ -13,10 +15,8 @@
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/detail/app_configuration.h"
 
 #include "router/route_table.h"
-#include "router/router_impl.h"
 
 namespace ruvia::detail {
 

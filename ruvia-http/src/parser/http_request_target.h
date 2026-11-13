@@ -3,7 +3,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/borrowed_view.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"

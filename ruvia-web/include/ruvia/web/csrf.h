@@ -4,7 +4,6 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/detail/middleware_registration.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia {

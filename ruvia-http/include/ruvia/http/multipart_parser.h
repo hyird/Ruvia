@@ -13,7 +13,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
 

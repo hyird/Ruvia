@@ -7,7 +7,6 @@
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"

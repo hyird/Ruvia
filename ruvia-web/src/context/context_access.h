@@ -19,8 +19,8 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/web_worker.h"
 
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"

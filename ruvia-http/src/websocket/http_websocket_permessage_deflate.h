@@ -1,3 +1,4 @@
+#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <zlib.h>
@@ -11,7 +12,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"

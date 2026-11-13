@@ -15,6 +15,7 @@
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_target_origin.h"
 

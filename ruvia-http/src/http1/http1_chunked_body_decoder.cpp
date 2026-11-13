@@ -6,11 +6,11 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "parser/field_line_folding.h"

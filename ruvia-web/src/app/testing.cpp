@@ -23,7 +23,6 @@
 #include "http/inline_http_header_views.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
-#include "router/router_impl.h"
 #include "server/config_validation.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_options.h"

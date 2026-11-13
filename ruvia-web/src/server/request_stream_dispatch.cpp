@@ -23,7 +23,6 @@
 #include "context/context_access.h"
 #include "context/context_services.h"
 #include "integration/operation_lane_lease.h"
-#include "router/compiled_route_plan.h"
 #include "router/route_table.h"
 #include "server/http_server_options.h"
 

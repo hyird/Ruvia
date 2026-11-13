@@ -5,8 +5,8 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/borrowed_view.h"
 
 namespace ruvia {
 

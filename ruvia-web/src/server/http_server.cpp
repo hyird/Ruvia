@@ -27,7 +27,6 @@
 #include "integration/runtime_control_completion.h"
 #include "integration/runtime_control_gate.h"
 #include "integration/worker_capabilities.h"
-#include "router/compiled_route_plan.h"
 #include "router/route_table.h"
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_identity.h"

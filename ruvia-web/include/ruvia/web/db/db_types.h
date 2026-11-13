@@ -18,7 +18,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/detail/text_scalar.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 

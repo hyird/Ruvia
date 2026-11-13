@@ -34,7 +34,7 @@
 #include "client/http_client_response_decoding.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
-#include "http3/http3_quic_runtime.h"
+#include "http3/http3_session.h"
 #include "http3/http3_udp_receive.h"
 #include "server/peer_address.h"
 #include "tls/tls_peer.h"

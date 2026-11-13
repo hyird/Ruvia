@@ -5,7 +5,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/request_stream.h"
 
-#include "router/route_resolution.h"
+#include "router/route_table.h"
 
 // listener_dispatch::request_stream: what a request stream connection resolves
 // every request to in place of the route table, and the one run of the

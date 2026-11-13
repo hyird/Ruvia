@@ -28,8 +28,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/text_scalar.h"
-#include "ruvia/web/detail/value_storage.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/model.h"

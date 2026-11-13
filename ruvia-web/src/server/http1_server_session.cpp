@@ -48,8 +48,8 @@
 #include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/streaming.h"
+#include "ruvia/web/web_worker.h"
 
 #include "context/context_access.h"
 #include "context/context_services.h"

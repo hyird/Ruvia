@@ -8,13 +8,13 @@
 
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_native_path.h"
-#include "ruvia/web/detail/app_configuration.h"
+#include "ruvia/web/router.h"
 #include "ruvia/web/server_config.h"
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
 #include "http/static_root_index.h"
-#include "router/router_impl.h"
+#include "router/route_table.h"
 #include "server/config_validation.h"
 
 namespace ruvia::detail {

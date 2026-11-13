@@ -10,10 +10,11 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 

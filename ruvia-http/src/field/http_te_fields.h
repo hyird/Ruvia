@@ -1,11 +1,12 @@
+#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "field/http_connection_fields.h"
 #include "field/http_quality_value.h"

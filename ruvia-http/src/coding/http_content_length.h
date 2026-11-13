@@ -1,3 +1,4 @@
+#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <charconv>
@@ -7,7 +8,7 @@
 #include <string_view>
 #include <system_error>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
+#include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia::detail {
 

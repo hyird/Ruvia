@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/borrowed_view.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"

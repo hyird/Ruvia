@@ -6,7 +6,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/borrowed_view.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_protocol_error.h"

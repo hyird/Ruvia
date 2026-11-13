@@ -29,6 +29,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_status.h"
 
 #include "coding/http_content_length.h"

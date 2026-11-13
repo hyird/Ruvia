@@ -35,8 +35,8 @@
 #include "server/tcp_accept_error.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3/http3_connection_id.h"
+#include "http3/http3_endpoint.h"
 #include "http3/http3_udp_receive.h"
-#include "http3/http3_worker_directory.h"
 #endif
 
 namespace ruvia::detail {

@@ -26,7 +26,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "integration/request_io_metrics.h"
-#include "router/route_resolution.h"
+#include "router/route_table.h"
 #include "server/connection_count.h"
 #include "server/connection_lifecycle.h"
 

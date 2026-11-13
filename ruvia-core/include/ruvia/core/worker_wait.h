@@ -10,9 +10,9 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/detail/suspend_race_state.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"

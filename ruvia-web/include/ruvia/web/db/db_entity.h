@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/detail/value_storage.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/model.h"
 

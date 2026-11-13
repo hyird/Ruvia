@@ -8,8 +8,8 @@
 #include <utility>
 
 #include "ruvia/core/operation_deadline.h"
-#include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/web_worker.h"
 
 #include "client/http_client_registry.h"
 #include "context/context_services.h"

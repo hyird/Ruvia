@@ -17,8 +17,8 @@
 #include <asio/post.hpp>
 #include <asio/use_awaitable.hpp>
 
-#include "ruvia/core/detail/suspend_race_state.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_cancellation.h"
 
 namespace ruvia {
 

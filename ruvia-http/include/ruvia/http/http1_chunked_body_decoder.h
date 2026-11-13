@@ -9,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/borrowed_view.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_body_error.h"

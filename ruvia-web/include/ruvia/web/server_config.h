@@ -25,7 +25,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/tls_config.h"

@@ -1,3 +1,4 @@
+#include "ruvia/http/http_request_trailers.h"
 #pragma once
 
 // HTTP/2 sans-I/O connection core.
@@ -38,8 +39,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/borrowed_view.h"
-#include "ruvia/http/detail/http_field_list_grammar.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
@@ -48,6 +48,7 @@
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_io_buffer.h"

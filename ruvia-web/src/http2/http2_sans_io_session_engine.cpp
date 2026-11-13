@@ -41,7 +41,7 @@
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
-#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
 #include "context/context_access.h"
@@ -52,7 +52,6 @@
 #include "http/http_tunnel_session.h"
 #include "http/request_body_loader.h"
 #include "http2/http2_sans_io_session.h"
-#include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"

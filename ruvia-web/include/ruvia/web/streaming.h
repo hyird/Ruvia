@@ -18,7 +18,7 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/sse.h"
-#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/error.h"
 
 namespace ruvia {
 

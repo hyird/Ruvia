@@ -1,3 +1,4 @@
+#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <cstdint>
@@ -7,8 +8,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_transfer_coding.h"
 
 namespace ruvia::detail {

@@ -8,7 +8,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http1_response_head_error.h"
@@ -16,10 +15,13 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
+#include "ruvia/http/http_request_trailers.h"
 
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"

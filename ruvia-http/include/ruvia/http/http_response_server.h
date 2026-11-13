@@ -8,11 +8,11 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/borrowed_view.h"
-#include "ruvia/http/detail/http_field_list_grammar.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_head_buffer.h"

@@ -32,7 +32,7 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_protocol.h"
-#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/websocket.h"
 
 #include "context/context_access.h"

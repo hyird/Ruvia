@@ -215,6 +215,15 @@ inline std::error_code send_http3_packet(asio::ip::udp::socket& socket, const as
 }  // namespace ruvia::detail
 #endif
 
+#include <ngtcp2/ngtcp2_crypto.h>
+
+#include <string_view>
+
+#include "ruvia/core/fnv1a.h"
+
+#include "http3/http3_connection_id.h"
+#include "tls/tls_random.h"
+
 namespace ruvia::detail {
 namespace {
 
@@ -713,6 +722,516 @@ void http3_endpoint::send_stateless_reset(std::span<const std::uint8_t> destinat
         token, random_bytes, packet, trigger_bytes - 1);
     if (written != 0) {
         (void)send(remote, std::span<const std::byte>(packet.data(), written), local, interface_index);
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+namespace {
+
+// Computes the 32-bit keyed digest of the 16 random bytes `cid[4..19]`. The
+// high 16 bits mask the owner worker index in `cid[0..1]`; the full digest
+// and the unmasked worker index feed `connection_id_tag`. Executed identically
+// by the Linux SO_ATTACH_REUSEPORT_CBPF program.
+[[nodiscard]] std::uint32_t connection_id_digest(const http3_secret& secret, const std::uint8_t* cid) noexcept {
+    const auto k0 = read_http3_be32(secret.data());
+    const auto k1 = read_http3_be32(secret.data() + 4);
+    const auto k2 = read_http3_be32(secret.data() + 8);
+    const auto k3 = read_http3_be32(secret.data() + 12);
+    const auto w0 = read_http3_be32(cid + 4);
+    const auto w1 = read_http3_be32(cid + 8);
+    const auto w2 = read_http3_be32(cid + 12);
+    const auto w3 = read_http3_be32(cid + 16);
+    std::uint32_t acc = (w0 ^ k0) * http3_cid_mix_prime_1;
+    acc = (acc ^ w1 ^ k1) * http3_cid_mix_prime_2;
+    acc = (acc ^ w2 ^ k2) * http3_cid_mix_prime_1;
+    acc = (acc ^ w3 ^ k3) * http3_cid_mix_prime_2;
+    return acc ^ (acc >> 16);
+}
+
+[[nodiscard]] std::uint16_t connection_id_tag(
+    const http3_secret& secret, std::uint32_t digest, std::uint16_t worker_index) noexcept {
+    const auto k4 = read_http3_be32(secret.data() + 16);
+    const std::uint32_t mixed = (digest ^ k4 ^ static_cast<std::uint32_t>(worker_index)) * http3_cid_mix_prime_1;
+    return static_cast<std::uint16_t>(mixed ^ (mixed >> 16));
+}
+
+}  // namespace
+
+std::size_t http3_cid_key_hash::operator()(const http3_cid_key& key) const noexcept {
+    return static_cast<std::size_t>(fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(key.bytes_.data()), key.size_)));
+}
+
+bool make_http3_connection_id(const http3_secret& secret, std::size_t worker_index, ngtcp2_cid& cid) noexcept {
+    if (!std::in_range<std::uint16_t>(worker_index)) {
+        return false;
+    }
+    std::array<std::uint8_t, http3_connection_id_length> bytes{};
+    if (!fill_random_bytes(std::span<unsigned char>(bytes.data() + 4, bytes.size() - 4))) {
+        return false;
+    }
+    const auto worker = static_cast<std::uint16_t>(worker_index);
+    const auto digest = connection_id_digest(secret, bytes.data());
+    const auto masked_worker = static_cast<std::uint16_t>(worker ^ static_cast<std::uint16_t>(digest >> 16));
+    const auto tag = connection_id_tag(secret, digest, worker);
+    bytes[0] = static_cast<std::uint8_t>(masked_worker >> 8);
+    bytes[1] = static_cast<std::uint8_t>(masked_worker);
+    bytes[2] = static_cast<std::uint8_t>(tag >> 8);
+    bytes[3] = static_cast<std::uint8_t>(tag);
+    ngtcp2_cid_init(&cid, bytes.data(), bytes.size());
+    return true;
+}
+
+std::optional<std::size_t> http3_connection_id_owner(
+    const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept {
+    if (cid.size() != http3_connection_id_length) {
+        return std::nullopt;
+    }
+    const auto digest = connection_id_digest(secret, cid.data());
+    const auto worker = static_cast<std::uint16_t>(read_http3_be16(cid.data()) ^ static_cast<std::uint16_t>(digest >> 16));
+    if (static_cast<std::size_t>(worker) >= worker_count) {
+        return std::nullopt;
+    }
+    if (read_http3_be16(cid.data() + 2) != connection_id_tag(secret, digest, worker)) {
+        return std::nullopt;
+    }
+    return static_cast<std::size_t>(worker);
+}
+
+std::size_t http3_initial_worker(
+    const http3_secret& secret, std::span<const std::uint8_t> cid, std::size_t worker_count) noexcept {
+    // Match the optional Linux cBPF selector, so software dispatch keeps the
+    // same owner when SO_REUSEPORT members change or no selector is available.
+    if (cid.size() == http3_connection_id_length) {
+        return connection_id_digest(secret, cid.data()) % worker_count;
+    }
+    if (cid.size() >= NGTCP2_MIN_INITIAL_DCIDLEN) {
+        const auto first = read_http3_be32(cid.data()) ^ read_http3_be32(secret.data());
+        const auto second = read_http3_be32(cid.data() + 4) ^ read_http3_be32(secret.data() + 4);
+        const auto mixed = ((first * http3_cid_mix_prime_1) ^ second) * http3_cid_mix_prime_2;
+        return (mixed >> 16) % worker_count;
+    }
+    auto hash = fnv1a_accumulate(fnv1a_offset_basis, std::string_view(reinterpret_cast<const char*>(secret.data()), secret.size()));
+    hash = fnv1a_accumulate(hash, std::string_view(reinterpret_cast<const char*>(cid.data()), cid.size()));
+    return static_cast<std::size_t>(hash % worker_count);
+}
+
+bool make_http3_stateless_reset_token(
+    const http3_secret& secret, const ngtcp2_cid& cid, http3_quic_stateless_reset_token& token) noexcept {
+    return ngtcp2_crypto_generate_stateless_reset_token(token.data(), secret.data(), secret.size(), &cid) == 0;
+}
+
+}  // namespace ruvia::detail
+
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+#if defined(__linux__)
+#include <linux/filter.h>
+#endif
+
+namespace ruvia::detail {
+#if !defined(_WIN32)
+namespace {
+
+class unique_udp_fd final {
+public:
+    unique_udp_fd() noexcept = default;
+    explicit unique_udp_fd(int fd) noexcept
+        : fd_(fd) {}
+    unique_udp_fd(unique_udp_fd&& other) noexcept
+        : fd_(std::exchange(other.fd_, -1)) {}
+    unique_udp_fd& operator=(unique_udp_fd&& other) noexcept {
+        if (this != &other) {
+            reset();
+            fd_ = std::exchange(other.fd_, -1);
+        }
+        return *this;
+    }
+    unique_udp_fd(const unique_udp_fd&) = delete;
+    unique_udp_fd& operator=(const unique_udp_fd&) = delete;
+    ~unique_udp_fd() {
+        reset();
+    }
+
+    [[nodiscard]] int get() const noexcept {
+        return fd_;
+    }
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return fd_ >= 0;
+    }
+    [[nodiscard]] int release() noexcept {
+        return std::exchange(fd_, -1);
+    }
+    void reset() noexcept {
+        if (fd_ >= 0) {
+            (void)::close(std::exchange(fd_, -1));
+        }
+    }
+
+private:
+    int fd_{-1};
+};
+
+unique_udp_fd open_reuseport_udp_fd(
+    const asio::ip::udp& protocol, const sockaddr* address, socklen_t address_length, [[maybe_unused]] std::optional<bool> ipv6_only) {
+#if !defined(SO_REUSEPORT)
+    (void)protocol;
+    (void)address;
+    (void)address_length;
+    throw std::system_error(asio::error::operation_not_supported, "HTTP/3 worker listeners require SO_REUSEPORT");
+#else
+    int type = SOCK_DGRAM;
+#if defined(SOCK_CLOEXEC)
+    type |= SOCK_CLOEXEC;
+#endif
+    unique_udp_fd fd(::socket(protocol.family(), type, protocol.protocol()));
+    if (!fd) {
+        throw std::system_error(errno, asio::system_category(), "failed to open HTTP/3 UDP listener socket");
+    }
+#if !defined(SOCK_CLOEXEC) && defined(FD_CLOEXEC)
+    const int flags = ::fcntl(fd.get(), F_GETFD);
+    if (flags == -1 || ::fcntl(fd.get(), F_SETFD, flags | FD_CLOEXEC) == -1) {
+        throw std::system_error(errno, asio::system_category(), "failed to configure HTTP/3 UDP listener FD_CLOEXEC");
+    }
+#endif
+    const int enabled = 1;
+    if (::setsockopt(fd.get(), SOL_SOCKET, SO_REUSEADDR, &enabled, sizeof(enabled)) != 0) {
+        throw std::system_error(errno, asio::system_category(), "failed to enable HTTP/3 listener SO_REUSEADDR");
+    }
+    if (::setsockopt(fd.get(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
+        throw std::system_error(errno, asio::system_category(), "failed to enable HTTP/3 listener SO_REUSEPORT");
+    }
+    if (ipv6_only) {
+        const int value = *ipv6_only ? 1 : 0;
+        if (::setsockopt(fd.get(), IPPROTO_IPV6, IPV6_V6ONLY, &value, sizeof(value)) != 0) {
+            throw std::system_error(errno, asio::system_category(), "failed to configure HTTP/3 IPV6_V6ONLY");
+        }
+    }
+    if (::bind(fd.get(), address, address_length) != 0) {
+        throw std::system_error(errno, asio::system_category(), "failed to bind HTTP/3 UDP listener socket");
+    }
+    return fd;
+#endif
+}
+
+#if defined(__linux__) && defined(SO_ATTACH_REUSEPORT_CBPF)
+// Attaches an unprivileged cBPF socket selector that verifies server-issued
+// 20-byte QUIC connection IDs (both Short Header 1-RTT packets, including
+// post-migration / NAT-rebound paths, and Long Header packets carrying a
+// 20-byte server DCID) using the listener secret inlined as immediate words,
+// returning the unmasked owner worker index directly in the kernel. Client
+// Initial packets and forged IDs fall back to a keyed hash of the packet's
+// connection ID bytes so retransmissions stick to one worker while unkeyed
+// floods spread across all workers.
+void attach_reuseport_cbpf(int fd, const http3_secret& secret, std::size_t worker_count) {
+    if (worker_count <= 1 || !std::in_range<std::uint16_t>(worker_count)) {
+        return;
+    }
+    const auto count = static_cast<std::uint32_t>(worker_count);
+    const auto k0 = read_http3_be32(secret.data());
+    const auto k1 = read_http3_be32(secret.data() + 4);
+    const auto k2 = read_http3_be32(secret.data() + 8);
+    const auto k3 = read_http3_be32(secret.data() + 12);
+    const auto k4 = read_http3_be32(secret.data() + 16);
+    constexpr auto p1 = http3_cid_mix_prime_1;
+    constexpr auto p2 = http3_cid_mix_prime_2;
+    constexpr auto random_offset = static_cast<std::uint32_t>(SKF_AD_OFF + SKF_AD_RANDOM);
+
+    std::array<sock_filter, 79> filter{{
+        // 0..10: locate 20-byte server DCID at offset X = 1 (Short Header, len >= 21)
+        // or X = 6 (Long Header, len >= 26 and DCID length == 20).
+        BPF_STMT(BPF_LD | BPF_W | BPF_LEN, 0),
+        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 21, 0, 60),
+        BPF_STMT(BPF_LD | BPF_B | BPF_ABS, 0),
+        BPF_JUMP(BPF_JMP | BPF_JSET | BPF_K, 0x80, 2, 0),
+        BPF_STMT(BPF_LDX | BPF_W | BPF_IMM, 1),
+        BPF_STMT(BPF_JMP | BPF_JA, 5),
+        BPF_STMT(BPF_LD | BPF_W | BPF_LEN, 0),
+        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 26, 0, 54),
+        BPF_STMT(BPF_LD | BPF_B | BPF_ABS, 5),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_K, http3_connection_id_length, 0, 52),
+        BPF_STMT(BPF_LDX | BPF_W | BPF_IMM, 6),
+
+        // 11..21: load masked worker, tag, and random words w0..w3 from DCID[0..19].
+        BPF_STMT(BPF_LD | BPF_H | BPF_IND, 0),
+        BPF_STMT(BPF_ST, 0),
+        BPF_STMT(BPF_LD | BPF_H | BPF_IND, 2),
+        BPF_STMT(BPF_ST, 1),
+        BPF_STMT(BPF_LD | BPF_W | BPF_IND, 8),
+        BPF_STMT(BPF_ST, 2),
+        BPF_STMT(BPF_LD | BPF_W | BPF_IND, 12),
+        BPF_STMT(BPF_ST, 3),
+        BPF_STMT(BPF_LD | BPF_W | BPF_IND, 16),
+        BPF_STMT(BPF_ST, 4),
+        BPF_STMT(BPF_LD | BPF_W | BPF_IND, 4),
+
+        // 22..40: compute connection_id_digest(secret, dcid) into M[2].
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k0),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p1),
+        BPF_STMT(BPF_LDX | BPF_MEM, 2),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k1),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p2),
+        BPF_STMT(BPF_LDX | BPF_MEM, 3),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k2),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p1),
+        BPF_STMT(BPF_LDX | BPF_MEM, 4),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k3),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p2),
+        BPF_STMT(BPF_ST, 2),
+        BPF_STMT(BPF_ALU | BPF_RSH | BPF_K, 16),
+        BPF_STMT(BPF_LDX | BPF_MEM, 2),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ST, 2),
+
+        // 41..45: unmask worker_index = (digest >> 16) ^ masked_worker and bounds-check.
+        BPF_STMT(BPF_ALU | BPF_RSH | BPF_K, 16),
+        BPF_STMT(BPF_LDX | BPF_MEM, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, count, 14, 0),
+        BPF_STMT(BPF_ST, 0),
+
+        // 46..58: verify connection_id_tag(secret, digest, worker_index).
+        BPF_STMT(BPF_LDX | BPF_MEM, 2),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k4),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p1),
+        BPF_STMT(BPF_ST, 3),
+        BPF_STMT(BPF_ALU | BPF_RSH | BPF_K, 16),
+        BPF_STMT(BPF_LDX | BPF_MEM, 3),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_AND | BPF_K, 0xffffu),
+        BPF_STMT(BPF_LDX | BPF_MEM, 1),
+        BPF_JUMP(BPF_JMP | BPF_JEQ | BPF_X, 0, 0, 2),
+        BPF_STMT(BPF_LD | BPF_MEM, 0),
+        BPF_STMT(BPF_RET | BPF_A, 0),
+
+        // 59..61: unauthenticated 20-byte CID: route by keyed digest % worker_count.
+        BPF_STMT(BPF_LD | BPF_MEM, 2),
+        BPF_STMT(BPF_ALU | BPF_MOD | BPF_K, count),
+        BPF_STMT(BPF_RET | BPF_A, 0),
+
+        // 62..75: client Initial with 8..19-byte DCID: keyed hash of DCID[0..7].
+        BPF_STMT(BPF_LD | BPF_W | BPF_LEN, 0),
+        BPF_JUMP(BPF_JMP | BPF_JGE | BPF_K, 14, 0, 12),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 10),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k1),
+        BPF_STMT(BPF_ST, 0),
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, 6),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_K, k0),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p1),
+        BPF_STMT(BPF_LDX | BPF_MEM, 0),
+        BPF_STMT(BPF_ALU | BPF_XOR | BPF_X, 0),
+        BPF_STMT(BPF_ALU | BPF_MUL | BPF_K, p2),
+        BPF_STMT(BPF_ALU | BPF_RSH | BPF_K, 16),
+        BPF_STMT(BPF_ALU | BPF_MOD | BPF_K, count),
+        BPF_STMT(BPF_RET | BPF_A, 0),
+
+        // 76..78: sub-minimum datagram fallback.
+        BPF_STMT(BPF_LD | BPF_W | BPF_ABS, random_offset),
+        BPF_STMT(BPF_ALU | BPF_MOD | BPF_K, count),
+        BPF_STMT(BPF_RET | BPF_A, 0),
+    }};
+    const sock_fprog program{
+        .len = static_cast<unsigned short>(filter.size()),
+        .filter = filter.data(),
+    };
+    if (::setsockopt(fd, SOL_SOCKET, SO_ATTACH_REUSEPORT_CBPF, &program, sizeof(program)) != 0) {
+        if (errno != ENOPROTOOPT && errno != EOPNOTSUPP && errno != EPERM && errno != EACCES) {
+            throw std::system_error(errno, asio::system_category(), "failed to attach HTTP/3 SO_ATTACH_REUSEPORT_CBPF");
+        }
+    }
+}
+#endif
+
+}  // namespace
+#endif
+
+http3_worker_directory::http3_worker_directory(std::size_t worker_count)
+    : slots_(),
+      listener_sockets_() {
+    slots_.reserve(worker_count);
+    for (std::size_t index = 0; index < worker_count; ++index) {
+        slots_.push_back(std::make_unique<slot>());
+    }
+}
+
+http3_worker_directory::~http3_worker_directory() {
+#if !defined(_WIN32)
+    for (auto& group : listener_sockets_) {
+        for (int& fd : group) {
+            if (fd >= 0) {
+                (void)::close(std::exchange(fd, -1));
+            }
+        }
+    }
+#endif
+}
+
+void http3_worker_directory::bind_worker(std::size_t index, const worker_ref& worker_value) {
+    if (index >= slots_.size() || !worker_value.valid()) {
+        throw std::invalid_argument("invalid HTTP/3 worker directory slot");
+    }
+    slots_[index]->worker_ = worker_value;
+}
+
+void http3_worker_directory::attach(std::size_t index, void* target, receive_type receive) noexcept {
+    auto& value = *slots_[index];
+    value.target_ = target;
+    value.receive_ = receive;
+}
+
+void http3_worker_directory::detach(std::size_t index) noexcept {
+    auto& value = *slots_[index];
+    value.target_ = nullptr;
+    value.receive_ = nullptr;
+}
+
+void http3_worker_directory::register_endpoint(std::size_t worker_index, http3_endpoint& endpoint,
+    const asio::ip::udp::endpoint& local, std::shared_ptr<const http3_secret> secret,
+    std::size_t listener_index) {
+    slots_[worker_index]->endpoints_.push_back({&endpoint, local, std::move(secret), listener_index});
+}
+
+void http3_worker_directory::unregister_endpoint(std::size_t worker_index, http3_endpoint& endpoint) noexcept {
+    for (auto& registration : slots_[worker_index]->endpoints_) {
+        if (registration.endpoint_ == &endpoint) {
+            registration.endpoint_ = nullptr;
+            return;
+        }
+    }
+}
+
+#if !defined(_WIN32)
+void http3_worker_directory::open_listener_socket(std::size_t worker_index, std::size_t listener_index,
+    const asio::ip::udp::endpoint& configured_endpoint, const http3_secret& secret,
+    inherited_listener_sockets* inherited, asio::ip::udp::socket& socket, std::optional<bool> ipv6_only) {
+    if (worker_index >= slots_.size()) {
+        throw std::invalid_argument("invalid HTTP/3 worker index");
+    }
+    unique_udp_fd assigned;
+    {
+        std::lock_guard<std::mutex> lock(bind_mutex_);
+        while (listener_sockets_.size() <= listener_index) {
+            listener_sockets_.emplace_back();
+        }
+        auto& group = listener_sockets_[listener_index];
+        if (group.empty()) {
+            std::vector<unique_udp_fd> opened;
+            opened.reserve(slots_.size());
+            if (inherited != nullptr && !inherited->udp().empty()) {
+                // Validated as bound to this endpoint, one per worker in
+                // worker order: the group's members as the kernel numbers them.
+                for (const auto fd : inherited->claim_udp()) {
+                    opened.emplace_back(fd);
+                }
+            } else {
+                asio::ip::udp::endpoint bound_endpoint = configured_endpoint;
+                for (std::size_t index = 0; index < slots_.size(); ++index) {
+                    auto fd = open_reuseport_udp_fd(configured_endpoint.protocol(), bound_endpoint.data(),
+                        static_cast<socklen_t>(bound_endpoint.size()), ipv6_only);
+                    if (index == 0) {
+                        auto length = static_cast<socklen_t>(bound_endpoint.capacity());
+                        if (::getsockname(fd.get(), bound_endpoint.data(), &length) != 0) {
+                            throw std::system_error(errno, asio::system_category(), "failed to query HTTP/3 UDP listener endpoint");
+                        }
+                        bound_endpoint.resize(length);
+                    }
+                    opened.push_back(std::move(fd));
+                }
+            }
+            if (opened.size() != slots_.size()) {
+                throw std::invalid_argument("HTTP/3 listener sockets must number one per worker");
+            }
+#if defined(__linux__) && defined(SO_ATTACH_REUSEPORT_CBPF)
+            attach_reuseport_cbpf(opened.front().get(), secret, slots_.size());
+#else
+            (void)secret;
+#endif
+            group.resize(slots_.size(), -1);
+            for (std::size_t index = 0; index < opened.size(); ++index) {
+                group[index] = opened[index].release();
+            }
+        }
+        if (group[worker_index] < 0) {
+            throw std::logic_error("HTTP/3 listener socket already claimed by worker");
+        }
+        assigned = unique_udp_fd(std::exchange(group[worker_index], -1));
+    }
+    socket.assign(configured_endpoint.protocol(), assigned.get());
+    (void)assigned.release();
+    socket.non_blocking(true);
+}
+
+void http3_worker_directory::close_unclaimed_listener_sockets(std::size_t listener_index) noexcept {
+    const std::lock_guard<std::mutex> lock(bind_mutex_);
+    if (listener_index < listener_sockets_.size()) {
+        for (int& fd : listener_sockets_[listener_index]) {
+            if (fd >= 0) {
+                (void)::close(std::exchange(fd, -1));
+            }
+        }
+    }
+}
+#endif
+
+bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_index,
+    std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote,
+    const asio::ip::udp::endpoint& local, std::uint32_t interface_index, std::uint32_t ecn) noexcept {
+    if (owner >= slots_.size()) {
+        return false;
+    }
+    auto& target = *slots_[owner];
+    auto token = http3_in_flight_token::reserve(target.in_flight_);
+    if (!token) {
+        return false;
+    }
+    try {
+        const auto status = target.worker_.post_factory([&]() -> move_only_function<void()> {
+            std::vector<std::byte> copied(bytes.begin(), bytes.end());
+            http3_handoff_datagram datagram{
+                .bytes_ = std::move(copied),
+                .remote_ = remote,
+                .ecn_ = ecn,
+                .local_ = local,
+                .interface_index_ = interface_index,
+            };
+            return [&target, listener_index, owned = std::move(datagram), token = std::move(token)]() mutable noexcept {
+                // The target pointer is confined to this, the owner's, thread.
+                if (target.receive_ == nullptr) {
+                    return;
+                }
+                for (const auto& registration : target.endpoints_) {
+                    if (registration.listener_index_ != listener_index) {
+                        continue;
+                    }
+                    if (registration.endpoint_ != nullptr) {
+                        target.receive_(target.target_, listener_index, owned);
+                        return;
+                    }
+                    // This worker may already have released the old endpoint
+                    // while another worker still owns one of its connections.
+                    for (const auto& fallback : target.endpoints_) {
+                        if (fallback.endpoint_ != nullptr && fallback.local_ == registration.local_) {
+                            target.receive_(target.target_, fallback.listener_index_, owned);
+                            return;
+                        }
+                    }
+                    return;
+                }
+            };
+        });
+        return status == post_status::accepted;
+    } catch (...) {
+        return false;
     }
 }
 

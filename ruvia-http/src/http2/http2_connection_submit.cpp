@@ -7,13 +7,14 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_connection_advertisement.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_stream.h"
 
 #include "field/http_request_field_validation.h"

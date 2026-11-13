@@ -1,3 +1,4 @@
+#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <cstdint>
@@ -5,11 +6,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_response.h"

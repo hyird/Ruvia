@@ -32,7 +32,7 @@
 #include "app/env_state.h"
 #include "integration/named_capability.h"
 #include "integration/runtime_control_completion.h"
-#include "router/router_impl.h"
+#include "router/route_table.h"
 #include "server/config_validation.h"
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_contexts.h"

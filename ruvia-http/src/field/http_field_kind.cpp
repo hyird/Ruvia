@@ -9,7 +9,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
@@ -20,6 +19,7 @@
 #include "ruvia/http/http_hop_by_hop.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/http_entity_tag.h"

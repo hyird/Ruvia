@@ -33,12 +33,12 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/app_configuration.h"
-#include "ruvia/web/detail/middleware_registration.h"
-#include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/rate_limit.h"
+#include "ruvia/web/router.h"
 #include "ruvia/web/server_config.h"
+#include "ruvia/web/web_worker.h"
 namespace ruvia {
 
 class test_app;
