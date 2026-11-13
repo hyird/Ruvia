@@ -14,7 +14,8 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_request.h"
+#include "ruvia/http/borrowed_text.h"
+
 namespace ruvia {
 
 namespace detail {

@@ -1,0 +1,1042 @@
+#include "ruvia/core/blocking_pool.h"
+
+#include <gtest/gtest.h>
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <concepts>
+#include <cstdint>
+#include <future>
+#include <limits>
+#include <memory>
+#include <semaphore>
+#include <stdexcept>
+#include <system_error>
+#include <thread>
+#include <type_traits>
+#include <utility>
+
+#include <asio/io_context.hpp>
+#include <asio/post.hpp>
+
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/task_scope.h"
+
+#include "worker_task_fixture.h"
+
+namespace ruvia::test::blocking_pool_tests {
+
+template <typename value_type>
+concept separated_blocking_result_access =
+    requires(blocking_result<value_type>& result, const blocking_result<value_type>& constant) {
+        { result.value() } -> std::same_as<std::add_lvalue_reference_t<value_type>>;
+        { constant.value() } -> std::same_as<std::conditional_t<std::is_void_v<value_type>, void, std::add_lvalue_reference_t<const value_type>>>;
+        { std::move(result).take_value() } -> std::same_as<value_type>;
+    } &&
+    (!requires(blocking_result<value_type>& result) { result.take_value(); }) &&
+    (!requires(blocking_result<value_type>& result) { std::move(result).value(); }) &&
+    (!requires(const blocking_result<value_type>& result) { std::move(result).value(); }) &&
+    (!requires(const blocking_result<value_type>& result) { std::move(result).take_value(); });
+
+static_assert(separated_blocking_result_access<int>);
+static_assert(separated_blocking_result_access<void>);
+static_assert(separated_blocking_result_access<std::unique_ptr<int>>);
+
+struct yielding_result final {
+    explicit yielding_result(int value) noexcept
+        : value_(value) {}
+
+    yielding_result(const yielding_result&) = delete;
+    yielding_result& operator=(const yielding_result&) = delete;
+    yielding_result(yielding_result&& other) noexcept
+        : value_(std::exchange(other.value_, -1)) {
+        // Moving a user result may yield while completion and suspension race.
+        std::this_thread::yield();
+    }
+
+    int value_;
+};
+
+struct receiver_move_failure final {
+    explicit receiver_move_failure(std::thread::id receiver) noexcept
+        : receiver_(receiver) {}
+    receiver_move_failure(const receiver_move_failure&) = delete;
+    receiver_move_failure(receiver_move_failure&& other)
+        : receiver_(other.receiver_) {
+        if (std::this_thread::get_id() == receiver_) {
+            throw std::runtime_error("receiver move failed");
+        }
+    }
+    std::thread::id receiver_;
+};
+
+task<void> exercise_receiver_move_failure(worker_ref worker, bool& success) {
+    const auto receiver = std::this_thread::get_id();
+    auto result = co_await run_blocking(worker, {}, [receiver] { return receiver_move_failure(receiver); });
+    if (result.status() != blocking_status::completed || !result.failed()) {
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result).take_value());
+    } catch (const std::runtime_error&) {
+        success = true;
+    }
+}
+
+task<void> exercise_completion_during_suspend(worker_ref worker, bool& success) {
+    for (int value = 0; value < 1024; ++value) {
+        auto result = co_await run_blocking(worker, [value] { return yielding_result(value); });
+        const auto& const_result = result;
+        if (!result.completed() || const_result.value().value_ != value ||
+            result.value().value_ != value || std::move(result).take_value().value_ != value) {
+            co_return;
+        }
+    }
+    success = true;
+}
+
+}  // namespace ruvia::test::blocking_pool_tests
+
+namespace {
+
+using ruvia::blocking_pool;
+using ruvia::blocking_pool_options;
+
+[[nodiscard]] bool blocking_pool_defaults_are_bounded_by_cpu_policy() {
+    blocking_pool pool;
+    const bool valid = pool.thread_count() >= 2 && pool.thread_count() <= 8 &&
+                       pool.queue_capacity() == pool.thread_count() * 64;
+    pool.stop();
+    pool.join();
+    return valid;
+}
+using ruvia::blocking_status;
+using ruvia::blocking_submit_status;
+using ruvia::task;
+using ruvia::worker_ref;
+
+// A task the pool runs on its own thread: it reports that it started, then
+// holds its thread until the test releases it.
+struct thread_gate final {
+    std::binary_semaphore started_{0};
+    std::binary_semaphore release_{0};
+
+    void occupy(blocking_pool& pool) {
+        const auto submitted = pool.submit([this] {
+            started_.release();
+            release_.acquire();
+        });
+        if (submitted != blocking_submit_status::accepted) {
+            std::terminate();
+        }
+        started_.acquire();
+    }
+};
+
+struct reentrant_discard_state final {
+    blocking_pool* pool_{nullptr};
+    std::atomic_int destroyed_{0};
+    std::atomic_int ran_{0};
+    std::atomic_int rejected_{0};
+};
+
+struct reentrant_discarded_task final {
+    reentrant_discard_state* state_{nullptr};
+
+    explicit reentrant_discarded_task(reentrant_discard_state& state_value)
+        : state_(&state_value) {}
+    reentrant_discarded_task(const reentrant_discarded_task&) = delete;
+    reentrant_discarded_task& operator=(const reentrant_discarded_task&) = delete;
+    reentrant_discarded_task(reentrant_discarded_task&& other) noexcept
+        : state_(std::exchange(other.state_, nullptr)) {}
+
+    ~reentrant_discarded_task() {
+        if (state_ == nullptr) {
+            return;
+        }
+        state_->destroyed_.fetch_add(1, std::memory_order_relaxed);
+        static_cast<void>(state_->pool_->stats());
+        state_->pool_->stop();
+        if (state_->pool_->submit([] {}) == blocking_submit_status::pool_stopped) {
+            state_->rejected_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    void operator()() const noexcept {
+        state_->ran_.fetch_add(1, std::memory_order_relaxed);
+    }
+};
+
+enum class move_action { query,
+    submit,
+    stop };
+
+struct reentrant_move_state final {
+    blocking_pool* pool_{};
+    move_action action_{};
+    std::atomic<int> moves_{};
+    std::atomic<int> queries_{};
+    std::atomic<int> destroyed_{};
+    std::atomic<int> ran_{};
+    std::binary_semaphore ran_signal_{0};
+    blocking_submit_status nested_status_{blocking_submit_status::accepted};
+};
+
+struct reentrant_moving_task final {
+    explicit reentrant_moving_task(reentrant_move_state& state)
+        : state_(&state) {}
+    reentrant_moving_task(const reentrant_moving_task&) = delete;
+    reentrant_moving_task& operator=(const reentrant_moving_task&) = delete;
+    reentrant_moving_task(reentrant_moving_task&& other) noexcept
+        : state_(other.state_),
+          owns_(std::exchange(other.owns_, false)) {
+        const auto move = state_->moves_.fetch_add(1) + 1;
+        static_cast<void>(state_->pool_->stats());
+        state_->queries_.fetch_add(1);
+        if (move == 3) {
+            if (state_->action_ == move_action::submit) {
+                state_->nested_status_ = state_->pool_->submit([] {}).status();
+            } else if (state_->action_ == move_action::stop) {
+                state_->pool_->stop();
+            }
+        }
+    }
+    ~reentrant_moving_task() {
+        static_cast<void>(state_->pool_->stats());
+        state_->queries_.fetch_add(1);
+        if (owns_) {
+            state_->destroyed_.fetch_add(1);
+        }
+    }
+    void operator()() const noexcept {
+        state_->ran_.fetch_add(1);
+        state_->ran_signal_.release();
+    }
+
+    reentrant_move_state* state_;
+    bool owns_{true};
+};
+
+bool test_callable_moves_and_destruction_can_query_pool() {
+    for (const auto action : {move_action::query, move_action::submit}) {
+        thread_gate gate;
+        reentrant_move_state state;
+        blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+        state.pool_ = &pool;
+        state.action_ = action;
+        gate.occupy(pool);
+        ruvia::move_only_function<void()> task_value{reentrant_moving_task(state)};
+        const auto status = pool.submit(std::move(task_value));
+        const auto queued = pool.stats();
+        gate.release_.release();
+        if (status != blocking_submit_status::accepted) {
+            pool.join();
+            return false;
+        }
+        state.ran_signal_.acquire();
+        pool.join();
+        const auto finished = pool.stats();
+        if (queued.queued_ != 1 || finished.completed_ != 2 || finished.running_ != 0 ||
+            state.moves_.load() < 4 || state.queries_.load() < 4 ||
+            state.ran_.load() != 1 || state.destroyed_.load() != 1 ||
+            (action == move_action::submit &&
+                (state.nested_status_ != blocking_submit_status::queue_full || finished.rejected_ != 1))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool test_callable_move_can_stop_pool_before_publication() {
+    thread_gate gate;
+    reentrant_move_state state;
+    blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 2});
+    state.pool_ = &pool;
+    state.action_ = move_action::stop;
+    gate.occupy(pool);
+    std::atomic<bool> queued_ran{};
+    const auto queued = pool.submit([&] { queued_ran.store(true); });
+    ruvia::move_only_function<void()> task_value{reentrant_moving_task(state)};
+    auto status = pool.submit(std::move(task_value));
+    gate.release_.release();
+    pool.join();
+    const auto stopped = pool.stats();
+    // The callable that lost the race to stop() comes back to the caller untouched.
+    const bool returned = status == blocking_submit_status::pool_stopped && status.rejected() != nullptr &&
+                          state.destroyed_.load() == 0;
+    static_cast<void>(std::move(status).take_rejected());
+    return returned && queued == blocking_submit_status::accepted && stopped.queued_ == 0 &&
+           stopped.running_ == 0 && stopped.discarded_ == 2 && stopped.completed_ == 1 && !queued_ran.load() &&
+           state.ran_.load() == 0 && state.destroyed_.load() == 1;
+}
+
+task<void> exercise_results(worker_ref worker_value, bool& success) {
+    auto value = co_await ruvia::run_blocking(worker_value, {}, [] { return 42; });
+    if (!value.completed() || std::move(value).take_value() != 42) {
+        co_return;
+    }
+
+    auto thrown = co_await ruvia::run_blocking(
+        worker_value, {}, []() -> int { throw std::system_error(std::make_error_code(std::errc::permission_denied)); });
+    const auto failure = thrown.error();
+    auto relocated = std::move(thrown);
+    for (auto* outcome : {&thrown, &relocated}) {
+        if (outcome->status() != blocking_status::completed || !outcome->failed() ||
+            outcome->completed() || outcome->error() != failure) {
+            co_return;
+        }
+        bool rethrown = false;
+        try {
+            static_cast<void>(std::move(*outcome).take_value());
+        } catch (const std::system_error& error) {
+            rethrown = error.code() == std::errc::permission_denied;
+        }
+        if (!rethrown) {
+            co_return;
+        }
+    }
+
+    std::atomic_bool ran{false};
+    auto empty = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] { flag->store(true); });
+    if (!empty.completed() || !ran.load()) {
+        co_return;
+    }
+    static_cast<void>(std::move(empty).take_value());
+
+    // A moved-only result travels back by move, not by copy.
+    auto owned = co_await ruvia::run_blocking(worker_value, {}, [] { return std::make_unique<int>(7); });
+    if (!owned.completed()) {
+        co_return;
+    }
+    const auto pointer = std::move(owned).take_value();
+    if (pointer == nullptr || *pointer != 7) {
+        co_return;
+    }
+
+    success = true;
+}
+
+task<void> exercise_cancellation(worker_ref worker_value, thread_gate& gate_value,
+    ruvia::stop_source& source_value, std::atomic_bool& callable_finished,
+    std::weak_ptr<int>& abandoned_resource, bool& success) {
+    auto owned_resource = std::make_shared<int>(12);
+    abandoned_resource = owned_resource;
+    auto result_value = co_await ruvia::run_blocking(worker_value,
+        {.timeout_ = std::chrono::seconds(30), .stop_token_ = source_value.token()},
+        [&, owned_resource = std::move(owned_resource)]() mutable {
+            gate_value.started_.release();
+            gate_value.release_.acquire();
+            callable_finished.store(true, std::memory_order_release);
+            return std::move(owned_resource);
+        });
+    if (result_value.status() != blocking_status::cancelled || result_value.completed() || result_value.failed()) {
+        gate_value.release_.release();
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result_value).take_value());
+    } catch (const ruvia::blocking_operation_rejected& error) {
+        success = error.status() == blocking_status::cancelled;
+    }
+    gate_value.release_.release();
+}
+
+// A wedged callable must not pin its caller forever: the wait has a deadline,
+// even though the pool thread stays occupied until the callable returns.
+task<void> exercise_timeout(
+    worker_ref worker_value, thread_gate& gate_value, std::weak_ptr<int>& abandoned_resource, bool& success) {
+    auto owned_resource = std::make_shared<int>(1);
+    abandoned_resource = owned_resource;
+    auto timed_out = co_await ruvia::run_blocking(worker_value, {.timeout_ = std::chrono::milliseconds(20)},
+        [&gate_value, owned_resource = std::move(owned_resource)]() mutable {
+            gate_value.release_.acquire();
+            return std::move(owned_resource);
+        });
+    if (timed_out.status() != blocking_status::timed_out || timed_out.completed()) {
+        co_return;
+    }
+    bool rejected = false;
+    try {
+        static_cast<void>(std::move(timed_out).take_value());
+    } catch (const ruvia::blocking_operation_rejected& error) {
+        rejected = error.status() == blocking_status::timed_out;
+    }
+    gate_value.release_.release();
+
+    // A deadline that is not reached behaves exactly like the untimed wait.
+    auto in_time = co_await ruvia::run_blocking(worker_value, {.timeout_ = std::chrono::seconds(30)}, [] { return 9; });
+    success = rejected && in_time.completed() && std::move(in_time).take_value() == 9;
+}
+
+task<void> exercise_saturating_timeout(
+    blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value, bool& success) {
+    // Keep the pool occupied so a wrapped timeout cannot hide behind a task
+    // that happens to finish before the receiver arms its deadline.
+    std::atomic_bool completed{false};
+    std::thread releaser([&pool, &gate_value, &completed] {
+        while (pool.stats().queued_ == 0 && !completed.load(std::memory_order_relaxed)) {
+            std::this_thread::yield();
+        }
+        gate_value.release_.release();
+    });
+
+    using wide_milliseconds = std::chrono::duration<std::uint64_t, std::milli>;
+    auto result_value = co_await ruvia::run_blocking(
+        worker_value, {.timeout_ = wide_milliseconds(std::numeric_limits<std::uint64_t>::max())},
+        [] { return 17; });
+    completed.store(true, std::memory_order_relaxed);
+    releaser.join();
+    success = result_value.completed() && std::move(result_value).take_value() == 17;
+}
+
+task<void> count_on_worker(std::atomic_int& order, int& observed_value) {
+    observed_value = order.fetch_add(1);
+    co_return;
+}
+
+task<void> block_then_count(worker_ref worker_value, std::atomic_int& order, int& observed_value, bool& completed) {
+    auto result_value = co_await ruvia::run_blocking(
+        worker_value, {}, [] { std::this_thread::sleep_for(std::chrono::milliseconds(50)); });
+    completed = result_value.completed();
+    observed_value = order.fetch_add(1);
+}
+
+// The point of the pool: while one handler waits on blocking work, the worker
+// keeps running other coroutines instead of sitting inside the blocking call.
+task<void> exercise_worker_stays_free(worker_ref worker_value, bool& success) {
+    std::atomic_int order{0};
+    int blocking_order = -1;
+    int free_order = -1;
+    bool blocking_completed = false;
+
+    ruvia::task_scope scope(worker_value);
+    scope.spawn(block_then_count(worker_value, order, blocking_order, blocking_completed));
+    scope.spawn(count_on_worker(order, free_order));
+    co_await scope.join();
+
+    success = blocking_completed && free_order == 0 && blocking_order == 1;
+}
+
+// A pool that stops must not leave a suspended handler waiting forever: tasks
+// discarded from the queue still answer their waiter.
+task<void> exercise_stopped_pool(
+    blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value,
+    std::weak_ptr<int>& discarded_resource, bool& success) {
+    std::thread stopper([&pool] {
+        while (pool.stats().queued_ == 0) {
+            std::this_thread::yield();
+        }
+        pool.stop();
+    });
+
+    auto owned_resource = std::make_shared<int>(1);
+    discarded_resource = owned_resource;
+    auto result_value = co_await ruvia::run_blocking(worker_value, {},
+        [owned_resource = std::move(owned_resource)]() mutable { return std::move(owned_resource); });
+    stopper.join();
+    gate_value.release_.release();
+
+    if (result_value.status() != blocking_status::pool_stopped || result_value.completed()) {
+        co_return;
+    }
+    bool rejected = false;
+    try {
+        static_cast<void>(std::move(result_value).take_value());
+    } catch (const ruvia::blocking_operation_rejected& error) {
+        rejected = error.status() == blocking_status::pool_stopped;
+    }
+    // A stopped pool refuses new work rather than queueing it forever.
+    auto refused = co_await ruvia::run_blocking(worker_value, {}, [] { return 2; });
+    // A stopping pool is shutdown accounting, never the overload signal an
+    // operator sizes the pool from.
+    const auto stats = pool.stats();
+    success = rejected && refused.status() == blocking_status::pool_stopped && stats.rejected_ == 0 &&
+              stats.discarded_ >= 2;
+}
+
+task<void> exercise_queue_full(
+    blocking_pool& pool, worker_ref worker_value, thread_gate& gate_value, bool& success) {
+    // One thread is occupied and the single queue slot is taken, so this one
+    // has nowhere to go.
+    const auto queued = pool.submit([] {});
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [] { return 1; });
+    gate_value.release_.release();
+    const auto stats = pool.stats();
+    success = queued == blocking_submit_status::accepted &&
+              result_value.status() == blocking_status::queue_full && stats.rejected_ == 1 &&
+              stats.discarded_ == 0;
+}
+
+task<void> exercise_worker_stopping(
+    ruvia::event_loop_attachment& attachment, worker_ref worker_value, thread_gate& gate_value, bool& success) {
+    asio::post(attachment.loop().executor(), [&attachment] { attachment.stop(); });
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [&gate_value] {
+        gate_value.release_.acquire();
+        return 5;
+    });
+    success = result_value.status() == blocking_status::worker_stopping && !result_value.completed() &&
+              !result_value.failed();
+}
+
+// Offloading from a worker that has ALREADY stopped is the same shutdown
+// outcome, not an exception the caller never asked for.
+task<void> exercise_stopped_worker(
+    ruvia::event_loop_attachment& attachment, worker_ref worker_value, std::atomic_bool& ran, bool& success) {
+    attachment.stop();
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] {
+        flag->store(true);
+        return 1;
+    });
+    success = result_value.status() == blocking_status::worker_stopping;
+}
+
+// Outcomes the wait would decide without the callable are decided before
+// submission, so the callable never occupies a pool thread for them.
+task<void> exercise_settled_before_submit(
+    worker_ref worker_value, worker_ref other_worker, std::atomic_bool& ran, bool& success) {
+    ruvia::stop_source stopped;
+    stopped.request_stop();
+    auto cancelled = co_await ruvia::run_blocking(
+        worker_value, {.stop_token_ = stopped.token()}, [flag = &ran] { flag->store(true); });
+    auto expired = co_await ruvia::run_blocking(worker_value,
+        {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})},
+        [flag = &ran] { flag->store(true); });
+    bool nonpositive_rejected = false;
+    try {
+        static_cast<void>(ruvia::run_blocking(
+            worker_value, {.timeout_ = std::chrono::milliseconds(0)}, [flag = &ran] { flag->store(true); }));
+    } catch (const std::invalid_argument&) {
+        nonpositive_rejected = true;
+    }
+    bool misplaced = false;
+    try {
+        static_cast<void>(co_await ruvia::run_blocking(other_worker, {}, [flag = &ran] {
+            flag->store(true);
+        }));
+    } catch (const std::logic_error&) {
+        misplaced = true;
+    }
+    success = cancelled.status() == blocking_status::cancelled && expired.status() == blocking_status::timed_out &&
+              nonpositive_rejected && misplaced;
+}
+
+// A worker whose event loop was given no pool reports that state; the callable
+// runs nowhere else.
+task<void> exercise_worker_without_pool(worker_ref worker_value, std::atomic_bool& ran, bool& success) {
+    auto result_value = co_await ruvia::run_blocking(worker_value, {}, [flag = &ran] { flag->store(true); });
+    if (result_value.status() != blocking_status::unavailable || result_value.completed() || result_value.failed()) {
+        co_return;
+    }
+    try {
+        static_cast<void>(std::move(result_value).take_value());
+    } catch (const ruvia::blocking_operation_rejected& error) {
+        success = error.status() == blocking_status::unavailable;
+    }
+}
+
+bool test_destruction_does_not_join_running_callable() {
+    auto started_promise = std::make_shared<std::promise<void>>();
+    auto started = started_promise->get_future();
+    auto finished_promise = std::make_shared<std::promise<void>>();
+    auto finished = finished_promise->get_future();
+    std::promise<void> release_promise;
+    auto release = release_promise.get_future().share();
+    std::promise<void> destroyed_promise;
+    auto destroyed = destroyed_promise.get_future();
+
+    auto pool = std::make_unique<blocking_pool>(blocking_pool_options{.thread_count_ = 1});
+    if (pool->submit(
+            [started = std::move(started_promise), finished = std::move(finished_promise), release] {
+                started->set_value();
+                release.wait();
+                finished->set_value();
+            }) != blocking_submit_status::accepted) {
+        return false;
+    }
+    started.wait();
+
+    std::thread destroyer([pool = std::move(pool), &destroyed_promise]() mutable {
+        pool.reset();
+        destroyed_promise.set_value();
+    });
+    const bool returned_before_callable =
+        destroyed.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+
+    release_promise.set_value();
+    destroyer.join();
+    const bool callable_finished =
+        finished.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready;
+    return returned_before_callable && callable_finished;
+}
+
+bool test_join_stops_and_waits_for_running_callable() {
+    auto started_promise = std::make_shared<std::promise<void>>();
+    auto started = started_promise->get_future();
+    std::promise<void> release_promise;
+    auto release = release_promise.get_future().share();
+    std::promise<void> joined_promise;
+    auto joined = joined_promise.get_future();
+
+    blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+    if (pool.submit([started = std::move(started_promise), release] {
+            started->set_value();
+            release.wait();
+        }) != blocking_submit_status::accepted) {
+        return false;
+    }
+    started.wait();
+
+    std::thread joiner([&pool, &joined_promise] {
+        pool.join();
+        joined_promise.set_value();
+    });
+    const bool join_waited =
+        joined.wait_for(std::chrono::milliseconds(200)) == std::future_status::timeout;
+
+    release_promise.set_value();
+    joiner.join();
+    return join_waited && joined.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready;
+}
+
+bool test_join_rejects_pool_thread_before_stopping() {
+    blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 1});
+    std::promise<bool> completed;
+    auto result_value = completed.get_future();
+    if (pool.submit([&] {
+            bool rejected = false;
+            try {
+                pool.join();
+            } catch (const std::logic_error& error) {
+                rejected = std::string_view(error.what()) ==
+                           "cannot join a blocking pool from one of its threads";
+            }
+            const auto still_accepting = pool.submit([] {}) == blocking_submit_status::accepted;
+            completed.set_value(rejected && still_accepting);
+        }) != blocking_submit_status::accepted) {
+        return false;
+    }
+    const bool rejected = result_value.get();
+    pool.join();
+    return rejected;
+}
+
+bool test_stop_drains_without_running_queued_tasks() {
+    constexpr int queued_task_count = 3;
+    thread_gate gate;
+    reentrant_discard_state state;
+    blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = queued_task_count});
+    state.pool_ = &pool;
+    gate.occupy(pool);
+
+    for (int i = 0; i < queued_task_count; ++i) {
+        if (pool.submit(reentrant_discarded_task(state)) !=
+            blocking_submit_status::accepted) {
+            gate.release_.release();
+            pool.join();
+            return false;
+        }
+    }
+
+    pool.stop();
+    const auto stopped = pool.stats();
+    gate.release_.release();
+    pool.join();
+    const auto finished = pool.stats();
+    return stopped.queued_ == 0 && stopped.running_ == 1 &&
+           stopped.discarded_ == queued_task_count * 2 &&
+           state.destroyed_.load(std::memory_order_relaxed) == queued_task_count &&
+           state.rejected_.load(std::memory_order_relaxed) == queued_task_count &&
+           state.ran_.load(std::memory_order_relaxed) == 0 && finished.running_ == 0 &&
+           finished.completed_ == 1;
+}
+
+}  // namespace
+
+TEST(Ruvia, blocking_pool_results_and_worker_progress) {
+    bool results = false;
+    bool worker_stays_free = false;
+    {
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 2});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(attachment, exercise_results(worker_value, results),
+            exercise_worker_stays_free(worker_value, worker_stays_free));
+        pool.join();
+    }
+    EXPECT_TRUE(results);
+    EXPECT_TRUE(worker_stays_free);
+}
+
+TEST(Ruvia, blocking_pool_cross_thread_completion_preserves_results) {
+    bool success = false;
+    blocking_pool pool({.thread_count_ = 1});
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+    ruvia::test::run_worker_tasks(attachment,
+        ruvia::test::blocking_pool_tests::exercise_completion_during_suspend(attachment.loop().worker(), success));
+    pool.join();
+    EXPECT_TRUE(success);
+}
+
+TEST(Ruvia, blocking_pool_receiver_move_failure_is_reported) {
+    bool success = false;
+    blocking_pool pool({.thread_count_ = 1});
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+    ruvia::test::run_worker_tasks(attachment,
+        ruvia::test::blocking_pool_tests::exercise_receiver_move_failure(attachment.loop().worker(), success));
+    pool.join();
+    EXPECT_TRUE(success);
+}
+
+TEST(Ruvia, blocking_pool_cancellation_releases_the_waiter) {
+    bool cancelled = false;
+    std::atomic_bool cancelled_callable_finished{false};
+    std::weak_ptr<int> abandoned_resource;
+    {
+        thread_gate gate;
+        ruvia::stop_source source;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        std::thread canceller([&] {
+            gate.started_.acquire();
+            source.request_stop();
+        });
+        ruvia::test::run_worker_tasks(attachment, exercise_cancellation(worker_value, gate, source,
+                                                      cancelled_callable_finished, abandoned_resource, cancelled));
+        canceller.join();
+        pool.join();
+    }
+    EXPECT_TRUE(cancelled);
+    EXPECT_TRUE(cancelled_callable_finished.load(std::memory_order_acquire));
+    EXPECT_TRUE(abandoned_resource.expired());
+}
+
+TEST(Ruvia, blocking_pool_timeout_releases_the_waiter) {
+    bool timeout = false;
+    std::weak_ptr<int> abandoned_resource;
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 2});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(
+            attachment, exercise_timeout(worker_value, gate, abandoned_resource, timeout));
+        pool.join();
+    }
+    EXPECT_TRUE(timeout);
+    EXPECT_TRUE(abandoned_resource.expired());
+}
+
+TEST(Ruvia, blocking_pool_timeout_saturates) {
+    bool saturating_timeout = false;
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        gate.occupy(pool);
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(attachment,
+            exercise_saturating_timeout(pool, worker_value, gate, saturating_timeout));
+        pool.join();
+    }
+    EXPECT_TRUE(saturating_timeout);
+}
+
+TEST(Ruvia, blocking_pool_stop_releases_queued_waiters) {
+    bool stopped_pool = false;
+    std::weak_ptr<int> discarded_resource;
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        gate.occupy(pool);
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(attachment,
+            exercise_stopped_pool(pool, worker_value, gate, discarded_resource, stopped_pool));
+        pool.join();
+    }
+    EXPECT_TRUE(stopped_pool);
+    EXPECT_TRUE(discarded_resource.expired());
+}
+
+TEST(Ruvia, blocking_pool_full_queue_rejects_work) {
+    bool queue_full = false;
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1, .queue_capacity_ = 1});
+        gate.occupy(pool);
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(attachment, exercise_queue_full(pool, worker_value, gate, queue_full));
+        pool.join();
+    }
+    EXPECT_TRUE(queue_full);
+}
+
+TEST(Ruvia, blocking_pool_preserves_fifo_and_recovers_queue_capacity) {
+    for (const std::size_t capacity : {1, 3, 5, 8}) {
+        std::size_t next = 0;
+        std::array<std::size_t, 8> observed{};
+        thread_gate gate;
+        std::binary_semaphore completed{0};
+        blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = capacity});
+        EXPECT_EQ(pool.queue_capacity(), capacity);
+        for (std::size_t round = 0; round != 16; ++round) {
+            next = 0;
+            gate.occupy(pool);
+            for (std::size_t index = 0; index != capacity; ++index) {
+                EXPECT_EQ(pool.submit([&, index, round] {
+                    observed[next++] = round * capacity + index;
+                    if (index + 1 == capacity) {
+                        completed.release();
+                    }
+                }),
+                    blocking_submit_status::accepted);
+            }
+            EXPECT_EQ(pool.stats().queued_, capacity);
+            EXPECT_EQ(pool.submit([] {}), blocking_submit_status::queue_full);
+            gate.release_.release();
+            completed.acquire();
+            for (std::size_t index = 0; index != capacity; ++index) {
+                EXPECT_EQ(observed[index], round * capacity + index);
+            }
+        }
+        pool.join();
+    }
+}
+
+TEST(Ruvia, blocking_pool_worker_stop_releases_the_waiter) {
+    bool worker_stopping = false;
+    {
+        thread_gate gate;
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(
+            attachment, exercise_worker_stopping(attachment, worker_value, gate, worker_stopping));
+        gate.release_.release();
+        pool.join();
+    }
+    EXPECT_TRUE(worker_stopping);
+}
+
+TEST(Ruvia, blocking_pool_stopped_worker_rejects_work) {
+    bool stopped_worker = false;
+    std::atomic_bool stopped_worker_task_ran{false};
+    {
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        const auto worker_value = attachment.loop().worker();
+        ruvia::test::run_worker_tasks(
+            attachment, exercise_stopped_worker(attachment, worker_value, stopped_worker_task_ran, stopped_worker));
+        pool.join();
+        stopped_worker =
+            stopped_worker && !stopped_worker_task_ran.load() && pool.stats().completed_ == 0;
+    }
+    EXPECT_TRUE(stopped_worker);
+}
+
+TEST(Ruvia, blocking_pool_rejects_settled_operations_before_submission) {
+    bool settled_before_submit = false;
+    std::atomic_bool settled_task_ran{false};
+    {
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        asio::io_context io_context;
+        auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8, .blocking_pool_ = &pool});
+        asio::io_context other_context;
+        auto other_attachment = ruvia::attach_event_loop(other_context, {.queue_capacity_ = 8});
+        const auto worker_value = attachment.loop().worker();
+        // The worker lends out the pool its loop borrows, and nothing else.
+        EXPECT_EQ(attachment.loop().worker().blocking_pool(), &pool);
+        EXPECT_EQ(other_attachment.loop().worker().blocking_pool(), nullptr);
+        EXPECT_EQ(ruvia::worker_ref{}.blocking_pool(), nullptr);
+        ruvia::test::run_worker_tasks(attachment, exercise_settled_before_submit(worker_value,
+                                                      other_attachment.loop().worker(), settled_task_ran,
+                                                      settled_before_submit));
+        pool.join();
+        settled_before_submit =
+            settled_before_submit && !settled_task_ran.load() && pool.stats().completed_ == 0;
+    }
+    EXPECT_TRUE(settled_before_submit);
+}
+
+TEST(Ruvia, blocking_pool_worker_without_pool_reports_unavailable) {
+    bool unavailable = false;
+    std::atomic_bool ran{false};
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
+    ruvia::test::run_worker_tasks(
+        attachment, exercise_worker_without_pool(attachment.loop().worker(), ran, unavailable));
+    EXPECT_TRUE(unavailable);
+    EXPECT_TRUE(!ran.load());
+}
+
+TEST(Ruvia, blocking_pool_rejects_empty_tasks) {
+    bool rejects_empty_task = false;
+    {
+        blocking_pool pool(blocking_pool_options{.thread_count_ = 1});
+        try {
+            static_cast<void>(pool.submit({}));
+        } catch (const std::invalid_argument&) {
+            rejects_empty_task = true;
+        }
+        pool.stop();
+        pool.join();
+        rejects_empty_task =
+            rejects_empty_task && pool.submit([] {}) == blocking_submit_status::pool_stopped;
+    }
+    EXPECT_TRUE(rejects_empty_task);
+}
+
+TEST(Ruvia, blocking_pool_default_sizing_is_bounded) {
+    EXPECT_TRUE(blocking_pool_defaults_are_bounded_by_cpu_policy());
+}
+
+TEST(Ruvia, blocking_pool_destruction_does_not_join_running_work) {
+    EXPECT_TRUE(test_destruction_does_not_join_running_callable());
+}
+
+TEST(Ruvia, blocking_pool_join_waits_for_running_work) {
+    EXPECT_TRUE(test_join_stops_and_waits_for_running_callable());
+}
+
+TEST(Ruvia, blocking_pool_join_rejects_its_own_thread) {
+    EXPECT_TRUE(test_join_rejects_pool_thread_before_stopping());
+}
+
+TEST(Ruvia, blocking_pool_stop_discards_queued_work_without_running_it) {
+    EXPECT_TRUE(test_stop_drains_without_running_queued_tasks());
+}
+
+TEST(Ruvia, blocking_pool_callable_moves_and_destruction_allow_reentry) {
+    EXPECT_TRUE(test_callable_moves_and_destruction_can_query_pool());
+}
+
+TEST(Ruvia, blocking_pool_callable_move_can_stop_before_publication) {
+    EXPECT_TRUE(test_callable_move_can_stop_pool_before_publication());
+}
+
+TEST(Ruvia, blocking_pool_join_waits_for_discard_cleanup_and_allows_reentrant_join) {
+    thread_gate gate;
+    std::binary_semaphore discard_started{0};
+    std::binary_semaphore release_discard{0};
+    std::atomic_bool await_discard{false};
+    std::atomic_bool discarded{false};
+    std::atomic_bool ran{false};
+    blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+    gate.occupy(pool);
+    auto payload = std::shared_ptr<int>(new int(17), [&](int* value) {
+        if (await_discard.load()) {
+            discard_started.release();
+            release_discard.acquire();
+            pool.join();
+        }
+        delete value;
+        discarded = true;
+    });
+    const auto status = pool.submit([payload = std::move(payload), &ran] { ran = *payload == 17; });
+    if (status != blocking_submit_status::accepted) {
+        gate.release_.release();
+        pool.join();
+        FAIL() << "failed to queue the discard probe";
+    }
+    await_discard = true;
+    std::thread stopper([&] { pool.stop(); });
+    if (!discard_started.try_acquire_for(std::chrono::seconds(5))) {
+        await_discard = false;
+        release_discard.release();
+        gate.release_.release();
+        stopper.join();
+        pool.join();
+        FAIL() << "queued task destruction did not start";
+    }
+    gate.release_.release();
+    std::promise<void> join_started;
+    auto joining = join_started.get_future();
+    std::promise<void> join_finished;
+    auto joined = join_finished.get_future();
+    std::thread joiner([&] {
+        join_started.set_value();
+        pool.join();
+        join_finished.set_value();
+    });
+    joining.wait();
+    const bool waited_for_discard =
+        joined.wait_for(std::chrono::milliseconds(20)) == std::future_status::timeout;
+    release_discard.release();
+    stopper.join();
+    joiner.join();
+    EXPECT_TRUE(waited_for_discard);
+    EXPECT_TRUE(discarded.load());
+    EXPECT_FALSE(ran.load());
+    const auto finished = pool.stats();
+    EXPECT_EQ(finished.queued_, 0U);
+    EXPECT_EQ(finished.running_, 0U);
+    EXPECT_EQ(finished.completed_, 1U);
+    EXPECT_EQ(finished.discarded_, 1U);
+}
+
+TEST(Ruvia, blocking_pool_rejects_overflowing_capacity_options) {
+    constexpr std::size_t wrapped_threads =
+        std::size_t{1} << (std::numeric_limits<std::size_t>::digits - 6);
+    for (const blocking_pool_options options : {
+             blocking_pool_options{.thread_count_ = wrapped_threads, .queue_capacity_ = 0},
+             blocking_pool_options{
+                 .thread_count_ = (std::numeric_limits<std::size_t>::max() / 64) + 1,
+                 .queue_capacity_ = 0},
+             blocking_pool_options{
+                 .thread_count_ = std::numeric_limits<std::size_t>::max(),
+                 .queue_capacity_ = 1},
+         }) {
+        bool rejected = false;
+        try {
+            blocking_pool pool(options);
+            static_cast<void>(pool);
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+    }
+}
+
+TEST(Ruvia, blocking_pool_submit_returns_rejected_callable) {
+    thread_gate gate;
+    blocking_pool pool({.thread_count_ = 1, .queue_capacity_ = 1});
+    gate.occupy(pool);
+    auto owned = std::make_shared<int>(7);
+    const std::weak_ptr<int> watch = owned;
+    EXPECT_EQ(pool.submit([] {}), blocking_submit_status::accepted);
+
+    // A full queue returns the callable with everything it owns.
+    auto full = pool.submit([owned = std::move(owned)] { static_cast<void>(owned); });
+    EXPECT_EQ(full.status(), blocking_submit_status::queue_full);
+    ASSERT_NE(full.rejected(), nullptr);
+    EXPECT_FALSE(watch.expired());
+    auto returned = std::move(full).take_rejected();
+    EXPECT_EQ(full.rejected(), nullptr);
+    EXPECT_FALSE(watch.expired());
+
+    gate.release_.release();
+    pool.stop();
+    // A stopped pool returns it as well; the caller decides where it dies.
+    auto stopped = pool.submit(std::move(returned));
+    EXPECT_EQ(stopped.status(), blocking_submit_status::pool_stopped);
+    ASSERT_NE(stopped.rejected(), nullptr);
+    EXPECT_FALSE(watch.expired());
+    static_cast<void>(std::move(stopped).take_rejected());
+    EXPECT_TRUE(watch.expired());
+    pool.join();
+    const auto stats = pool.stats();
+    EXPECT_EQ(stats.rejected_, 1U);
+}

@@ -1,4 +1,4 @@
-#include "http_internal.h"
+#include "http_connection_fields.h"
 // HTTP/2 sans-I/O connection core.
 //
 // A pure protocol state machine: it never touches a socket, a coroutine, a timer,
@@ -38,7 +38,16 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/websocket_handshake.h"
+
+#include "http_connection_fields.h"
 
 namespace ruvia::detail {
 
@@ -1407,6 +1416,10 @@ public:
                                       stream.local_send().end_stream_committed() != nullptr);
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
 // The field section handed to one nghttp2 HEADERS/PUSH_PROMISE submission.
 // Entries either borrow caller text that outlives the submission or own a copy
 // (lowercased names, formatted values). nghttp2 copies every name and value
@@ -1534,6 +1547,10 @@ private:
     std::vector<entry_type> entries_;
     std::vector<nghttp2_nv> nv_;
 };
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 
 // SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
 // serialized HPACK block. Huffman coding can spend up to 30 bits per decoded
@@ -1732,6 +1749,10 @@ struct http2_header_decode_context final {
     return is_forbidden_http_request_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
 [[nodiscard]] inline bool http2_is_pending_websocket_connect(const http2_stream_state& stream) noexcept {
     const auto* pending = stream.tunnel().pending();
     return pending != nullptr && pending->form() == http2_connect_form::extended &&
@@ -1766,6 +1787,10 @@ struct http2_header_decode_context final {
     // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
     return validate_extended_connect_websocket_headers(request, options);
 }
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 
 // Queue records for the events whose public form the facade materializes from
 // stream storage or binds to its owner endpoint when the event is taken.
@@ -2903,6 +2928,10 @@ private:
     std::uint32_t undrained_control_frames_{0};
     std::uint32_t peer_error_resets_{0};
 };
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 
 namespace {
 
@@ -5315,7 +5344,6 @@ http2_connection::submit_extended_connect_request_head(
 
 std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_push_promise(
     std::uint32_t associated_stream_id, http_push_request_view request) {
-    using error_type = http2_push_submit_error;
     const auto* parent_value = streams_.find(associated_stream_id);
     const auto promised_id = static_cast<std::uint32_t>(nghttp2_session_get_next_stream_id(session_.get()));
     if (role_ != http2_role::server || !received_peer_settings_ ||
@@ -5323,16 +5351,16 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         (associated_stream_id & 1U) == 0 || !http2_remote_final_head_decoded(*parent_value) ||
         parent_value->tunnel().not_connect() == nullptr || parent_value->local_send().end_stream_committed() ||
         promised_id > http2_max_stream_id) {
-        return error_type::invalid_state;
+        return http2_push_submit_error::invalid_state;
     }
     if (peer_setting(NGHTTP2_SETTINGS_ENABLE_PUSH) == 0) {
-        return error_type::push_disabled;
+        return http2_push_submit_error::push_disabled;
     }
     // RFC 9113 §8.4: the client's SETTINGS_MAX_CONCURRENT_STREAMS bounds pushed
     // responses. When no pushed stream could open now the promise is not made.
     // Reserved promises do not count (§5.1.2); their response head waits for a slot.
     if (active_local_request_streams_ >= peer_setting(NGHTTP2_SETTINGS_MAX_CONCURRENT_STREAMS)) {
-        return error_type::stream_limit;
+        return http2_push_submit_error::stream_limit;
     }
     const auto known_method = request.method_ == "GET"    ? http_known_method::get
                               : request.method_ == "HEAD" ? http_known_method::head
@@ -5344,11 +5372,11 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
             request.headers_,
             http_request_content_indication::no_content, {}, http_client_request_expectation::none,
             http_request_field_source::generated, max_http_header_bytes)) {
-        return error_type::invalid_request;
+        return http2_push_submit_error::invalid_request;
     }
     auto* stream = create_stream(promised_id);
     if (stream == nullptr) {
-        return error_type::stream_limit;
+        return http2_push_submit_error::stream_limit;
     }
     try {
         stream->assign_request_method(request.method_);
@@ -5410,10 +5438,14 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
     return promised_id;
 }
 
+}  // namespace ruvia::detail
+
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in
 // chunks borrowed from the fed input. nghttp2 has already enforced framing,
 // stream states and flow control; this layer applies HTTP message semantics.
+
+namespace ruvia::detail {
 
 namespace {
 
@@ -6585,6 +6617,9 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websoc
     });
 }
 
+}  // namespace ruvia
+
+namespace ruvia {
 namespace detail {
 
 class hpack_decoder final {

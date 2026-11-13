@@ -1,0 +1,34 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <atomic>
+#include <charconv>
+#include <chrono>
+#include <concepts>
+#include <coroutine>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <exception>
+#include <filesystem>
+#include <limits>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+#include <type_traits>
+#include <utility>
+#include <variant>
+#include <vector>
+
+#include <asio.hpp>
+#include <asio/ssl.hpp>
+#include <openssl/evp.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>

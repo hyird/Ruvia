@@ -1,0 +1,315 @@
+#include <gtest/gtest.h>
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <memory>
+#include <semaphore>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+
+#include <asio/buffer.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/ssl/error.hpp>
+#include <asio/ssl/stream.hpp>
+#include <asio/write.hpp>
+#include <openssl/ssl.h>
+
+#include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
+
+#include "http_server_fixture.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http_server_fixture.h"
+#endif
+#include "http_server_fixture.h"
+// How the server ends connections it closes itself. A final response that
+// closes the connection must reach a peer that is still sending (RFC 9112
+// §9.6: lingering close instead of a reset). Over TLS, a close after an idle
+// timeout, after an HTTP/2 GOAWAY, or while draining sends close_notify
+// (RFC 9112 §9.8). This executable owns its application because of its short
+// idle timeout.
+
+namespace connection_close_test {
+
+using namespace std::chrono_literals;
+
+constexpr auto idle_timeout = 300ms;
+constexpr std::size_t large_response_bytes = std::size_t{4} * 1024 * 1024;
+
+class connection_close_routes final {
+    RUVIA_ROUTES_BEGIN(connection_close_routes)
+    RUVIA_GET("/close/item", item);
+    RUVIA_POST("/close/large", large);
+    RUVIA_GET_WS("/close/ws", ws_close);
+    RUVIA_GET_WS("/close/ws-read", ws_read);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> item(ruvia::context& c) {
+        co_return c.text("item");
+    }
+
+    // Answers without reading the request content, which closes the connection.
+    ruvia::task<ruvia::http_response> large(ruvia::context& c) {
+        co_return c.text(std::string(large_response_bytes, 'L'));
+    }
+
+    ruvia::task<void> ws_close(ruvia::context& c) {
+        (void)c;
+        co_return;
+    }
+
+    ruvia::task<void> ws_read(ruvia::context& c) {
+        (void)co_await c.websocket().read();
+        co_return;
+    }
+};
+
+using tls_stream = asio::ssl::stream<asio::ip::tcp::socket>;
+
+using ruvia::test::read_to_end;
+
+std::unique_ptr<tls_stream> connect_tls(asio::io_context& io, asio::ssl::context& client,
+    const asio::ip::tcp::endpoint& endpoint) {
+    auto stream = std::make_unique<tls_stream>(io, client);
+    stream->next_layer().connect(endpoint);
+    stream->handshake(asio::ssl::stream_base::client);
+    return stream;
+}
+
+// The server answers a request whose content it does not read with a large
+// response and closes. The peer keeps unread request bytes queued at the
+// server and reads slowly through a small receive window, so most of the
+// response is still in the server's send queue when the server closes: an
+// immediate close would reset the connection and discard it.
+void final_response_survives_unread_request_content(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ip::tcp::socket socket(io);
+    socket.open(endpoint.protocol());
+    socket.set_option(asio::socket_base::receive_buffer_size(64 * 1024));
+    socket.connect(endpoint);
+    std::string request("POST /close/large HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n");
+    request.append(std::size_t{64} * 1024, 'u');
+    asio::write(socket, asio::buffer(request));
+    std::this_thread::sleep_for(200ms);
+    asio::error_code end;
+    const auto response = read_to_end(socket, end);
+    const auto head_end = response.find("\r\n\r\n");
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(head_end != std::string::npos);
+    if (head_end != std::string::npos) {
+        EXPECT_EQ(response.size() - head_end - 4, large_response_bytes);
+    }
+    EXPECT_TRUE(end == asio::error::eof);
+}
+
+// A keep-alive connection that idles past idle_timeout ends with close_notify.
+void idle_tls_connection_ends_with_close_notify(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    const auto stream = connect_tls(io, client, endpoint);
+    // 服务端可在发送返回前开始空闲计时，所以先记录请求发送的起点。
+    const auto started = std::chrono::steady_clock::now();
+    asio::write(*stream, asio::buffer(std::string_view("GET /close/item HTTP/1.1\r\nHost: localhost\r\n\r\n")));
+    asio::error_code end;
+    const auto response = read_to_end(*stream, end);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.ends_with("item"));
+    EXPECT_TRUE(std::chrono::steady_clock::now() - started >= idle_timeout);
+    EXPECT_TRUE(end == asio::error::eof);
+}
+
+#if defined(RUVIA_ENABLE_HTTP2)
+// An HTTP/2 connection that idles past idle_timeout first sends GOAWAY, then
+// close_notify (RFC 9113 §9.1). The peer acknowledges SETTINGS and PING so a
+// graceful drain can complete.
+void idle_http2_connection_sends_goaway_then_close_notify(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    static constexpr unsigned char alpn[] = {2, 'h', '2'};
+    EXPECT_EQ(SSL_CTX_set_alpn_protos(client.native_handle(), alpn, sizeof(alpn)), 0);
+    const auto stream = connect_tls(io, client, endpoint);
+    std::string opening(ruvia::http2_client_preface);
+    ruvia::test::append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, {});
+    asio::write(*stream, asio::buffer(opening));
+
+    std::string received{};
+    std::size_t parsed = 0;
+    bool goaway = false;
+    std::array<char, 16 * 1024> buffer;
+    std::error_code end;
+    while (!end) {
+        const auto size = stream->read_some(asio::buffer(buffer), end);
+        received.append(buffer.data(), size);
+        while (received.size() - parsed >= 9) {
+            const auto* frame = reinterpret_cast<const unsigned char*>(received.data() + parsed);
+            const std::size_t length = (std::size_t{frame[0]} << 16) | (std::size_t{frame[1]} << 8) | frame[2];
+            if (received.size() - parsed < 9 + length) {
+                break;
+            }
+            const auto type = frame[3];
+            const auto flags = frame[4];
+            std::error_code ignored;
+            if (type == 4 && (flags & 1) == 0) {
+                constexpr std::array<char, 9> settings_ack{0, 0, 0, 4, 1, 0, 0, 0, 0};
+                asio::write(*stream, asio::buffer(settings_ack), ignored);
+            } else if (type == 6 && (flags & 1) == 0 && length == 8) {
+                std::string ack(received, parsed, 9 + length);
+                ack[4] = 1;
+                asio::write(*stream, asio::buffer(ack), ignored);
+            } else if (type == 7) {
+                goaway = true;
+            }
+            parsed += 9 + length;
+        }
+    }
+    EXPECT_TRUE(goaway);
+    EXPECT_TRUE(end == asio::error::eof);
+}
+#endif
+
+// Draining closes a connection that awaits its first request with close_notify.
+std::unique_ptr<tls_stream> open_unused_tls_connection(
+    asio::io_context& io, asio::ssl::context& client, const asio::ip::tcp::endpoint& endpoint) {
+    auto stream = connect_tls(io, client, endpoint);
+    // Let the server finish its side of the handshake.
+    std::this_thread::sleep_for(50ms);
+    return stream;
+}
+
+// RFC 9846 §6.1 / RFC 6455 §7.1.1: after a clean WebSocket close handshake
+// over TLS (wss://), the server sends close_notify before closing TCP.
+void wss_clean_close_handshake_sends_close_notify(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    const auto stream = connect_tls(io, client, endpoint);
+    constexpr std::string_view upgrade =
+        "GET /close/ws HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    asio::write(*stream, asio::buffer(upgrade));
+
+    std::string received{};
+    std::array<char, 1024> buffer{};
+    std::error_code error;
+    while (received.find("\x88") == std::string::npos && !error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        received.append(buffer.data(), count);
+    }
+    EXPECT_TRUE(!error);
+    // Reply with a masked client Close frame (code 1000, zero mask).
+    constexpr std::array<unsigned char, 8> client_close{0x88, 0x82, 0x00, 0x00, 0x00, 0x00, 0x03, 0xe8};
+    asio::write(*stream, asio::buffer(client_close), error);
+    EXPECT_TRUE(!error);
+    while (!error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        received.append(buffer.data(), count);
+    }
+    EXPECT_TRUE(error == asio::error::eof);
+}
+
+// RFC 9846 §6.1 / RFC 6455 §7.1.7: when a wss:// peer truncates TLS / drops TCP
+// mid-frame without sending a WebSocket Close frame or close_notify, the server
+// aborts the connection without sending a clean TLS close_notify.
+void wss_truncated_peer_eof_omits_close_notify(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    const auto stream = connect_tls(io, client, endpoint);
+    constexpr std::string_view upgrade =
+        "GET /close/ws-read HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Upgrade: websocket\r\n"
+        "Connection: Upgrade\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+        "Sec-WebSocket-Version: 13\r\n\r\n";
+    asio::write(*stream, asio::buffer(upgrade));
+
+    std::string head{};
+    std::array<char, 1024> buffer{};
+    std::error_code error;
+    while (head.find("\r\n\r\n") == std::string::npos && !error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        head.append(buffer.data(), count);
+    }
+    EXPECT_TRUE(!error);
+    constexpr std::array<char, 1> partial_ws_frame{'\x81'};
+    asio::write(*stream, asio::buffer(partial_ws_frame), error);
+    EXPECT_TRUE(!error);
+    stream->next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
+    EXPECT_TRUE(!error);
+
+    std::string rest{};
+    while (!error) {
+        const auto count = stream->read_some(asio::buffer(buffer), error);
+        rest.append(buffer.data(), count);
+    }
+    EXPECT_TRUE(rest.empty());
+    EXPECT_TRUE(error == asio::ssl::error::stream_truncated);
+}
+}  // namespace connection_close_test
+
+using namespace connection_close_test;
+
+TEST(Ruvia, server_closes_connections_gracefully) {
+    ruvia::test::tls_identity identity("localhost");
+    const auto private_key = identity.private_key_file();
+
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation plain_reservation(io);
+    ruvia::test::tcp_port_reservation tls_reservation(io);
+    const auto plain_endpoint = plain_reservation.endpoint();
+    const auto tls_endpoint = tls_reservation.endpoint();
+
+    auto& app = ruvia::app();
+    static std::binary_semaphore started{0};
+    app.server({.worker_count_ = 1, .idle_timeout_ = idle_timeout, .connection_scan_interval_ = 5ms})
+        .listen({
+            .address_ = "127.0.0.1",
+            .http_ = plain_endpoint.port(),
+            .https_ = tls_endpoint.port(),
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
+        })
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
+    const bool ready = started.try_acquire_for(10s);
+    EXPECT_TRUE(ready);
+    if (ready) {
+        final_response_survives_unread_request_content(io, plain_endpoint);
+        idle_tls_connection_ends_with_close_notify(io, tls_endpoint);
+#if defined(RUVIA_ENABLE_HTTP2)
+        idle_http2_connection_sends_goaway_then_close_notify(io, tls_endpoint);
+#endif
+        wss_clean_close_handshake_sends_close_notify(io, tls_endpoint);
+        wss_truncated_peer_eof_omits_close_notify(io, tls_endpoint);
+
+        // A stop disconnects directly: an unused TLS connection is closed
+        // without close_notify, so the peer sees a truncated stream.
+        asio::ssl::context client(asio::ssl::context::tls_client);
+        client.set_verify_mode(asio::ssl::verify_none);
+        const auto unused = open_unused_tls_connection(io, client, tls_endpoint);
+        std::thread stopper([&app] { app.stop(); });
+        asio::error_code end;
+        const auto received = read_to_end(*unused, end);
+        stopper.join();
+        EXPECT_TRUE(received.empty());
+        EXPECT_TRUE(end == asio::ssl::error::stream_truncated || end == asio::error::connection_reset);
+    } else {
+        app.stop();
+    }
+    runner.join();
+}

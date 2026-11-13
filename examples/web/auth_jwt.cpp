@@ -14,7 +14,9 @@
 #include <string_view>
 
 #include "ruvia/web/app.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/jwt.h"
+#include "ruvia/web/middleware.h"
 
 namespace {
 

@@ -1,0 +1,262 @@
+// PostgreSQL ORM example. With no arguments, print the generated migration. --migrate applies the demo migration; --run executes the demo on the
+// database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
+// Build with RUVIA_ENABLE_POSTGRESQL=ON. Covers typed CRUD, projections,
+// CTE writes, locks, returning rows, arrays, trigger functions and query caches.
+// RUVIA_ORM_CACHE_REDIS_HOST/PORT opt into the Redis cache provider when built.
+// Use a demo database: --run inserts, changes and deletes demonstration rows.
+// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
+
+#include <array>
+#include <chrono>
+#include <cstdlib>
+#include <exception>
+#include <iostream>
+#include <memory>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <vector>
+
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/web/db/db.h"
+#include "ruvia/web/db/db_query.h"
+#include "ruvia/web/db/db_session.h"
+#include "ruvia/web/middleware.h"
+
+#include "backend_config.h"
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis.h"
+#endif
+
+namespace {
+using namespace ruvia;
+
+RUVIA_DB_ENTITY(device, "orm_demo_device",
+    RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
+    RUVIA_DB_COLUMN(name, std::string),
+    RUVIA_DB_COLUMN(revision, std::int64_t, db_column_options{.default_expression_ = fixed_string{"1"}}),
+    RUVIA_DB_COLUMN(labels, std::vector<std::string>, db_column_options{.default_expression_ = fixed_string{"ARRAY[]::text[]"}}))
+
+RUVIA_DB_PROJECTION(device_summary,
+    RUVIA_DB_COLUMN(id, std::int64_t),
+    RUVIA_DB_COLUMN(label, std::string),
+    RUVIA_DB_COLUMN(rank, std::int64_t))
+
+auto migrations() {
+    db_query expressions;
+    db_schema schema({.driver_ = db_driver::postgresql});
+    schema.create_table<device>({.if_not_exists_ = true});
+    schema.create_index({.name_ = "orm_demo_device_labels", .table_ = device::table_name(), .keys_ = {{.column_ = "labels"}}, .if_not_exists_ = true, .method_ = db_index_method::gin});
+
+    db_procedure version;
+    auto changed = expressions.binary(expressions.column("name", "new"), db_binary_operator::is_distinct_from, expressions.column("name", "old"));
+    version.begin_if(changed);
+    version.assign("new.revision", expressions.binary(expressions.column("revision", "old"), db_binary_operator::add, expressions.value(1)));
+    version.end_if();
+    version.return_value(expressions.column("new"));
+    schema.create_trigger_function("orm_demo_version", version, true);
+    schema.drop_trigger(device::table_name(), "orm_demo_version", true);
+    schema.create_trigger({.name_ = "orm_demo_version", .table_ = device::table_name(), .function_ = "orm_demo_version", .events_ = {db_trigger_event::update}});
+    return schema.compile("orm_demo_001");
+}
+
+task<void> demonstrate(db_client& db) {
+    auto handle = db.db();
+    auto devices = handle.repository<device>();
+    device input;
+    input.set<"id">(1);
+    input.set<"name">("Pump station");
+    input.set<"revision">(1);
+    std::vector<std::string> labels;
+    labels.emplace_back("telemetry");
+    labels.emplace_back("zone-a");
+    input.set<"labels">(std::move(labels));
+    const std::array<borrowed_text, 1> upsert_conflict_paths{"id"};
+    const db_upsert_options upsert_options{.conflict_paths_ = upsert_conflict_paths, .skip_update_if_no_values_changed_ = true};
+    co_await devices.upsert(input, upsert_options);
+
+    const std::array<db_find_order, 1> find_order{{{"id", db_order_direction::asc}}};
+    const db_find_options find_options{.where_ = device::column<"id">().between(1, 100) && device::column<"name">().like("%station%") && device::column<"labels">().array_contains({"telemetry"}),
+        .order_ = find_order,
+        .take_ = 20};
+    auto [found, total] = co_await devices.find_and_count(find_options);
+    std::cout << "total=" << total << '\n';
+    for (const auto& device : found) {
+        std::cout << device.get<"id">() << ": " << device.get<"name">() << '\n';
+    }
+
+    device patch;
+    patch.set<"name">("Pump station updated");
+    co_await devices.update(device::column<"id">() == 1, patch);
+    co_await devices.increment(device::column<"id">() == 1, "revision", 1);
+    co_await devices.decrement(device::column<"id">() == 1, "revision", 1);
+    std::cout << "exists=" << co_await devices.exists({.where_ = device::column<"id">() == 1}) << '\n';
+    const auto one = co_await devices.find_one({.where_ = device::column<"id">() == 1});
+    if (one) {
+        std::cout << "revision=" << one->get<"revision">() << '\n';
+    }
+
+    auto builder = devices.query_builder("d");
+    builder.where(device::column<"revision">() >= 1);
+    std::cout << "matching=" << co_await builder.get_count() << '\n';
+    builder.limit(1);
+    auto [page, matching] = co_await builder.get_many_and_count();
+    std::cout << "page=" << page.size() << ", matching=" << matching << '\n';
+
+    db_query expressions;
+    auto summary = devices.query_builder("d");
+    const db_order_term summary_order[]{{expressions.column("id", "d")}};
+    summary.select({{"id"},
+        {"label", expressions.call("upper", {expressions.column("name", "d")})},
+        {"rank", expressions.over(expressions.call("row_number"), {.order_by_ = summary_order})}});
+    const auto summaries = co_await summary.get_many<device_summary>();
+    for (const auto& item : summaries) {
+        std::cout << item.get<"rank">() << ": " << item.get<"label">() << '\n';
+    }
+    auto update_summary = devices.update_builder();
+    update_summary.where(device::column<"id">() == 1)
+        .set({
+            {"name", expressions.call("upper", {expressions.column("name")})},
+            device::column<"revision">() += 1,
+        })
+        .returning({{"id"}, device::column<"name">().as("label"), device::column<"revision">().as("rank")});
+    const auto changed = co_await update_summary.get_one<device_summary>();
+    if (changed) {
+        std::cout << "updated=" << changed->get<"label">() << '\n';
+    }
+
+    auto transaction = co_await handle.begin_transaction();
+    auto transactional = transaction.repository<device>();
+    auto candidates = transactional.query_builder("candidate");
+    candidates.where(device::column<"id">() == 1).limit(1).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
+    auto claim = transactional.update_builder("target");
+    claim.update_from_cte("candidates", "candidate")
+        .set("name", "Claimed device")
+        .where(device::column<"id">("target") == device::column<"id">("candidate"))
+        .returning();
+    auto claimed = transactional.query_builder("claimed");
+    claimed.with("candidates", candidates).with("claimed", claim).from_cte("claimed");
+    const auto claimed_devices = co_await claimed.get_many();
+    std::cout << "claimed=" << claimed_devices.size() << '\n';
+    const db_find_options transaction_page{.where_ = device::column<"id">() == 1, .skip_ = 10, .take_ = 1};
+    auto [empty_page, transaction_total] = co_await transactional.find_and_count(transaction_page);
+    std::cout << "empty page=" << empty_page.size() << ", transaction total=" << transaction_total << '\n';
+    const auto locked = co_await transactional.find_one({.where_ = device::column<"id">() == 1,
+        .lock_ = db_lock_options{.mode_ = db_row_lock::update, .skip_locked_ = true}});
+    if (locked) {
+        co_await transactional.remove(*locked);
+    }
+    co_await transaction.rollback();
+    std::cout << "after rollback=" << co_await devices.count() << '\n';
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+task<void> demonstrate_cache(db_client& db) {
+    auto handle = db.db();
+    auto devices = handle.repository<device>();
+    const std::array<db_find_order, 1> cache_order{{{"id"}}};
+    const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
+    auto [page, total] = co_await devices.find_and_count(options);
+    std::cout << "cached page=" << page.size() << ", total=" << total << '\n';
+    auto query = devices.query_builder();
+    query.cache(std::chrono::seconds(5));
+    std::cout << "cached count=" << co_await query.get_count() << '\n';
+    // The id covers the page and the count find_and_count derived from it.
+    const std::array<std::string_view, 1> ids{"device-page"};
+    co_await handle.query_result_cache().remove(ids);
+}
+#endif
+
+task<void> run(const db_config& settings, event_loop_attachment& attachment, const example::environment& env) {
+    std::exception_ptr failure;
+    std::unique_ptr<db_client> db;
+#ifdef RUVIA_ENABLE_REDIS
+    std::unique_ptr<redis_client> redis;
+#endif
+    try {
+        if (const auto port = env.get<std::uint16_t>("RUVIA_ORM_CACHE_REDIS_PORT")) {
+#ifdef RUVIA_ENABLE_REDIS
+            auto config = example::redis_config(env, "RUVIA_ORM_CACHE_REDIS");
+            redis = std::make_unique<redis_client>(attachment.loop(), config);
+            co_await redis->connect();
+            auto store_value = redis->redis();
+            db = std::make_unique<db_client>(attachment.loop(), settings, store_value,
+                db_cache_config{.key_prefix_ = "orm-demo"});
+#else
+            (void)port;
+            throw std::invalid_argument("ORM query caching requires Redis support");
+#endif
+        } else {
+            db = std::make_unique<db_client>(attachment.loop(), settings);
+        }
+        co_await db->connect();
+        co_await demonstrate(*db);
+#ifdef RUVIA_ENABLE_REDIS
+        if (redis) {
+            co_await demonstrate_cache(*db);
+        }
+#endif
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    if (db) {
+        co_await db->shutdown();
+    }
+#ifdef RUVIA_ENABLE_REDIS
+    if (redis) {
+        co_await redis->shutdown();
+    }
+#endif
+    attachment.stop();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+db_config config(const example::environment& env) {
+    return example::database_config(env, db_driver::postgresql);
+}
+}  // namespace
+
+int main(int argc, char** argv) {
+    try {
+        bool migrate = false, execute = false;
+        for (int i = 1; i < argc; ++i) {
+            if (std::string_view(argv[i]) == "--migrate") {
+                migrate = true;
+            } else if (std::string_view(argv[i]) == "--run") {
+                execute = true;
+            } else {
+                throw std::invalid_argument("usage: ruvia_example_orm [--migrate] [--run]");
+            }
+        }
+        const auto changes = migrations();
+        for (const auto& migration : changes) {
+            std::cout << migration.sql() << ";\n";
+        }
+        if (!migrate && !execute) {
+            return 0;
+        }
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env(&app.env());
+        const auto settings = config(env);
+        if (migrate) {
+            (void)example::apply_migrations(settings, changes);
+        }
+        if (execute) {
+            asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
+            // The loop looks a DNS RUVIA_DB_HOST up on this pool; declared
+            // first, it outlives the attachment.
+            blocking_pool host_lookups({.thread_count_ = 1});
+            auto attachment = attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
+            auto root = attachment.loop().start(run(settings, attachment, env));
+            attachment.run();
+            std::move(root).get();
+        }
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+}

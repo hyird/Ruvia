@@ -1,0 +1,1296 @@
+#include "ruvia/core/task_scope.h"
+
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <exception>
+#include <limits>
+#include <mutex>
+#include <new>
+#include <optional>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <typeinfo>
+#include <utility>
+#include <variant>
+
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task.h"
+#include "ruvia/core/worker_ref.h"
+
+#ifdef _WIN32
+#include <array>
+#include <charconv>
+#include <limits>
+
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+
+#include <asio/error_code.hpp>
+#endif
+#if RUVIA_SANITIZER_ALLOCATOR
+#include <cstdlib>
+#if defined(_WIN32)
+#include <malloc.h>
+#endif
+#else
+#include <mimalloc.h>
+#endif
+
+namespace ruvia {
+
+struct task_scope::node_type {
+    node_type(task_scope& owner_value, task<void> child_value)
+        : scope_(owner_value),
+          task_(std::move(child_value)) {}
+
+    task_scope& scope_;
+    task<void> task_;
+};
+
+struct task_scope::retiring_guard final {
+    explicit retiring_guard(task_scope& scope) noexcept
+        : scope_(&scope),
+          previous_(scope.retiring_) {
+        scope.retiring_ = this;
+    }
+
+    ~retiring_guard() {
+        if (!destroyed_) {
+            scope_->retiring_ = previous_;
+        }
+    }
+
+    task_scope* scope_;
+    retiring_guard* previous_;
+    bool destroyed_{false};
+};
+
+task_scope::task_scope(const worker_ref& worker_value)
+    : worker_(worker_value.valid()
+                  ? worker_value
+                  : throw std::invalid_argument("task scope requires a valid worker")) {}
+
+task_scope::~task_scope() {
+    if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
+        std::terminate();
+    }
+    for (auto* retiring = retiring_; retiring != nullptr; retiring = retiring->previous_) {
+        retiring->destroyed_ = true;
+    }
+    // Every child finished but no join observed the outcome: the failure has
+    // no other owner.
+    if (std::holds_alternative<task_scope_open_type>(lifecycle_) && failure_ != nullptr) {
+        report_unhandled_failure("task scope child", failure_);
+    }
+}
+
+void task_scope::spawn(task<void> task_value) & {
+    if (!worker_.is_current()) {
+        throw std::logic_error("task scope spawn must run on its bound worker");
+    }
+    const auto join_started = [this] {
+        return std::holds_alternative<task_scope_joining_type>(lifecycle_) ||
+               std::holds_alternative<task_scope_joined_type>(lifecycle_);
+    };
+    if (join_started()) {
+        throw std::logic_error("cannot spawn a task after task scope join started");
+    }
+    task_value.prepare_direct_start();
+
+    // Admission must remain visible while the allocator can reenter join.
+    ++active_;
+    node_type* node_value = nullptr;
+    try {
+        node_value = new node_type(*this, std::move(task_value));
+    } catch (...) {
+        // Destroy the still-cold child before allowing a join to retire its owner.
+        {
+            task<void> discarded(std::move(task_value));
+        }
+        --active_;
+        resume_join_if_idle();
+        throw;
+    }
+    if (join_started()) {
+        delete node_value;
+        --active_;
+        resume_join_if_idle();
+        throw std::logic_error("cannot spawn a task after task scope join started");
+    }
+
+    node_value->task_.coroutine_.promise().control_.set_completion(node_value, &task_scope::child_complete);
+    node_value->task_.start();
+}
+
+void task_scope::request_stop() & noexcept {
+    stop_source_.request_stop();
+}
+
+stop_token task_scope::token() const& {
+    return stop_source_.token();
+}
+
+bool task_scope::stop_requested() const& noexcept {
+    return stop_source_.stop_requested();
+}
+
+std::size_t task_scope::size() const& noexcept {
+    return active_;
+}
+
+task_scope::join_operation task_scope::join() & {
+    if (!worker_.is_current()) {
+        throw std::logic_error("task scope join must run on its bound worker");
+    }
+    return join_operation(*this);
+}
+
+// Only a cold operation may move; a started one has handed its continuation
+// to the scope.
+task_scope::join_operation::join_operation(join_operation&& other) noexcept
+    : scope_(std::exchange(other.scope_, nullptr)) {
+    if (other.started_) {
+        std::terminate();
+    }
+}
+
+bool task_scope::join_operation::await_ready() {
+    if (scope_ == nullptr || started_) {
+        throw std::logic_error("task scope join cannot be awaited");
+    }
+    if (!scope_->worker_.is_current()) {
+        throw std::logic_error("task scope join must run on its bound worker");
+    }
+    if (std::holds_alternative<task_scope_joining_type>(scope_->lifecycle_) ||
+        std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
+        throw std::logic_error("task scope can only be joined once");
+    }
+    started_ = true;
+    if (scope_->active_ == 0 && scope_->retiring_ == nullptr) {
+        scope_->lifecycle_.template emplace<task_scope_joined_type>();
+        return true;
+    }
+    return false;
+}
+
+void task_scope::join_operation::await_suspend(std::coroutine_handle<> continuation) noexcept {
+    scope_->lifecycle_.template emplace<task_scope_joining_type>(continuation);
+}
+
+void task_scope::join_operation::await_resume() {
+    if (!std::holds_alternative<task_scope_joined_type>(scope_->lifecycle_)) {
+        std::terminate();
+    }
+    scope_->rethrow_failure();
+}
+
+void task_scope::resume_join_if_idle() noexcept {
+    if (active_ != 0 || retiring_ != nullptr) {
+        return;
+    }
+    auto* joining = std::get_if<task_scope_joining_type>(&lifecycle_);
+    if (joining == nullptr) {
+        return;
+    }
+    auto continuation = joining->continuation();
+    lifecycle_.template emplace<task_scope_joined_type>();
+    // The joiner may destroy this scope inline.
+    continuation.resume();
+}
+
+void task_scope::child_complete(void* raw) noexcept {
+    auto* node_value = static_cast<node_type*>(raw);
+    detail::worker_ref_access::defer_or_terminate(
+        node_value->scope_.worker_, [node_value] { node_value->scope_.finish(node_value); });
+}
+
+void task_scope::finish(node_type* node_value) noexcept {
+    bool notify_stop = false;
+    node_value->task_.prepare_direct_completion();
+    try {
+        node_value->task_.coroutine_.promise().result();
+    } catch (...) {
+        if (failure_ == nullptr) {
+            failure_ = std::current_exception();
+            notify_stop = true;
+        } else if (!equivalent_failures(std::current_exception(), failure_)) {
+            // join rethrows only the first failure; later distinct ones have no other owner.
+            report_unhandled_failure("additional task scope child", std::current_exception());
+        }
+    }
+    if (notify_stop) {
+        request_stop();
+    }
+
+    --active_;
+    {
+        retiring_guard retiring(*this);
+        task<void> retired_task(std::move(node_value->task_));
+        delete node_value;
+        retired_task.finish_direct_completion();
+        retired_task.reset();
+        if (retiring.destroyed_) {
+            return;
+        }
+    }
+    resume_join_if_idle();
+}
+
+void task_scope::rethrow_failure() {
+    if (failure_ != nullptr) {
+        std::rethrow_exception(failure_);
+    }
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace detail {
+
+stop_state_ref stop_state::create() {
+    return stop_state_ref(new stop_state());
+}
+
+void stop_state::destroy() noexcept {
+    delete this;
+}
+
+void stop_state::request_stop() noexcept {
+    std::unique_lock lock(mutex_);
+    if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
+        return;
+    }
+    flags_.fetch_or(requested_flag, std::memory_order_release);
+    requester_ = std::this_thread::get_id();
+    while (head_ != nullptr) {
+        auto* const node = head_;
+        head_ = node->next_;
+        if (head_ != nullptr) {
+            head_->previous_ = nullptr;
+        }
+        node->next_ = nullptr;
+        running_ = node;
+        lock.unlock();
+        // The callback may destroy the node, and an unlink waiting on another
+        // thread frees it once running_ moves on: the node is not touched again.
+        node->invoke();
+        lock.lock();
+        running_ = nullptr;
+        if (std::exchange(run_awaited_, false)) {
+            run_epoch_.fetch_add(1, std::memory_order_relaxed);
+            run_epoch_.notify_all();
+        }
+    }
+}
+
+bool stop_state::link(stop_callback_node& node, std::atomic<stop_registration_phase>& phase) noexcept {
+    std::lock_guard lock(mutex_);
+    if ((flags_.load(std::memory_order_relaxed) & requested_flag) != 0) {
+        return false;
+    }
+    node.linked_ = true;
+    auto expected = stop_registration_phase::registering;
+    if (!phase.compare_exchange_strong(expected, stop_registration_phase::registered,
+            std::memory_order_acq_rel, std::memory_order_acquire)) {
+        node.linked_ = false;
+        if (expected != stop_registration_phase::reset_pending) {
+            std::terminate();
+        }
+        return false;
+    }
+    node.next_ = head_;
+    if (head_ != nullptr) {
+        head_->previous_ = &node;
+    }
+    head_ = &node;
+    return true;
+}
+
+void stop_state::unlink(stop_callback_node& node) noexcept {
+    std::unique_lock lock(mutex_);
+    if (head_ == &node || node.previous_ != nullptr) {
+        if (node.previous_ != nullptr) {
+            node.previous_->next_ = node.next_;
+        } else {
+            head_ = node.next_;
+        }
+        if (node.next_ != nullptr) {
+            node.next_->previous_ = node.previous_;
+        }
+        node.previous_ = nullptr;
+        node.next_ = nullptr;
+        return;
+    }
+    // Never linked, or its run already returned.
+    if (running_ != &node) {
+        return;
+    }
+    // Destroyed from inside its own run: waiting would deadlock, and the
+    // requester never touches the node after its run.
+    if (requester_ == std::this_thread::get_id()) {
+        return;
+    }
+    // The mutex orders the callback's effects before the observed running_ change.
+    while (running_ == &node) {
+        run_awaited_ = true;
+        const auto epoch = run_epoch_.load(std::memory_order_relaxed);
+        lock.unlock();
+        run_epoch_.wait(epoch, std::memory_order_relaxed);
+        lock.lock();
+    }
+}
+
+}  // namespace detail
+
+// Request deadlines create a source per request on every worker. The mimalloc
+// resource has no shared pooling layer and outlives every observer, including
+// tokens retired after the allocating worker has exited.
+stop_source::stop_source()
+    : state_(detail::stop_state::create()) {}
+
+namespace {
+
+[[nodiscard]] bool unique_parent(std::span<const stop_token> parents, std::size_t index) noexcept {
+    if (!parents[index].stoppable()) {
+        return false;
+    }
+    for (std::size_t previous = 0; previous != index; ++previous) {
+        if (parents[previous] == parents[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+[[nodiscard]] std::size_t extra_parent_count(std::span<const stop_token> parents) noexcept {
+    if (parents.size() <= 2) {
+        return 0;
+    }
+    std::size_t count = 0;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (parents[index].stop_requested()) {
+            return 0;
+        }
+        count += unique_parent(parents, index);
+    }
+    return count > 2 ? count - 2 : 0;
+}
+
+}  // namespace
+
+stop_group::stop_group(std::span<const stop_token> parents)
+    : extra_parents_(extra_parent_count(parents)) {
+    // Capture the state, never this: downstream callbacks may destroy the
+    // group, including the parent registration currently invoking us.
+    const auto register_parent = [this](const stop_token& parent, stop_registration& registration) {
+        parent.register_callback(registration, [state = output_.state_] {
+            state->request_stop();
+        });
+    };
+    if (!extra_parents_.empty()) {
+        source_.emplace();
+        output_ = source_->token();
+        std::size_t slot = 0;
+        for (std::size_t index = 0; index != parents.size(); ++index) {
+            if (!unique_parent(parents, index)) {
+                continue;
+            }
+            if (slot < parents_.size()) {
+                register_parent(parents[index], parents_[slot]);
+            } else {
+                register_parent(parents[index], extra_parents_[slot - parents_.size()]);
+            }
+            ++slot;
+        }
+        return;
+    }
+    const stop_token* first = nullptr;
+    const stop_token* second = nullptr;
+    for (std::size_t index = 0; index != parents.size(); ++index) {
+        if (parents[index].stop_requested()) {
+            output_ = parents[index];
+            return;
+        }
+        if (unique_parent(parents, index)) {
+            if (first == nullptr) {
+                first = &parents[index];
+            } else {
+                second = &parents[index];
+            }
+        }
+    }
+    if (first == nullptr) {
+        return;
+    }
+    if (second == nullptr) {
+        output_ = *first;
+        return;
+    }
+    source_.emplace();
+    output_ = source_->token();
+    register_parent(*first, parents_[0]);
+    register_parent(*second, parents_[1]);
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+// Keeps a reentrant join from publishing retirement during frame/capability
+// cleanup. Its registration is a value, not a frame-owner base class.
+struct operation_scope::drain_guard final {
+    explicit drain_guard(operation_scope& scope) noexcept {
+        scope.link(registration_);
+        registration_.phase_ = detail::scoped_operation_registration::phase::retiring;
+    }
+
+    ~drain_guard() {
+        auto* scope = registration_.scope_;
+        // Keep the drain registered while capability callbacks run: a join
+        // started by one of them must not publish retirement prematurely.
+        if (scope->head_ == &registration_ && registration_.next_ == nullptr &&
+            scope->join_continuation_ == nullptr) {
+            scope->expire_capabilities();
+        }
+        registration_.phase_ = detail::scoped_operation_registration::phase::expired;
+        scope->unlink(registration_);
+        // Join may retire this scope's owner inline. No further scope access.
+        scope->resume_joiner();
+    }
+
+    detail::scoped_operation_registration registration_;
+};
+
+struct operation_scope::join_awaiter final {
+    explicit join_awaiter(operation_scope& scope) noexcept
+        : owner_(scope) {}
+
+    [[nodiscard]] bool await_ready() const noexcept {
+        return owner_.head_ == nullptr;
+    }
+
+    bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        if (owner_.head_ == nullptr || owner_.join_continuation_ != nullptr) {
+            std::terminate();
+        }
+        owner_.join_continuation_ = continuation;
+        return true;
+    }
+
+    void await_resume() const noexcept {}
+
+    operation_scope& owner_;
+};
+
+void operation_scope::close() noexcept {
+    if (expiring_capabilities_ || (!active_ && head_ == nullptr && capability_head_ == nullptr)) {
+        return;
+    }
+    for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
+        if (operation->phase_ == detail::scoped_operation_registration::phase::running ||
+            operation->phase_ == detail::scoped_operation_registration::phase::completing ||
+            (active_ && operation->phase_ == detail::scoped_operation_registration::phase::retiring)) {
+            std::terminate();
+        }
+    }
+    // An inactive scope already has a drain owner. Reentrant cold-frame
+    // cleanup may observe its retiring entries, but never unfinished work.
+    if (!active_) {
+        return;
+    }
+    expire_for_join();
+}
+
+void operation_scope::expire() noexcept {
+    if (expiring_capabilities_ || !active_) {
+        return;
+    }
+    expire_for_join();
+}
+
+task<void> operation_scope::close_and_join() & {
+    if (join_started_) {
+        if (!join_complete_) {
+            throw std::logic_error("scoped operation scope can only be joined once");
+        }
+        co_return;
+    }
+    join_started_ = true;
+    expire_for_join();
+    if (head_ == nullptr) {
+        expire_capabilities();
+        join_complete_ = true;
+        co_return;
+    }
+    co_await join_awaiter(*this);
+}
+
+void operation_scope::retire_cold_operations() noexcept {
+    for (;;) {
+        auto* operation = head_;
+        while (operation != nullptr && operation->phase_ != detail::scoped_operation_registration::phase::cold) {
+            operation = operation->next_;
+        }
+        if (operation == nullptr) {
+            return;
+        }
+        operation->retire_frame();
+        // Cleanup may remove sibling cold frames; search the live chain again.
+    }
+}
+
+void operation_scope::expire_for_join() noexcept {
+    drain_guard drain(*this);
+    active_ = false;
+    retire_cold_operations();
+}
+
+void operation_scope::expire_capabilities() noexcept {
+    expiring_capabilities_ = true;
+    while (capability_head_ != nullptr) {
+        capability_head_->expire();
+    }
+    expiring_capabilities_ = false;
+}
+
+void operation_scope::resume_joiner() noexcept {
+    if (head_ != nullptr || join_continuation_ == nullptr) {
+        return;
+    }
+    auto continuation = std::exchange(join_continuation_, {});
+    expire_capabilities();
+    join_complete_ = true;
+    continuation.resume();
+}
+
+void operation_scope::check_worker() const noexcept {
+    if (worker_ != nullptr && !worker_->is_current()) {
+        std::terminate();
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(
+    operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept
+    : target_(target),
+      cleanup_(cleanup),
+      active_(scope.active()) {
+    if (active_) {
+        link(scope);
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(
+    const scoped_capability_registration& other, void* target) noexcept
+    : target_(target),
+      cleanup_(other.cleanup_),
+      active_(other.active_) {
+    if (active_ && other.scope_ != nullptr) {
+        link(*other.scope_);
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(
+    scoped_capability_registration&& other, void* target) noexcept
+    : scope_(other.scope_),
+      previous_(other.previous_),
+      next_(other.next_),
+      target_(target),
+      cleanup_(other.cleanup_),
+      active_(other.active_) {
+    if (scope_ != nullptr) {
+        if (previous_ != nullptr) {
+            previous_->next_ = this;
+        } else {
+            scope_->capability_head_ = this;
+        }
+        if (next_ != nullptr) {
+            next_->previous_ = this;
+        }
+    }
+    other.scope_ = nullptr;
+    other.previous_ = nullptr;
+    other.next_ = nullptr;
+    other.target_ = nullptr;
+    other.cleanup_ = nullptr;
+    other.active_ = false;
+}
+
+scoped_capability_registration::~scoped_capability_registration() {
+    unlink();
+}
+
+void scoped_capability_registration::require_active() const {
+    if (!active_) {
+        throw std::logic_error("scoped capability lifetime has expired");
+    }
+}
+
+operation_scope& scoped_capability_registration::scope() const {
+    require_active();
+    return *scope_;
+}
+
+void scoped_capability_registration::bind(
+    operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
+    if (scope_ != nullptr || active_) {
+        std::terminate();
+    }
+    target_ = target;
+    cleanup_ = cleanup;
+    active_ = scope.active();
+    if (active_) {
+        link(scope);
+    }
+}
+
+void scoped_capability_registration::link(operation_scope& scope) noexcept {
+    scope_ = &scope;
+    next_ = scope.capability_head_;
+    if (next_ != nullptr) {
+        next_->previous_ = this;
+    }
+    scope.capability_head_ = this;
+}
+
+void scoped_capability_registration::unlink() noexcept {
+    if (scope_ == nullptr) {
+        return;
+    }
+    if (previous_ != nullptr) {
+        previous_->next_ = next_;
+    } else {
+        scope_->capability_head_ = next_;
+    }
+    if (next_ != nullptr) {
+        next_->previous_ = previous_;
+    }
+    scope_ = nullptr;
+    previous_ = nullptr;
+    next_ = nullptr;
+}
+
+void scoped_capability_registration::expire() noexcept {
+    const auto cleanup = cleanup_;
+    auto* target = target_;
+    active_ = false;
+    unlink();
+    // Cleanup may destroy this registration or remove sibling capabilities.
+    // Never access the registration after calling its typed owner.
+    if (cleanup != nullptr) {
+        cleanup(target);
+    }
+}
+
+void operation_scope::link(detail::scoped_operation_registration& operation) noexcept {
+    operation.scope_ = this;
+    operation.next_ = head_;
+    if (head_ != nullptr) {
+        head_->previous_ = &operation;
+    }
+    head_ = &operation;
+}
+
+void operation_scope::unlink(detail::scoped_operation_registration& operation) noexcept {
+    if (operation.previous_ != nullptr) {
+        operation.previous_->next_ = operation.next_;
+    } else if (head_ == &operation) {
+        head_ = operation.next_;
+    }
+    if (operation.next_ != nullptr) {
+        operation.next_->previous_ = operation.previous_;
+    }
+    operation.scope_ = nullptr;
+    operation.previous_ = nullptr;
+    operation.next_ = nullptr;
+}
+
+namespace detail {
+
+scoped_operation_registration::scoped_operation_registration(
+    scoped_operation_registration&& other, void* new_frame_target) noexcept {
+    if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
+        std::terminate();
+    }
+    if (other.phase_ == phase::unscoped) {
+        return;
+    }
+    scope_ = other.scope_;
+    previous_ = other.previous_;
+    next_ = other.next_;
+    phase_ = other.phase_;
+    frame_target_ = other.frame_target_ != nullptr ? new_frame_target : nullptr;
+    retire_cold_ = other.retire_cold_;
+    if (scope_ != nullptr) {
+        if (previous_ != nullptr) {
+            previous_->next_ = this;
+        } else {
+            scope_->head_ = this;
+        }
+        if (next_ != nullptr) {
+            next_->previous_ = this;
+        }
+    }
+    other.scope_ = nullptr;
+    other.previous_ = nullptr;
+    other.next_ = nullptr;
+    other.phase_ = phase::unscoped;
+    other.clear_frame_binding();
+}
+
+scoped_operation_registration::~scoped_operation_registration() {
+    if (scope_ != nullptr || phase_ == phase::running || phase_ == phase::retiring) {
+        std::terminate();
+    }
+}
+
+void scoped_operation_registration::bind(operation_scope& scope, void* target,
+    void (*retire_cold)(void*) noexcept) noexcept {
+    if (phase_ != phase::unscoped || retire_cold == nullptr || retire_cold_ != nullptr) {
+        std::terminate();
+    }
+    if (!scope.active()) {
+        scope.check_worker();
+        phase_ = phase::retiring;
+        retire_cold(target);
+        phase_ = phase::expired;
+        return;
+    }
+    phase_ = phase::cold;
+    frame_target_ = target;
+    retire_cold_ = retire_cold;
+    scope.link(*this);
+}
+
+void scoped_operation_registration::clear_frame_binding() noexcept {
+    frame_target_ = nullptr;
+    retire_cold_ = nullptr;
+}
+
+void scoped_operation_registration::prepare_start() const {
+    if (phase_ == phase::expired) {
+        throw std::logic_error("capability operation scope has expired");
+    }
+    if (phase_ != phase::cold) {
+        throw std::logic_error("capability operation can only be awaited once");
+    }
+    scope_->check_worker();
+}
+
+void scoped_operation_registration::start() noexcept {
+    if (phase_ != phase::cold) {
+        std::terminate();
+    }
+    phase_ = phase::running;
+}
+
+void scoped_operation_registration::prepare_completion() noexcept {
+    if (phase_ != phase::running) {
+        std::terminate();
+    }
+    scope_->check_worker();
+    // The final suspend point permits owner relocation, not early retirement:
+    // the registration stays linked until the frame has been destroyed.
+    phase_ = phase::completing;
+}
+
+void scoped_operation_registration::complete() noexcept {
+    if (phase_ != phase::completing) {
+        std::terminate();
+    }
+    phase_ = phase::complete;
+    clear_frame_binding();
+    if (scope_ != nullptr) {
+        auto* scope = scope_;
+        scope->unlink(*this);
+        scope->resume_joiner();
+    }
+}
+
+void scoped_operation_registration::retire_frame() noexcept {
+    if (phase_ == phase::running || phase_ == phase::completing || phase_ == phase::retiring) {
+        std::terminate();
+    }
+    if (phase_ == phase::cold) {
+        scope_->check_worker();
+        phase_ = phase::retiring;
+        const auto retire_cold = retire_cold_;
+        auto* target = frame_target_;
+        clear_frame_binding();
+        retire_cold(target);
+    }
+    phase_ = phase::expired;
+    if (scope_ != nullptr) {
+        auto* scope = scope_;
+        scope->unlink(*this);
+        // Join may retire the owner inline; no further registration access.
+        scope->resume_joiner();
+    }
+}
+
+}  // namespace detail
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace {
+
+#ifdef _WIN32
+// Asio reports socket and resolver errors in its own system category, whose
+// message() formats Win32 codes in the ANSI code page like std::system_category().
+[[nodiscard]] bool is_windows_system_category(const std::error_category& category) noexcept {
+    return category == std::system_category() || category == asio::system_category();
+}
+
+[[nodiscard]] bool is_message_trailing_space(wchar_t value) noexcept {
+    return value == L' ' || value == L'\t' || value == L'\r' || value == L'\n';
+}
+
+// The Win32 system message for `value` in UTF-8, or empty when there is none.
+[[nodiscard]] std::string windows_system_message(int value) {
+    std::array<wchar_t, 1024> buffer;
+    // MAX_WIDTH_MASK folds the message's line breaks into spaces.
+    auto length = ::FormatMessageW(
+        FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS | FORMAT_MESSAGE_MAX_WIDTH_MASK, nullptr,
+        static_cast<DWORD>(value), 0, buffer.data(), static_cast<DWORD>(buffer.size()), nullptr);
+    while (length > 0 && is_message_trailing_space(buffer[length - 1])) {
+        --length;
+    }
+    if (length == 0) {
+        return {};
+    }
+    const auto wide_length = static_cast<int>(length);
+    const auto size = ::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), wide_length, nullptr, 0, nullptr, nullptr);
+    if (size <= 0) {
+        return {};
+    }
+    std::string text(static_cast<std::size_t>(size), '\0');
+    if (::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), wide_length, text.data(), size, nullptr, nullptr) != size) {
+        return {};
+    }
+    return text;
+}
+#endif
+
+// Reporting is loudest exactly when the process is least able to afford it: an
+// allocation failure or a dead upstream fails every connection at once, and
+// stderr is a synchronous write that can block the reporting thread when it is
+// redirected to a slow or full file. A flood would then slow the very recovery
+// it is describing, and bury the first failure -- the informative one -- under
+// thousands of identical consequences.
+//
+// So the reporter emits at most burst lines per window and counts the rest.
+// The count is not lost: the next line that gets through carries it.
+constexpr std::size_t burst = 20;
+constexpr auto window = std::chrono::seconds(1);
+
+std::mutex& rate_mutex() noexcept {
+    static std::mutex mutex;
+    return mutex;
+}
+
+struct rate_state final {
+    std::chrono::steady_clock::time_point window_start_{};
+    std::size_t emitted_{0};
+    std::size_t suppressed_{0};
+    bool started_{false};
+};
+
+rate_state& get_rate_state() noexcept {
+    static rate_state state;
+    return state;
+}
+
+// Decides whether this failure gets a line. Returns the number of failures
+// suppressed since the last emitted line, to be reported alongside it.
+struct rate_decision final {
+    bool emit_{false};
+    std::size_t suppressed_{0};
+};
+
+[[nodiscard]] rate_decision admit() noexcept {
+    const auto now = std::chrono::steady_clock::now();
+    const std::lock_guard guard(rate_mutex());
+    auto& state_value = get_rate_state();
+
+    if (!state_value.started_ || now - state_value.window_start_ >= window) {
+        state_value.started_ = true;
+        state_value.window_start_ = now;
+        state_value.emitted_ = 0;
+    }
+    if (state_value.emitted_ >= burst) {
+        ++state_value.suppressed_;
+        return {};
+    }
+    ++state_value.emitted_;
+    rate_decision decision;
+    decision.emit_ = true;
+    decision.suppressed_ = state_value.suppressed_;
+    state_value.suppressed_ = 0;
+    return decision;
+}
+
+// Holds the stdio lock of stderr, so the pieces of one line reach it together,
+// without interleaving with any concurrent stdio writer.
+class stream_lock final {
+public:
+    stream_lock() noexcept {
+#if defined(_WIN32)
+        _lock_file(stderr);
+#else
+        flockfile(stderr);
+#endif
+    }
+
+    ~stream_lock() {
+#if defined(_WIN32)
+        _unlock_file(stderr);
+#else
+        funlockfile(stderr);
+#endif
+    }
+
+    stream_lock(const stream_lock&) = delete;
+    stream_lock& operator=(const stream_lock&) = delete;
+};
+
+void write_text(std::string_view text) noexcept {
+    std::fwrite(text.data(), 1, text.size(), stderr);
+}
+
+void write_line(std::string_view context_value, std::string_view what, std::size_t occurrences,
+    std::size_t suppressed) noexcept {
+    char occurrences_text[32] = "";
+    if (occurrences > 1) {
+        std::snprintf(occurrences_text, sizeof(occurrences_text), " (x%zu)", occurrences);
+    }
+    char suppressed_text[48] = "";
+    if (suppressed != 0) {
+        std::snprintf(suppressed_text, sizeof(suppressed_text), " (+%zu suppressed)", suppressed);
+    }
+    // Views are written by their exact length: they need not be NUL-terminated
+    // and may be longer than printf's int precision can express.
+    const stream_lock lock;
+    write_text("ruvia: ");
+    write_text(context_value);
+    write_text(" failed: ");
+    write_text(what);
+    write_text(occurrences_text);
+    write_text(suppressed_text);
+    write_text("\n");
+}
+
+}  // namespace
+
+std::string error_code_text(const std::error_code& error) {
+#ifdef _WIN32
+    if (is_windows_system_category(error.category())) {
+        auto text = windows_system_message(error.value());
+        if (text.empty()) {
+            std::array<char, std::numeric_limits<int>::digits10 + 3> digits;
+            const auto end = std::to_chars(digits.data(), digits.data() + digits.size(), error.value()).ptr;
+            text.assign(error.category().name()).append(":").append(digits.data(), end);
+        }
+        return text;
+    }
+#endif
+    return error.message();
+}
+
+std::string system_error_text(const std::system_error& error) {
+#ifdef _WIN32
+    if (is_windows_system_category(error.code().category())) {
+        const std::string_view what(error.what());
+        const auto native = error.code().message();
+        auto text = error_code_text(error.code());
+        if (!what.ends_with(native)) {
+            return text;
+        }
+        std::string result(what.substr(0, what.size() - native.size()));
+        result.append(text);
+        return result;
+    }
+#endif
+    return error.what();
+}
+void report_unhandled_failure(
+    std::string_view context_value, std::exception_ptr exception, std::size_t occurrences) noexcept {
+    if (exception == nullptr) {
+        return;
+    }
+    const auto decision = admit();
+    if (!decision.emit_) {
+        return;
+    }
+    // Rethrowing is the only way to read the exception's message. A nested
+    // failure here (a what() that allocates and fails) still leaves the
+    // unknown-exception line below, so the report never disappears entirely.
+    try {
+        std::rethrow_exception(exception);
+    } catch (const std::system_error& error) {
+        // On Windows what() carries a system-category message in the ANSI code
+        // page; the line must stay UTF-8.
+        try {
+            const auto text = system_error_text(error);
+            write_line(context_value, text, occurrences, decision.suppressed_);
+        } catch (...) {
+            // Formatting failed to allocate; the native text still reports it.
+            write_line(context_value, error.what(), occurrences, decision.suppressed_);
+        }
+    } catch (const std::exception& error) {
+        write_line(context_value, error.what(), occurrences, decision.suppressed_);
+    } catch (...) {
+        write_line(context_value, "unknown exception", occurrences, decision.suppressed_);
+    }
+}
+
+bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept {
+    if (left == right) {
+        return true;
+    }
+    if (left == nullptr || right == nullptr) {
+        return false;
+    }
+    // A caught exception may be a copy that dies with its catch block (MSVC's
+    // rethrow_exception copies), so both messages are compared while both
+    // handlers are still active; a what() pointer never leaves its catch.
+    bool equivalent = false;
+    try {
+        std::rethrow_exception(left);
+    } catch (const std::exception& left_error) {
+        try {
+            std::rethrow_exception(right);
+        } catch (const std::exception& right_error) {
+            equivalent = typeid(left_error) == typeid(right_error) &&
+                         std::string_view(left_error.what()) == std::string_view(right_error.what());
+        } catch (...) {
+        }
+    } catch (...) {
+    }
+    return equivalent;
+}
+
+}  // namespace ruvia
+
+#if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
+#define RUVIA_SANITIZER_ALLOCATOR 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(thread_sanitizer) || __has_feature(memory_sanitizer)
+#define RUVIA_SANITIZER_ALLOCATOR 1
+#else
+#define RUVIA_SANITIZER_ALLOCATOR 0
+#endif
+#else
+#define RUVIA_SANITIZER_ALLOCATOR 0
+#endif
+
+namespace ruvia {
+
+namespace {
+
+[[nodiscard]] void* allocate_mimalloc(std::size_t bytes_value, std::size_t alignment) {
+#if RUVIA_SANITIZER_ALLOCATOR
+    // The system allocators may answer a zero-byte request with null.
+    const std::size_t size = bytes_value == 0 ? 1 : bytes_value;
+#if defined(_WIN32)
+    if (void* block = _aligned_malloc(size, (std::max)(alignment, alignof(void*)))) {
+        return block;
+    }
+#else
+    void* block = nullptr;
+    if (::posix_memalign(&block, (std::max)(alignment, alignof(void*)), size) == 0 && block != nullptr) {
+        return block;
+    }
+#endif
+#else
+    // mimalloc returns a unique, aligned block for zero bytes.
+    if (void* block = mi_malloc_aligned(bytes_value, alignment)) {
+        return block;
+    }
+#endif
+    throw std::bad_alloc();
+}
+
+void free_mimalloc(void* block) noexcept {
+#if RUVIA_SANITIZER_ALLOCATOR
+#if defined(_WIN32)
+    _aligned_free(block);
+#else
+    std::free(block);
+#endif
+#else
+    mi_free(block);
+#endif
+}
+
+}  // namespace
+
+namespace detail {
+void* task_frame_allocate(std::size_t bytes_value) {
+    return allocate_mimalloc(bytes_value, alignof(std::max_align_t));
+}
+
+void task_frame_deallocate(void* pointer) noexcept {
+    free_mimalloc(pointer);
+}
+
+void* task_frame_allocate_aligned(std::size_t bytes_value, std::size_t alignment) {
+    return allocate_mimalloc(bytes_value, alignment);
+}
+
+}  // namespace detail
+
+void collect_thread_heap() noexcept {
+#if !RUVIA_SANITIZER_ALLOCATOR
+    // mi_collect() serves the calling thread's heap; forcing also purges the
+    // shared arenas.
+    mi_collect(true);
+#endif
+}
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace {
+
+// The lexical shape is checked here because the platform parsers behind
+// asio::ip::make_address are not strict validators: Windows accepts
+// `a.b.c.d:port`, `[v6]:port`, and fills in missing IPv4 octets. The address
+// text must therefore already be a complete literal before it reaches asio.
+
+[[nodiscard]] constexpr bool is_decimal_digit(char value) noexcept {
+    return value >= '0' && value <= '9';
+}
+
+[[nodiscard]] constexpr bool is_hex_digit(char value) noexcept {
+    return is_decimal_digit(value) || (value >= 'a' && value <= 'f') || (value >= 'A' && value <= 'F');
+}
+
+// Exactly four decimal octets, each 1-3 digits without leading zeros and at
+// most 255. Returns the bytes in network order on success.
+[[nodiscard]] std::optional<asio::ip::address_v4::bytes_type> parse_ipv4_literal(std::string_view text) noexcept {
+    asio::ip::address_v4::bytes_type bytes{};
+    std::size_t position = 0;
+    for (std::size_t octet = 0; octet < bytes.size(); ++octet) {
+        if (octet != 0) {
+            if (position >= text.size() || text[position] != '.') {
+                return std::nullopt;
+            }
+            ++position;
+        }
+        std::size_t digits = 0;
+        unsigned value = 0;
+        while (position < text.size() && is_decimal_digit(text[position])) {
+            if (digits == 3 || (digits == 1 && value == 0)) {
+                return std::nullopt;
+            }
+            value = value * 10 + static_cast<unsigned>(text[position] - '0');
+            ++digits;
+            ++position;
+        }
+        if (digits == 0 || value > 255) {
+            return std::nullopt;
+        }
+        bytes[octet] = static_cast<unsigned char>(value);
+    }
+    if (position != text.size()) {
+        return std::nullopt;
+    }
+    return bytes;
+}
+
+// Hex digits, ':' and '.' (for an embedded IPv4 tail), optionally followed by
+// one '%' and a non-empty zone that contains no further '%'; nothing else.
+[[nodiscard]] bool is_ipv6_literal_shape(std::string_view text) noexcept {
+    const auto zone = text.find('%');
+    const auto address = text.substr(0, zone);
+    if (address.find(':') == std::string_view::npos) {
+        return false;
+    }
+    for (const char value : address) {
+        if (!is_hex_digit(value) && value != ':' && value != '.') {
+            return false;
+        }
+    }
+    if (address.find('.') != std::string_view::npos) {
+        const auto last_colon = address.rfind(':');
+        if (last_colon == std::string_view::npos || !parse_ipv4_literal(address.substr(last_colon + 1)).has_value()) {
+            return false;
+        }
+    }
+    if (zone == std::string_view::npos) {
+        return true;
+    }
+    const auto zone_name = text.substr(zone + 1);
+    if (zone_name.empty()) {
+        return false;
+    }
+    for (const unsigned char ch : zone_name) {
+        if (ch <= 0x20 || ch >= 0x7f || ch == '%' || ch == ':' || ch == '[' || ch == ']') {
+            return false;
+        }
+    }
+    if (zone_name.front() == '+' || zone_name.front() == '-') {
+        return false;
+    }
+    if (is_decimal_digit(zone_name.front())) {
+        if (zone_name.front() == '0') {
+            return false;
+        }
+        std::uint64_t scope_value = 0;
+        for (const char ch : zone_name) {
+            if (!is_decimal_digit(ch)) {
+                return false;
+            }
+            scope_value = scope_value * 10 + static_cast<std::uint64_t>(ch - '0');
+            if (scope_value > std::numeric_limits<asio::ip::scope_id_type>::max()) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+}  // namespace
+
+// Consumes the complete view, including checking for embedded NUL. Common
+// address text uses stack storage; unusually long scope names use temporary heap
+// storage that is released before returning the independent address value.
+std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
+    if (text.find('\0') != std::string_view::npos) {
+        return std::nullopt;
+    }
+    if (const auto v4 = parse_ipv4_literal(text)) {
+        return asio::ip::address(asio::ip::address_v4(*v4));
+    }
+    if (!is_ipv6_literal_shape(text)) {
+        return std::nullopt;
+    }
+    std::error_code error;
+    std::array<char, 64> terminated;
+    const auto address = [&] {
+        if (text.size() < terminated.size()) {
+            std::memcpy(terminated.data(), text.data(), text.size());
+            terminated[text.size()] = '\0';
+            return asio::ip::make_address_v6(terminated.data(), error);
+        }
+        const std::string owned(text);
+        return asio::ip::make_address_v6(owned.c_str(), error);
+    }();
+    if (error || (text.find('%') != std::string_view::npos && address.scope_id() == 0)) {
+        return std::nullopt;
+    }
+    return asio::ip::address(address);
+}
+
+}  // namespace ruvia

@@ -1,0 +1,179 @@
+#include <gtest/gtest.h>
+
+#include <filesystem>
+#include <fstream>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <utility>
+
+#include <asio/buffer.hpp>
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
+#include <asio/write.hpp>
+
+#include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
+#include "ruvia/web/http_server.h"
+
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
+// A document root shares paths with a guarded wildcard route. This executable
+// owns its application, so the document root cannot leak into other suites.
+
+namespace {
+
+namespace fs = std::filesystem;
+
+class document_root_guard final {
+public:
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
+        if (!c.req().header("X-Test-Credential").has_value()) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::unauthorized});
+        }
+        co_await next_value();
+    }
+};
+
+class document_root_routes final {
+    RUVIA_ROUTES_BEGIN(document_root_routes)
+    RUVIA_GET("/private/*", private_file, document_root_guard);
+    RUVIA_GET("/admin/panel/*", private_file, document_root_guard);
+    // Makes PROPFIND a method this server knows, for the 405-vs-501 split.
+    RUVIA_METHOD("PROPFIND", "/dav", private_file);
+    RUVIA_POST("/encoded/:slug", post_slug);
+    RUVIA_GET("/a%20b.txt", get_space_route);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> private_file(ruvia::context& c) {
+        co_return c.text("guarded");
+    }
+
+    ruvia::task<ruvia::http_response> post_slug(ruvia::context& c) {
+        co_return c.text("posted:" + std::string(c.req().param("slug").value_or("")));
+    }
+
+    ruvia::task<ruvia::http_response> get_space_route(ruvia::context& c) {
+        co_return c.text("from-route");
+    }
+};
+
+void populate_document_root(const fs::path& dir) {
+    fs::create_directories(dir / "private");
+    fs::create_directories(dir / "admin" / "panel");
+    fs::create_directories(dir / "encoded");
+    std::ofstream(dir / "private" / "file.txt") << "secret";
+    std::ofstream(dir / "admin" / "panel" / "secret.txt") << "secret";
+    std::ofstream(dir / "public.txt") << "public";
+    std::ofstream(dir / "my report.txt") << "spaced";
+    std::ofstream(dir / "encoded" / "readme.txt") << "readme-from-disk";
+    std::ofstream(dir / "encoded" / "hello world.txt") << "hello-world-from-disk";
+    std::ofstream(dir / "a%20b.txt") << "literal-percent";
+}
+
+// Sends one request on a fresh connection and returns the complete response.
+[[nodiscard]] std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view target, std::string_view method = "GET") {
+    std::string request(method);
+    request.append(" ");
+    request.append(target);
+    request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    return ruvia::test::exchange(io, endpoint, request);
+}
+
+[[nodiscard]] bool has_status(std::string_view response, std::string_view status) {
+    return response.starts_with("HTTP/1.1 ") && response.substr(9).starts_with(status);
+}
+
+}  // namespace
+
+TEST(Ruvia, document_root_never_serves_targets_rejected_by_routing) {
+    const ruvia::test::scoped_temp_directory directory("ruvia-document-root");
+    const auto& dir = directory.path();
+    populate_document_root(dir);
+    ruvia::document_root_config config;
+    config.root_ = dir;
+    config.static_options_.file_types_ =
+        ruvia::static_file_type_policy{.kind_ = ruvia::static_file_type_policy::kind::all};
+    ruvia::app().document_root(std::move(config));
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+
+    // The document root still answers paths no route claims.
+    const auto public_file = exchange(io, server.endpoint(), "/public.txt");
+    EXPECT_TRUE(has_status(public_file, "200"));
+    EXPECT_TRUE(public_file.ends_with("public"));
+
+    // The guarded route owns its prefix, under every equivalent spelling
+    // (RFC 3986 6.2.2.2): an encoded unreserved character reaches the same
+    // route and its guard.
+    for (const std::string_view target : {"/private/file.txt", "/private/file.txt/", "/admin/panel/secret.txt",
+             "/%70rivate/file.txt", "/admin/%70anel/secret.txt"}) {
+        EXPECT_TRUE(has_status(exchange(io, server.endpoint(), target), "401"));
+    }
+
+    // Dot-segment and empty-segment ("//", trailing '/') spellings of guarded
+    // routes must not fall back to the document root.
+    for (const std::string_view target :
+        {"/private/./file.txt", "/private/%2E/file.txt", "/private/%2e/file.txt", "/private/x/../file.txt",
+            "//private/file.txt", "/admin//panel/secret.txt", "//public.txt", "/public.txt/"}) {
+        const auto response = exchange(io, server.endpoint(), target);
+        EXPECT_TRUE(has_status(response, "404"));
+        EXPECT_TRUE(response.find("secret") == std::string::npos);
+        EXPECT_TRUE(response.find("public") == std::string::npos);
+    }
+    // Another method on an encoded spelling answers for the route, never the file.
+    const auto encoded_post = exchange(io, server.endpoint(), "/%70rivate/file.txt", "POST");
+    EXPECT_TRUE(has_status(encoded_post, "405"));
+    EXPECT_TRUE(encoded_post.find("secret") == std::string::npos);
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/%70rivate/file.txt", "OPTIONS"), "204"));
+
+    // The request path is decoded exactly once into the file name, and no
+    // escape may reveal a separator routing never split on.
+    const auto spaced = exchange(io, server.endpoint(), "/my%20report.txt");
+    EXPECT_TRUE(has_status(spaced, "200"));
+    EXPECT_TRUE(spaced.ends_with("spaced"));
+    for (const std::string_view target : {"/my%2520report.txt", "/private%2Ffile.txt", "/private%5Cfile.txt"}) {
+        const auto response = exchange(io, server.endpoint(), target);
+        EXPECT_TRUE(has_status(response, "404"));
+        EXPECT_TRUE(response.find("secret") == std::string::npos);
+    }
+
+    // RFC 9110 15.5.6 and 9.3.7: a document-root file exists for every method,
+    // so OPTIONS describes it and other methods are 405 with Allow, while a
+    // missing file stays 404 and an unregistered token stays 501.
+    const auto options = exchange(io, server.endpoint(), "/public.txt", "OPTIONS");
+    EXPECT_TRUE(has_status(options, "204"));
+    EXPECT_TRUE(options.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto post = exchange(io, server.endpoint(), "/my%20report.txt", "POST");
+    EXPECT_TRUE(has_status(post, "405"));
+    EXPECT_TRUE(post.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "POST"), "404"));
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/missing.txt", "OPTIONS"), "404"));
+    EXPECT_TRUE(has_status(exchange(io, server.endpoint(), "/public.txt", "BREW"), "501"));
+    // A registered extension token is known here, so the file answers 405 too.
+    const auto propfind = exchange(io, server.endpoint(), "/public.txt", "PROPFIND");
+    EXPECT_TRUE(has_status(propfind, "405"));
+    EXPECT_TRUE(propfind.find("\r\nAllow: GET, HEAD, OPTIONS\r\n") != std::string::npos);
+
+    // Percent-encoded document-root paths alongside a sibling method route on the same path pattern.
+    const auto encoded_readme = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "GET");
+    EXPECT_TRUE(has_status(encoded_readme, "200"));
+    EXPECT_TRUE(encoded_readme.ends_with("readme-from-disk"));
+    const auto encoded_space = exchange(io, server.endpoint(), "/encoded/hello%20world.txt", "GET");
+    EXPECT_TRUE(has_status(encoded_space, "200"));
+    EXPECT_TRUE(encoded_space.ends_with("hello-world-from-disk"));
+    const auto encoded_options = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "OPTIONS");
+    EXPECT_TRUE(has_status(encoded_options, "204"));
+    EXPECT_TRUE(encoded_options.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto delete_encoded = exchange(io, server.endpoint(), "/encoded/%72eadme.txt", "DELETE");
+    EXPECT_TRUE(has_status(delete_encoded, "405"));
+    EXPECT_TRUE(delete_encoded.find("\r\nAllow: GET, POST, HEAD, OPTIONS\r\n") != std::string::npos);
+    const auto literal_percent = exchange(io, server.endpoint(), "/a%2520b.txt", "GET");
+    EXPECT_TRUE(has_status(literal_percent, "200"));
+    EXPECT_TRUE(literal_percent.ends_with("literal-percent"));
+    server.finish();
+}

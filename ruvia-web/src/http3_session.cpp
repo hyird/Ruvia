@@ -1,5 +1,4 @@
 #include <netinet/in.h>
-#include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 #include <sys/socket.h>
 
@@ -29,13 +28,31 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/websocket_handshake.h"
+#include "ruvia/web/streaming.h"
 
-#include "web_internal.h"
+#include "connection_lifecycle.h"
+#include "context_access.h"
+#include "route_table.h"
+#if defined(_WIN32)
+#include "route_table.h"
+#endif
+#include <ngtcp2/ngtcp2_crypto.h>
 
+#include "ruvia/core/worker_ref.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
+#include <sys/socket.h>
 #include <unistd.h>
+
+#include <cerrno>
 #endif
 #if defined(__linux__)
 #include <linux/filter.h>
@@ -44,6 +61,10 @@
 #include <concepts>
 
 #include <openssl/ssl.h>
+
+#include "ruvia/core/worker_wait.h"
+
+#include "http_client_pool.h"
 
 namespace ruvia::detail {
 namespace {
@@ -1538,6 +1559,9 @@ void http3_session::finish_drain_if_ready() noexcept {
     }
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::span<const std::byte> byte_view(std::string_view bytes) noexcept {
@@ -2395,6 +2419,9 @@ void http3_endpoint::send_stateless_reset(std::span<const std::uint8_t> destinat
     }
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 namespace {
 
 // Computes the 32-bit keyed digest of the 16 random bytes `cid[4..19]`. The
@@ -2489,6 +2516,9 @@ bool make_http3_stateless_reset_token(
     return ngtcp2_crypto_generate_stateless_reset_token(token.data(), secret.data(), secret.size(), &cid) == 0;
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
 #if !defined(_WIN32)
 namespace {
 

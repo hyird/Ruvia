@@ -6,8 +6,8 @@
 
 ## 1. 流式请求体与流式响应 / SSE
 
-头文件：`"ruvia/web/context.h"`、`"ruvia/http/http_response.h"`。
-不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebapph)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主ruviawebapph)。
+头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/http_content_coding.h"`。
+不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主ruviawebhttp_serverh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
 
@@ -59,7 +59,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 ### 1.2 流式响应写入（`response_stream_writer`）
 
-- **流式路由签名推导**：使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`，与缓冲的 `c.text(...)` 相同；应用已设置的 `X-Content-Type-Options` 保留）获取 `response_stream_writer&`：
+使用 `RUVIA_GET(path, handler, ...)`（或 `RUVIA_POST` 等）且处理器返回 `ruvia::task<void>` 时，框架自动将其推导为流式响应路由。通过 `c.stream()`（默认二进制流）或 `c.stream_text()`（自动设置 `text/plain; charset=UTF-8` 与 `X-Content-Type-Options: nosniff`，与缓冲的 `c.text(...)` 相同；应用已设置的 `X-Content-Type-Options` 保留）获取 `response_stream_writer&`：
 
 | 方法签名 | 说明 |
 | --- | --- |
@@ -78,7 +78,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
 
-- **线性输出通道与尾处理**：提交、写入与结束共用线性输出通道；并发启动或重复提交抛 `std::logic_error`。头提交前的失败仍可替换为缓冲错误响应，提交后的失败不能再发送第二个响应头。正常无正文完成不通过异常控制流、不停止取消 token、不伪造成功写入；中间件后置代码仍正常执行。响应完成与请求体消费是两个独立阶段：必要时仍须读取/排空合法请求体，HTTP/1 在提交时未消费完整请求体则按关闭计划处理，不因稍后读取而恢复复用。
+提交、写入与结束共用线性输出通道；并发启动或重复提交抛 `std::logic_error`。头提交前的失败仍可替换为缓冲错误响应，提交后的失败不能再发送第二个响应头。正常无正文完成不通过异常控制流、不停止取消 token、不伪造成功写入；中间件后置代码仍正常执行。响应完成与请求体消费是两个独立阶段：必要时仍须读取/排空合法请求体，HTTP/1 在提交时未消费完整请求体则按关闭计划处理，不因稍后读取而恢复复用。
 
 ---
 
@@ -114,26 +114,27 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 `sse_writer` 是可复制句柄，操作借用其响应流；`operation` 语义同 `response_stream_writer`。
 
-出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/http_response.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
+出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/http_content_coding.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
 
 #### 客户端断开即取消请求
 
-- **对端断开取消传播**：流式响应路由（处理器返回 `ruvia::task<void>`）中，客户端关闭连接会停止 `c.stop_token()`，与 Go `net/http` 的后台读取、Pingora `read_body_or_idle` 及 nginx 默认 `proxy_ignore_client_abort off` 一致。该 token 已由 `db()`、`redis()`（含 Pub/Sub 订阅）、`run_blocking()` 与 `sse.sleep()` / `stream.sleep()` 自动绑定，空闲 SSE 等待订阅消息时也能及时结束，无需显式启用。
+流式响应路由（处理器返回 `ruvia::task<void>`）中，客户端关闭连接会停止 `c.stop_token()`，与 Go `net/http` 的后台读取、Pingora `read_body_or_idle` 及 nginx 默认 `proxy_ignore_client_abort off` 一致。该 token 已由 `db()`、`redis()`（含 Pub/Sub 订阅）、`run_blocking()` 与 `sse.sleep()` / `stream.sleep()` 自动绑定，空闲 SSE 等待订阅消息时也能及时结束，无需显式启用。
 
-- **HTTP/1 读侧终止观察**：HTTP/1 明文和 TLS 下请求体完整消费后，框架在连接所属事件循环上发起一次异步 transport read 观察读侧终止；没有探测写入、心跳依赖或 socket 状态轮询。没有请求体的 GET 在分派时即开始；带请求体时在处理器读完请求体（如 `co_await c.req().text()`）的那次读取返回前开始。未读完的请求体字节仍在 socket 中时不检测，也不自动排空或抢占请求体读取。
-- **单独请求与管线半关闭区分**：单独到达的请求（同一批输入中前面没有其他请求）遇 EOF、TLS `close_notify`；任何请求遇 TLS 截断（无 `close_notify` 的 TCP 结束）、TCP RST 或写失败，都停止 `c.stop_token()`，`aborted()` 随之为 `true`，之后的写入抛传输异常；当前流按截断结束并关闭连接。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。
+- HTTP/1 明文和 TLS：请求体完整消费后，框架在连接所属事件循环上发起一次异步 transport read 观察读侧终止；没有探测写入、心跳依赖或 socket 状态轮询。没有请求体的 GET 在分派时即开始；带请求体时在处理器读完请求体（如 `co_await c.req().text()`）的那次读取返回前开始。未读完的请求体字节仍在 socket 中时不检测，也不自动排空或抢占请求体读取。
+- 单独到达的请求（同一批输入中前面没有其他请求）遇 EOF、TLS `close_notify`；任何请求遇 TLS 截断（无 `close_notify` 的 TCP 结束）、TCP RST 或写失败，都停止 `c.stop_token()`，`aborted()` 随之为 `true`，之后的写入抛传输异常；当前流按截断结束并关闭连接。正常结束与异常退出都先取消并等待检测结束，再释放连接资源。
 - **TCP 写半关闭**：[RFC 9112 §9.6](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6) 指出客户端半关闭本身不表示放弃响应，但单个 FIN 无法区分“关闭整个客户端”与“仅关闭发送方向”。流式响应把单独到达请求之后的 FIN 视为客户端离开：只发送一个请求即 `shutdown(SHUT_WR)`、仍要读取完整流式响应的客户端会被截断，这类客户端应改为保持发送方向打开或使用缓冲响应路由。缓冲响应路由不受影响。
 - **Pipeline**：检测期间读到的后续请求字节按原顺序完整保留，不将“可读”误判为断开。pipeline 内的干净结束（TCP FIN 或 TLS `close_notify`）是请求方向半关闭，与 FIN 到达的时机无关：当前请求排在前一请求之后到达（客户端在前一响应结束前已发出它，无论前一路由是缓冲还是流式），或其后已有后续请求字节时，不取消当前响应；FIN 之前已收到的请求（包括流式响应，其 `c.stop_token()` 不因该 FIN 停止）照常处理，全部响应后关闭连接，不再读取 transport。TCP RST 与 TLS 截断仍中止。预读达到既有请求头大小上限时暂停检测，直到当前响应结束；不为探测无界缓冲。
-- **HTTP/2 流级重置隔离**：HTTP/2 不新增读操作：本流 `RST_STREAM` 或使该流终止的连接关闭停止 `c.stop_token()`，不取消同连接其他 stream。请求方向正常的 `END_STREAM` 不取消响应；`GOAWAY` 遵循连接排空规则。
-- **半开连接超时兜底**：网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理，不新增保活探测。
-- **协作式取消边界**：取消是协作式的：未绑定 `c.stop_token()` 的自定义等待须显式传入它，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
+- HTTP/2 不新增读操作：本流 `RST_STREAM` 或使该流终止的连接关闭停止 `c.stop_token()`，不取消同连接其他 stream。请求方向正常的 `END_STREAM` 不取消响应；`GOAWAY` 遵循连接排空规则。
+- 网络黑洞、客户端断电等没有 FIN/RST 到达的情况不能保证即时识别，仍由既有超时策略处理，不新增保活探测。
+- 取消是协作式的：未绑定 `c.stop_token()` 的自定义等待须显式传入它，并在取消后返回、释放订阅；不会抢占 CPU 循环或无取消支持的等待。
 
 最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端：
 
 ```cpp
 #include <string>
-#include "ruvia/core/event_loop.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/streaming.h"
 
 ruvia::task<void> stream_subscription(
     ruvia::context& c,
@@ -155,13 +156,13 @@ ruvia::task<void> stream_subscription(
 }
 ```
 
-- **订阅生命周期与取消守卫**：在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [api_surface.cpp](../examples/web/api_surface.cpp) 与 [redis.cpp](../examples/web/redis.cpp)。
+在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/web/streaming.cpp) 与 [redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)。
 
 ---
 
 ## 2. HTTP/1.1、HTTP/2 & HTTP/3 服务端高级协议能力
 
-参考示例：[examples/web/api_surface.cpp](../examples/web/api_surface.cpp)。
+参考示例：[examples/web/http_features.cpp](../examples/web/http_features.cpp)。
 
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
@@ -177,11 +178,11 @@ ruvia::task<void> stream_subscription(
 
 ## 3. WebSocket 服务端
 
-头文件：`"ruvia/web/context.h"`、`"ruvia/http/http_client.h"`。
-参考示例：[examples/web/api_surface.cpp](../examples/web/api_surface.cpp)。
+头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/websocket_handshake.h"`。
+参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
-不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发ruviawebapph) 显式协商并取得同一个 `websocket` 会话接口。
+不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发ruviawebrequest_streamh) 显式协商并取得同一个 `websocket` 会话接口。
 
 - **Extended CONNECT 字段**：HTTP/2 中的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理，既不校验也不拒绝。
 - **子协议提议**：接收方跳过 `Sec-WebSocket-Protocol` 提议中的重复子协议；唯一性是 RFC 6455 §4.1 对发送方客户端的要求。
@@ -190,7 +191,7 @@ Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended 
 ### 3.1 路由注册与配置
 
 ```cpp
-#include "ruvia/web/context.h"
+#include "ruvia/web/streaming.h"
 
 inline const ruvia::websocket_route_config chat_ws_options{
     .subprotocols_ = {"chat.v1", "json.v1"},
@@ -267,7 +268,7 @@ private:
 - **帧规则**：首帧携带 opcode，后续为续帧（opcode 0）；`permessage-deflate` 下 RSV1 只在首帧，整条消息是一条跨分片的 DEFLATE 流，每块以 sync flush 结尾，末块去掉 `00 00 FF FF`；文本跨分片校验 UTF-8，消息上限按整条消息累计；`bytes_sent()` 随每个分片累计。
 - **未完成中止**：写入器析构或 `abort()` 时消息未完成即中止会话（对端无法得知消息边界），记为 `aborted`；写入器借用 `websocket`，随其失效。
 
-`websocket_termination`（`"ruvia/http/http_client.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
+`websocket_termination`（`"ruvia/http/websocket_handshake.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
 
 | 取值 | 触发 |
 | --- | --- |
@@ -287,23 +288,22 @@ private:
 - **计数时点**：接收方向计完整解析的帧，被拒绝的帧不计；发送方向计已成功交付传输的字节；两者单调饱和于 `std::uint64_t`。
 - **访问期限**：`websocket` 失效（请求处理结束）后访问器返回 `none` 与 `0`；需要会话最终值时在处理器内 `close()` 或读到 `std::nullopt` 后读取。
 
-- **WebSocket 关闭码范围与校验**：`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。
-- **关闭码合法区间与原因校验**：可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
+`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
 
 `websocket_message` 方法：
 - `opcode()`（`websocket_opcode::text` 或 `binary`）
 - `payload()`（返回 `std::string_view`，在下一次 `read()` 启动前有效）
 - `text()` / `binary()`（返回 `bool`）
 
-- **零拷贝借用消息 `borrow()`**：`websocket_message::borrow(opcode, borrowed_text payload)` 用于调用方自有存储的零拷贝消息；字符串字面量、`std::string_view` 和具名 `std::string` 可直接传入，拥有型字符串右值（包括 `const` 右值）被编译器拒绝。需要发送临时字符串时使用 `text()` / `binary()` 的拥有化入口，不要预先转成 `string_view` 绕过生命周期检查。`borrow()` 不延长存储寿命；消息视图及 `send()` 操作完成前必须保持 owner 和字节有效。
+`websocket_message::borrow(opcode, borrowed_text payload)` 用于调用方自有存储的零拷贝消息；字符串字面量、`std::string_view` 和具名 `std::string` 可直接传入，拥有型字符串右值（包括 `const` 右值）被编译器拒绝。需要发送临时字符串时使用 `text()` / `binary()` 的拥有化入口，不要预先转成 `string_view` 绕过生命周期检查。`borrow()` 不延长存储寿命；消息视图及 `send()` 操作完成前必须保持 owner 和字节有效。
 
 ---
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/context.h"`。
-参考示例：[examples/web/api_surface.cpp](../examples/web/api_surface.cpp)。
-不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发ruviawebapph)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebapph)。
+头文件：`"ruvia/web/streaming.h"`。
+参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
+不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
 
@@ -321,12 +321,11 @@ ruvia::task<void> handle_connect(ruvia::context& c) {
 }
 ```
 
-- **HTTP/2 隧道乐观数据**：HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度；非 2xx 响应发送完毕后服务端以 `RST_STREAM(NO_ERROR)` 结束该流（RFC 9113 §8.1），而不是等待客户端结束请求半边。
-- **Extended CONNECT WebSocket 提前数据**：RFC 8441 WebSocket（`:protocol = websocket`）同样处理：RFC 6455 §4.1 要求客户端等待 2xx，但这是对发送方的约束，提前到达的 `DATA` 在流控窗口内保留，握手接受后按序交给 WebSocket 会话。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃；`ALTSVC`、`ORIGIN` 帧也一样忽略（RFC 7838 §4、RFC 8336 §2.1），不复位隧道流。
+HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9298 §5，经 RFC 9931 更新）属于隧道数据：协议层在流控窗口内保留这些字节（不归还接收窗口），隧道接受后由 `tunnel.read()` 按序读到；若路由返回非 2xx，已缓冲及后续字节被丢弃并归还流控额度；非 2xx 响应发送完毕后服务端以 `RST_STREAM(NO_ERROR)` 结束该流（RFC 9113 §8.1），而不是等待客户端结束请求半边。RFC 8441 WebSocket（`:protocol = websocket`）同样处理：RFC 6455 §4.1 要求客户端等待 2xx，但这是对发送方的约束，提前到达的 `DATA` 在流控窗口内保留，握手接受后按序交给 WebSocket 会话。已建立隧道上的未知扩展帧类型按 RFC 9113 §5.5 丢弃；`ALTSVC`、`ORIGIN` 帧也一样忽略（RFC 7838 §4、RFC 8336 §2.1），不复位隧道流。
 
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
-- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发ruviawebapph)采用相同的在途操作与冷任务回收规则。
+- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)采用相同的在途操作与冷任务回收规则。
 
 TLS 隧道把对端未发送 `close_notify` 就关闭 TCP 视为输入结束，`tunnel.read()` 返回 `std::nullopt`（与 Go `crypto/tls` 在记录边界接受截断的策略一致）；HTTP/1.1 响应体等有消息定界的读取路径仍把该情形作为传输错误上报。
 
@@ -350,7 +349,7 @@ ruvia::task<void> handle_udp(ruvia::context& c) {
 }
 ```
 
-- **自定义升级协议 Capsule 隧道**：其他升级协议隧道（HTTP/2 Extended CONNECT）通过 `http_tunnel_route_config{.datagrams_ = true}` 声明使用 Capsule 协议：该路由的 2xx 响应携带唯一的 `Capsule-Protocol: ?1`（[RFC 9297 §3.4](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.4)；`connect-udp` 由 RFC 9298 握手自行生成，不重复添加），处理器才可调用 `tunnel.datagrams()`、`udp()` 或 `capsules()`；未声明的路由调用这三者抛出 `std::logic_error`（协商由路由协议负责）。普通 `CONNECT` 路由声明 `datagrams_` 时注册即抛出 `std::invalid_argument`。
+其他升级协议隧道（HTTP/2 Extended CONNECT）通过 `http_tunnel_route_config{.datagrams_ = true}` 声明使用 Capsule 协议：该路由的 2xx 响应携带唯一的 `Capsule-Protocol: ?1`（[RFC 9297 §3.4](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.4)；`connect-udp` 由 RFC 9298 握手自行生成，不重复添加），处理器才可调用 `tunnel.datagrams()`、`udp()` 或 `capsules()`；未声明的路由调用这三者抛出 `std::logic_error`（协商由路由协议负责）。普通 `CONNECT` 路由声明 `datagrams_` 时注册即抛出 `std::invalid_argument`。
 
 HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后优先发送原生不可靠数据报；否则使用请求流中的 DATAGRAM Capsule。`udp()` 在两种传输上统一处理 Context ID 0，空载荷也是有效数据报。不要将成功 `send()` 视为对端已收到：原生 QUIC DATAGRAM 不重传。
 
@@ -369,8 +368,7 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 - **操作生命周期**：Capsule、Datagram 与 UDP 门面共享同一对读写通道租约，同方向拒绝重叠。销毁门面前必须等待已启动操作结束；未启动冷任务随门面销毁失效。
 - **输入与结果所有权**：切换输入或关闭时，先清除借用视图，再释放缓冲并重置输入游标。已交付的 `http_capsule` / `http_datagram` 独立拥有负载，不受后续读取、门面析构或客户端停机影响，但必须在所属 worker 上释放。
 
-- **未知 Capsule 流式跳过**：Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。
-- **畸形 Capsule 复位与终止**：保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
+Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
 
 HTTP/3 的畸形 Capsule 中止对应流并使用 `H3_MESSAGE_ERROR`；原生 HTTP Datagram 的关联前缀与 SETTINGS 错误由协议层按 RFC 9297 处理，不混同于 Capsule 流解析错误。
 
@@ -417,7 +415,7 @@ co_return c.text(body.text());
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
-| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发ruviawebapph) |
+| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
@@ -439,7 +437,7 @@ co_return c.text(body.text());
 
 - **启动前已停止**：令牌在操作启动前已停止时抛 `cancelled`，不写出任何字节，交换、隧道与读通道保持可用。
 
-- **出站 WebSocket 构造器**：WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。返回消息借用连接的接收存储，视图在下一次 `read()` 或 `close()` 前有效。连接不能跨 worker 使用。
+WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。返回消息借用连接的接收存储，视图在下一次 `read()` 或 `close()` 前有效。连接不能跨 worker 使用。
 
 - **结束与失败**：握手后遵守 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api) 的统一契约。关闭、EOF、协议拒绝、心跳失活与主动中止以 `nullopt` 和 `termination()` 表达；单次操作超时或取消抛 `std::system_error`（`errc::timed_out` / `operation_canceled`）。
 - **选项继承**：逐次 `operation_options` 继承所属句柄的选项，超时只能收紧，提供的令牌替换继承的用户取消；握手期限不变成连接总寿命。
@@ -459,7 +457,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 - **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 
-- **客户端引用与线程亲和**：引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_session)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_session)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
 ### 5.2 源站、转发与连接控制
 
@@ -479,9 +477,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
-- **重定向策略与跨源凭据剥离**：自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。
-- **重定向回调与跳数追踪**：`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。
-- **流式上传重定向与跨源剥离**：`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |
@@ -512,7 +508,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 
 ### 5.3 协议选择与扩展
 
-- **协议版本集合 `http_client_versions`**：`http_client_versions`（`http1_` / `http2_` / `http3_`）是请求可用的版本集合：`http_client_config::versions_` 给 alias 默认值（{1, 2}），`http_client_request_options::versions_` 可逐请求覆盖，一个 alias 即可服务不同档位的站点。空集合、未编译进库的版本或明文下的 HTTP/3 抛 `std::invalid_argument`。
+`http_client_versions`（`http1_` / `http2_` / `http3_`）是请求可用的版本集合：`http_client_config::versions_` 给 alias 默认值（{1, 2}），`http_client_request_options::versions_` 可逐请求覆盖，一个 alias 即可服务不同档位的站点。空集合、未编译进库的版本或明文下的 HTTP/3 抛 `std::invalid_argument`。
 
 | 集合 | https | http |
 | --- | --- | --- |
@@ -520,18 +516,18 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | 含 3 且含 1 或 2 | 先走 TCP，同一路由的认证响应通告 `Alt-Svc` `h3` 后升级 QUIC | 不允许 |
 | 仅 {3} | 直连路由的 QUIC | 不允许 |
 
-- **出站 TLS 协商与 HTTP/3 预算**：TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；含 1 的协商可在旧服务端使用 HTTP/1.1，仅 h2 的报价不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
+TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；含 1 的协商可在旧服务端使用 HTTP/1.1，仅 h2 的报价不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
 
 - **Alt-Svc 按路由**：替代服务按实际路由（拨号 host、拨号端口、TLS server name）记录与查找，包括 alias 原路由与请求级覆盖；只采信 TLS 认证的响应，alt-authority 省略 host 时取该路由的拨号 host，QUIC 用同一 server name 校验证书。不含 3 的请求不记录、不升级。
 - **容量**：条目数受 `http3_.max_alt_svc_entries_` 跨路由约束，最久未用者先淘汰；`Alt-Svc: clear` 只清除该路由。
 - **失败回落**：替代端点在请求发送前连接或握手失败时，请求回落该路由的 TCP，不因此失败；该替代条目 5 分钟内标记不可用、不再尝试，重新通告也不解除（RFC 7838 §2.4）。仅 {3} 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
 
-- **客户端 0-RTT 与 `425` 重试**：客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有同一路由（拨号目标与 server name）已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试；票据按最久未用淘汰，条目数上限同 `max_idle_multiplexed_`（至少 1）。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
+客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有同一路由（拨号目标与 server name）已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试；票据按最久未用淘汰，条目数上限同 `max_idle_multiplexed_`（至少 1）。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 
 - **路径迁移**：沿用 ngtcp2 路径验证并保留原连接，不自动重放失败请求。CID 容量见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。
 - **迁移期限**：握手确认、CID 补充等待与路径验证共用 `connect_timeout_` 和 `with_options()` 中更紧的整体期限。
 - **迁移终止**：用户取消返回 `cancelled`，期限到期返回 `timeout`；客户端关闭或事件循环停止导致连接退役时，优先返回 `closing`。
 
-- **服务端通告观察 `next_advertisement()`**：`client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
+`client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
 
-示例：[http_client.cpp](../examples/web/http_client.cpp)。
+示例：[http_client.cpp](../examples/web/http_client.cpp)、[http_client_advanced.cpp](../examples/web/http_client_advanced.cpp)。

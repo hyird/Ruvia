@@ -1,16 +1,40 @@
-ruvia_collect_cpp_sources(ruvia_web_sources src
-    "${_ruvia_disabled_protocol_regex}")
+set(ruvia_web_sources
+    src/app.cpp
+    src/context_response.cpp
+    src/http1_server_session.cpp
+    src/http_client_exchange.cpp
+    src/http_client_pool.cpp
+    src/http_server.cpp
+    src/router.cpp
+    src/worker_connections.cpp
+)
+if(RUVIA_ENABLE_HTTP2)
+    list(APPEND ruvia_web_sources src/http2_sans_io_session_engine.cpp)
+endif()
+if(RUVIA_ENABLE_HTTP3)
+    list(APPEND ruvia_web_sources src/http3_session.cpp)
+endif()
 # Keep the shared database sources whenever either driver is enabled; only the
-# driver-specific translation units and disabled feature directories are omitted.
-if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db_pool\\.cpp$")
+# driver-specific translation units and disabled features are omitted.
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND ruvia_web_sources
+        src/db_pool.cpp
+        src/db_query.cpp
+        src/db_session.cpp
+    )
+endif()
+if(RUVIA_ENABLE_MARIADB)
+    list(APPEND ruvia_web_sources src/mariadb_driver.cpp)
+endif()
+if(RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND ruvia_web_sources src/postgresql_driver.cpp)
 endif()
 # The database query-result cache stores rows in Redis.
-if(NOT RUVIA_ENABLE_REDIS)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis_pool\\.cpp$")
+if(RUVIA_ENABLE_REDIS)
+    list(APPEND ruvia_web_sources src/redis_pool.cpp)
 endif()
-if(NOT RUVIA_ENABLE_JWT)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/jwt\\.cpp$")
+if(RUVIA_ENABLE_JWT)
+    list(APPEND ruvia_web_sources src/jwt.cpp)
 endif()
 
 add_library(ruvia-web STATIC ${ruvia_web_sources})
@@ -41,18 +65,29 @@ endif()
 
 ruvia_install_component(ruvia-web web)
 
-set(_ruvia_web_excluded_header_patterns ${_ruvia_disabled_protocol_patterns})
-if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(APPEND _ruvia_web_excluded_header_patterns "/db\\.h$")
+set(ruvia_web_headers
+    include/ruvia/web/app.h
+    include/ruvia/web/context.h
+    include/ruvia/web/controller.h
+    include/ruvia/web/http_client.h
+    include/ruvia/web/http_client_types.h
+    include/ruvia/web/http_server.h
+    include/ruvia/web/middleware.h
+    include/ruvia/web/model.h
+    include/ruvia/web/streaming.h
+)
+if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
+    list(APPEND ruvia_web_headers
+        include/ruvia/web/db/db.h
+        include/ruvia/web/db/db_query.h
+        include/ruvia/web/db/db_session.h
+    )
 endif()
-if(NOT RUVIA_ENABLE_REDIS)
-    list(APPEND _ruvia_web_excluded_header_patterns "/redis\\.h$")
+if(RUVIA_ENABLE_REDIS)
+    list(APPEND ruvia_web_headers include/ruvia/web/redis/redis.h)
 endif()
-if(NOT RUVIA_ENABLE_JWT)
-    list(APPEND _ruvia_web_excluded_header_patterns "/jwt\\.h$")
+if(RUVIA_ENABLE_JWT)
+    list(APPEND ruvia_web_headers include/ruvia/web/jwt.h)
 endif()
-list(JOIN _ruvia_web_excluded_header_patterns "|" _ruvia_web_excluded_header_regex)
-
-ruvia_install_public_header_closure(web include/ruvia/web
-    "${_ruvia_web_excluded_header_regex}")
+ruvia_install_public_headers(web ${ruvia_web_headers})
 

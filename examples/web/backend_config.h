@@ -14,9 +14,13 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
-#if defined(RUVIA_ENABLE_DATABASE)
-#include "ruvia/web/db.h"
+#include "ruvia/web/http_client_types.h"
+
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db.h"
 #endif
 
 namespace example {
@@ -74,6 +78,10 @@ private:
     const ruvia::env* dotenv_;
 };
 
+}  // namespace example
+
+namespace example {
+
 // Shared startup configuration for SQL and Redis examples. With prefix
 // RUVIA_DB (or RUVIA_REDIS), TLS stays verified unless RUVIA_DB_TLS=false is
 // explicitly selected for a trusted local server. RUVIA_DB_CA selects a CA;
@@ -101,6 +109,10 @@ inline ruvia::client_tls_config backend_tls(std::string_view prefix, const envir
     }
     return config;
 }
+
+}  // namespace example
+
+namespace example {
 
 inline void assign_setting(std::string& target, const environment& env, std::string_view name) {
     if (const auto value = env.get(name)) {

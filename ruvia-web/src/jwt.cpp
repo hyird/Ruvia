@@ -18,10 +18,11 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_request.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/model.h"
 
-#include "web_internal.h"
+#include "connection_lifecycle.h"
 namespace ruvia {
 
 namespace detail {
@@ -1055,10 +1056,10 @@ std::string_view jwt_numeric_date::text() const& noexcept {
 }
 
 std::optional<std::chrono::system_clock::time_point> jwt_numeric_date::to_time_point() const noexcept {
-    using clock_type = std::chrono::system_clock;
+    using system_clock = std::chrono::system_clock;
     auto date = detail::normalize_decimal(detail::decompose_validated_decimal(text()));
     if (date.digits_.empty()) {
-        return clock_type::time_point{};
+        return system_clock::time_point{};
     }
     const int tick_order = date.order_ + detail::tick_decimal_places;
     if (tick_order <= 0 || tick_order > 19 || date.digit_count_ > static_cast<std::size_t>(tick_order)) {
@@ -1068,16 +1069,16 @@ std::optional<std::chrono::system_clock::time_point> jwt_numeric_date::to_time_p
     for (int position = 0; position < tick_order; ++position) {
         ticks = ticks * 10 + static_cast<unsigned>(detail::next_digit(date.digits_) - '0');
     }
-    constexpr auto minimum = std::numeric_limits<clock_type::rep>::min();
-    constexpr auto maximum = std::numeric_limits<clock_type::rep>::max();
+    constexpr auto minimum = std::numeric_limits<system_clock::rep>::min();
+    constexpr auto maximum = std::numeric_limits<system_clock::rep>::max();
     const auto limit = date.negative_ ? detail::unsigned_magnitude(minimum) : static_cast<std::uint64_t>(maximum);
     if (ticks > limit) {
         return std::nullopt;
     }
     const auto count = date.negative_
-                           ? (ticks == detail::unsigned_magnitude(minimum) ? minimum : -static_cast<clock_type::rep>(ticks))
-                           : static_cast<clock_type::rep>(ticks);
-    return clock_type::time_point{clock_type::duration{count}};
+                           ? (ticks == detail::unsigned_magnitude(minimum) ? minimum : -static_cast<system_clock::rep>(ticks))
+                           : static_cast<system_clock::rep>(ticks);
+    return system_clock::time_point{system_clock::duration{count}};
 }
 
 }  // namespace ruvia

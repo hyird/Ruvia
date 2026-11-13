@@ -1,4 +1,8 @@
-ruvia_collect_cpp_sources(ruvia_core_sources src "")
+set(ruvia_core_sources
+    src/blocking_pool.cpp
+    src/task_scope.cpp
+    src/worker_runtime.cpp
+)
 add_library(ruvia-core STATIC ${ruvia_core_sources})
 
 ruvia_configure_library(ruvia-core core)
@@ -35,5 +39,13 @@ target_compile_definitions(ruvia-core PUBLIC
 
 ruvia_install_component(ruvia-core core)
 
-ruvia_install_public_header_closure(core include/ruvia/core "")
+ruvia_install_public_headers(core
+    include/ruvia/core/blocking_pool.h
+    include/ruvia/core/event_loop.h
+    include/ruvia/core/stop_token.h
+    include/ruvia/core/task.h
+    include/ruvia/core/task_scope.h
+    include/ruvia/core/worker_ref.h
+    include/ruvia/core/worker_wait.h
+)
 
