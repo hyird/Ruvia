@@ -771,6 +771,295 @@ void http_content_transcoder::reset() {
     phase_ = phase::active;
 }
 
+struct http_staged_content_transcoder::impl_type final {
+    impl_type(std::span<const http_content_coding> source_codings,
+        http_content_coding target_coding, http_staged_transcode_options options,
+        std::pmr::memory_resource* upstream)
+        : budget_(options.max_memory_bytes_, upstream),
+          effective_resource_(
+              options.max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()
+                  ? upstream
+                  : &budget_),
+          source_codings_(effective_resource_),
+          staged_raw_(effective_resource_),
+          staged_decoded_(effective_resource_),
+          min_bytes_(options.min_bytes_),
+          max_bytes_(options.max_bytes_),
+          target_coding_(target_coding),
+          require_smaller_(options.require_smaller_than_source_) {
+        if (min_bytes_ > max_bytes_) {
+            throw std::invalid_argument(
+                "staged transcoder minimum size must not exceed maximum size");
+        }
+        if (http_content_coding_token(target_coding_).empty()) {
+            throw std::invalid_argument("unsupported HTTP target content coding");
+        }
+        for (const auto coding : source_codings) {
+            if (http_content_coding_token(coding).empty()) {
+                throw std::invalid_argument("unsupported HTTP source content coding");
+            }
+            if (coding != http_content_coding::identity) {
+                source_codings_.push_back(coding);
+            }
+        }
+        if (!source_codings_.empty() && max_bytes_ > 0) {
+            const std::size_t decode_cap =
+                max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
+            decoder_.emplace(source_codings_, http_content_coding::identity,
+                http_content_transcoder_options{
+                    .resource_ = effective_resource_,
+                    .max_decoded_bytes_ = decode_cap,
+                });
+        }
+    }
+
+    void switch_to_passthrough() noexcept {
+        passthrough_ = true;
+        decoder_.reset();
+        std::pmr::string(effective_resource_).swap(staged_decoded_);
+    }
+
+    bool write(std::string_view input, std::pmr::string* passthrough_out) {
+        if (passthrough_) {
+            if (!input.empty()) {
+                if (passthrough_out != nullptr) {
+                    if (!staged_raw_.empty()) {
+                        passthrough_out->append(staged_raw_);
+                        std::pmr::string(effective_resource_).swap(staged_raw_);
+                    }
+                    passthrough_out->append(input);
+                } else {
+                    staged_raw_.append(input);
+                }
+            } else if (passthrough_out != nullptr && !staged_raw_.empty()) {
+                passthrough_out->append(staged_raw_);
+                std::pmr::string(effective_resource_).swap(staged_raw_);
+            }
+            return false;
+        }
+
+        if (input.size() > max_bytes_ || staged_raw_.size() > max_bytes_ - input.size()) {
+            switch_to_passthrough();
+            if (passthrough_out != nullptr) {
+                if (!staged_raw_.empty()) {
+                    passthrough_out->append(staged_raw_);
+                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                }
+                passthrough_out->append(input);
+            } else {
+                staged_raw_.append(input);
+            }
+            return false;
+        }
+
+        staged_raw_.append(input);
+        if (source_codings_.empty()) {
+            decoded_bytes_ = staged_raw_.size();
+            return true;
+        }
+
+        try {
+            decoder_->write(input, staged_decoded_, false);
+            decoded_bytes_ = staged_decoded_.size();
+            if (decoded_bytes_ > max_bytes_) {
+                switch_to_passthrough();
+                if (passthrough_out != nullptr && !staged_raw_.empty()) {
+                    passthrough_out->append(staged_raw_);
+                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                }
+                return false;
+            }
+        } catch (const http_content_transcode_error& err) {
+            if (err.decode_error() == http_content_decode_error::decoded_size_exceeded) {
+                switch_to_passthrough();
+                if (passthrough_out != nullptr && !staged_raw_.empty()) {
+                    passthrough_out->append(staged_raw_);
+                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                }
+                return false;
+            }
+            throw;
+        }
+        return true;
+    }
+
+    http_staged_transcode_result finish() {
+        const http_content_coding fallback_coding =
+            source_codings_.empty() ? http_content_coding::identity : source_codings_.back();
+        if (passthrough_) {
+            return http_staged_transcode_result(
+                false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+        }
+        if (!source_codings_.empty()) {
+            try {
+                decoder_->finish(staged_decoded_);
+                decoded_bytes_ = staged_decoded_.size();
+                if (decoded_bytes_ > max_bytes_) {
+                    switch_to_passthrough();
+                    return http_staged_transcode_result(
+                        false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+                }
+            } catch (const http_content_transcode_error& err) {
+                if (err.decode_error() == http_content_decode_error::decoded_size_exceeded) {
+                    switch_to_passthrough();
+                    return http_staged_transcode_result(
+                        false, fallback_coding, decoded_bytes_, std::move(staged_raw_));
+                }
+                throw;
+            }
+        } else {
+            decoded_bytes_ = staged_raw_.size();
+        }
+
+        const std::string_view plain_view =
+            source_codings_.empty() ? std::string_view(staged_raw_) : std::string_view(staged_decoded_);
+        if (plain_view.size() < min_bytes_ || plain_view.size() > max_bytes_ ||
+            (source_codings_.empty() && target_coding_ == http_content_coding::identity)) {
+            return http_staged_transcode_result(
+                false, fallback_coding, plain_view.size(), std::move(staged_raw_));
+        }
+        if (target_coding_ == http_content_coding::identity) {
+            return http_staged_transcode_result(true, http_content_coding::identity,
+                plain_view.size(), std::move(staged_decoded_));
+        }
+
+        const std::size_t max_encoded =
+            require_smaller_
+                ? (staged_raw_.empty() ? 0U : staged_raw_.size() - 1U)
+                : (std::numeric_limits<std::size_t>::max)();
+        auto encoded = encode_http_content(target_coding_, plain_view,
+            http_content_encode_options{
+                .max_encoded_bytes_ = max_encoded,
+                .resource_ = effective_resource_,
+            });
+        if (!encoded.has_value()) {
+            return http_staged_transcode_result(
+                false, fallback_coding, plain_view.size(), std::move(staged_raw_));
+        }
+        return http_staged_transcode_result(
+            true, target_coding_, plain_view.size(), std::move(*encoded));
+    }
+
+    void reset() {
+        staged_raw_.clear();
+        staged_decoded_.clear();
+        decoded_bytes_ = 0;
+        passthrough_ = false;
+        if (!source_codings_.empty() && max_bytes_ > 0) {
+            const std::size_t decode_cap =
+                max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
+            if (decoder_.has_value()) {
+                decoder_->reset();
+            } else {
+                decoder_.emplace(source_codings_, http_content_coding::identity,
+                    http_content_transcoder_options{
+                        .resource_ = effective_resource_,
+                        .max_decoded_bytes_ = decode_cap,
+                    });
+            }
+        } else {
+            decoder_.reset();
+        }
+    }
+
+    http_memory_budget_resource budget_;
+    std::pmr::memory_resource* effective_resource_;
+    std::pmr::vector<http_content_coding> source_codings_;
+    std::optional<http_content_transcoder> decoder_;
+    std::pmr::string staged_raw_;
+    std::pmr::string staged_decoded_;
+    std::size_t min_bytes_;
+    std::size_t max_bytes_;
+    std::size_t decoded_bytes_{0};
+    http_content_coding target_coding_;
+    bool require_smaller_{false};
+    bool passthrough_{false};
+};
+
+http_staged_content_transcoder::http_staged_content_transcoder(
+    http_content_coding source_coding, http_content_coding target_coding,
+    http_staged_transcode_options options)
+    : http_staged_content_transcoder(
+          std::span<const http_content_coding>(&source_coding, 1), target_coding, options) {}
+
+http_staged_content_transcoder::http_staged_content_transcoder(
+    std::span<const http_content_coding> source_codings, http_content_coding target_coding,
+    http_staged_transcode_options options)
+    : target_coding_(target_coding),
+      resource_(detail::http_pmr_resource_or_default(options.resource_)) {
+    impl_ = detail::construct_http_pmr_object<impl_type>(
+        resource_, source_codings, target_coding, options, resource_);
+}
+
+http_staged_content_transcoder::~http_staged_content_transcoder() {
+    detail::destroy_http_pmr_object(impl_, resource_);
+}
+
+bool http_staged_content_transcoder::passthrough() const noexcept {
+    return impl_ != nullptr && impl_->passthrough_;
+}
+
+std::size_t http_staged_content_transcoder::staged_raw_bytes() const noexcept {
+    return impl_ != nullptr ? impl_->staged_raw_.size() : 0;
+}
+
+std::size_t http_staged_content_transcoder::decoded_bytes() const noexcept {
+    return impl_ != nullptr ? impl_->decoded_bytes_ : 0;
+}
+
+bool http_staged_content_transcoder::write(std::string_view input) {
+    if (phase_ != phase::active) {
+        throw std::logic_error("HTTP staged content transcoder is no longer writable");
+    }
+    try {
+        return impl_->write(input, nullptr);
+    } catch (...) {
+        phase_ = phase::failed;
+        throw;
+    }
+}
+
+bool http_staged_content_transcoder::write(
+    std::string_view input, std::pmr::string& passthrough_output) {
+    if (phase_ != phase::active) {
+        throw std::logic_error("HTTP staged content transcoder is no longer writable");
+    }
+    try {
+        if (detail::http_text_aliases_string(input, passthrough_output)) {
+            const std::pmr::string owned(input, impl_->effective_resource_);
+            return impl_->write(owned, &passthrough_output);
+        }
+        return impl_->write(input, &passthrough_output);
+    } catch (...) {
+        phase_ = phase::failed;
+        throw;
+    }
+}
+
+http_staged_transcode_result http_staged_content_transcoder::finish() {
+    if (phase_ != phase::active) {
+        throw std::logic_error("HTTP staged content transcoder cannot finish in current state");
+    }
+    try {
+        auto result = impl_->finish();
+        phase_ = phase::finished;
+        return result;
+    } catch (...) {
+        phase_ = phase::failed;
+        throw;
+    }
+}
+
+void http_staged_content_transcoder::reset() {
+    try {
+        impl_->reset();
+    } catch (...) {
+        phase_ = phase::failed;
+        throw;
+    }
+    phase_ = phase::active;
+}
+
 http_worker_codecs::http_worker_codecs(std::pmr::memory_resource* resource) noexcept
     : resource_(detail::http_pmr_resource_or_default(resource)),
       gzip_(http_content_coding::gzip, resource_),

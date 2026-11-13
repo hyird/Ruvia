@@ -14,62 +14,6 @@ namespace ruvia {
 namespace {
 using item_type = detail::http_structured_item;
 
-template <typename iterator_type>
-class priority_header_input final {
-public:
-    priority_header_input(iterator_type first, iterator_type last) noexcept
-        : next_(first),
-          last_(last) {
-        (void)select_next(remaining_);
-        normalize();
-    }
-    [[nodiscard]] bool empty() const noexcept {
-        return remaining_.empty();
-    }
-    [[nodiscard]] char peek() const noexcept {
-        return remaining_.front();
-    }
-    [[nodiscard]] const char* data() const noexcept {
-        return remaining_.data();
-    }
-    void advance() noexcept {
-        remaining_.remove_prefix(1);
-        normalize();
-    }
-
-private:
-    [[nodiscard]] bool select_next(std::string_view& value) noexcept {
-        while (next_ != last_) {
-            const auto& header_value = *next_++;
-            if (http_ascii_equals_ignore_case(header_value.name(), "priority")) {
-                value = header_value.value();
-                return true;
-            }
-        }
-        return false;
-    }
-    void normalize() noexcept {
-        while (remaining_.empty()) {
-            if (separator_) {
-                separator_ = false;
-                remaining_ = pending_;
-            } else if (select_next(pending_)) {
-                // HTTP combines repeated field lines before Structured Field parsing.
-                remaining_ = ", ";
-                separator_ = true;
-            } else {
-                return;
-            }
-        }
-    }
-
-    iterator_type next_;
-    iterator_type last_;
-    std::string_view remaining_;
-    std::string_view pending_;
-    bool separator_{false};
-};
-
 template <typename input_type>
 std::variant<std::monostate, http_priority_error> parse_priority_members(detail::http_structured_parser<input_type> parser, http_priority_fields& fields_value) noexcept {
     parser.spaces();
@@ -120,14 +64,22 @@ std::variant<http_priority_fields, http_priority_error> parse_http_priority(std:
 }
 std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::span<const http_header_view> headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{priority_header_input{headers.begin(), headers.end()}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(
+            detail::http_structured_parser{
+                detail::http_structured_header_input{headers.begin(), headers.end(), "priority"}},
+            fields);
+        parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;
 }
 std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_response_headers& headers) noexcept {
     http_priority_fields fields;
-    if (auto parsed_value = parse_priority_members(detail::http_structured_parser{priority_header_input{headers.begin(), headers.end()}}, fields); parsed_value.index() != 0) {
+    if (auto parsed_value = parse_priority_members(
+            detail::http_structured_parser{
+                detail::http_structured_header_input{headers.begin(), headers.end(), "priority"}},
+            fields);
+        parsed_value.index() != 0) {
         return std::get<1>(parsed_value);
     }
     return fields;

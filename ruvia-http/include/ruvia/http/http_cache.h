@@ -1,6 +1,7 @@
 #pragma once
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -34,6 +35,8 @@ enum class cache_control_directive : std::uint16_t {
     immutable = 1U << 7,
     only_if_cached = 1U << 8,
     max_stale_any = 1U << 9,
+    private_unqualified = 1U << 10,
+    no_cache_unqualified = 1U << 11,
 };
 
 // Parsed HTTP Cache-Control directives (RFC 9111 section 5.2). Unknown directives are ignored.
@@ -63,6 +66,18 @@ public:
     }
     [[nodiscard]] constexpr bool is_private() const noexcept {
         return has(cache_control_directive::private_value);
+    }
+    [[nodiscard]] constexpr bool is_unqualified_private() const noexcept {
+        return has(cache_control_directive::private_unqualified);
+    }
+    [[nodiscard]] constexpr bool is_field_qualified_private() const noexcept {
+        return is_private() && !is_unqualified_private();
+    }
+    [[nodiscard]] constexpr bool is_unqualified_no_cache() const noexcept {
+        return has(cache_control_directive::no_cache_unqualified);
+    }
+    [[nodiscard]] constexpr bool is_field_qualified_no_cache() const noexcept {
+        return no_cache() && !is_unqualified_no_cache();
     }
     [[nodiscard]] constexpr bool is_public() const noexcept {
         return has(cache_control_directive::public_value);
@@ -101,11 +116,65 @@ public:
         return stale_if_error_;
     }
 
+    [[nodiscard]] constexpr std::size_t private_field_count() const noexcept {
+        return is_unqualified_private() ? 0U : private_fields_.count_;
+    }
+    [[nodiscard]] constexpr std::string_view private_field(
+        std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
+        return is_unqualified_private() ? std::string_view{} : private_fields_.at(index);
+    }
+    std::string_view private_field(std::size_t) const&& = delete;
+    [[nodiscard]] bool has_private_field(std::string_view field_name) const noexcept;
+
+    [[nodiscard]] constexpr std::size_t no_cache_field_count() const noexcept {
+        return is_unqualified_no_cache() ? 0U : no_cache_fields_.count_;
+    }
+    [[nodiscard]] constexpr std::string_view no_cache_field(
+        std::size_t index) const& noexcept RUVIA_LIFETIMEBOUND {
+        return is_unqualified_no_cache() ? std::string_view{} : no_cache_fields_.at(index);
+    }
+    std::string_view no_cache_field(std::size_t) const&& = delete;
+    [[nodiscard]] bool has_no_cache_field(std::string_view field_name) const noexcept;
+
 private:
     friend class cache_control_field_parser;
+    friend std::optional<cache_control> parse_targeted_cache_control(
+        std::string_view value) noexcept;
+    template <typename input_type>
+    friend std::optional<cache_control> parse_targeted_cache_control_from_input(
+        input_type input) noexcept;
+
+    static constexpr std::size_t max_nominated_fields = 16;
+    static constexpr std::size_t max_nominated_field_bytes = 256;
+
+    struct nominated_field_set final {
+        std::array<char, max_nominated_field_bytes> storage_{};
+        std::array<std::uint16_t, max_nominated_fields> offsets_{};
+        std::array<std::uint8_t, max_nominated_fields> lengths_{};
+        std::uint16_t storage_used_{0};
+        std::uint8_t count_{0};
+
+        constexpr void clear() noexcept {
+            storage_used_ = 0;
+            count_ = 0;
+        }
+
+        [[nodiscard]] constexpr std::string_view at(std::size_t index) const noexcept {
+            if (index >= count_) {
+                return {};
+            }
+            return std::string_view(storage_.data() + offsets_[index], lengths_[index]);
+        }
+
+        [[nodiscard]] bool contains(std::string_view field_name) const noexcept;
+        [[nodiscard]] bool add_lowercase(std::string_view field_name) noexcept;
+    };
 
     constexpr void set(cache_control_directive directive) noexcept {
         directives_ |= static_cast<std::uint16_t>(directive);
+    }
+    constexpr void clear_directive(cache_control_directive directive) noexcept {
+        directives_ &= static_cast<std::uint16_t>(~static_cast<std::uint16_t>(directive));
     }
 
     std::uint16_t directives_{0};
@@ -115,6 +184,8 @@ private:
     std::optional<std::uint64_t> s_max_age_;
     std::optional<std::uint64_t> stale_while_revalidate_;
     std::optional<std::uint64_t> stale_if_error_;
+    nominated_field_set private_fields_{};
+    nominated_field_set no_cache_fields_{};
 };
 
 // Incrementally parses every Cache-Control field line as one logical directive
@@ -146,6 +217,66 @@ private:
 [[nodiscard]] cache_control parse_cache_control(const http_response_headers& headers) noexcept;
 [[nodiscard]] cache_control parse_cache_control(const http_response& response) noexcept;
 
+// RFC 9213 Targeted HTTP Cache Control (e.g. CDN-Cache-Control).
+// Parses an RFC 8941 Structured Field Dictionary of cache directives; returns
+// std::nullopt when absent, empty, or syntactically invalid per RFC 9213 §2.1.
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    std::string_view value) noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    std::span<const http_header> headers,
+    std::string_view header_name = "CDN-Cache-Control") noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    std::span<const http_header_view> headers,
+    std::string_view header_name = "CDN-Cache-Control") noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    const http_response_headers& headers,
+    std::string_view header_name = "CDN-Cache-Control") noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    const http_response& response,
+    std::string_view header_name = "CDN-Cache-Control") noexcept;
+
+struct targeted_cache_control_selection final {
+    cache_control control_{};
+    std::string_view selected_header_{};
+    bool targeted_{false};
+};
+
+// RFC 9213 §2.2 target-list selection: evaluates `target_headers` in priority
+// order and returns the first present, valid non-empty targeted policy; falls
+// back to standard Cache-Control when no targeted header matches.
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
+    std::span<const http_header> headers,
+    std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
+    std::span<const http_header_view> headers,
+    std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
+    const http_response_headers& headers,
+    std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
+    const http_response& response,
+    std::span<const std::string_view> target_headers) noexcept;
+
+// RFC 9111 §5.2.2.7 & §5.2.2.3 field-qualified header stripping for shared caches.
+// Returns false if unqualified `private` or `no-store` forbids shared-cache
+// storage; returns true when storable (after stripping any field-qualified
+// `private="field1, field2"` headers in place).
+bool strip_http_cache_private_headers(
+    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept;
+bool strip_http_cache_private_headers(
+    http_response_headers& headers, const cache_control& control);
+bool strip_http_cache_private_headers(
+    http_response& response, const cache_control& control);
+bool strip_http_cache_private_headers(std::pmr::vector<http_header>& headers) noexcept;
+bool strip_http_cache_private_headers(http_response_headers& headers);
+bool strip_http_cache_private_headers(http_response& response);
+
+bool strip_http_cache_no_cache_headers(
+    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept;
+bool strip_http_cache_no_cache_headers(
+    http_response_headers& headers, const cache_control& control);
+bool strip_http_cache_no_cache_headers(
+    http_response& response, const cache_control& control);
 [[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
 [[nodiscard]] bool http_cache_control_has_no_transform(std::span<const http_header> headers) noexcept;
 [[nodiscard]] bool http_cache_control_has_no_transform(

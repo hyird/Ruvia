@@ -8,9 +8,12 @@
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+
+#include "field/http_structured_fields.h"
 namespace ruvia {
 namespace {
 
@@ -55,6 +58,41 @@ namespace {
     return result_value;
 }
 
+[[nodiscard]] bool parse_nominated_field_list_arg(
+    std::string_view arg, auto&& add_field) noexcept {
+    if (arg.empty()) {
+        return false;
+    }
+    std::array<char, 256> unescaped_buf{};
+    std::string_view list_text = arg;
+    if (arg.front() == '"') {
+        http_quoted_string_cursor cursor(arg);
+        std::size_t len = 0;
+        unsigned char ch = 0;
+        while (cursor.next(ch)) {
+            if (len >= unescaped_buf.size()) {
+                return false;
+            }
+            unescaped_buf[len++] = static_cast<char>(ch);
+        }
+        if (!cursor.closed() || cursor.consumed() != arg.size()) {
+            return false;
+        }
+        list_text = std::string_view(unescaped_buf.data(), len);
+    } else if (!is_valid_http_header_name(arg)) {
+        return false;
+    }
+
+    http_field_name_list names(list_text);
+    bool saw_name = false;
+    while (const auto name = names.next()) {
+        saw_name = true;
+        if (!add_field(*name)) {
+            return false;
+        }
+    }
+    return saw_name && names.valid();
+}
 }  // namespace
 
 void cache_control_field_parser::update(std::string_view value) noexcept {
@@ -75,17 +113,47 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
                         max_age_seen_ = true;
                         value_.max_age_ = parse_delta_seconds(arg);
                     }
-                } else if (http_ascii_equals_ignore_case(name, "private") &&
-                           (!has_argument || detail::is_http_token_or_quoted_string(arg))) {
-                    value_.set(cache_control_directive::private_value);
+                } else if (http_ascii_equals_ignore_case(name, "private")) {
+                    if (!has_argument) {
+                        value_.set(cache_control_directive::private_value);
+                        value_.set(cache_control_directive::private_unqualified);
+                        value_.private_fields_.clear();
+                    } else if (detail::is_http_token_or_quoted_string(arg)) {
+                        value_.set(cache_control_directive::private_value);
+                        if (!value_.is_unqualified_private()) {
+                            const bool added = parse_nominated_field_list_arg(
+                                arg, [this](std::string_view field_name) noexcept {
+                                    return value_.private_fields_.add_lowercase(field_name);
+                                });
+                            if (!added) {
+                                value_.set(cache_control_directive::private_unqualified);
+                                value_.private_fields_.clear();
+                            }
+                        }
+                    }
                 }
                 break;
             case 8U:
                 if (!has_argument && http_ascii_equals_ignore_case(name, "no-store")) {
                     value_.set(cache_control_directive::no_store);
-                } else if (http_ascii_equals_ignore_case(name, "no-cache") &&
-                           (!has_argument || detail::is_http_token_or_quoted_string(arg))) {
-                    value_.set(cache_control_directive::no_cache);
+                } else if (http_ascii_equals_ignore_case(name, "no-cache")) {
+                    if (!has_argument) {
+                        value_.set(cache_control_directive::no_cache);
+                        value_.set(cache_control_directive::no_cache_unqualified);
+                        value_.no_cache_fields_.clear();
+                    } else if (detail::is_http_token_or_quoted_string(arg)) {
+                        value_.set(cache_control_directive::no_cache);
+                        if (!value_.is_unqualified_no_cache()) {
+                            const bool added = parse_nominated_field_list_arg(
+                                arg, [this](std::string_view field_name) noexcept {
+                                    return value_.no_cache_fields_.add_lowercase(field_name);
+                                });
+                            if (!added) {
+                                value_.set(cache_control_directive::no_cache_unqualified);
+                                value_.no_cache_fields_.clear();
+                            }
+                        }
+                    }
                 } else if (http_ascii_equals_ignore_case(name, "s-maxage")) {
                     if (!s_max_age_seen_) {
                         s_max_age_seen_ = true;
@@ -218,6 +286,403 @@ bool http_cache_control_has_no_transform(const http_response_headers& headers) n
 
 bool http_cache_control_has_no_transform(const http_response& response) noexcept {
     return parse_cache_control(response).no_transform();
+}
+
+bool cache_control::nominated_field_set::contains(std::string_view field_name) const noexcept {
+    for (std::size_t i = 0; i < count_; ++i) {
+        if (http_ascii_equals_ignore_case(at(i), field_name)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool cache_control::nominated_field_set::add_lowercase(std::string_view field_name) noexcept {
+    if (field_name.empty() || field_name.size() > (std::numeric_limits<std::uint8_t>::max)()) {
+        return false;
+    }
+    if (contains(field_name)) {
+        return true;
+    }
+    if (count_ >= max_nominated_fields ||
+        field_name.size() > max_nominated_field_bytes - storage_used_) {
+        return false;
+    }
+    offsets_[count_] = storage_used_;
+    lengths_[count_] = static_cast<std::uint8_t>(field_name.size());
+    for (std::size_t i = 0; i < field_name.size(); ++i) {
+        storage_[storage_used_ + i] =
+            static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(field_name[i])));
+    }
+    storage_used_ = static_cast<std::uint16_t>(storage_used_ + field_name.size());
+    ++count_;
+    return true;
+}
+
+bool cache_control::has_private_field(std::string_view field_name) const noexcept {
+    return !is_unqualified_private() && private_fields_.contains(field_name);
+}
+
+bool cache_control::has_no_cache_field(std::string_view field_name) const noexcept {
+    return !is_unqualified_no_cache() && no_cache_fields_.contains(field_name);
+}
+
+template <typename input_type>
+std::optional<cache_control> parse_targeted_cache_control_from_input(input_type input) noexcept {
+    detail::http_structured_parser<input_type> parser{std::move(input)};
+    parser.ows();
+    if (parser.empty()) {
+        return std::nullopt;
+    }
+    cache_control result;
+    bool saw_member = false;
+    while (!parser.empty()) {
+        const auto key = parser.key();
+        if (key.empty()) {
+            return std::nullopt;
+        }
+        saw_member = true;
+        detail::http_structured_item item{
+            .kind_ = detail::http_structured_item::kind_type::boolean,
+            .boolean_ = true,
+        };
+        if (parser.take('=')) {
+            item = {};
+            if (!parser.member(item)) {
+                return std::nullopt;
+            }
+        } else if (!parser.parameters()) {
+            return std::nullopt;
+        }
+
+        const auto apply_bool_directive = [&](cache_control_directive dir) noexcept {
+            if (item.kind_ == detail::http_structured_item::kind_type::boolean) {
+                if (item.boolean_) {
+                    result.set(dir);
+                } else {
+                    result.clear_directive(dir);
+                }
+            } else {
+                result.clear_directive(dir);
+            }
+        };
+        const auto apply_delta_directive =
+            [&](std::optional<std::uint64_t>& target) noexcept {
+                if (item.kind_ == detail::http_structured_item::kind_type::integer &&
+                    item.integer_ >= 0) {
+                    target = static_cast<std::uint64_t>(item.integer_);
+                } else {
+                    target.reset();
+                }
+            };
+        const auto apply_qualified_directive = [&](cache_control_directive flag_dir,
+                                                   cache_control_directive unqual_dir,
+                                                   cache_control::nominated_field_set& fields) noexcept {
+            if (item.kind_ == detail::http_structured_item::kind_type::boolean) {
+                fields.clear();
+                if (item.boolean_) {
+                    result.set(flag_dir);
+                    result.set(unqual_dir);
+                } else {
+                    result.clear_directive(flag_dir);
+                    result.clear_directive(unqual_dir);
+                }
+            } else if (item.kind_ == detail::http_structured_item::kind_type::string ||
+                       item.kind_ == detail::http_structured_item::kind_type::token) {
+                fields.clear();
+                result.clear_directive(unqual_dir);
+                result.set(flag_dir);
+                std::array<char, 256> unescaped{};
+                std::string_view list_text = item.text_;
+                if (item.kind_ == detail::http_structured_item::kind_type::string &&
+                    item.has_escapes_) {
+                    std::size_t out_len = 0;
+                    for (std::size_t i = 0; i < item.text_.size(); ++i) {
+                        if (item.text_[i] == '\\' && i + 1U < item.text_.size()) {
+                            ++i;
+                        }
+                        if (out_len >= unescaped.size()) {
+                            result.set(unqual_dir);
+                            fields.clear();
+                            return;
+                        }
+                        unescaped[out_len++] = item.text_[i];
+                    }
+                    list_text = std::string_view(unescaped.data(), out_len);
+                }
+                http_field_name_list names(list_text);
+                bool saw_name = false;
+                bool ok = true;
+                while (const auto field_name = names.next()) {
+                    saw_name = true;
+                    if (!fields.add_lowercase(*field_name)) {
+                        ok = false;
+                        break;
+                    }
+                }
+                if (!saw_name || !names.valid() || !ok) {
+                    result.set(unqual_dir);
+                    fields.clear();
+                }
+            } else {
+                fields.clear();
+                result.clear_directive(flag_dir);
+                result.clear_directive(unqual_dir);
+            }
+        };
+
+        if (key == "no-store") {
+            apply_bool_directive(cache_control_directive::no_store);
+        } else if (key == "no-transform") {
+            apply_bool_directive(cache_control_directive::no_transform);
+        } else if (key == "must-revalidate") {
+            apply_bool_directive(cache_control_directive::must_revalidate);
+        } else if (key == "proxy-revalidate") {
+            apply_bool_directive(cache_control_directive::proxy_revalidate);
+        } else if (key == "public") {
+            apply_bool_directive(cache_control_directive::public_value);
+        } else if (key == "immutable") {
+            apply_bool_directive(cache_control_directive::immutable);
+        } else if (key == "only-if-cached") {
+            apply_bool_directive(cache_control_directive::only_if_cached);
+        } else if (key == "private") {
+            apply_qualified_directive(cache_control_directive::private_value,
+                cache_control_directive::private_unqualified, result.private_fields_);
+        } else if (key == "no-cache") {
+            apply_qualified_directive(cache_control_directive::no_cache,
+                cache_control_directive::no_cache_unqualified, result.no_cache_fields_);
+        } else if (key == "max-age") {
+            apply_delta_directive(result.max_age_);
+        } else if (key == "s-maxage") {
+            apply_delta_directive(result.s_max_age_);
+        } else if (key == "stale-while-revalidate") {
+            apply_delta_directive(result.stale_while_revalidate_);
+        } else if (key == "stale-if-error") {
+            apply_delta_directive(result.stale_if_error_);
+        } else if (key == "min-fresh") {
+            apply_delta_directive(result.min_fresh_);
+        } else if (key == "max-stale") {
+            if (item.kind_ == detail::http_structured_item::kind_type::boolean && item.boolean_) {
+                result.set(cache_control_directive::max_stale_any);
+                result.max_stale_.reset();
+            } else if (item.kind_ == detail::http_structured_item::kind_type::integer &&
+                       item.integer_ >= 0) {
+                result.clear_directive(cache_control_directive::max_stale_any);
+                result.max_stale_ = static_cast<std::uint64_t>(item.integer_);
+            } else {
+                result.clear_directive(cache_control_directive::max_stale_any);
+                result.max_stale_.reset();
+            }
+        }
+
+        parser.ows();
+        if (parser.empty()) {
+            break;
+        }
+        if (!parser.take(',')) {
+            return std::nullopt;
+        }
+        parser.ows();
+        if (parser.empty()) {
+            return std::nullopt;
+        }
+    }
+    if (!saw_member) {
+        return std::nullopt;
+    }
+    return result;
+}
+
+std::optional<cache_control> parse_targeted_cache_control(std::string_view value) noexcept {
+    return parse_targeted_cache_control_from_input(detail::http_structured_text_input{value});
+}
+
+std::optional<cache_control> parse_targeted_cache_control(
+    std::span<const http_header> headers, std::string_view header_name) noexcept {
+    if (header_name.empty()) {
+        return std::nullopt;
+    }
+    return parse_targeted_cache_control_from_input(
+        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
+}
+
+std::optional<cache_control> parse_targeted_cache_control(
+    std::span<const http_header_view> headers, std::string_view header_name) noexcept {
+    if (header_name.empty()) {
+        return std::nullopt;
+    }
+    return parse_targeted_cache_control_from_input(
+        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
+}
+
+std::optional<cache_control> parse_targeted_cache_control(
+    const http_response_headers& headers, std::string_view header_name) noexcept {
+    if (header_name.empty()) {
+        return std::nullopt;
+    }
+    return parse_targeted_cache_control_from_input(
+        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
+}
+
+std::optional<cache_control> parse_targeted_cache_control(
+    const http_response& response, std::string_view header_name) noexcept {
+    return parse_targeted_cache_control(response.headers(), header_name);
+}
+
+namespace {
+
+template <typename headers_type>
+targeted_cache_control_selection resolve_targeted_cache_control_impl(
+    const headers_type& headers, std::span<const std::string_view> target_headers) noexcept {
+    for (const auto target_name : target_headers) {
+        if (target_name.empty()) {
+            continue;
+        }
+        if (http_ascii_equals_ignore_case(target_name, "Cache-Control")) {
+            const bool has_cc = std::ranges::any_of(headers, [](const auto& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), "Cache-Control");
+            });
+            if (has_cc) {
+                return {
+                    .control_ = parse_cache_control(headers),
+                    .selected_header_ = target_name,
+                    .targeted_ = false,
+                };
+            }
+            continue;
+        }
+        if (const auto targeted = parse_targeted_cache_control(headers, target_name)) {
+            return {
+                .control_ = *targeted,
+                .selected_header_ = target_name,
+                .targeted_ = true,
+            };
+        }
+    }
+    const bool has_cc = std::ranges::any_of(headers, [](const auto& field) noexcept {
+        return http_ascii_equals_ignore_case(field.name(), "Cache-Control");
+    });
+    return {
+        .control_ = parse_cache_control(headers),
+        .selected_header_ = has_cc ? std::string_view("Cache-Control") : std::string_view{},
+        .targeted_ = false,
+    };
+}
+
+}  // namespace
+
+targeted_cache_control_selection resolve_targeted_cache_control(
+    std::span<const http_header> headers,
+    std::span<const std::string_view> target_headers) noexcept {
+    return resolve_targeted_cache_control_impl(headers, target_headers);
+}
+
+targeted_cache_control_selection resolve_targeted_cache_control(
+    std::span<const http_header_view> headers,
+    std::span<const std::string_view> target_headers) noexcept {
+    return resolve_targeted_cache_control_impl(headers, target_headers);
+}
+
+targeted_cache_control_selection resolve_targeted_cache_control(
+    const http_response_headers& headers,
+    std::span<const std::string_view> target_headers) noexcept {
+    return resolve_targeted_cache_control_impl(headers, target_headers);
+}
+
+targeted_cache_control_selection resolve_targeted_cache_control(
+    const http_response& response,
+    std::span<const std::string_view> target_headers) noexcept {
+    return resolve_targeted_cache_control(response.headers(), target_headers);
+}
+
+bool strip_http_cache_private_headers(
+    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept {
+    if (control.no_store() || control.is_unqualified_private()) {
+        return false;
+    }
+    if (control.is_field_qualified_private()) {
+        std::erase_if(headers, [&control](const http_header& field) noexcept {
+            return control.has_private_field(field.name());
+        });
+    }
+    return true;
+}
+
+bool strip_http_cache_private_headers(
+    http_response_headers& headers, const cache_control& control) {
+    if (control.no_store() || control.is_unqualified_private()) {
+        return false;
+    }
+    const auto count = control.private_field_count();
+    for (std::size_t i = 0; i < count; ++i) {
+        headers.remove_header(control.private_field(i));
+    }
+    return true;
+}
+
+bool strip_http_cache_private_headers(
+    http_response& response, const cache_control& control) {
+    if (control.no_store() || control.is_unqualified_private()) {
+        return false;
+    }
+    if (!control.is_field_qualified_private()) {
+        return true;
+    }
+    auto staged = response.headers().clone();
+    (void)strip_http_cache_private_headers(staged, control);
+    response.commit_headers(std::move(staged));
+    return true;
+}
+
+bool strip_http_cache_private_headers(std::pmr::vector<http_header>& headers) noexcept {
+    return strip_http_cache_private_headers(headers, parse_cache_control(headers));
+}
+
+bool strip_http_cache_private_headers(http_response_headers& headers) {
+    return strip_http_cache_private_headers(headers, parse_cache_control(headers));
+}
+
+bool strip_http_cache_private_headers(http_response& response) {
+    return strip_http_cache_private_headers(response, parse_cache_control(response));
+}
+
+bool strip_http_cache_no_cache_headers(
+    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept {
+    if (control.no_store() || control.is_unqualified_no_cache()) {
+        return false;
+    }
+    if (control.is_field_qualified_no_cache()) {
+        std::erase_if(headers, [&control](const http_header& field) noexcept {
+            return control.has_no_cache_field(field.name());
+        });
+    }
+    return true;
+}
+
+bool strip_http_cache_no_cache_headers(
+    http_response_headers& headers, const cache_control& control) {
+    if (control.no_store() || control.is_unqualified_no_cache()) {
+        return false;
+    }
+    const auto count = control.no_cache_field_count();
+    for (std::size_t i = 0; i < count; ++i) {
+        headers.remove_header(control.no_cache_field(i));
+    }
+    return true;
+}
+
+bool strip_http_cache_no_cache_headers(
+    http_response& response, const cache_control& control) {
+    if (control.no_store() || control.is_unqualified_no_cache()) {
+        return false;
+    }
+    if (!control.is_field_qualified_no_cache()) {
+        return true;
+    }
+    auto staged = response.headers().clone();
+    (void)strip_http_cache_no_cache_headers(staged, control);
+    response.commit_headers(std::move(staged));
+    return true;
 }
 
 namespace {

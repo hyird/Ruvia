@@ -730,4 +730,118 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_eta
     EXPECT_EQ(h3_collector.fingerprint(), "4:12|0|m,a,s,p");
 }
 
+TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_staged_transcoder) {
+    // 1. RFC 9213 Targeted Cache-Control (Structured Field Dictionary & priority selection)
+    const auto cdn_cc = ruvia::parse_targeted_cache_control(
+        "max-age=60, max-age=300, stale-while-revalidate=45; param=1, no-store=?0, must-revalidate=?1");
+    ASSERT_TRUE(cdn_cc.has_value());
+    EXPECT_EQ(cdn_cc->max_age(), std::optional<std::uint64_t>(300));
+    EXPECT_EQ(cdn_cc->stale_while_revalidate(), std::optional<std::uint64_t>(45));
+    EXPECT_FALSE(cdn_cc->no_store());
+    EXPECT_TRUE(cdn_cc->must_revalidate());
+
+    // Invalid SF-Dictionary syntax (uppercase key or unterminated string) returns std::nullopt per RFC 9213 §2.1.
+    EXPECT_FALSE(ruvia::parse_targeted_cache_control("MAX-AGE=60").has_value());
+    EXPECT_FALSE(ruvia::parse_targeted_cache_control("").has_value());
+
+    const std::array<ruvia::http_header_view, 3> response_headers{{
+        {"Cache-Control", "private, no-store"},
+        {"CDN-Cache-Control", "max-age=600, public"},
+        {"Cloudflare-CDN-Cache-Control", "invalid=\"unterminated"},
+    }};
+    const std::array<std::string_view, 2> target_list{{
+        "Cloudflare-CDN-Cache-Control",
+        "CDN-Cache-Control",
+    }};
+    // Invalid first targeted header is ignored; second valid targeted header wins over Cache-Control.
+    const auto selected = ruvia::resolve_targeted_cache_control(response_headers, target_list);
+    EXPECT_TRUE(selected.targeted_);
+    EXPECT_EQ(selected.selected_header_, "CDN-Cache-Control");
+    EXPECT_TRUE(selected.control_.is_public());
+    EXPECT_FALSE(selected.control_.no_store());
+    EXPECT_EQ(selected.control_.max_age(), std::optional<std::uint64_t>(600));
+
+    // 2. RFC 9111 §5.2.2.7 private="field" & §5.2.2.3 no-cache="field" field-level stripping
+    const auto field_priv = ruvia::parse_cache_control(
+        "public, max-age=120, private=\"Set-Cookie, X-User-Secret\", no-cache=\"X-Auth-State\"");
+    EXPECT_TRUE(field_priv.is_private());
+    EXPECT_FALSE(field_priv.is_unqualified_private());
+    EXPECT_TRUE(field_priv.is_field_qualified_private());
+    EXPECT_EQ(field_priv.private_field_count(), 2U);
+    EXPECT_TRUE(field_priv.has_private_field("set-cookie"));
+    EXPECT_TRUE(field_priv.has_private_field("X-USER-SECRET"));
+    EXPECT_FALSE(field_priv.has_private_field("Content-Type"));
+
+    EXPECT_TRUE(field_priv.no_cache());
+    EXPECT_FALSE(field_priv.is_unqualified_no_cache());
+    EXPECT_TRUE(field_priv.is_field_qualified_no_cache());
+    EXPECT_EQ(field_priv.no_cache_field_count(), 1U);
+    EXPECT_TRUE(field_priv.has_no_cache_field("x-auth-state"));
+
+    std::pmr::vector<ruvia::http_header> strip_headers;
+    strip_headers.emplace_back("Content-Type", "application/json");
+    strip_headers.emplace_back("Set-Cookie", "sid=123");
+    strip_headers.emplace_back("X-User-Secret", "top-secret");
+    strip_headers.emplace_back("X-Public", "kept");
+    EXPECT_TRUE(ruvia::strip_http_cache_private_headers(strip_headers, field_priv));
+    ASSERT_EQ(strip_headers.size(), 2U);
+    EXPECT_EQ(strip_headers[0].name(), "Content-Type");
+    EXPECT_EQ(strip_headers[1].name(), "X-Public");
+
+    // Unqualified private alongside field-qualified private forbids shared-cache storage.
+    const auto unqual_priv =
+        ruvia::parse_cache_control("private=\"Set-Cookie\", private");
+    EXPECT_TRUE(unqual_priv.is_unqualified_private());
+    EXPECT_FALSE(unqual_priv.is_field_qualified_private());
+    EXPECT_FALSE(ruvia::strip_http_cache_private_headers(strip_headers, unqual_priv));
+
+    // 3. Staged content transcoder for unknown-length (chunked) responses with [min_bytes, max_bytes]
+    std::pmr::string payload;
+    for (int i = 0; i < 32; ++i) {
+        payload.append("chunked-response-staging-compressible-line-0123456789\n");
+    }
+    const auto gzipped = ruvia::encode_http_content(
+        ruvia::http_content_coding::gzip, payload, {.max_encoded_bytes_ = payload.size() + 128});
+    ASSERT_TRUE(gzipped.has_value());
+
+    // Case A: Decoded size within [min_bytes, max_bytes] -> transcodes gzip to zstd.
+    ruvia::http_staged_content_transcoder staged(
+        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
+        {.min_bytes_ = 100, .max_bytes_ = 4096});
+    for (std::size_t pos = 0; pos < gzipped->size(); pos += 19) {
+        EXPECT_TRUE(staged.write(std::string_view(*gzipped).substr(pos, 19)));
+    }
+    auto res_in_range = staged.finish();
+    EXPECT_TRUE(res_in_range.transformed());
+    EXPECT_EQ(res_in_range.coding(), ruvia::http_content_coding::zstd);
+    EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
+    const auto decoded_zstd = ruvia::decode_http_content(
+        ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
+    ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded_zstd));
+    EXPECT_EQ(std::get<std::pmr::string>(decoded_zstd), payload);
+
+    // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
+    ruvia::http_staged_content_transcoder too_small(
+        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
+        {.min_bytes_ = payload.size() + 100, .max_bytes_ = 8192});
+    EXPECT_TRUE(too_small.write(*gzipped));
+    auto res_small = too_small.finish();
+    EXPECT_FALSE(res_small.transformed());
+    EXPECT_EQ(res_small.coding(), ruvia::http_content_coding::gzip);
+    EXPECT_EQ(res_small.bytes(), *gzipped);
+
+    // Case C: Decoded size > max_bytes -> spills into passthrough_output and falls back to original stream!
+    ruvia::http_staged_content_transcoder too_large(
+        ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
+        {.min_bytes_ = 16, .max_bytes_ = 256});
+    std::pmr::string passthrough_stream;
+    for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
+        (void)too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream);
+    }
+    EXPECT_TRUE(too_large.passthrough());
+    auto res_large = too_large.finish();
+    EXPECT_FALSE(res_large.transformed());
+    EXPECT_EQ(passthrough_stream + std::pmr::string(res_large.bytes()), *gzipped);
+}
+
 }  // namespace
