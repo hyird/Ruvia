@@ -328,6 +328,16 @@ public:
     application& on_http2_headers(std::nullptr_t) &;
     application& on_http2_headers(std::nullptr_t) && = delete;
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    application& on_http3_frame(http3_frame_callback callback) &;
+    application& on_http3_frame(http3_frame_callback callback) && = delete;
+    application& on_http3_frame(std::nullptr_t) &;
+    application& on_http3_frame(std::nullptr_t) && = delete;
+    application& on_http3_field(http3_field_callback callback) &;
+    application& on_http3_field(http3_field_callback callback) && = delete;
+    application& on_http3_field(std::nullptr_t) &;
+    application& on_http3_field(std::nullptr_t) && = delete;
+#endif
     // Serves every listener_dispatch::connection listener (see
     // server_connection and connection_callback); run() throws
     // std::invalid_argument for such a listener without one. Replacement

@@ -616,6 +616,23 @@ task<void> http_capsule_stream::write(std::uint64_t type, std::string_view paylo
     }
     return write_frame(std::string_view(header.data(), std::get<0>(encoded)), payload_value, false, std::move(operation));
 }
+task<void> http_capsule_stream::write_owned(
+    std::uint64_t type, std::pmr::string&& payload_value, operation_options operation) {
+    if (!state_) {
+        throw std::logic_error("capsule stream is empty");
+    }
+    state_->require();
+    if (state_->send_ended_) {
+        throw std::logic_error("capsule sending direction is closed");
+    }
+    std::array<char, 16> header;
+    const auto encoded = encode_http_capsule_header(header, type, payload_value.size());
+    if ((encoded.index() != 0) || payload_value.size() > state_->config_.max_capsule_length_) {
+        throw std::length_error("invalid capsule type or payload length");
+    }
+    return write_frame_owned(std::string_view(header.data(), std::get<0>(encoded)),
+        std::move(payload_value), false, std::move(operation));
+}
 task<void> http_capsule_stream::write_frame(
     std::string_view prefix, std::string_view payload_value, bool datagram, operation_options operation) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
@@ -650,6 +667,41 @@ task<void> http_capsule_stream::write_frame(
     bytes_value.append(payload_value);
     return ::ruvia::make_scoped_operation(state_->output_scope_,
         write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(bytes_value), datagram, std::move(operation)}));
+}
+task<void> http_capsule_stream::write_frame_owned(
+    std::string_view prefix, std::pmr::string&& payload_value, bool datagram, operation_options operation) {
+    if (prefix.empty()) {
+        const auto write = +[](detail::capsule_write_input input) -> task<void> {
+            auto& state_value = input.pin_.state();
+            state_value.throw_if_stopped_before_start(input.operation_, "capsule write");
+            const detail::operation_steps steps(std::move(input.operation_));
+            detail::running_capsule_operation running(state_value, true);
+            if (state_value.send_ended_) {
+                throw std::logic_error("capsule sending direction is closed");
+            }
+            try {
+                if (input.datagram_) {
+                    if (co_await state_value.send_datagram(input.bytes_, steps)) {
+                        co_return;
+                    }
+                    std::array<char, 16> header;
+                    const auto encoded = encode_http_capsule_header(header, http_datagram_capsule_type, input.bytes_.size());
+                    if (encoded.index() != 0) {
+                        throw std::length_error("HTTP Datagram exceeds capsule bound");
+                    }
+                    input.bytes_.insert(0, header.data(), std::get<0>(encoded));
+                }
+                co_await state_value.send_bytes(std::move(input.bytes_), steps);
+            } catch (...) {
+                state_value.abort();
+                throw;
+            }
+        };
+        auto owned = detail::rebind_owned_storage(payload_value, state_->resource_);
+        return ::ruvia::make_scoped_operation(state_->output_scope_,
+            write(detail::capsule_write_input{detail::capsule_state_pin(*state_), std::move(owned), datagram, std::move(operation)}));
+    }
+    return write_frame(prefix, payload_value, datagram, std::move(operation));
 }
 task<void> http_capsule_stream::finish(operation_options operation) & {
     if (!state_) {
@@ -777,6 +829,10 @@ task<void> http_datagram_stream::send(std::span<const std::byte> payload_value, 
 task<void> http_datagram_stream::send(std::string_view payload_value, operation_options operation) & {
     return send_payload(payload_value, false, std::move(operation));
 }
+task<void> http_datagram_stream::send_owned(
+    std::pmr::string&& payload_value, operation_options operation) {
+    return send_payload_owned(std::move(payload_value), false, std::move(operation));
+}
 task<void> http_datagram_stream::send_payload(std::string_view payload_value, bool udp, operation_options operation) {
     if (!stream_.state_) {
         throw std::logic_error("HTTP Datagram stream is empty");
@@ -802,6 +858,34 @@ task<void> http_datagram_stream::send_payload(std::string_view payload_value, bo
     }
     return stream_.write_frame(std::get<0>(plan).prefix(), payload_value, false, std::move(operation));
 }
+task<void> http_datagram_stream::send_payload_owned(
+    std::pmr::string&& payload_value, bool udp, operation_options operation) {
+    if (!stream_.state_) {
+        throw std::logic_error("HTTP Datagram stream is empty");
+    }
+    auto& state_value = *stream_.state_;
+    state_value.require();
+    if (state_value.send_ended_) {
+        throw std::logic_error("HTTP Datagram sending direction is closed");
+    }
+    const auto context_bytes = udp ? std::size_t{1} : std::size_t{0};
+    if (context_bytes > state_value.config_.max_capsule_length_ ||
+        payload_value.size() > state_value.config_.max_capsule_length_ - context_bytes) {
+        throw std::length_error("HTTP Datagram exceeds capsule bound");
+    }
+    http_datagram_session session_value;
+    const auto plan = udp ? session_value.prepare_udp_datagram(std::span(payload_value.data(), payload_value.size()))
+                          : session_value.prepare_datagram(std::span(payload_value.data(), payload_value.size()));
+    if (plan.index() != 0) {
+        throw std::length_error("HTTP Datagram payload exceeds its bound");
+    }
+    if (state_value.has_native_transport()) {
+        return stream_.write_frame_owned(udp ? std::string_view("\0", 1) : std::string_view{},
+            std::move(payload_value), true, std::move(operation));
+    }
+    return stream_.write_frame_owned(
+        std::get<0>(plan).prefix(), std::move(payload_value), false, std::move(operation));
+}
 task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options operation) & {
     auto* state_value = stream_.stream_.state_;
     if (!state_value) {
@@ -817,5 +901,9 @@ task<void> http_udp_tunnel::send(std::span<const std::byte> payload_value, opera
 }
 task<void> http_udp_tunnel::send(std::string_view payload_value, operation_options operation) & {
     return stream_.send_payload(payload_value, true, std::move(operation));
+}
+task<void> http_udp_tunnel::send_owned(
+    std::pmr::string&& payload_value, operation_options operation) {
+    return stream_.send_payload_owned(std::move(payload_value), true, std::move(operation));
 }
 }  // namespace ruvia

@@ -105,6 +105,12 @@ public:
     task<void> write(std::uint64_t, std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::uint64_t type, std::span<const std::byte> payload, operation_options operation = {}) &;
     task<void> write(std::uint64_t, std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> write(std::uint64_t type, string_type&& payload, operation_options operation = {}) & {
+        return write_owned(type, std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> write(std::uint64_t, string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
     void abort() & noexcept;
@@ -117,6 +123,9 @@ private:
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
     [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram, operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::uint64_t type, std::pmr::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> write_frame_owned(
+        std::string_view prefix, std::pmr::string&& payload, bool datagram, operation_options operation);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
     explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
@@ -177,6 +186,12 @@ public:
     task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
     task<void> send(std::string_view, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
+        return send_owned(std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> send(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
     }
@@ -193,6 +208,9 @@ private:
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
     [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp, operation_options operation);
+    [[nodiscard]] task<void> send_owned(std::pmr::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> send_payload_owned(
+        std::pmr::string&& payload, bool udp, operation_options operation);
     http_capsule_stream stream_;
 };
 
@@ -215,6 +233,12 @@ public:
     task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
     task<void> send(std::string_view, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
+        return send_owned(std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> send(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
     }
@@ -227,6 +251,7 @@ public:
 private:
     friend class http_tunnel;
     friend class http_client_tunnel;
+    [[nodiscard]] task<void> send_owned(std::pmr::string&& payload, operation_options operation);
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept
         : stream_(std::move(stream)) {}
     http_datagram_stream stream_;

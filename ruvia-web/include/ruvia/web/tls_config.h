@@ -41,9 +41,9 @@ struct tls_identity_config final {
 using tls_certificate_id = std::uint64_t;
 
 // Immutable ClientHello views, valid only during the selection callback.
-// Wire lists use network-byte-order uint16 pairs, except alpn_ which is the
-// RFC 7301 ProtocolNameList. Absent extensions have empty views. No OpenSSL
-// object, file access or borrowed application identity is needed.
+// Wire lists are decoded into host-order uint16 protocol identifiers and ALPN
+// protocol name views. Absent extensions have empty views. No OpenSSL object,
+// file access or borrowed application identity is needed.
 struct tls_certificate_selection final {
     std::uint64_t connection_id_{};
     ip_address remote_address_;
@@ -53,11 +53,11 @@ struct tls_certificate_selection final {
     std::uint16_t local_port_{};
     bool quic_{};
     std::uint16_t legacy_version_{};
-    std::span<const std::byte> cipher_suites_;
-    std::span<const std::byte> signature_algorithms_;
-    std::span<const std::byte> supported_versions_;
-    std::span<const std::byte> supported_groups_;
-    std::span<const std::byte> alpn_;
+    std::span<const std::uint16_t> cipher_suites_;
+    std::span<const std::uint16_t> signature_algorithms_;
+    std::span<const std::uint16_t> supported_versions_;
+    std::span<const std::uint16_t> supported_groups_;
+    std::span<const std::string_view> alpn_;
 
     [[nodiscard]] bool offers_signature_algorithm(std::uint16_t algorithm) const noexcept;
 };

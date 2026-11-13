@@ -189,11 +189,12 @@ struct test_app::impl_type final {
             admission.emplace(std::move(admitted));
         }
         const auto& request_services = admission ? admission->services() : services;
+        const auto remote_ip =
+            ip_address::parse(request.remote_address_).value_or(ip_address{});
         const auto tail = admission ? admission->tail()
                                     : detail::http_response_tail(parsed_value,
                                           detail::http_response_coding_policy::disabled(),
-                                          request.remote_address_, request.remote_address_,
-                                          request_start);
+                                          remote_ip, remote_ip, request_start);
         const auto prepared = co_await tail.prepare_or_finish(
             response, options_, worker_, routes_value, request_memory_value, request_services);
 

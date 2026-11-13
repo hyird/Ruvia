@@ -11,6 +11,7 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
+#include "server/peer_address.h"
 
 namespace ruvia::detail {
 namespace {
@@ -484,7 +485,7 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
     const auto connected = co_await transport_.connect(timeout);
     if (transport_.peer_endpoint().port() != 0) {
         connection_id_ = pool_.next_connection_id();
-        peer_ip_ = transport_.peer_endpoint().address().to_string();
+        peer_ip_ = to_ip_address(transport_.peer_endpoint().address()).normalized_ipv4();
         capture_connection_info(response, false);
     }
     if (!connected.ok()) {

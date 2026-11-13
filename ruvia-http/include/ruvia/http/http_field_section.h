@@ -107,16 +107,6 @@ template <typename field_span_type>
 [[nodiscard]] std::size_t estimate_http1_field_section_bytes(
     const http_response_headers& fields, bool include_terminating_crlf = true) noexcept;
 
-[[nodiscard]] constexpr std::size_t estimate_http1_trailers_bytes(
-    std::span<const http_header> trailers, bool include_terminating_crlf = true) noexcept {
-    return estimate_http1_field_section_bytes(trailers, include_terminating_crlf);
-}
-
-[[nodiscard]] constexpr std::size_t estimate_http1_trailers_bytes(
-    std::span<const http_header_view> trailers, bool include_terminating_crlf = true) noexcept {
-    return estimate_http1_field_section_bytes(trailers, include_terminating_crlf);
-}
-
 // Equivalent HTTP/1.1 wire byte size of a response status line ("HTTP/1.1 NNN
 // <reason>\r\n"), all header field lines, and the terminating CRLF.
 [[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(

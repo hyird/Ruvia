@@ -106,7 +106,7 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
     if (!access_log.callback_) {
         return;
     }
-    deferred.defer(head_end, *request_, remote_address_, client_address_, start_, status, io_metrics_);
+    deferred.defer(head_end, *request_, client_address_, start_, status, io_metrics_);
 }
 
 http_request_admission admit_http_request(const http_request_admission_input& input,
@@ -134,7 +134,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
         admission.services_.bind_conn_info(services.resolve_conn_info(request));
     }
     const auto& connection = admission.services_.get_conn_info();
-    const auto remote_address = admission.services_.remote_address();
+    const auto remote_address = connection.remote().address();
     const auto client_address = connection.client().address();
     admission.tail_.bind_addresses(remote_address, client_address);
     admission.tail_.bind_alternative_service(services.alternative_service());

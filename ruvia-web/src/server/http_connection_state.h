@@ -98,12 +98,12 @@ public:
 
     // Keeps the record of a response whose head completes at output offset
     // `head_end`. Duration is measured when the record is reported.
-    void defer(std::size_t head_end, const http_request& request, std::string_view remote_address,
-        std::string_view client_address, std::chrono::steady_clock::time_point start,
-        http_status_code status, const request_io_metrics& io_metrics = {});
+    void defer(std::size_t head_end, const http_request& request, ip_address client_address,
+        std::chrono::steady_clock::time_point start, http_status_code status,
+        const request_io_metrics& io_metrics = {});
     // Reports every kept response whose head lies within the first `written`
     // output bytes (in output order), then forgets all of them.
-    void complete(const access_log_sink& access_log, std::string_view remote_address, std::size_t written) noexcept;
+    void complete(const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept;
     // Forgets every kept response and releases grown storage.
     void reset() noexcept;
 
@@ -113,7 +113,7 @@ private:
         std::size_t text_begin_;
         std::size_t method_bytes_;
         std::size_t path_bytes_;
-        std::size_t client_address_bytes_;
+        ip_address client_address_;
         std::chrono::steady_clock::time_point start_;
         request_io_metrics io_metrics_{};
         http_known_method known_method_;

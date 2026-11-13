@@ -39,7 +39,6 @@
 #include "body/http_stream_body_reader.h"
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_cors.h"
 #include "router/route_table.h"
 #include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
@@ -226,7 +225,7 @@ public:
     // `request_pipelined` tells whether the request arrived behind another.
     response_stream_sink(stream_type& stream, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
-        const worker_handle& worker_value, const http_request& request, const cors_options* cors,
+        const worker_handle& worker_value, const http_request& request, const http_cors_policy* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         const compression_config* compression,
@@ -250,7 +249,7 @@ public:
     }
 
     response_stream_sink(stream_type&, worker_codecs&, http_response_head_buffer&,
-        connection_scanner::entry&, worker_handle&&, const http_request&, const cors_options*,
+        connection_scanner::entry&, worker_handle&&, const http_request&, const http_cors_policy*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
         const compression_config*, std::pmr::memory_resource&, stop_source&, bool) = delete;
@@ -432,7 +431,7 @@ private:
             // The same final-representation order as a buffered response: the
             // application CORS policy first, then content coding.
             if (cors_ != nullptr) {
-                apply_cors_headers(request_, response, *cors_);
+                (void)cors_->apply_response_headers(request_, response);
             }
             compression_.prepare(request_, response);
             // The request body is settled at commit: read in full by now, the
@@ -597,7 +596,7 @@ private:
     // route dispatch. Streaming must not acquire shared ownership per request.
     const worker_handle& worker_;
     const http_request& request_;
-    const cors_options* cors_;
+    const http_cors_policy* cors_;
     http1_response_stream_plan plan_;
     http1_response_stream_plan consumed_plan_;
     lazy_buffered_body<stream_type>& request_body_;

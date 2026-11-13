@@ -128,7 +128,7 @@ public:
         http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
         http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding,
-        const compression_config* compression, const cors_options* cors) noexcept
+        const compression_config* compression, const http_cors_policy* cors) noexcept
         : multiplexed_response_stream_sink_base(
               stream_runtime, stream_signal, resource, request_method, codecs, response_coding, compression, cors),
           connection_(connection),

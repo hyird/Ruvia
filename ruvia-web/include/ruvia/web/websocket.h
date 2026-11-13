@@ -290,10 +290,22 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
+        return submit_owned(std::move(chunk), false, std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> write(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
     task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
     task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> finish(string_type&& last_chunk, operation_options operation = {}) & {
+        return submit_owned(std::move(last_chunk), true, std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> finish(string_type&&, operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
 
@@ -301,6 +313,8 @@ private:
     friend class detail::websocket_state;
     websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
     [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
+    [[nodiscard]] task<void> submit_owned(
+        std::pmr::string&& chunk, bool final, operation_options operation);
     [[nodiscard]] bool message_open() const noexcept;
     static void expire_capability(void* target) noexcept;
 

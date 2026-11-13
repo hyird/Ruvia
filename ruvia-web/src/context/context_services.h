@@ -16,6 +16,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_accept_encoding.h"
+#include "ruvia/http/http_client_ip.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/context.h"
@@ -26,7 +27,6 @@
 #include "integration/request_io_metrics.h"
 #include "integration/worker_client_registry_view.h"
 #include "server/connection_lifecycle.h"
-#include "server/trusted_proxies.h"
 
 namespace ruvia {
 
@@ -61,7 +61,7 @@ struct context_worker_services final {
     // Where a file response's real faults (no blocking pool, a stalled open)
     // are reported; the worker's connection failure outlet, never null.
     const connection_failure_sink* connection_failure_{};
-    const trusted_proxy_set* trusted_proxies_{};
+    const http_client_ip_extractor* trusted_proxies_{};
 };
 
 struct context_connection_services final {
@@ -445,6 +445,9 @@ public:
         services.connection_services_.lifecycle_ = &lifecycle;
         services.connection_services_.info_.local_ = lifecycle.local_endpoint();
         services.connection_services_.info_.remote_ = lifecycle.remote_endpoint();
+        if (!services.connection_services_.info_.via_trusted_proxy_) {
+            services.connection_services_.info_.client_ = lifecycle.remote_endpoint();
+        }
         return services;
     }
 
@@ -456,7 +459,8 @@ public:
         auto services = *this;
         services.connection_services_.info_ = conn_info::plain(connection_id, remote_address);
         services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
+        services.connection_services_.peer_trusted_ =
+            trusts_peer(services.connection_services_.info_.remote_.address());
         services.connection_services_.served_certificate_ = nullptr;
         return services;
     }
@@ -473,7 +477,8 @@ public:
         services.connection_services_.info_ =
             conn_info::tls(connection_id, remote_address, client_certificate_subject, alpn, server_name);
         services.connection_services_.info_.set_remote_port(remote_port);
-        services.connection_services_.peer_trusted_ = trusts_peer(remote_address);
+        services.connection_services_.peer_trusted_ =
+            trusts_peer(services.connection_services_.info_.remote_.address());
         services.connection_services_.served_certificate_ = &served_certificate;
         return services;
     }
@@ -513,8 +518,9 @@ public:
     context_services with_alternative_service(std::basic_string<char, traits_type, allocator_type>&&) const = delete;
 
 private:
-    [[nodiscard]] bool trusts_peer(std::string_view remote_address) const noexcept {
-        return worker_services_->trusted_proxies_ != nullptr && worker_services_->trusted_proxies_->trusts(remote_address);
+    [[nodiscard]] bool trusts_peer(const ip_address& remote_address) const noexcept {
+        return worker_services_->trusted_proxies_ != nullptr &&
+               worker_services_->trusted_proxies_->is_trusted_proxy(remote_address);
     }
 
     const context_worker_services* worker_services_;

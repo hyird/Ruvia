@@ -85,9 +85,4 @@ enum class http_request_content_semantics : std::uint8_t {
     return true;
 }
 
-[[nodiscard]] constexpr bool http_method_requires_zero_content_length(
-    std::string_view method) noexcept {
-    return http_method_sends_zero_content_length(method);
-}
-
 }  // namespace ruvia

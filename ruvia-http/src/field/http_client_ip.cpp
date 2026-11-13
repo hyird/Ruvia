@@ -33,44 +33,115 @@ namespace {
     return node_value;
 }
 
-[[nodiscard]] std::string_view extract_rfc7239_for_node(std::string_view element) noexcept {
-    std::string_view address{};
+[[nodiscard]] std::optional<http_scheme> parse_forwarded_http_scheme(
+    std::string_view token) noexcept {
+    token = http_trim_quoted_field_value(http_trim_ows(token));
+    if (http_ascii_equals_ignore_case(token, "http")) {
+        return http_scheme::http;
+    }
+    if (http_ascii_equals_ignore_case(token, "https")) {
+        return http_scheme::https;
+    }
+    return std::nullopt;
+}
+
+struct forwarded_hop final {
+    std::optional<ip_address> address_{};
+    std::optional<http_scheme> scheme_{};
+};
+
+[[nodiscard]] std::optional<ip_address> parse_hop_address(std::string_view node_value) noexcept {
+    const auto address_text = extract_forwarded_node_address(node_value);
+    if (address_text.empty()) {
+        return std::nullopt;
+    }
+    const auto parsed = ip_address::parse(address_text);
+    if (!parsed.has_value()) {
+        return std::nullopt;
+    }
+    return parsed->normalized_ipv4();
+}
+
+[[nodiscard]] forwarded_hop parse_rfc7239_element(std::string_view element) noexcept {
+    forwarded_hop hop{};
     bool saw_for = false;
-    bool valid = true;
+    bool saw_proto = false;
     http_visit_semicolon_parameters_quoted_field(
         element, [&](std::string_view name, std::string_view value) noexcept {
             if (http_ascii_equals_ignore_case(name, "for")) {
                 if (saw_for) {
-                    valid = false;
-                    address = {};
-                    return false;
+                    hop.address_.reset();
+                } else {
+                    saw_for = true;
+                    hop.address_ = parse_hop_address(value);
                 }
-                saw_for = true;
-                address = extract_forwarded_node_address(value);
+            } else if (http_ascii_equals_ignore_case(name, "proto")) {
+                if (saw_proto) {
+                    hop.scheme_.reset();
+                } else {
+                    saw_proto = true;
+                    hop.scheme_ = parse_forwarded_http_scheme(value);
+                }
             }
             return true;
         });
-    return (valid && saw_for) ? address : std::string_view{};
+    return hop;
 }
 
-[[nodiscard]] http_forwarded_header_kind resolve_header_kind(
-    std::string_view name, http_forwarded_header_kind configured) noexcept {
-    if (configured != http_forwarded_header_kind::auto_detect) {
-        return configured;
+class forwarding_chain final {
+public:
+    void append(const http_client_ip_extractor& extractor, forwarded_hop hop) noexcept {
+        if (size_ == 0) {
+            leftmost_ = hop;
+        }
+        const bool trusted = hop.address_.has_value() && extractor.is_trusted_proxy(*hop.address_);
+        if (trusted) {
+            if (awaiting_nearest_trusted_) {
+                nearest_trusted_ = hop.address_;
+                awaiting_nearest_trusted_ = false;
+            }
+        } else {
+            client_hop_ = hop;
+            client_index_ = size_;
+            client_identified_ = hop.address_.has_value();
+            has_client_hop_ = true;
+            nearest_trusted_.reset();
+            awaiting_nearest_trusted_ = true;
+        }
+        ++size_;
     }
-    if (http_ascii_equals_ignore_case(name, "Forwarded")) {
-        return http_forwarded_header_kind::rfc7239_forwarded;
+
+    [[nodiscard]] forwarded_hop client() const noexcept {
+        if (!has_client_hop_) {
+            return leftmost_;
+        }
+        return {client_identified_ ? client_hop_.address_ : nearest_trusted_, client_hop_.scheme_};
     }
-    if (http_ascii_equals_ignore_case(name, "X-Forwarded-For")) {
-        return http_forwarded_header_kind::comma_separated_list;
+
+    [[nodiscard]] std::size_t client_index() const noexcept {
+        return has_client_hop_ ? client_index_ : 0;
     }
-    return http_forwarded_header_kind::single_ip;
-}
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return size_;
+    }
+
+private:
+    forwarded_hop leftmost_{};
+    forwarded_hop client_hop_{};
+    std::optional<ip_address> nearest_trusted_{};
+    std::size_t client_index_{0};
+    std::size_t size_{0};
+    bool has_client_hop_{false};
+    bool client_identified_{false};
+    bool awaiting_nearest_trusted_{false};
+};
 
 template <typename header_span_type>
-[[nodiscard]] std::optional<ip_address> resolve_from_header(
-    const http_client_ip_extractor& extractor, std::string_view header_name,
-    http_forwarded_header_kind kind, header_span_type headers) noexcept {
+[[nodiscard]] std::optional<http_client_ip_result> resolve_from_header(
+    const http_client_ip_extractor& extractor, const ip_address& normalized_peer,
+    std::string_view header_name, http_forwarded_header_kind kind,
+    header_span_type headers) noexcept {
     if (kind == http_forwarded_header_kind::single_ip) {
         std::string_view single_value{};
         std::size_t line_count = 0;
@@ -87,21 +158,15 @@ template <typename header_span_type>
         if (trimmed.empty() || trimmed.find(',') != std::string_view::npos) {
             return std::nullopt;
         }
-        const auto node = extract_forwarded_node_address(trimmed);
-        const auto parsed = ip_address::parse(node);
-        if (!parsed.has_value()) {
+        const auto parsed = parse_hop_address(trimmed);
+        if (!parsed.has_value() || extractor.is_trusted_proxy(*parsed)) {
             return std::nullopt;
         }
-        const auto normalized = parsed->normalized_ipv4();
-        if (extractor.is_trusted_proxy(normalized)) {
-            return std::nullopt;
-        }
-        return normalized;
+        return http_client_ip_result{
+            .address_ = *parsed, .from_forwarded_header_ = true, .scheme_ = std::nullopt};
     }
 
-    std::array<std::string_view, 64> hops{};
-    std::size_t hop_count = 0;
-    bool overflow = false;
+    forwarding_chain chain;
     for (const auto& field : headers) {
         if (!http_ascii_equals_ignore_case(field.name(), header_name)) {
             continue;
@@ -111,48 +176,75 @@ template <typename header_span_type>
                 if (item.empty()) {
                     return true;
                 }
-                if (hop_count == hops.size()) {
-                    overflow = true;
-                    return false;
+                if (kind == http_forwarded_header_kind::rfc7239_forwarded) {
+                    chain.append(extractor, parse_rfc7239_element(item));
+                } else {
+                    chain.append(extractor, {.address_ = parse_hop_address(item), .scheme_ = std::nullopt});
                 }
-                hops[hop_count++] =
-                    kind == http_forwarded_header_kind::rfc7239_forwarded
-                        ? extract_rfc7239_for_node(item)
-                        : extract_forwarded_node_address(item);
                 return true;
             });
-        if (overflow) {
-            return std::nullopt;
-        }
     }
-    if (hop_count == 0) {
+    if (chain.size() == 0) {
         return std::nullopt;
     }
-
-    for (std::size_t index = hop_count; index > 0; --index) {
-        const auto candidate = hops[index - 1];
-        if (candidate.empty()) {
-            return std::nullopt;
+    auto resolved = chain.client();
+    if (kind == http_forwarded_header_kind::comma_separated_list &&
+        extractor.trust_x_forwarded_proto() &&
+        http_ascii_equals_ignore_case(header_name, "X-Forwarded-For")) {
+        std::size_t proto_count = 0;
+        std::optional<http_scheme> matched_scheme{};
+        const auto target_index = chain.client_index();
+        for (const auto& field : headers) {
+            if (!http_ascii_equals_ignore_case(field.name(), "X-Forwarded-Proto")) {
+                continue;
+            }
+            http_visit_comma_separated_quoted_field_items(
+                field.value(), [&](std::string_view item) noexcept {
+                    if (item.empty()) {
+                        return true;
+                    }
+                    if (proto_count == target_index) {
+                        matched_scheme = parse_forwarded_http_scheme(item);
+                    }
+                    ++proto_count;
+                    return true;
+                });
         }
-        const auto parsed = ip_address::parse(candidate);
-        if (!parsed.has_value()) {
-            return std::nullopt;
-        }
-        const auto normalized = parsed->normalized_ipv4();
-        if (!extractor.is_trusted_proxy(normalized)) {
-            return normalized;
+        if (proto_count == chain.size()) {
+            resolved.scheme_ = matched_scheme;
         }
     }
-    return std::nullopt;
+    if (!resolved.address_.has_value() && !resolved.scheme_.has_value()) {
+        return std::nullopt;
+    }
+    return http_client_ip_result{
+        .address_ = resolved.address_.value_or(normalized_peer),
+        .from_forwarded_header_ = true,
+        .scheme_ = resolved.scheme_,
+    };
 }
 
+[[nodiscard]] http_forwarded_header_kind resolve_header_kind(
+    std::string_view name, http_forwarded_header_kind configured) noexcept {
+    if (configured != http_forwarded_header_kind::auto_detect) {
+        return configured;
+    }
+    if (http_ascii_equals_ignore_case(name, "Forwarded")) {
+        return http_forwarded_header_kind::rfc7239_forwarded;
+    }
+    if (http_ascii_equals_ignore_case(name, "X-Forwarded-For")) {
+        return http_forwarded_header_kind::comma_separated_list;
+    }
+    return http_forwarded_header_kind::single_ip;
+}
 }  // namespace
 
 http_client_ip_extractor::http_client_ip_extractor(
     const http_client_ip_config& config, std::pmr::memory_resource* resource)
     : trusted_cidrs_(detail::http_pmr_resource_or_default(resource)),
       headers_(detail::http_pmr_resource_or_default(resource)),
-      enabled_(config.enabled_) {
+      enabled_(config.enabled_),
+      trust_x_forwarded_proto_(config.trust_x_forwarded_proto_) {
     auto* const target_resource = trusted_cidrs_.get_allocator().resource();
     trusted_cidrs_.reserve(config.trusted_proxies_.size());
     for (const auto& cidr_text : config.trusted_proxies_) {
@@ -212,9 +304,9 @@ http_client_ip_result http_client_ip_extractor::resolve(
         if (!present) {
             continue;
         }
-        if (const auto extracted =
-                resolve_from_header(*this, header_spec.name_, header_spec.kind_, headers)) {
-            return {.address_ = *extracted, .from_forwarded_header_ = true};
+        if (const auto extracted = resolve_from_header(
+                *this, normalized_peer, header_spec.name_, header_spec.kind_, headers)) {
+            return *extracted;
         }
     }
     return {.address_ = normalized_peer, .from_forwarded_header_ = false};
@@ -234,9 +326,9 @@ http_client_ip_result http_client_ip_extractor::resolve(
         if (!present) {
             continue;
         }
-        if (const auto extracted =
-                resolve_from_header(*this, header_spec.name_, header_spec.kind_, headers)) {
-            return {.address_ = *extracted, .from_forwarded_header_ = true};
+        if (const auto extracted = resolve_from_header(
+                *this, normalized_peer, header_spec.name_, header_spec.kind_, headers)) {
+            return *extracted;
         }
     }
     return {.address_ = normalized_peer, .from_forwarded_header_ = false};

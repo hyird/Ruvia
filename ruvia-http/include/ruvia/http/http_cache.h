@@ -89,10 +89,6 @@ public:
         return min_fresh_;
     }
 
-    [[nodiscard]] constexpr std::optional<std::uint64_t> s_max_age() const noexcept {
-        return s_max_age_;
-    }
-
     [[nodiscard]] constexpr std::optional<std::uint64_t> s_maxage() const noexcept {
         return s_max_age_;
     }
@@ -303,10 +299,6 @@ struct http_cache_age_input final {
 // and framing fields that must not be emitted in a 304 Not Modified response or
 // overwrite stored representation headers during 304 cache freshening.
 [[nodiscard]] bool is_http_304_forbidden_header(std::string_view field_name) noexcept;
-[[nodiscard]] inline bool is_http_not_modified_representation_metadata(
-    std::string_view field_name) noexcept {
-    return is_http_304_forbidden_header(field_name);
-}
 
 void sanitize_http_304_response_headers(std::pmr::vector<http_header>& headers);
 void sanitize_http_304_response_headers(http_response_headers& headers);

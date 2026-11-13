@@ -20,6 +20,8 @@
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_client_ip.h"
+#include "ruvia/http/http_cors.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -60,41 +62,6 @@ struct compression_config final {
     // own document-root precompression thresholds and still prefer checked-in
     // precompressed sidecars when present.
     std::size_t max_bytes_{std::size_t{64} * 1024 * 1024};
-};
-
-enum class cors_origin_mode : std::uint8_t {
-    any,
-    exact,
-    credentialed_exact,
-};
-
-struct cors_origin_config final {
-    cors_origin_mode mode_{cors_origin_mode::any};
-    // Required for exact modes. "null" represents the serialized opaque
-    // origin; wildcard mode requires this field to remain empty.
-    borrowed_text value_{};
-};
-
-enum class cors_request_headers_mode : std::uint8_t {
-    reflect,
-    fixed,
-};
-
-struct cors_request_headers_config final {
-    cors_request_headers_mode mode_{cors_request_headers_mode::reflect};
-    // Required in fixed mode and empty in reflect mode.
-    std::pmr::vector<std::pmr::string> names_{process_resource()};
-};
-
-// CORS metadata does not establish HTTP message framing. Invalid origin,
-// requested-method or requested-header syntax generates no policy headers;
-// the application still receives the request. Reflected header names are
-// serialized as one comma-delimited field, including repeated request lines.
-struct cors_config final {
-    cors_origin_config origin_{};
-    cors_request_headers_config request_headers_{};
-    std::pmr::vector<std::pmr::string> expose_headers_{process_resource()};
-    std::optional<std::chrono::seconds> max_age_{};
 };
 
 // The complete always-present Web server runtime configuration. application consumes
@@ -211,13 +178,16 @@ struct server_config final {
     // negotiation of indexed precompressed static variants; CORS headers
     // also follow the route engine's OPTIONS preflight answer.
     std::optional<compression_config> compression_{};
-    std::optional<cors_config> cors_{};
+    std::optional<http_cors_policy_config> cors_{};
 };
 
 struct trusted_proxy_config final {
     // CIDR lengths count bits in the literal's address family. For example,
     // 127.0.0.0/8 and ::ffff:127.0.0.0/104 describe the same mapped network.
     std::pmr::vector<std::pmr::string> cidrs_{process_resource()};
+    // Priority-ordered forwarding headers. When empty, defaults to
+    // {"X-Forwarded-For", "Forwarded"}.
+    std::pmr::vector<http_forwarded_header_spec> forwarding_headers_{process_resource()};
     // Enable only when every trusted proxy sanitizes and appends matching
     // X-Forwarded-For / X-Forwarded-Proto elements.
     bool trust_x_forwarded_proto_{false};
@@ -445,11 +415,11 @@ public:
         return path_;
     }
 
-    [[nodiscard]] constexpr std::string_view client_address() const noexcept {
+    [[nodiscard]] constexpr ip_address client_address() const noexcept {
         return client_address_;
     }
 
-    [[nodiscard]] constexpr std::string_view remote_address() const noexcept {
+    [[nodiscard]] constexpr ip_address remote_address() const noexcept {
         return remote_address_;
     }
 
@@ -488,8 +458,8 @@ private:
         http_known_method known_method_;
         std::string_view path_;
         http_protocol_version protocol_version_;
-        std::string_view remote_address_;
-        std::string_view client_address_;
+        ip_address remote_address_{};
+        ip_address client_address_{};
         http_status_code status_;
         std::uint64_t duration_micros_;
         std::uint64_t db_count_{0};
@@ -502,7 +472,7 @@ private:
         : method_(fields.method_),
           path_(fields.path_),
           remote_address_(fields.remote_address_),
-          client_address_(fields.client_address_.empty() ? fields.remote_address_ : fields.client_address_),
+          client_address_(fields.client_address_),
           duration_micros_(fields.duration_micros_),
           db_count_(fields.db_count_),
           db_duration_micros_(fields.db_duration_micros_),
@@ -514,8 +484,8 @@ private:
 
     std::string_view method_;
     std::string_view path_;
-    std::string_view remote_address_;
-    std::string_view client_address_;
+    ip_address remote_address_{};
+    ip_address client_address_{};
     std::uint64_t duration_micros_;
     std::uint64_t db_count_{0};
     std::uint64_t db_duration_micros_{0};
@@ -550,7 +520,7 @@ class connection_failure_record final {
 public:
     // Empty when the peer address could not be read (the connection was
     // already gone) or when the failure happened before it was resolved.
-    [[nodiscard]] constexpr std::string_view remote_address() const noexcept {
+    [[nodiscard]] constexpr ip_address remote_address() const noexcept {
         return remote_address_;
     }
 
@@ -562,11 +532,11 @@ public:
 private:
     friend struct detail::connection_failure_record_access;
 
-    connection_failure_record(std::string_view remote_address, std::exception_ptr exception) noexcept
+    connection_failure_record(ip_address remote_address, std::exception_ptr exception) noexcept
         : remote_address_(remote_address),
           exception_(std::move(exception)) {}
 
-    std::string_view remote_address_;
+    ip_address remote_address_{};
     std::exception_ptr exception_;
 };
 
@@ -575,7 +545,7 @@ private:
 // https_ port. A paired HTTP/3 service's QUIC connections count under its
 // HTTPS endpoint.
 struct listener_stats final {
-    std::pmr::string address_{process_resource()};
+    ip_address address_{};
     port_number port_{};
     std::size_t active_connections_{0};
 };

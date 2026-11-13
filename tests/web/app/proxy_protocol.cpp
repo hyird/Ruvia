@@ -46,7 +46,7 @@ ruvia::task<void> identify(ruvia::request_stream& stream) {
     const auto text = remote.address().to_string();
     std::string body(text.data(), text.size());
     body += ":" + std::to_string(remote.port());
-    body += ":" + std::string(stream.conn().client().address());
+    body += ":" + std::string(stream.conn().client().address().to_string());
     body += stream.conn().via_trusted_proxy() ? ":trusted" : ":direct";
     if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
         co_await stream.response().write(body);
@@ -112,7 +112,7 @@ TEST(Ruvia, proxy_listener_requires_preface_and_uses_source_for_every_peer_fact)
     ruvia::http_server server(runtime.loop_, {.request_stream_ = &identify,
                                                  .access_ = [&](const ruvia::access_log_record& record) noexcept {
             std::lock_guard lock(mutex);
-            logged.emplace_back(record.remote_address()); },
+            logged.emplace_back(record.remote_address().to_string()); },
                                                  .connection_admission_ = [&](const ruvia::connection_event& event) noexcept {
             std::lock_guard lock(mutex);
             admitted.push_back(event.remote());

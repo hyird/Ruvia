@@ -26,6 +26,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
@@ -93,10 +94,9 @@ struct http_client_phase_timeouts final {
 // 本响应，不阻塞其他流；总截止期不因回调挂起而暂停。重定向的每一跳共用同一回调。
 using http_client_informational_callback = move_only_function<task<void>(http_status_code, std::span<const http_header>, stop_token)>;
 
-// Validates each numeric candidate address (ip text, port) before it is dialed.
+// Validates each numeric candidate address (ip_address, port) before it is dialed.
 // Every worker serving the alias calls the same shared target, possibly concurrently.
-using http_client_address_validator = move_only_function<bool(std::string_view, std::uint16_t)>;
-
+using http_client_address_validator = move_only_function<bool(const ip_address&, std::uint16_t)>;
 // Move-only: it owns the request's informational callback.
 struct http_client_request_options final {
     // nullopt 继承 origin 默认；false 为保留编码字段的原样流。
@@ -134,19 +134,9 @@ enum class http_client_response_framing : std::uint8_t {
 };
 
 struct http_client_connection_info final {
-    explicit http_client_connection_info(std::pmr::memory_resource* resource = process_resource())
-        : peer_ip_(pmr_resource_or_default(resource)) {}
-    http_client_connection_info(const http_client_connection_info& other)
-        : http_client_connection_info(other.peer_ip_.get_allocator().resource()) {
-        *this = other;
-    }
-    http_client_connection_info(http_client_connection_info&&) noexcept = default;
-    http_client_connection_info& operator=(const http_client_connection_info&) = default;
-    http_client_connection_info& operator=(http_client_connection_info&&) = default;
-
     // 物理连接身份，不是槽位。重新拨号产生新 id，旧 id 不能关闭新连接。
     std::uint64_t id_{};
-    std::pmr::string peer_ip_{process_resource()};
+    ip_address peer_ip_{};
     std::uint16_t peer_port_{};
     bool reused_{false};
     std::chrono::steady_clock::duration connect_duration_{};
@@ -227,20 +217,25 @@ using http_client_async_redirect_observer =
     move_only_function<task<bool>(const http_client_redirect_hop&, stop_token)>;
 
 struct http_client_endpoint_address final {
-    explicit http_client_endpoint_address(std::pmr::memory_resource* resource = process_resource())
-        : ip_(pmr_resource_or_default(resource)) {}
-    http_client_endpoint_address(std::string_view ip, port_number port,
-        std::pmr::memory_resource* resource = process_resource())
-        : ip_(ip, pmr_resource_or_default(resource)),
+    http_client_endpoint_address() noexcept = default;
+    constexpr http_client_endpoint_address(ip_address ip, port_number port) noexcept
+        : ip_(ip),
           port_(port) {}
-    http_client_endpoint_address(const http_client_endpoint_address& other)
-        : http_client_endpoint_address(other.ip_, other.port_, other.ip_.get_allocator().resource()) {}
-    http_client_endpoint_address(http_client_endpoint_address&&) noexcept = default;
-    http_client_endpoint_address& operator=(const http_client_endpoint_address&) = default;
-    http_client_endpoint_address& operator=(http_client_endpoint_address&&) = default;
+    http_client_endpoint_address(std::string_view ip, port_number port)
+        : ip_(parse_ip(ip)),
+          port_(port) {}
 
-    std::pmr::string ip_{process_resource()};
+    ip_address ip_{};
     port_number port_{};
+
+private:
+    [[nodiscard]] static ip_address parse_ip(std::string_view text) {
+        const auto parsed = ip_address::parse(text);
+        if (!parsed.has_value()) {
+            throw std::invalid_argument("HTTP client endpoint IP must be a valid IP literal");
+        }
+        return *parsed;
+    }
 };
 
 // Connection advertisements are optional observations. They do not change the

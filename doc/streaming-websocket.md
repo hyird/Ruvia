@@ -478,7 +478,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
-自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))`（及同形 `.redirect_policy(...)` 重载）在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |
@@ -486,10 +486,10 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | 请求级路由覆盖 | `http_client_request_options` 的 `authority_`（`host[:port]`，拒绝 userinfo）、`dial_host_` / `dial_port_`、`server_name_` 逐请求覆盖 alias 默认值；未设字段继承 alias，scheme 不可改。Host / `:authority` 取有效 authority，SNI 与证书名默认取其 host（IP 字面量不发 SNI、按 IP SAN 校验）；请求级拨号域名只在新建连接时解析并经 `address_validator_` |
 | 连接复用键 | 连接按 `(拨号 host, 拨号端口, TLS server name, ALPN 报价)` 复用，Host / `:authority` 不入键：HTTP/1 keep-alive 可跨 Host 复用；HTTP/2、HTTP/3 同一连接上发送其他 authority 时，由调用方保证所选证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。每个 alias 只有一个 TLS 上下文，QUIC 会话票据按路由隔离 |
 | 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；Alt-Svc 按实际路由记录与使用（见 5.3），Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
-| 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 DNS 快照；Alt-Svc 照常按实际路由学习，替代端点同样经 `address_validator_` 校验（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`redirect_policy` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
+| 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 DNS 快照；Alt-Svc 照常按实际路由学习，替代端点同样经 `address_validator_` 校验（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`on_redirect` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
 | 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
 | 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
-| SSRF 策略 | `address_validator_(numeric_ip, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
+| SSRF 策略 | `address_validator_(const ip_address&, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
 | 原样编码流 | origin 的 `decode_content_ = false`，或请求 `.configure({.decode_content_ = false})`：保留 `Content-Encoding` / `Content-Length`，不等待完整正文便交付首块；默认仍自动解码 |
 | 转发字段 | `.configure({.field_source_ = http_request_field_source::forwarded})` 使用协议层接收/转发语义，不套用自生成字段的发送方限制；分帧与歧义校验不放松 |
 | 即时 1xx | `configure` 的 `informational_`（`move_only_function<task<void>(http_status_code, span<const http_header>, stop_token)>`） 按线序等待每个中间响应；字段借用到回调完成，不必等待最终响应头 |

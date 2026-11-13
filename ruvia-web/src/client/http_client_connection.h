@@ -573,7 +573,7 @@ private:
     std::uint64_t serial_;
     bool alias_route_;
     std::uint64_t connection_id_{};
-    std::pmr::string peer_ip_{process_resource()};
+    ip_address peer_ip_{};
 #ifdef RUVIA_ENABLE_HTTP2
     std::pmr::vector<http2_stream*> http2_streams_;
     http2_stream* last_http2_stream_{nullptr};

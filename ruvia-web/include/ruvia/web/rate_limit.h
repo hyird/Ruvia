@@ -3,8 +3,16 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
+#include <memory_resource>
+#include <optional>
+#include <span>
+#include <string_view>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/http_response.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/middleware.h"
 
@@ -12,6 +20,9 @@ namespace ruvia {
 
 class context;
 
+// Buffer capacity required by format_rate_limit_address_key ("v6s/" + 32 hex
+// digits + '/' + up to 10 scope digits).
+inline constexpr std::size_t rate_limit_key_buffer_bytes = 48;
 // Each worker preallocates this many sliding-window key entries when either
 // the app-wide default rule or a route-specific rate-limit middleware is
 // present. A key probes a bounded run of entries from its hash position; a
@@ -50,6 +61,89 @@ struct rate_limit_rule final {
 struct rate_limit_config final {
     rate_limit_rule rule_{};
     std::size_t capacity_per_worker_{default_rate_limit_capacity_per_worker};
+};
+
+// Normalizes a client IP address into its per-client rate-limit key:
+// - IPv4 and IPv4-mapped IPv6 share the canonical dotted IPv4 host key;
+// - Unscoped IPv6 is grouped by its /64 network prefix ("v6/<16 hex>");
+// - Scoped IPv6 keys on its full 128-bit address and numeric scope ("v6s/<32 hex>/<scope>").
+[[nodiscard]] std::string_view format_rate_limit_address_key(
+    const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
+[[nodiscard]] std::string_view format_rate_limit_address_key(
+    std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept;
+
+struct rate_limit_decision final {
+    bool allowed_{true};
+    std::size_t limit_{0};
+    std::size_t remaining_{0};
+    std::uint64_t retry_after_ms_{0};
+    std::uint64_t reset_after_ms_{0};
+
+    [[nodiscard]] constexpr bool allowed() const noexcept {
+        return allowed_;
+    }
+    [[nodiscard]] constexpr explicit operator bool() const noexcept {
+        return allowed_;
+    }
+    [[nodiscard]] constexpr std::size_t limit() const noexcept {
+        return limit_;
+    }
+    [[nodiscard]] constexpr std::size_t remaining() const noexcept {
+        return remaining_;
+    }
+    [[nodiscard]] constexpr std::uint64_t retry_after_ms() const noexcept {
+        return retry_after_ms_;
+    }
+    [[nodiscard]] constexpr std::uint64_t reset_after_ms() const noexcept {
+        return reset_after_ms_;
+    }
+    [[nodiscard]] constexpr std::uint64_t retry_after_seconds() const noexcept {
+        return retry_after_ms_ / 1000U + (retry_after_ms_ % 1000U == 0U ? 0U : 1U);
+    }
+    [[nodiscard]] constexpr std::uint64_t reset_after_seconds() const noexcept {
+        return reset_after_ms_ / 1000U + (reset_after_ms_ % 1000U == 0U ? 0U : 1U);
+    }
+
+    friend constexpr bool operator==(const rate_limit_decision&, const rate_limit_decision&) noexcept = default;
+};
+
+void apply_rate_limit_headers(http_response& response, const rate_limit_decision& decision);
+
+// Single-worker SipHash-1-3 sliding-window rate limiter table. Preallocates a
+// power-of-two slot array at construction and performs zero allocations or
+// locks on the decision path.
+class sliding_window_rate_limiter final {
+public:
+    explicit sliding_window_rate_limiter(const rate_limit_config& config,
+        std::pmr::memory_resource* resource = process_resource());
+    explicit sliding_window_rate_limiter(
+        std::size_t capacity_per_worker = default_rate_limit_capacity_per_worker,
+        std::pmr::memory_resource* resource = process_resource());
+
+    sliding_window_rate_limiter(const sliding_window_rate_limiter&) = delete;
+    sliding_window_rate_limiter& operator=(const sliding_window_rate_limiter&) = delete;
+    sliding_window_rate_limiter(sliding_window_rate_limiter&&) noexcept;
+    sliding_window_rate_limiter& operator=(sliding_window_rate_limiter&&) noexcept;
+    ~sliding_window_rate_limiter();
+
+    [[nodiscard]] bool has_default_rule() const noexcept;
+    [[nodiscard]] std::size_t capacity() const noexcept;
+
+    [[nodiscard]] rate_limit_decision decide(std::string_view key,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(const ip_address& address,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+
+    [[nodiscard]] rate_limit_decision decide(std::string_view key, const rate_limit_rule& rule,
+        std::uintptr_t scope = 1,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+    [[nodiscard]] rate_limit_decision decide(const ip_address& address, const rate_limit_rule& rule,
+        std::uintptr_t scope = 1,
+        std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now()) noexcept;
+
+private:
+    struct impl_type;
+    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
 };
 namespace detail {
 // `declaration` identifies the rule's declaration: stacked rules on one route

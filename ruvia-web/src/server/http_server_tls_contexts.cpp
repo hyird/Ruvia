@@ -223,8 +223,6 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
     return SSL_CLIENT_HELLO_SUCCESS;
 }
 
-// OpenSSL supplies the extension bytes. Strip only their length prefix, not
-// a second ClientHello parser; OpenSSL retains all protocol validation.
 std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::size_t prefix) {
     const unsigned char* bytes = nullptr;
     std::size_t size = 0;
@@ -240,6 +238,36 @@ std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::s
         throw std::invalid_argument("malformed TLS selection extension length");
     }
     return {reinterpret_cast<const std::byte*>(bytes + prefix), length};
+}
+
+std::pmr::vector<std::uint16_t> decode_u16_list(
+    std::span<const std::byte> raw, std::pmr::memory_resource* resource) {
+    if (raw.size() % 2U != 0U) {
+        throw std::invalid_argument("malformed TLS uint16 extension list");
+    }
+    std::pmr::vector<std::uint16_t> decoded(resource);
+    decoded.reserve(raw.size() / 2U);
+    for (std::size_t i = 0; i < raw.size(); i += 2U) {
+        const auto hi = static_cast<std::uint16_t>(std::to_integer<unsigned int>(raw[i]));
+        const auto lo = static_cast<std::uint16_t>(std::to_integer<unsigned int>(raw[i + 1U]));
+        decoded.push_back(static_cast<std::uint16_t>((hi << 8U) | lo));
+    }
+    return decoded;
+}
+
+std::pmr::vector<std::string_view> decode_alpn_list(
+    std::span<const std::byte> raw, std::pmr::memory_resource* resource) {
+    std::pmr::vector<std::string_view> protocols(resource);
+    for (std::size_t pos = 0; pos < raw.size();) {
+        const auto length = static_cast<std::size_t>(std::to_integer<unsigned int>(raw[pos]));
+        if (length == 0U || pos + 1U + length > raw.size()) {
+            throw std::invalid_argument("malformed TLS ALPN extension list");
+        }
+        protocols.emplace_back(
+            reinterpret_cast<const char*>(raw.data() + pos + 1U), length);
+        pos += 1U + length;
+    }
+    return protocols;
 }
 
 // ClientHello precedes OpenSSL's status_request parsing. Give this SSL its
@@ -299,8 +327,22 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 if (!binding || binding->fields_.connection_id_ == 0 || local == nullptr) {
                     throw std::logic_error("TLS certificate selector requires connection metadata");
                 }
+                std::array<std::byte, 2048> stack_buffer;
+                std::pmr::monotonic_buffer_resource arena(
+                    stack_buffer.data(), stack_buffer.size(), process_resource());
                 const unsigned char* ciphers = nullptr;
                 const auto cipher_size = SSL_client_hello_get0_ciphers(ssl, &ciphers);
+                const auto cipher_suites = decode_u16_list(
+                    {reinterpret_cast<const std::byte*>(ciphers), cipher_size}, &arena);
+                const auto signature_algorithms = decode_u16_list(
+                    client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2), &arena);
+                const auto supported_versions = decode_u16_list(
+                    client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1), &arena);
+                const auto supported_groups = decode_u16_list(
+                    client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2), &arena);
+                const auto alpn = decode_alpn_list(
+                    client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2),
+                    &arena);
                 const tls_certificate_selection input{
                     .connection_id_ = binding->fields_.connection_id_,
                     .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}),
@@ -310,11 +352,11 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                     .local_port_ = binding->fields_.local_port_,
                     .quic_ = binding->fields_.quic_,
                     .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)),
-                    .cipher_suites_ = {reinterpret_cast<const std::byte*>(ciphers), cipher_size},
-                    .signature_algorithms_ = client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2),
-                    .supported_versions_ = client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1),
-                    .supported_groups_ = client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2),
-                    .alpn_ = client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2)};
+                    .cipher_suites_ = cipher_suites,
+                    .signature_algorithms_ = signature_algorithms,
+                    .supported_versions_ = supported_versions,
+                    .supported_groups_ = supported_groups,
+                    .alpn_ = alpn};
                 selected = (*identities.select_certificate_)(input);
             }
             if (selected) {

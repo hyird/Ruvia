@@ -248,7 +248,9 @@ http_cors_policy::http_cors_policy(
     for (const auto& suffix_entry : config.allowed_origin_suffixes_) {
         add_suffix(suffix_entry);
     }
-
+    if (exact_origins_.empty() && suffix_rules_.empty()) {
+        allow_any_origin_ = true;
+    }
     for (const auto& method : config.allowed_methods_) {
         const std::string_view view(method);
         if (view == "*") {
@@ -259,6 +261,9 @@ http_cors_policy::http_cors_policy(
             throw std::invalid_argument("CORS allowed method must be a valid HTTP method token");
         }
         allowed_methods_.emplace_back(view);
+    }
+    if (allowed_methods_.empty()) {
+        allow_any_method_ = true;
     }
     joined_allowed_methods_ = join_tokens(allowed_methods_, resource_);
 
@@ -273,8 +278,10 @@ http_cors_policy::http_cors_policy(
         }
         allowed_headers_.emplace_back(view);
     }
+    if (allowed_headers_.empty()) {
+        reflect_request_headers_ = true;
+    }
     joined_allowed_headers_ = join_tokens(allowed_headers_, resource_);
-
     for (const auto& expose_name : config.expose_headers_) {
         if (!is_valid_http_header_name(expose_name)) {
             throw std::invalid_argument("CORS exposed header must be a valid HTTP field name");
@@ -542,6 +549,112 @@ bool http_cors_policy::rewrite_response_headers(
     const bool granted = rewrite_response_headers(request_origin, staged);
     response.commit_headers(std::move(staged));
     return granted;
+}
+
+bool http_cors_policy::apply_response_headers(
+    const http_request& request, http_response& response) const {
+    const auto origin = request.header("Origin");
+    if (origin.has_value() && !allows_origin(*origin)) {
+        return false;
+    }
+    const bool options = request.known_method() == http_known_method::options;
+    const auto requested_method =
+        options ? request.header("Access-Control-Request-Method") : std::nullopt;
+    if (requested_method.has_value() && !allows_method(http_trim_ows(*requested_method))) {
+        return false;
+    }
+    const bool preflight = options && origin.has_value() && requested_method.has_value();
+    const bool reflect_headers =
+        preflight && reflect_request_headers_ &&
+        !response.header("Access-Control-Allow-Headers").has_value();
+    std::pmr::string reflected_headers(response.memory_resource());
+    if (options && request.header("Access-Control-Request-Headers").has_value()) {
+        std::size_t request_header_names_size = 0;
+        for (const auto& field : request.headers()) {
+            if (field.name().size() != 30U ||
+                !http_ascii_equals_ignore_case(field.name(), "Access-Control-Request-Headers")) {
+                continue;
+            }
+            http_field_name_list names(field.value());
+            bool saw_name = false;
+            while (const auto header_name = names.next()) {
+                saw_name = true;
+                if (!allows_request_header(*header_name)) {
+                    return false;
+                }
+                const auto separator_size =
+                    request_header_names_size == 0 ? std::size_t{0} : std::size_t{2};
+                const auto maximum = (std::numeric_limits<std::size_t>::max)();
+                if (header_name->size() > maximum - separator_size ||
+                    request_header_names_size > maximum - separator_size - header_name->size()) {
+                    return false;
+                }
+                request_header_names_size += separator_size + header_name->size();
+                if (reflect_headers) {
+                    if (!reflected_headers.empty()) {
+                        reflected_headers.append(", ");
+                    }
+                    reflected_headers.append(*header_name);
+                }
+            }
+            if (!saw_name || !names.valid()) {
+                return false;
+            }
+        }
+    }
+
+    if (!response.header("Access-Control-Allow-Origin").has_value()) {
+        if (allow_any_origin_ && !allow_credentials_) {
+            response.header_stable_view("Access-Control-Allow-Origin", "*");
+        } else if (origin.has_value()) {
+            response.header("Access-Control-Allow-Origin", *origin);
+        } else if (exact_origins_.size() == 1 && suffix_rules_.empty()) {
+            response.header("Access-Control-Allow-Origin", exact_origins_.front());
+        }
+    }
+    if (allow_credentials_ && !response.header("Access-Control-Allow-Credentials").has_value()) {
+        response.header_stable_view("Access-Control-Allow-Credentials", "true");
+    }
+
+    if (options) {
+        response.add_vary_token("Origin");
+        response.add_vary_token("Access-Control-Request-Method");
+        if (reflect_request_headers_) {
+            response.add_vary_token("Access-Control-Request-Headers");
+        }
+    } else if (!allow_any_origin_ || allow_credentials_) {
+        response.add_vary_token("Origin");
+    }
+
+    if (preflight) {
+        if (!response.header("Access-Control-Allow-Methods").has_value()) {
+            if (!joined_allowed_methods_.empty()) {
+                response.header("Access-Control-Allow-Methods", joined_allowed_methods_);
+            } else if (const auto allow = response.header("Allow");
+                allow.has_value() && !allow->empty()) {
+                response.header("Access-Control-Allow-Methods", *allow);
+            } else {
+                response.header("Access-Control-Allow-Methods", http_trim_ows(*requested_method));
+            }
+        }
+        if (!response.header("Access-Control-Allow-Headers").has_value()) {
+            if (!reflect_request_headers_ && !joined_allowed_headers_.empty()) {
+                response.header("Access-Control-Allow-Headers", joined_allowed_headers_);
+            } else if (reflect_request_headers_ && !reflected_headers.empty()) {
+                response.header("Access-Control-Allow-Headers", reflected_headers);
+            }
+        }
+        if (!max_age_.empty() && !response.header("Access-Control-Max-Age").has_value()) {
+            response.header("Access-Control-Max-Age", max_age_);
+        }
+        return true;
+    }
+
+    if (!joined_expose_headers_.empty() &&
+        !response.header("Access-Control-Expose-Headers").has_value()) {
+        response.header("Access-Control-Expose-Headers", joined_expose_headers_);
+    }
+    return true;
 }
 
 }  // namespace ruvia

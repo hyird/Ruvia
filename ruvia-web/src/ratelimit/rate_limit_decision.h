@@ -22,12 +22,12 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline std::optional<rate_limit_rejection> decide_request_rate_limit(rate_limiter* limiter,
-    std::string_view remote_address, const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
+    const ip_address& client_address, const std::optional<std::chrono::steady_clock::time_point>& arrival) noexcept {
     if (limiter == nullptr || !limiter->has_default_rule()) {
         return std::nullopt;
     }
     char key_buffer[rate_limit_key_buffer_bytes];
-    return limiter->allow_default(rate_limit_key_for(remote_address, key_buffer), rate_limit_instant(arrival));
+    return limiter->allow_default(rate_limit_key_for(client_address, key_buffer), rate_limit_instant(arrival));
 }
 
 // Thrown by a route rate-limit middleware. Error dispatch answers it the way a

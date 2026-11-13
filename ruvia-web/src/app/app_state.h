@@ -144,6 +144,10 @@ struct app_state final {
     callback_registration<http2_frame_callback> http2_frame_callback_;
     callback_registration<http2_headers_callback> http2_headers_callback_;
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    callback_registration<http3_frame_callback> http3_frame_callback_;
+    callback_registration<http3_field_callback> http3_field_callback_;
+#endif
     callback_registration<connection_admission_callback> connection_admission_callback_;
     callback_registration<connection_open_callback> connection_open_callback_;
     callback_registration<connection_close_callback> connection_close_callback_;

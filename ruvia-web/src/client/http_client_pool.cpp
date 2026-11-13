@@ -27,6 +27,7 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "client/http_client_transport_error.h"
+#include "server/peer_address.h"
 #include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
@@ -170,7 +171,7 @@ std::uint64_t http_client_pool::next_connection_id() noexcept {
 std::pmr::vector<http_client_endpoint_address> http_client_pool::dns_snapshot() const {
     std::pmr::vector<http_client_endpoint_address> result(process_resource());
     const auto append = [&result](const asio::ip::tcp::endpoint& endpoint) {
-        result.emplace_back(endpoint.address().to_string(), endpoint.port(), process_resource());
+        result.emplace_back(to_ip_address(endpoint.address()).normalized_ipv4(), endpoint.port());
     };
     if (dns_addresses_.literal_) {
         append(*dns_addresses_.literal_);
@@ -188,7 +189,8 @@ void http_client_pool::validate_addresses(const client_resolve_result& result) c
         return;
     }
     const auto validate = [this](const asio::ip::tcp::endpoint& endpoint) {
-        if (!(*config_.address_validator_)(endpoint.address().to_string(), endpoint.port())) {
+        if (!(*config_.address_validator_)(
+                to_ip_address(endpoint.address()).normalized_ipv4(), endpoint.port())) {
             throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP dial address rejected");
         }
     };
@@ -248,11 +250,10 @@ void http_client_pool::update_dns(std::span<const http_client_endpoint_address> 
     std::pmr::vector<asio::ip::tcp::endpoint> endpoints(process_resource());
     endpoints.reserve(addresses.size());
     for (const auto& value : addresses) {
-        const auto address = parse_ip_address(value.ip_);
-        if (!address || value.port_.value() == 0) {
+        if (value.port_.value() == 0) {
             throw std::invalid_argument("HTTP DNS snapshot requires numeric addresses and positive ports");
         }
-        const asio::ip::tcp::endpoint endpoint(*address, value.port_.value());
+        const asio::ip::tcp::endpoint endpoint(to_asio_address(value.ip_), value.port_.value());
         if (std::ranges::find(endpoints, endpoint) == endpoints.end()) {
             endpoints.push_back(endpoint);
         }

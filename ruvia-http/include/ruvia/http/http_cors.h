@@ -118,6 +118,9 @@ public:
         borrowed_text request_origin, http_response_headers& response_headers) const;
     bool rewrite_response_headers(
         borrowed_text request_origin, http_response& response) const;
+    // Applies server-side CORS headers (including OPTIONS preflight and Allow
+    // promotion) without overwriting headers already set by the route handler.
+    bool apply_response_headers(const http_request& request, http_response& response) const;
 
 private:
     struct suffix_rule final {

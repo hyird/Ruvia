@@ -409,7 +409,7 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
 
         ruvia::http_server server(attachment.loop(),
             {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
-            {.compression_ = ruvia::compression_config{.min_bytes_ = 16}, .cors_ = ruvia::cors_config{}});
+            {.compression_ = ruvia::compression_config{.min_bytes_ = 16}, .cors_ = ruvia::http_cors_policy_config{}});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});

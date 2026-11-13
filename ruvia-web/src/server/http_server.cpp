@@ -56,6 +56,10 @@ http_server_options standalone_options(server_config config, const http_server_c
     options.http2_frame_ = callback_access::ref(callbacks.http2_frame_);
     options.http2_headers_ = callback_access::ref(callbacks.http2_headers_);
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    options.http3_frame_ = callback_access::ref(callbacks.http3_frame_);
+    options.http3_field_ = callback_access::ref(callbacks.http3_field_);
+#endif
     options.connection_admission_ = callback_access::ref(callbacks.connection_admission_);
     options.connection_open_ = callback_access::ref(callbacks.connection_open_);
     options.connection_close_ = callback_access::ref(callbacks.connection_close_);
@@ -1017,7 +1021,7 @@ public:
         }
         http_server_options validated;
         validated.set_trusted_proxies(config);
-        std::vector<trusted_proxy_set> candidates;
+        std::vector<http_client_ip_extractor> candidates;
         candidates.reserve(workers_.size());
         for (std::size_t index = 0; index != workers_.size(); ++index) {
             candidates.emplace_back(process_resource());

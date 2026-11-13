@@ -19,6 +19,7 @@
 #include "server/server_tls_stream.h"
 #include "server/worker_connections.h"
 #include "util/operation_lane_lease.h"
+#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 namespace {
@@ -89,14 +90,26 @@ task<std::optional<std::span<const std::byte>>> server_connection::read(operatio
     return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, std::move(operation)));
 }
 
-task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
+task<void> server_connection::write(std::string_view bytes, operation_options operation) & {
     require_active();
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
+    return write_owned(std::pmr::string(bytes, process_resource()), std::move(operation));
+}
+
+task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
+    return write(as_chars(bytes), std::move(operation));
+}
+
+task<void> server_connection::write_owned(std::pmr::string&& bytes, operation_options operation) {
+    require_active();
+    if (send_ended_) {
+        throw std::logic_error("server connection send direction has ended");
+    }
+    auto owned = detail::rebind_owned_storage(bytes, process_resource());
     return ::ruvia::make_scoped_operation(operations_,
-        write_connection(target_, write_, std::pmr::string(as_chars(bytes), process_resource()), write_active_,
-            send_ended_, std::move(operation)));
+        write_connection(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {

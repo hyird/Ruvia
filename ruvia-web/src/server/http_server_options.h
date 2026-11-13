@@ -16,9 +16,7 @@
 #include "ruvia/web/server_connection.h"
 #include "ruvia/web/server_observation.h"
 
-#include "http/http_cors.h"
 #include "server/document_root_binding.h"
-#include "server/trusted_proxies.h"
 
 namespace ruvia {
 class env;
@@ -57,7 +55,7 @@ struct access_log_record_access final {
 
 struct connection_failure_record_access final {
     [[nodiscard]] static connection_failure_record make(
-        std::string_view remote_address, std::exception_ptr exception) noexcept {
+        ip_address remote_address, std::exception_ptr exception) noexcept {
         return connection_failure_record(remote_address, std::move(exception));
     }
 };
@@ -85,6 +83,16 @@ struct server_observation_access final {
         return http2_headers_record(connection_id, metadata);
     }
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    [[nodiscard]] static constexpr http3_frame_record http3_frame(
+        std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept {
+        return http3_frame_record(connection_id, metadata);
+    }
+    [[nodiscard]] static constexpr http3_field_record http3_field(
+        std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept {
+        return http3_field_record(connection_id, metadata);
+    }
+#endif
 };
 
 // The connection level's failure outlet. An unset callback still reports: the
@@ -106,6 +114,7 @@ struct connection_failure_sink final {
     // count and the callback from drifting apart as new sites are added.
     std::atomic<std::size_t>* counter_{nullptr};
 
+    void invoke(ip_address remote_address, std::exception_ptr exception) const noexcept;
     void invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept;
 };
 
@@ -176,11 +185,11 @@ struct http_server_options final {
     // connections (shared no-context-takeover deflate) borrow it; worker-thread
     // synchronous use only.
     worker_codecs* codecs_{nullptr};
-    std::optional<cors_options> cors_{};
+    std::optional<http_cors_policy> cors_{};
     document_root_state document_root_{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
-    trusted_proxy_set trusted_proxies_{};
+    http_client_ip_extractor trusted_proxies_{process_resource()};
     access_log_sink access_log_{};
     const env* env_{nullptr};
     worker_failure_sink failure_{};
@@ -191,6 +200,10 @@ struct http_server_options final {
 #if defined(RUVIA_ENABLE_HTTP2)
     http2_frame_callback_ref http2_frame_{};
     http2_headers_callback_ref http2_headers_{};
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    http3_frame_callback_ref http3_frame_{};
+    http3_field_callback_ref http3_field_{};
 #endif
     connection_admission_callback_ref connection_admission_{};
     connection_open_callback_ref connection_open_{};
@@ -214,7 +227,7 @@ struct http_server_options final {
     }
     void set_trusted_proxies(const trusted_proxy_config& config);
     void clear_trusted_proxies() noexcept {
-        trusted_proxies_ = trusted_proxy_set(process_resource());
+        trusted_proxies_ = http_client_ip_extractor(process_resource());
     }
 };
 

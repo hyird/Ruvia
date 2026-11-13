@@ -50,7 +50,7 @@ class http1_response_output final {
 public:
     http1_response_output(stream_type& stream, http_response_head_buffer& output,
         http1_deferred_access_log& deferred_access, const access_log_sink& access_log,
-        std::string_view remote_address, connection_scanner::entry& progress) noexcept
+        ip_address remote_address, connection_scanner::entry& progress) noexcept
         : stream_(&stream),
           output_(&output),
           deferred_access_(&deferred_access),
@@ -152,7 +152,7 @@ private:
     http_response_head_buffer* output_;
     http1_deferred_access_log* deferred_access_;
     const access_log_sink* access_log_;
-    std::string_view remote_address_;
+    ip_address remote_address_{};
     connection_scanner::entry* progress_;
     std::string_view body_;
     connection_write_outcome written_;

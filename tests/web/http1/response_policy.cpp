@@ -62,7 +62,7 @@ std::pmr::vector<access_entry> access_entries{ruvia::process_resource()};
 [[nodiscard]] ruvia::server_config cors_server() {
     return {.worker_count_ = 1,
         .connection_scan_interval_ = std::chrono::milliseconds(5),
-        .cors_ = ruvia::cors_config{}};
+        .cors_ = ruvia::http_cors_policy_config{}};
 }
 
 [[maybe_unused]] const bool policy_configured = [] {

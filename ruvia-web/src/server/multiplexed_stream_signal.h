@@ -36,7 +36,6 @@
 
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_cors.h"
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
@@ -524,7 +523,7 @@ protected:
     multiplexed_response_stream_sink_base(stream_type& stream, multiplexed_stream_signal& signal,
         std::pmr::memory_resource* resource, http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding, const compression_config* compression,
-        const cors_options* cors) noexcept
+        const http_cors_policy* cors) noexcept
         : stream_(stream),
           signal_(signal),
           request_method_(request_method),
@@ -551,7 +550,7 @@ protected:
     response_stream_state state_;
     http_interim_response_output* interim_output_{};
     http_known_method request_method_{http_known_method::unknown};
-    const cors_options* cors_;
+    const http_cors_policy* cors_;
     http_streaming_response_compression compression_;
     operation_interrupt_source output_interrupts_;
 
@@ -573,7 +572,8 @@ private:
             auto response = co_await context_access::commit_streaming_head(state_.bound_context());
             validate_response_stream_status(context_access::request(state_.bound_context()), response);
             if (cors_ != nullptr) {
-                apply_cors_headers(context_access::request(state_.bound_context()), response, *cors_);
+                (void)cors_->apply_response_headers(
+                    context_access::request(state_.bound_context()), response);
             }
             throw_if_terminated();
             throw_if_body_failed();

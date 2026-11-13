@@ -31,7 +31,6 @@ namespace ruvia::detail {
 
 class context_services;
 struct connection_failure_sink;
-class trusted_proxy_set;
 
 struct worker_capability_definitions final {
     std::span<const db_definition> databases_{};
@@ -47,7 +46,7 @@ struct worker_capability_options final {
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
     http_client_worker_config http_client_worker_{};
     const env* env_{nullptr};
-    const trusted_proxy_set* trusted_proxies_{nullptr};
+    const http_client_ip_extractor* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
     // The server write_timeout_ bounding a file response's open on the pool.
     std::optional<timeout_duration> file_io_timeout_{};

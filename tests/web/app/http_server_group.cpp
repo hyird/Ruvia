@@ -97,7 +97,7 @@ struct held_work final {
 ruvia::task<void> answer(ruvia::request_stream& stream) {
     std::string body = std::to_string(stream.worker().id()) + ":" + std::to_string(stream.conn().connection_id());
     if (stream.request().path() == "/proxy") {
-        body = std::string(stream.conn().client().address());
+        body = std::string(stream.conn().client().address().to_string());
         body += stream.conn().via_trusted_proxy() ? ":proxy:" : ":direct:";
         body += stream.conn().scheme() == ruvia::http_scheme::https ? "https" : "http";
     }

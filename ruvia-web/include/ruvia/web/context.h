@@ -141,31 +141,6 @@ private:
 // intentionally lives outside http_request and context_request.
 class conn_info final {
 public:
-    class client_endpoint final {
-    public:
-        [[nodiscard]] constexpr std::string_view address() const noexcept {
-            return address_;
-        }
-
-        // Zero when the port is not known: a forwarded client address whose
-        // proxy did not record one, or a hand-built test connection.
-        [[nodiscard]] constexpr std::uint16_t port() const noexcept {
-            return port_;
-        }
-
-    private:
-        friend class conn_info;
-        friend class tls_client_hello_record;
-        friend class server_connection;
-
-        explicit constexpr client_endpoint(std::string_view address, std::uint16_t port = 0) noexcept
-            : address_(address),
-              port_(port) {}
-
-        std::string_view address_;
-        std::uint16_t port_{0};
-    };
-
     // Process-wide unique transport ID across workers, hosts and restarts.
     // Every request and observation on one connection shares this ID; retired
     // IDs are never reused. Never zero for a served connection; zero for a
@@ -191,7 +166,7 @@ public:
     //
     // This, not remote(), is what rate limiting keys on and what an access log
     // should record.
-    [[nodiscard]] constexpr client_endpoint client() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint client() const noexcept {
         return client_;
     }
 
@@ -227,7 +202,7 @@ private:
         : id_(id),
           remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
           remote_text_(remote_address),
-          client_(remote_address),
+          client_(remote_),
           transport_(transport),
           scheme_(http_scheme::http) {}
 
@@ -235,7 +210,7 @@ private:
         : id_(id),
           remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
           remote_text_(remote_address),
-          client_(remote_address),
+          client_(remote_),
           transport_(transport),
           scheme_(http_scheme::https) {}
 
@@ -250,27 +225,20 @@ private:
     }
 
     // Applied only after the peer has been matched against the configured
-    // trusted set. An empty argument leaves the transport-derived value, so a
-    // proxy that sends one field but not the other does not blank the rest.
+    // trusted set. An empty scheme leaves the transport-derived value.
     constexpr void apply_forwarded(
-        std::string_view client_address, std::string_view forwarded_scheme) noexcept {
-        if (!client_address.empty()) {
-            client_ = client_endpoint(client_address);
-            via_trusted_proxy_ = true;
-        }
-        if (forwarded_scheme == "http") {
-            scheme_ = http_scheme::http;
-            via_trusted_proxy_ = true;
-        } else if (forwarded_scheme == "https") {
-            scheme_ = http_scheme::https;
-            via_trusted_proxy_ = true;
+        const ip_address& client_address, std::optional<http_scheme> forwarded_scheme) noexcept {
+        client_ = ip_endpoint(client_address, 0);
+        via_trusted_proxy_ = true;
+        if (forwarded_scheme.has_value()) {
+            scheme_ = *forwarded_scheme;
         }
     }
 
     constexpr void set_remote_port(std::uint16_t port) noexcept {
         remote_ = ip_endpoint(remote_.address(), port);
         if (!via_trusted_proxy_) {
-            client_ = client_endpoint(remote_text_, port);
+            client_ = remote_;
         }
     }
     void set_local(std::string_view address, std::uint16_t port) noexcept {
@@ -280,7 +248,7 @@ private:
     std::uint64_t id_;
     ip_endpoint remote_;
     std::string_view remote_text_;
-    client_endpoint client_;
+    ip_endpoint client_;
     ip_endpoint local_{};
     std::variant<plain_connection_transport, tls_connection_transport> transport_;
     http_scheme scheme_;

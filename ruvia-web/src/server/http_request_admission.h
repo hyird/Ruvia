@@ -146,7 +146,7 @@ private:
 class http_response_tail final {
 public:
     http_response_tail(const http_request& request, http_response_coding_policy coding_policy,
-        std::string_view remote_address, std::string_view client_address,
+        ip_address remote_address, ip_address client_address,
         std::chrono::steady_clock::time_point start) noexcept
         : request_(&request),
           coding_policy_(coding_policy),
@@ -169,7 +169,7 @@ public:
     void disable_response_coding() noexcept {
         coding_policy_ = http_response_coding_policy::disabled();
     }
-    void bind_addresses(std::string_view remote_address, std::string_view client_address) noexcept {
+    void bind_addresses(ip_address remote_address, ip_address client_address) noexcept {
         remote_address_ = remote_address;
         client_address_ = client_address;
     }
@@ -180,7 +180,7 @@ public:
     }
     // The CORS policy the response streams and buffered responses of this
     // request apply; null when none does.
-    [[nodiscard]] static const cors_options* cors(const http_server_options& options) noexcept {
+    [[nodiscard]] static const http_cors_policy* cors(const http_server_options& options) noexcept {
         return options.cors_.has_value() ? &*options.cors_ : nullptr;
     }
 
@@ -225,8 +225,8 @@ public:
 private:
     const http_request* request_;
     http_response_coding_policy coding_policy_;
-    std::string_view remote_address_;
-    std::string_view client_address_;
+    ip_address remote_address_{};
+    ip_address client_address_{};
     std::chrono::steady_clock::time_point start_;
     std::string_view alternative_service_;
     mutable request_io_metrics io_metrics_{};

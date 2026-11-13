@@ -147,11 +147,12 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
     }
     std::pmr::vector<ip_address> addresses(process_resource());
     const auto append_endpoint = [&](const asio::ip::tcp::endpoint& endpoint) {
-        if (validator && !(*validator)(endpoint.address().to_string(), endpoint.port())) {
+        const auto resolved_ip = to_ruvia_ip_address(endpoint.address());
+        if (validator && !(*validator)(resolved_ip, endpoint.port())) {
             throw http_client_error(make_error_code(http_client_errc::resolve_failed),
                 "HTTP dial address rejected", std::nullopt, nullptr, false);
         }
-        addresses.push_back(to_ruvia_ip_address(endpoint.address()));
+        addresses.push_back(resolved_ip);
     };
     if (result.literal_) {
         append_endpoint(*result.literal_);

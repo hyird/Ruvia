@@ -2,7 +2,6 @@
 #include <variant>
 
 #include "context/context_services.h"
-#include "http/http_cors.h"
 #include "router/route_table.h"
 #include "server/http_alternative_service.h"
 #include "server/http_buffered_response.h"
@@ -15,10 +14,11 @@ namespace {
 // listener's Alt-Svc, and run the compression policy up to its offload
 // boundary, which only a worker with a blocking pool can cross.
 [[nodiscard]] http_buffered_compression_step prepare_representation(const http_request& request,
-    const http_response_coding_policy& policy, std::string_view alternative_service, const cors_options* cors,
-    http_response& response, const http_server_options& options, const worker_handle& worker) {
+    const http_response_coding_policy& policy, std::string_view alternative_service,
+    const http_cors_policy* cors, http_response& response, const http_server_options& options,
+    const worker_handle& worker) {
     if (cors != nullptr) {
-        apply_cors_headers(request, response, *cors);
+        (void)cors->apply_response_headers(request, response);
     }
     apply_alternative_service(response, alternative_service);
     if (options.compression_.has_value()) {

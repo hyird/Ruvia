@@ -296,7 +296,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             EXPECT_TRUE(target.requests_.empty());
 
             auto unconfigured = client.client().get("/policy-without-origin");
-            unconfigured.redirect_policy([](ruvia::http_origin_view, ruvia::stop_token) -> ruvia::task<bool> { co_return true; });
+            unconfigured.on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> { co_return true; });
             auto still_denied = co_await unconfigured.send();
             EXPECT_EQ(still_denied.status().value(), 302);
             EXPECT_TRUE(target.requests_.empty());
@@ -306,9 +306,9 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             request.header("Authorization", "Bearer private");
             request.header("Proxy-Authorization", "Basic private");
             request.header("Cookie", "source=private");
-            request.redirect_policy([&](ruvia::http_origin_view origin, ruvia::stop_token stop) -> ruvia::task<bool> {
+            request.on_redirect([&](const ruvia::http_client_redirect_hop& hop, ruvia::stop_token stop) -> ruvia::task<bool> {
                 ++decisions;
-                EXPECT_EQ(origin.host(), "127.0.0.1");
+                EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
                 co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .versions_ = ruvia::http_client_versions{.http2_ = false}},
                     {.stop_token_ = std::move(stop)});
                 co_return true;
@@ -324,7 +324,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             }
 
             auto rejected = client.client().get("/policy-denies-registered");
-            rejected.redirect_policy([&](ruvia::http_origin_view, ruvia::stop_token) -> ruvia::task<bool> {
+            rejected.on_redirect([&](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
                 ++decisions;
                 co_return false;
             });
@@ -450,7 +450,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
             auto marker = std::make_shared<ruvia::test::dynamic_origin_tests::observed_configuration>(retired, destroyed);
             observed = marker;
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8001",
-                .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](std::string_view, std::uint16_t) { return marker != nullptr; })});
+                .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](const ruvia::ip_address&, std::uint16_t) { return marker != nullptr; })});
         }
         std::optional<ruvia::http_client_handle> old(client.client());
         std::optional<ruvia::task<ruvia::http_client_exchange>> cold(old->post("/cold").upload());
@@ -653,13 +653,13 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         auto request = client.client().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000},
                                                         .stop_token_ = stop.token()})
                            .get("/redirect");
-        request.redirect_policy([&](http_origin_view origin, stop_token token) -> task<bool> {
+        request.on_redirect([&](const http_client_redirect_hop& hop, stop_token token) -> task<bool> {
             entered = true;
             changed.notify();
-            EXPECT_EQ(origin.host(), "127.0.0.1");
+            EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
             EXPECT_EQ(co_await sleep_for(worker, std::chrono::seconds(10), token), timer_sleep_result::stop_requested);
-            EXPECT_EQ(origin.host(), "127.0.0.1");
-            EXPECT_EQ(origin.port(), 8123);
+            EXPECT_EQ(hop.target_origin().host(), "127.0.0.1");
+            EXPECT_EQ(hop.target_origin().port(), 8123);
             exited = true;
             co_return true;
         });

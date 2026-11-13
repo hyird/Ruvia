@@ -278,6 +278,79 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
                : std::optional(rate_limit_rejection(1, 1, rule.max_requests_));
 }
 
+[[nodiscard]] rate_limit_decision consume_decision(
+    rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+    const auto window_ms = window_length_ms(rule);
+    roll_window(slot, rule, now);
+    const auto remaining_ms = window_ms - elapsed_ms(slot.window_start_, now);
+    const auto limit = static_cast<std::uint64_t>(rule.max_requests_);
+    const auto previous = static_cast<std::uint64_t>(slot.previous_count_);
+    const auto current = static_cast<std::uint64_t>(slot.current_count_);
+    const auto prev_weighted = multiply_wide(previous, remaining_ms);
+    if (current < limit && prev_weighted < multiply_wide(limit - current, window_ms)) {
+        ++slot.current_count_;
+        const auto next_current = current + 1U;
+        const auto room_after_scaled = multiply_wide(limit - next_current, window_ms);
+        std::size_t remaining_requests = 0;
+        if (prev_weighted <= room_after_scaled) {
+            const std::uint64_t borrow = room_after_scaled.low_ < prev_weighted.low_ ? 1U : 0U;
+            const wide_unsigned diff{
+                .high_ = room_after_scaled.high_ - prev_weighted.high_ - borrow,
+                .low_ = room_after_scaled.low_ - prev_weighted.low_,
+            };
+            remaining_requests = static_cast<std::size_t>(divide_wide(diff, window_ms));
+        }
+        return rate_limit_decision{
+            .allowed_ = true,
+            .limit_ = rule.max_requests_,
+            .remaining_ = remaining_requests,
+            .retry_after_ms_ = 0,
+            .reset_after_ms_ = saturating_add(remaining_ms, window_ms),
+        };
+    }
+    const auto rejected = refusal(rule, previous, current, window_ms, remaining_ms);
+    return rate_limit_decision{
+        .allowed_ = false,
+        .limit_ = rejected.max_requests(),
+        .remaining_ = 0,
+        .retry_after_ms_ = rejected.retry_after_ms(),
+        .reset_after_ms_ = rejected.reset_after_ms(),
+    };
+}
+
+[[nodiscard]] rate_limit_decision consume_new_key_decision(rate_limit_slot& slot,
+    rate_limit_scope scope, std::string_view key, std::uint64_t hash,
+    const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+    slot.scope_ = scope;
+    slot.key_hash_ = hash;
+    slot.window_start_ = now;
+    const auto window_ms = window_length_ms(rule);
+    slot.stale_after_ms_ = saturating_add(window_ms, window_ms);
+    slot.current_count_ = 0;
+    slot.previous_count_ = 0;
+    slot.key_size_ = static_cast<std::uint8_t>(key.size());
+    std::ranges::copy(key, slot.key_.begin());
+    return consume_decision(slot, rule, now);
+}
+
+[[nodiscard]] rate_limit_decision overflow_rate_limit_decision(const rate_limit_rule& rule) noexcept {
+    if (rule.overflow_policy_ == rate_limit_overflow_policy::allow) {
+        return rate_limit_decision{
+            .allowed_ = true,
+            .limit_ = rule.max_requests_,
+            .remaining_ = 0,
+            .retry_after_ms_ = 0,
+            .reset_after_ms_ = window_length_ms(rule),
+        };
+    }
+    return rate_limit_decision{
+        .allowed_ = false,
+        .limit_ = rule.max_requests_,
+        .remaining_ = 0,
+        .retry_after_ms_ = 1,
+        .reset_after_ms_ = 1,
+    };
+}
 }  // namespace
 
 void validate_rate_limit_config(const rate_limit_config& config) {
@@ -369,6 +442,44 @@ std::optional<rate_limit_rejection> rate_limiter::allow(rate_limit_scope scope, 
     return overflow_decision(rule);
 }
 
+rate_limit_decision rate_limiter::decide_default(
+    std::string_view key, std::chrono::steady_clock::time_point now) noexcept {
+    if (!default_rule_per_worker_.has_value()) {
+        return rate_limit_decision{};
+    }
+    return decide_rule(default_scope, key, *default_rule_per_worker_, now);
+}
+
+rate_limit_decision rate_limiter::decide_rule(rate_limit_scope scope, std::string_view key,
+    const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept {
+    if (slots_.empty() || key.size() > rate_limit_max_key_bytes) {
+        return overflow_rate_limit_decision(rule);
+    }
+    now = std::max(now, std::chrono::steady_clock::time_point{});
+    const auto hash = key_hash(hash_key_, scope, key);
+    const auto mask = slots_.size() - 1;
+    const auto start = static_cast<std::size_t>(hash) & mask;
+    rate_limit_slot* reclaimable = nullptr;
+    const auto probe_window = std::min(slots_.size(), rate_limit_probe_window);
+    for (std::size_t probe_value = 0; probe_value < probe_window; ++probe_value) {
+        auto& slot = slots_[(start + probe_value) & mask];
+        if (slot.key_hash_ == empty_hash) {
+            return consume_new_key_decision(
+                reclaimable == nullptr ? slot : *reclaimable, scope, key, hash, rule, now);
+        }
+        if (key_equals(slot, scope, key, hash)) {
+            return consume_decision(slot, rule, now);
+        }
+        if (reclaimable == nullptr && stale(slot, now)) {
+            reclaimable = &slot;
+        }
+    }
+    if (reclaimable != nullptr) {
+        return consume_new_key_decision(*reclaimable, scope, key, hash, rule, now);
+    }
+    return overflow_rate_limit_decision(rule);
+}
+
 namespace {
 
 [[nodiscard]] std::optional<rate_limit_rejection> decide_route_rate_limit(
@@ -423,4 +534,98 @@ void enforce_route_rate_limit(context& context_value, const void* declaration, c
     }
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+std::string_view format_rate_limit_address_key(
+    const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
+    return detail::rate_limit_key_for(address, buffer);
+}
+
+std::string_view format_rate_limit_address_key(
+    std::string_view address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
+    return detail::rate_limit_key_for(address, buffer);
+}
+
+void apply_rate_limit_headers(http_response& response, const rate_limit_decision& decision) {
+    response.reserve_headers(response.headers().size() + (decision.allowed() ? 3U : 4U));
+    if (!decision.allowed()) {
+        detail::set_unsigned_header(response, "Retry-After", decision.retry_after_seconds());
+    }
+    detail::set_unsigned_header(response, "X-RateLimit-Limit", decision.limit());
+    detail::set_unsigned_header(response, "X-RateLimit-Remaining", decision.remaining());
+    detail::set_unsigned_header(response, "X-RateLimit-Reset", decision.reset_after_seconds());
+}
+
+struct sliding_window_rate_limiter::impl_type final {
+    impl_type(std::optional<rate_limit_rule> default_rule, std::size_t capacity_value)
+        : limiter_(default_rule, detail::route_rate_limit_presence::present, capacity_value) {}
+
+    detail::rate_limiter limiter_;
+};
+
+sliding_window_rate_limiter::sliding_window_rate_limiter(
+    const rate_limit_config& config, std::pmr::memory_resource* resource) {
+    detail::validate_rate_limit_config(config);
+    impl_ = make_pmr_object<impl_type>(
+        pmr_resource_or_default(resource), config.rule_, config.capacity_per_worker_);
+}
+
+sliding_window_rate_limiter::sliding_window_rate_limiter(
+    std::size_t capacity_per_worker, std::pmr::memory_resource* resource) {
+    if (!std::has_single_bit(capacity_per_worker)) {
+        throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
+    }
+    impl_ = make_pmr_object<impl_type>(
+        pmr_resource_or_default(resource), std::nullopt, capacity_per_worker);
+}
+
+sliding_window_rate_limiter::sliding_window_rate_limiter(
+    sliding_window_rate_limiter&&) noexcept = default;
+sliding_window_rate_limiter& sliding_window_rate_limiter::operator=(
+    sliding_window_rate_limiter&&) noexcept = default;
+sliding_window_rate_limiter::~sliding_window_rate_limiter() = default;
+
+bool sliding_window_rate_limiter::has_default_rule() const noexcept {
+    return impl_ != nullptr && impl_->limiter_.has_default_rule();
+}
+
+std::size_t sliding_window_rate_limiter::capacity() const noexcept {
+    return impl_ != nullptr ? impl_->limiter_.capacity() : 0;
+}
+
+rate_limit_decision sliding_window_rate_limiter::decide(
+    std::string_view key, std::chrono::steady_clock::time_point now) noexcept {
+    if (impl_ == nullptr) {
+        return rate_limit_decision{};
+    }
+    return impl_->limiter_.decide_default(key, now);
+}
+
+rate_limit_decision sliding_window_rate_limiter::decide(
+    const ip_address& address, std::chrono::steady_clock::time_point now) noexcept {
+    char key_buffer[rate_limit_key_buffer_bytes];
+    return decide(detail::rate_limit_key_for(address, key_buffer), now);
+}
+
+rate_limit_decision sliding_window_rate_limiter::decide(std::string_view key,
+    const rate_limit_rule& rule, std::uintptr_t scope,
+    std::chrono::steady_clock::time_point now) noexcept {
+    if (impl_ == nullptr || rule.max_requests_ == 0 || rule.window_.count() <= 0) {
+        return rate_limit_decision{};
+    }
+    return impl_->limiter_.decide_rule({.route_ = scope == 0 ? 2U : scope, .rule_ = 1U}, key, rule, now);
+}
+
+rate_limit_decision sliding_window_rate_limiter::decide(const ip_address& address,
+    const rate_limit_rule& rule, std::uintptr_t scope,
+    std::chrono::steady_clock::time_point now) noexcept {
+    char key_buffer[rate_limit_key_buffer_bytes];
+    return decide(detail::rate_limit_key_for(address, key_buffer), rule, scope, now);
+}
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 }  // namespace ruvia::detail

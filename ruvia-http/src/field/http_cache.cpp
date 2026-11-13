@@ -61,10 +61,8 @@ void cache_control_field_parser::update(std::string_view value) noexcept {
     detail::http_visit_comma_separated_quoted(value, [this](std::string_view token) noexcept {
         const auto eq = token.find('=');
         const bool has_argument = eq != std::string_view::npos;
-        const auto name =
-            http_trim_ows(eq == std::string_view::npos ? token : token.substr(0, eq));
-        const auto arg =
-            http_trim_ows(eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1));
+        const auto name = eq == std::string_view::npos ? token : token.substr(0, eq);
+        const auto arg = eq == std::string_view::npos ? std::string_view{} : token.substr(eq + 1);
         switch (name.size()) {
             case 6U:
                 if (!has_argument && http_ascii_equals_ignore_case(name, "public")) {

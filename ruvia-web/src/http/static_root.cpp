@@ -26,7 +26,6 @@
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 
-#include "http/http_compressible_media_type.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"
 #include "http/static_path_normalization.h"
@@ -362,7 +361,7 @@ void detail::static_root_access::install_precompressed_variants(
     for (auto& entry : state_value.entries_) {
         if (!entry.directly_servable_ || entry.size_ < options.min_bytes_ ||
             entry.size_ > options.max_bytes_ ||
-            !detail::http_media_type_compressible(entry.content_type_)) {
+            !is_http_media_type_compressible(entry.content_type_)) {
             continue;
         }
 

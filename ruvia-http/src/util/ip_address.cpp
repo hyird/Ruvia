@@ -16,7 +16,7 @@ namespace ruvia {
 namespace {
 
 [[nodiscard]] std::optional<std::uint32_t> parse_zone(std::string_view text) noexcept {
-    if (text.empty()) {
+    if (text.empty() || text.front() == '0') {
         return std::nullopt;
     }
     std::uint32_t value = 0;
@@ -141,9 +141,7 @@ namespace {
         return std::array<std::uint8_t, 16>{
             0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, v4[0], v4[1], v4[2], v4[3]};
     }
-    if (address.scope_id() != 0) {
-        return std::nullopt;
-    }
+    // Scoped IPv6 literals compare by their 128-bit address prefix in CIDR blocks.
     std::array<std::uint8_t, 16> v6{};
     const auto raw = address.bytes();
     std::copy_n(raw.data(), 16, v6.data());
@@ -168,8 +166,7 @@ std::optional<ip_cidr> ip_cidr::parse(std::string_view text) noexcept {
     unsigned bits = max_bits;
     if (slash != std::string_view::npos) {
         const auto prefix_text = text.substr(slash + 1);
-        if (prefix_text.empty() || prefix_text.size() > 3 ||
-            (prefix_text.size() > 1 && prefix_text.front() == '0')) {
+        if (prefix_text.empty() || prefix_text.size() > 3) {
             return std::nullopt;
         }
         const auto [end, err] =

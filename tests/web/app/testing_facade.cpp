@@ -478,7 +478,7 @@ private:
         reply.push_back(':');
         reply.append(std::to_string(c.conn().remote().port()));
         reply.push_back('/');
-        reply.append(c.conn().client().address());
+        reply.append(c.conn().client().address().to_string(c.arena()));
         reply.push_back('/');
         reply.append(c.conn().via_trusted_proxy() ? "proxy" : "direct");
         reply.push_back('/');

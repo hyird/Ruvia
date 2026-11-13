@@ -148,7 +148,7 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
     } catch (...) {
     }
     std::lock_guard lock(failures_mutex());
-    failures().push_back({std::string(record.remote_address()), std::move(message)});
+    failures().push_back({std::string(record.remote_address().to_string()), std::move(message)});
 }
 
 [[nodiscard]] connection_view describe(const ruvia::server_connection& connection) {

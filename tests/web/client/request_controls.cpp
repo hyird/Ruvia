@@ -285,7 +285,7 @@ void read_timeout(bool http2, bool total_only) {
             EXPECT_NE(connection, nullptr);
             if (connection != nullptr) {
                 EXPECT_NE(connection->id_, 0u);
-                EXPECT_EQ(connection->peer_ip_, "127.0.0.1");
+                EXPECT_EQ(connection->peer_ip_.to_string(), "127.0.0.1");
                 EXPECT_NE(connection->peer_port_, 0u);
                 EXPECT_FALSE(connection->reused_);
             }
@@ -491,13 +491,13 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
             auto response = co_await client.client().get("/").send();
             EXPECT_EQ(response.status().value(), 200);
             EXPECT_NE(received.find(authority), std::string::npos);
-            EXPECT_EQ(response.connection_info().peer_ip_, "::1");
+            EXPECT_EQ(response.connection_info().peer_ip_.to_string(), "::1");
             EXPECT_EQ(response.connection_info().peer_port_, port);
             EXPECT_EQ(response.content_length(), 0u);
             const auto addresses = client.client().dns_snapshot();
             EXPECT_EQ(addresses.size(), 1u);
             if (!addresses.empty()) {
-                EXPECT_EQ(addresses.front().ip_, "::1");
+                EXPECT_EQ(addresses.front().ip_.to_string(), "::1");
                 EXPECT_EQ(addresses.front().port_.value(), port);
             }
         } catch (...) {
@@ -517,34 +517,27 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
     }
 }
 
-TEST(Ruvia, http_client_metadata_values_preserve_allocator_ownership) {
-    constexpr std::string_view address = "2001:db8:1234:5678:90ab:cdef:1234:5678";
+TEST(Ruvia, http_client_metadata_values_preserve_strong_ip_identity) {
+    const auto parsed_address = ruvia::ip_address::parse("2001:db8:1234:5678:90ab:cdef:1234:5678");
+    ASSERT_TRUE(parsed_address.has_value());
     std::optional<ruvia::http_client_error> saved_error;
     {
-        std::pmr::monotonic_buffer_resource source_resource;
-        std::pmr::monotonic_buffer_resource destination_resource;
-        ruvia::http_client_connection_info source(&source_resource);
+        ruvia::http_client_connection_info source;
         source.id_ = 17;
-        source.peer_ip_ = address;
+        source.peer_ip_ = *parsed_address;
         source.peer_port_ = 443;
         auto copied = source;
-        EXPECT_EQ(copied.peer_ip_.get_allocator().resource(), &source_resource);
-        ruvia::http_client_connection_info assigned(&destination_resource);
+        ruvia::http_client_connection_info assigned;
         assigned = source;
-        EXPECT_EQ(assigned.peer_ip_.get_allocator().resource(), &destination_resource);
         assigned = std::move(copied);
-        EXPECT_EQ(assigned.peer_ip_.get_allocator().resource(), &destination_resource);
-        EXPECT_EQ(assigned.peer_ip_, address);
+        EXPECT_EQ(assigned.peer_ip_, *parsed_address);
 
-        ruvia::http_client_endpoint_address endpoint(address, 443, &source_resource);
+        ruvia::http_client_endpoint_address endpoint(*parsed_address, 443);
         auto copied_endpoint = endpoint;
-        EXPECT_EQ(copied_endpoint.ip_.get_allocator().resource(), &source_resource);
-        ruvia::http_client_endpoint_address assigned_endpoint(&destination_resource);
+        ruvia::http_client_endpoint_address assigned_endpoint;
         assigned_endpoint = endpoint;
-        EXPECT_EQ(assigned_endpoint.ip_.get_allocator().resource(), &destination_resource);
         assigned_endpoint = std::move(copied_endpoint);
-        EXPECT_EQ(assigned_endpoint.ip_.get_allocator().resource(), &destination_resource);
-        EXPECT_EQ(assigned_endpoint.ip_, address);
+        EXPECT_EQ(assigned_endpoint.ip_, *parsed_address);
 
         const ruvia::http_client_error error(
             std::make_error_code(std::errc::timed_out), "observed timeout", std::nullopt, &source);
@@ -554,8 +547,7 @@ TEST(Ruvia, http_client_metadata_values_preserve_allocator_ownership) {
     EXPECT_NE(connection, nullptr);
     if (connection != nullptr) {
         EXPECT_EQ(connection->id_, 17u);
-        EXPECT_EQ(connection->peer_ip_, address);
-        EXPECT_EQ(connection->peer_ip_.get_allocator().resource(), ruvia::process_resource());
+        EXPECT_EQ(connection->peer_ip_, *parsed_address);
     }
 }
 

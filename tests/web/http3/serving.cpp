@@ -754,10 +754,11 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
     config.request_timeout_ = 5s;
     config.tls_.ca_file_ = ca_file;
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
-    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&](std::string_view ip, std::uint16_t dial_port) {
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&](const ruvia::ip_address& ip, std::uint16_t dial_port) {
         ++validations;
         EXPECT_EQ(dial_port, port);
-        return allowed && (ip == "127.0.0.1" || ip == "127.0.0.2");
+        const auto text = ip.to_string();
+        return allowed && (text == "127.0.0.1" || text == "127.0.0.2");
     });
     ruvia::http_client owner(loop, config);
     auto client = owner.client();
@@ -770,7 +771,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         auto first = co_await client.get("/dial-authority").send();
         const auto first_info = first.connection_info();
         EXPECT_NE(first_info.id_, 0U);
-        EXPECT_EQ(first_info.peer_ip_, "127.0.0.1");
+        EXPECT_EQ(first_info.peer_ip_.to_string(), "127.0.0.1");
         EXPECT_EQ(first_info.peer_port_, port);
         EXPECT_FALSE(first_info.reused_);
         EXPECT_GT(first_info.tls_duration_, std::chrono::steady_clock::duration::zero());
@@ -861,7 +862,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             EXPECT_NE(information, nullptr);
             if (information) {
                 EXPECT_NE(information->id_, 0U);
-                EXPECT_EQ(information->peer_ip_, "127.0.0.1");
+                EXPECT_EQ(information->peer_ip_.to_string(), "127.0.0.1");
                 EXPECT_EQ(information->peer_port_, port);
             }
         }
@@ -870,8 +871,8 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         auto streaming = co_await client.get("/stream").send();
         const auto draining_id = streaming.connection_info().id_;
         const std::array candidates{
-            ruvia::http_client_endpoint_address{std::pmr::string("127.0.0.2", ruvia::process_resource()), port},
-            ruvia::http_client_endpoint_address{std::pmr::string("127.0.0.1", ruvia::process_resource()), port}};
+            ruvia::http_client_endpoint_address{"127.0.0.2", port},
+            ruvia::http_client_endpoint_address{"127.0.0.1", port}};
         client.update_dns(candidates);
         EXPECT_EQ(client.dns_snapshot().size(), 2U);
         std::exception_ptr replacement_failure;
@@ -879,7 +880,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             try {
                 auto updated = co_await client.get("/hello").send();
                 EXPECT_NE(updated.connection_info().id_, draining_id);
-                EXPECT_EQ(updated.connection_info().peer_ip_, "127.0.0.1");
+                EXPECT_EQ(updated.connection_info().peer_ip_.to_string(), "127.0.0.1");
                 EXPECT_EQ(updated.connection_info().peer_port_, port);
                 (void)co_await updated.text();
             } catch (...) {
@@ -917,7 +918,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         const auto snapshot = client.dns_snapshot();
         EXPECT_EQ(snapshot.size(), 1U);
         if (!snapshot.empty()) {
-            EXPECT_EQ(snapshot.front().ip_, "127.0.0.1");
+            EXPECT_EQ(snapshot.front().ip_.to_string(), "127.0.0.1");
             EXPECT_EQ(snapshot.front().port_.value(), port);
         }
         stage = "dns-policy-rejection";
@@ -946,8 +947,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
     ruvia::http_client refreshing(loop, config);
     failure = nullptr;
     try {
-        const std::array initial{ruvia::http_client_endpoint_address{
-            std::pmr::string("127.0.0.2", ruvia::process_resource()), port}};
+        const std::array initial{ruvia::http_client_endpoint_address{"127.0.0.2", port}};
         auto refreshed = refreshing.client();
         refreshed.update_dns(initial);
         // Background refresh only looks up DNS dial names that still have a
@@ -955,7 +955,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         // published snapshot stays.
         (void)co_await ruvia::sleep_for(loop.handle(), 100ms);
         const auto snapshot = refreshed.dns_snapshot();
-        EXPECT_TRUE(snapshot.size() == 1 && snapshot.front().ip_ == "127.0.0.2");
+        EXPECT_TRUE(snapshot.size() == 1 && snapshot.front().ip_.to_string() == "127.0.0.2");
         EXPECT_EQ(refreshed.stats().dns_refreshes_, 0U);
     } catch (...) {
         failure = std::current_exception();

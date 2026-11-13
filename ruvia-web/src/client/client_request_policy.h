@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_client.h"
 
 namespace ruvia::detail {
@@ -49,38 +50,7 @@ public:
     void retain_response_cookies(std::string_view request_target, std::span<const http_header> headers);
 
 private:
-    struct stored_cookie final {
-        stored_cookie(std::string_view name, std::string_view value,
-            std::pmr::memory_resource* resource)
-            : stored_cookie(name, value, "/", {}, resource) {}
-        stored_cookie(std::string_view name, std::string_view value,
-            std::string_view path, std::string_view domain,
-            std::pmr::memory_resource* resource)
-            : name_(name, resource),
-              value_(value, resource),
-              path_(path, resource),
-              domain_(domain, resource) {}
-        std::pmr::string name_;
-        std::pmr::string value_;
-        std::pmr::string path_;
-        std::pmr::string domain_;
-        std::optional<std::chrono::system_clock::time_point> expires_;
-        bool secure_{false};
-        // From the client configuration rather than a Set-Cookie: sent even
-        // when received cookies are ignored, never replaced by a response.
-        bool configured_{true};
-    };
-    void store_received_cookie(const client_received_cookie& cookie);
-    void reserve_cookie_slot();
-    void discard_expired(std::chrono::system_clock::time_point now);
-    [[nodiscard]] static std::size_t storage_bytes(std::string_view name,
-        std::string_view value, std::string_view path, std::string_view domain) noexcept;
-    [[nodiscard]] bool has_capacity(std::size_t replaced_bytes,
-        std::size_t replacement_bytes, bool adding) const noexcept;
-    void recompute_next_expiry() noexcept;
     const http_client_config_storage& config_;
-    std::pmr::vector<stored_cookie> cookies_;
-    std::optional<std::chrono::system_clock::time_point> next_expiry_{};
-    std::size_t cookie_bytes_{};
+    http_cookie_jar jar_;
 };
 }  // namespace ruvia::detail

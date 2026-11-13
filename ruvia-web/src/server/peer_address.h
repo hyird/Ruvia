@@ -59,8 +59,9 @@ inline void assign_peer_address(std::pmr::string& output, const asio::ip::addres
         }
         v4 = asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
     }
+    const auto v4_bytes = v4.to_bytes();
     std::array<char, 15> buffer;
-    const auto formatted = format_ipv4_address(v4, buffer);
+    const auto formatted = format_ipv4_octets(v4_bytes.data(), buffer);
     output.assign(formatted.data(), formatted.size());
 }
 

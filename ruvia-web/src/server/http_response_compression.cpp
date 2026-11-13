@@ -16,8 +16,6 @@
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_codec.h"
 
-#include "http/http_compressible_media_type.h"
-
 namespace ruvia::detail {
 namespace {
 
@@ -51,7 +49,7 @@ namespace {
         return true;
     }
     if (const auto content_type = response.header("Content-Type");
-        !content_type.has_value() || !http_media_type_compressible(*content_type)) {
+        !content_type.has_value() || !is_http_media_type_compressible(*content_type)) {
         return true;
     }
     const bool has_cache_control = response.header("Cache-Control").has_value();

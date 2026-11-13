@@ -457,21 +457,6 @@ http_client_request& http_client_request::configure(http_client_request_options 
     request_options_ = std::move(options);
     return *this;
 }
-http_client_request& http_client_request::redirect_policy(
-    move_only_function<task<bool>(http_origin_view, stop_token)> policy) {
-    if (consumed_) {
-        throw std::logic_error("HTTP request builder was consumed");
-    }
-    redirect_policy_ = std::move(policy);
-    return *this;
-}
-http_client_request& http_client_request::redirect_policy(http_client_redirect_observer policy) {
-    return on_redirect(std::move(policy));
-}
-http_client_request& http_client_request::redirect_policy(
-    http_client_async_redirect_observer policy) {
-    return on_redirect(std::move(policy));
-}
 http_client_request& http_client_request::on_redirect(http_client_redirect_observer observer) {
     if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
@@ -716,47 +701,12 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             }
         }
 
-        const bool has_custom_policy = static_cast<bool>(request.redirect_policy_) ||
-                                       static_cast<bool>(request.redirect_observer_) ||
+        const bool has_custom_policy = static_cast<bool>(request.redirect_observer_) ||
                                        static_cast<bool>(request.async_redirect_observer_);
         auto next_pool = request.client_.pool_owner_;
         if (next->cross_origin()) {
-            if (request.redirect_policy_) {
-                stop_source deadline_stop;
-                stop_group cancellation{request.client_.options_.stop_token_,
-                    request.client_.host_stop_token_, deadline_stop.token()};
-                worker_timer_registration timer;
-                if (const auto deadline_value = total.deadline()) {
-                    (void)request.client_.pool_->worker().schedule_timer(timer, *deadline_value,
-                        [&deadline_stop](worker_timer_outcome outcome) noexcept {
-                            if (outcome == worker_timer_outcome::expired) {
-                                deadline_stop.request_stop();
-                            }
-                        });
-                }
-                const auto require_live_policy = [&]() {
-                    if (total.expired()) {
-                        throw http_client_error(std::make_error_code(std::errc::timed_out),
-                            "HTTP redirect policy deadline expired", std::nullopt,
-                            &response.connection_info(), true, redirects);
-                    }
-                    if (cancellation.token().stop_requested()) {
-                        throw http_client_error(
-                            std::make_error_code(std::errc::operation_canceled),
-                            "HTTP redirect policy cancelled", std::nullopt,
-                            &response.connection_info(), true, redirects);
-                    }
-                };
-                require_live_policy();
-                const auto accepted =
-                    co_await request.redirect_policy_(next->origin(), cancellation.token());
-                require_live_policy();
-                if (!accepted) {
-                    co_return response;
-                }
-                request.client_.registration_.require_active();
-            } else if (!has_custom_policy && request.client_.scheme() == http_scheme::https &&
-                       next->scheme() != http_scheme::https) {
+            if (!has_custom_policy && request.client_.scheme() == http_scheme::https &&
+                next->scheme() != http_scheme::https) {
                 co_return response;
             }
             auto authority =

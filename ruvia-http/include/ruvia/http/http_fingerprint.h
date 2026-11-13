@@ -12,6 +12,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http2_observation.h"
+#include "ruvia/http/http3_connection.h"
 
 namespace ruvia {
 
@@ -63,18 +64,10 @@ public:
         return supported_groups_;
     }
     std::span<const std::uint16_t> supported_groups() const&& = delete;
-    [[nodiscard]] std::span<const std::uint16_t> elliptic_curves() const& noexcept RUVIA_LIFETIMEBOUND {
-        return supported_groups_;
-    }
-    std::span<const std::uint16_t> elliptic_curves() const&& = delete;
     [[nodiscard]] std::span<const std::uint8_t> ec_point_formats() const& noexcept RUVIA_LIFETIMEBOUND {
         return ec_point_formats_;
     }
     std::span<const std::uint8_t> ec_point_formats() const&& = delete;
-    [[nodiscard]] std::span<const std::uint8_t> point_formats() const& noexcept RUVIA_LIFETIMEBOUND {
-        return ec_point_formats_;
-    }
-    std::span<const std::uint8_t> point_formats() const&& = delete;
     [[nodiscard]] std::span<const std::pmr::string> alpn() const& noexcept RUVIA_LIFETIMEBOUND {
         return alpn_;
     }
@@ -91,10 +84,6 @@ public:
         return server_name_;
     }
     std::string_view server_name() const&& = delete;
-    [[nodiscard]] std::string_view sni() const& noexcept RUVIA_LIFETIMEBOUND {
-        return server_name_;
-    }
-    std::string_view sni() const&& = delete;
 
     [[nodiscard]] std::pmr::string ja3_raw(std::pmr::memory_resource* resource = nullptr) const;
     [[nodiscard]] std::pmr::string ja3(std::pmr::memory_resource* resource = nullptr) const;
@@ -193,4 +182,59 @@ private:
     phase phase_{phase::collecting};
 };
 
+struct http3_fingerprint_options final {
+    std::size_t max_frames_{32};
+    std::size_t max_bytes_{16384};
+    std::pmr::memory_resource* resource_{nullptr};
+};
+
+// Collects HTTP/3 frame and QPACK field observations up to the end of the
+// client's first request header block and builds a deterministic HTTP/3
+// fingerprint string: "CONTROL_FRAMES|FIRST_STREAM_ID|PSEUDO_HEADER_ORDER".
+class http3_fingerprint_collector final {
+public:
+    explicit http3_fingerprint_collector(std::pmr::memory_resource* resource = nullptr);
+    explicit http3_fingerprint_collector(http3_fingerprint_options options);
+
+    void observe_frame(const http3_frame_metadata& frame) noexcept;
+    void observe_field(const http3_field_metadata& field) noexcept;
+    void reset() noexcept;
+
+    static void on_frame(void* context, const http3_frame_metadata& frame) noexcept {
+        static_cast<http3_fingerprint_collector*>(context)->observe_frame(frame);
+    }
+    static void on_field(void* context, const http3_field_metadata& field) noexcept {
+        static_cast<http3_fingerprint_collector*>(context)->observe_field(field);
+    }
+
+    [[nodiscard]] constexpr bool complete() const noexcept {
+        return phase_ == phase::complete;
+    }
+    [[nodiscard]] constexpr bool failed() const noexcept {
+        return phase_ == phase::failed;
+    }
+    [[nodiscard]] std::string_view fingerprint() const& noexcept RUVIA_LIFETIMEBOUND {
+        return phase_ == phase::complete ? std::string_view(fingerprint_) : std::string_view{};
+    }
+    std::string_view fingerprint() const&& = delete;
+
+private:
+    enum class phase : std::uint8_t {
+        collecting,
+        complete,
+        failed,
+    };
+
+    std::pmr::memory_resource* resource_;
+    std::pmr::string control_frames_;
+    std::pmr::string pseudo_headers_;
+    std::pmr::string fingerprint_;
+    std::size_t max_frames_{32};
+    std::size_t max_bytes_{16384};
+    std::size_t frames_seen_{0};
+    std::size_t bytes_seen_{0};
+    std::int64_t first_request_stream_id_{-1};
+    bool saw_regular_header_{false};
+    phase phase_{phase::collecting};
+};
 }  // namespace ruvia

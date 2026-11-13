@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <limits>
 #include <memory_resource>
@@ -162,5 +163,95 @@ private:
     impl_type* impl_{nullptr};
     phase phase_{phase::active};
 };
+
+class http_worker_codecs;
+
+// RAII lease for a pooled incremental encoder from http_worker_codecs.
+// Destroying a non-discarded lease resets and returns the encoder to the pool;
+// discard() destroys a failed encoder instead of pooling it.
+class http_stream_encoder_lease final {
+public:
+    http_stream_encoder_lease(const http_stream_encoder_lease&) = delete;
+    http_stream_encoder_lease& operator=(const http_stream_encoder_lease&) = delete;
+    http_stream_encoder_lease(http_stream_encoder_lease&& other) noexcept
+        : codecs_(std::exchange(other.codecs_, nullptr)),
+          encoder_(std::exchange(other.encoder_, nullptr)) {}
+    ~http_stream_encoder_lease() {
+        release();
+    }
+
+    [[nodiscard]] http_content_encoder& encoder() & noexcept RUVIA_LIFETIMEBOUND {
+        return *encoder_;
+    }
+    http_content_encoder& encoder() && = delete;
+
+    void discard() noexcept;
+
+private:
+    friend class http_worker_codecs;
+
+    http_stream_encoder_lease(http_worker_codecs& codecs, http_content_encoder& encoder) noexcept
+        : codecs_(&codecs),
+          encoder_(&encoder) {}
+
+    void release() noexcept;
+
+    http_worker_codecs* codecs_{nullptr};
+    http_content_encoder* encoder_{nullptr};
+};
+
+// Per-worker reusable buffered and streaming content encoder pool.
+class http_worker_codecs final {
+public:
+    explicit http_worker_codecs(std::pmr::memory_resource* resource = nullptr) noexcept;
+    ~http_worker_codecs();
+    http_worker_codecs(const http_worker_codecs&) = delete;
+    http_worker_codecs& operator=(const http_worker_codecs&) = delete;
+
+    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding);
+    [[nodiscard]] http_stream_encoder_lease acquire_stream_encoder(http_content_coding coding);
+
+private:
+    friend class http_stream_encoder_lease;
+
+    static constexpr std::size_t max_pooled_stream_encoders = 8;
+
+    struct stream_encoder_pool_type final {
+        std::array<http_content_encoder*, max_pooled_stream_encoders> free_{};
+        std::size_t count_{0};
+    };
+
+    struct coding_encoders_type final {
+        coding_encoders_type(http_content_coding coding, std::pmr::memory_resource* resource) noexcept
+            : buffered_(coding, resource) {}
+
+        http_content_encode_context buffered_;
+        stream_encoder_pool_type streaming_;
+    };
+
+    [[nodiscard]] coding_encoders_type& encoders(http_content_coding coding);
+    void release_stream_encoder(http_content_encoder& encoder) noexcept;
+    void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
+
+    std::pmr::memory_resource* resource_;
+    coding_encoders_type gzip_;
+    coding_encoders_type deflate_;
+    coding_encoders_type brotli_;
+    coding_encoders_type zstd_;
+};
+
+inline void http_stream_encoder_lease::release() noexcept {
+    if (encoder_ != nullptr) {
+        auto* const codecs = std::exchange(codecs_, nullptr);
+        codecs->release_stream_encoder(*std::exchange(encoder_, nullptr));
+    }
+}
+
+inline void http_stream_encoder_lease::discard() noexcept {
+    if (encoder_ != nullptr) {
+        auto* const codecs = std::exchange(codecs_, nullptr);
+        codecs->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
+    }
+}
 
 }  // namespace ruvia

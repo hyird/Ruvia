@@ -12,10 +12,12 @@
 #include <string_view>
 #include <vector>
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client_ip.h"
+#include "ruvia/http/http_conditional_request.h"
 #include "ruvia/http/http_content_encoder.h"
 #include "ruvia/http/http_cors.h"
 #include "ruvia/http/http_field_section.h"
@@ -310,9 +312,9 @@ TEST(RuviaHttpPublicApi, hop_by_hop_fields_and_connection_nomination) {
 
     EXPECT_TRUE(ruvia::is_http_hop_by_hop_field_name("Proxy-Authorization"));
     EXPECT_TRUE(ruvia::is_http_hop_by_hop_field_name("Transfer-Encoding"));
-    EXPECT_TRUE(ruvia::is_http_hop_by_hop_request_field("X-Custom-Hop", nominated));
-    EXPECT_TRUE(ruvia::is_http_hop_by_hop_request_field("Upgrade", nominated, false));
-    EXPECT_FALSE(ruvia::is_http_hop_by_hop_request_field("Upgrade", nominated, true));
+    EXPECT_TRUE(ruvia::is_http_hop_by_hop_or_nominated_field("X-Custom-Hop", nominated));
+    EXPECT_TRUE(ruvia::is_http_hop_by_hop_or_nominated_field("Upgrade", nominated, false));
+    EXPECT_FALSE(ruvia::is_http_hop_by_hop_or_nominated_field("Upgrade", nominated, true));
 
     EXPECT_EQ(nominated.rebuild_connection_field(true, true),
         "Upgrade, x-custom-hop, x-second-hop");
@@ -572,7 +574,7 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     ASSERT_TRUE(parsed.has_value());
     EXPECT_EQ(parsed->legacy_version(), 0x0303U);
     EXPECT_EQ(parsed->version(), 0x0304U);
-    EXPECT_EQ(parsed->sni(), "example.com");
+    EXPECT_EQ(parsed->server_name(), "example.com");
     EXPECT_EQ(parsed->ja3_raw(), "771,4865-49199,0-10-11-13-16-43,29-23,0");
     EXPECT_EQ(parsed->ja3().size(), 32U);
 
@@ -632,6 +634,100 @@ TEST(RuviaHttpPublicApi, tls_client_hello_and_http2_akamai_fingerprints) {
     EXPECT_FALSE(collector.failed());
     EXPECT_EQ(collector.fingerprint(),
         "1:65536;2:0;4:6291456;6:262144|15663105|3:0:0:201|m,a,s,p");
+}
+
+TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_etag_and_http3_fingerprint) {
+    // 1. Media type compressibility allowlist
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("text/html; charset=utf-8"));
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("application/problem+json"));
+    EXPECT_TRUE(ruvia::is_http_media_type_compressible("application/wasm"));
+    EXPECT_FALSE(ruvia::is_http_media_type_compressible("application/zip"));
+    EXPECT_FALSE(ruvia::is_http_media_type_compressible("image/png"));
+
+    // 2. Reusable http_worker_codecs and http_stream_encoder_lease
+    ruvia::http_worker_codecs codecs;
+    {
+        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        std::pmr::string out;
+        lease.encoder().write("streamed payload", out, true);
+        lease.encoder().finish(out);
+        const auto decoded = ruvia::decode_http_content(
+            ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
+        EXPECT_EQ(std::get<std::pmr::string>(decoded), "streamed payload");
+    }
+    {
+        // Second lease reuses the reset encoder from the pool.
+        auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
+        std::pmr::string out;
+        lease.encoder().write("reused encoder payload", out);
+        lease.encoder().finish(out);
+        const auto decoded = ruvia::decode_http_content(
+            ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
+        ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
+        EXPECT_EQ(std::get<std::pmr::string>(decoded), "reused encoder payload");
+    }
+
+    // 3. Sans-I/O http_cookie_jar
+    const auto now = std::chrono::system_clock::now();
+    ruvia::http_cookie_jar jar(
+        ruvia::http_scheme::https, "sub.example.com",
+        {.max_cookies_ = 8, .max_cookie_bytes_ = 1024});
+    jar.add_configured_cookie("static", "1");
+    EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "sid=abc; Path=/app; Secure; HttpOnly", now));
+    EXPECT_TRUE(jar.absorb_set_cookie("/app/login", "__Host-token=xyz; Path=/; Secure", now));
+    // __Host- with Domain must be rejected.
+    EXPECT_FALSE(
+        jar.absorb_set_cookie("/app/login", "__Host-bad=1; Domain=example.com; Path=/; Secure", now));
+    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now),
+        "sid=abc; static=1; __Host-token=xyz");
+    EXPECT_EQ(jar.cookie_header("/other", true, now), "static=1; __Host-token=xyz");
+    // Max-Age=0 deletes the stored cookie.
+    EXPECT_TRUE(jar.absorb_set_cookie("/app/logout", "sid=deleted; Path=/app; Max-Age=0", now));
+    EXPECT_EQ(jar.cookie_header("/app/dashboard", true, now), "static=1; __Host-token=xyz");
+
+    // 4. Single-value ETag validation, strong/weak comparison, and weakening
+    EXPECT_TRUE(ruvia::is_valid_http_entity_tag("\"v1\""));
+    EXPECT_TRUE(ruvia::is_strong_http_entity_tag("\"v1\""));
+    EXPECT_FALSE(ruvia::is_weak_http_entity_tag("\"v1\""));
+    EXPECT_TRUE(ruvia::is_weak_http_entity_tag("W/\"v1\""));
+    EXPECT_FALSE(ruvia::is_valid_http_entity_tag("v1"));
+    EXPECT_TRUE(ruvia::http_strong_etag_equals("\"v1\"", "\"v1\""));
+    EXPECT_FALSE(ruvia::http_strong_etag_equals("W/\"v1\"", "\"v1\""));
+    EXPECT_TRUE(ruvia::http_weak_etag_equals("W/\"v1\"", "\"v1\""));
+    EXPECT_EQ(ruvia::weaken_http_etag("\"v1\""), "W/\"v1\"");
+    EXPECT_EQ(ruvia::weaken_http_etag("W/\"v1\""), "W/\"v1\"");
+
+    // 5. HTTP/3 fingerprint collector
+    ruvia::http3_fingerprint_collector h3_collector;
+    h3_collector.observe_frame({
+        .observation_sequence_ = 0,
+        .stream_id_ = 2,
+        .type_ = ruvia::http3_frame_type::settings,
+        .payload_length_ = 12,
+    });
+    h3_collector.observe_field({
+        .stream_id_ = 0,
+        .section_ = ruvia::http3_field_section_kind::header,
+        .phase_ = ruvia::http3_field_observation_phase::begin,
+    });
+    for (const std::string_view pseudo : {":method", ":authority", ":scheme", ":path"}) {
+        h3_collector.observe_field({
+            .stream_id_ = 0,
+            .section_ = ruvia::http3_field_section_kind::header,
+            .phase_ = ruvia::http3_field_observation_phase::field,
+            .name_ = pseudo,
+            .value_ = "x",
+        });
+    }
+    h3_collector.observe_field({
+        .stream_id_ = 0,
+        .section_ = ruvia::http3_field_section_kind::header,
+        .phase_ = ruvia::http3_field_observation_phase::end,
+    });
+    EXPECT_TRUE(h3_collector.complete());
+    EXPECT_FALSE(h3_collector.failed());
+    EXPECT_EQ(h3_collector.fingerprint(), "4:12|0|m,a,s,p");
 }
 
 }  // namespace

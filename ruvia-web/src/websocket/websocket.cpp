@@ -380,4 +380,14 @@ task<void> websocket_message_writer::submit(std::string_view chunk, bool final, 
         final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
 }
 
+task<void> websocket_message_writer::submit_owned(
+    std::pmr::string&& chunk, bool final, operation_options operation) {
+    registration_.require_active();
+    if (!message_open()) {
+        throw std::logic_error("websocket message writer is finished");
+    }
+    return owner_->write(opcode_, std::move(chunk), compress_, std::move(operation),
+        final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
+}
+
 }  // namespace ruvia

@@ -548,7 +548,7 @@ TEST(Ruvia, http_client_origin_less_alias_follows_alt_svc_per_route) {
     peer.alt_svc_ = "h3=\":" + std::to_string(alternative_port) + "\"";
     std::vector<std::uint16_t> validated_ports;
     ruvia::http_client_config config{.base_url_ = "https://"};
-    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&validated_ports](std::string_view, std::uint16_t port) {
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&validated_ports](const ruvia::ip_address&, std::uint16_t port) {
         validated_ports.push_back(port);
         return true;
     });
@@ -830,7 +830,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
     peer.redirect_location_ = "http://" + other_authority + "/landing";
     ruvia::http_client_config config{.base_url_ = "http://"};
     config.request_timeout_ = 5s;
-    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](std::string_view ip, std::uint16_t) { return ip == "127.0.0.1"; });
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](const ruvia::ip_address& ip, std::uint16_t) { return ip == *ruvia::ip_address::parse("127.0.0.1"); });
     run_client(io, attachment, {&peer, &other_peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
         const auto handle = client.client();
         const auto to = [](std::string_view value) {
@@ -864,7 +864,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
         EXPECT_EQ(unfollowed.status().value(), 302);
         (void)co_await unfollowed.text();
         // An accepted origin is reached through this alias with its authority.
-        auto followed = co_await handle.get("/redirect").configure(to(authority)).redirect_policy([](ruvia::http_origin_view, ruvia::stop_token) -> ruvia::task<bool> {
+        auto followed = co_await handle.get("/redirect").configure(to(authority)).on_redirect([](const ruvia::http_client_redirect_hop&, ruvia::stop_token) -> ruvia::task<bool> {
                                                                                      co_return true;
                                                                                  })
                             .send();
@@ -882,7 +882,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_requires_an_address_validat
     auto attachment = ruvia::attach_event_loop(io);
     EXPECT_THROW(ruvia::http_client(attachment.loop(), {.base_url_ = "http://"}), std::invalid_argument);
     ruvia::http_client_config cookies{.base_url_ = "https://"};
-    cookies.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](std::string_view, std::uint16_t) { return true; });
+    cookies.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](const ruvia::ip_address&, std::uint16_t) { return true; });
     cookies.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
     EXPECT_THROW(ruvia::http_client(attachment.loop(), cookies), std::invalid_argument);
 }
@@ -905,7 +905,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         const std::array moved{ruvia::http_client_endpoint_address("127.0.0.2", peer.port())};
         handle.update_dns(moved);
         auto first = co_await handle.get("/first").send();
-        EXPECT_EQ(first.connection_info().peer_ip_, "127.0.0.2");
+        EXPECT_EQ(first.connection_info().peer_ip_.to_string(), "127.0.0.2");
         (void)co_await first.text();
         // The refresh finds localhost elsewhere and retires the moved connection.
         for (int attempt = 0; attempt != 400 && !peer.connections_[0].closed_; ++attempt) {
@@ -914,7 +914,7 @@ TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_c
         EXPECT_TRUE(peer.connections_[0].closed_);
         EXPECT_GE(handle.stats().dns_refreshes_, 1U);
         auto second = co_await handle.get("/second").send();
-        EXPECT_NE(second.connection_info().peer_ip_, "127.0.0.2");
+        EXPECT_NE(second.connection_info().peer_ip_.to_string(), "127.0.0.2");
         (void)co_await second.text();
         lookups.join();
     });
@@ -1061,7 +1061,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
             handle.update_dns(pinned);
 
             auto first = co_await handle.get("/first").send();
-            EXPECT_EQ(first.connection_info().peer_ip_, "127.0.0.2");
+            EXPECT_EQ(first.connection_info().peer_ip_.to_string(), "127.0.0.2");
             (void)co_await first.text();
 
             // Non-destructive DNS resolution returns sorted, deduplicated addresses
@@ -1082,7 +1082,7 @@ TEST(Ruvia, http_client_non_destructive_dns_resolution_preserves_active_connecti
             EXPECT_FALSE(peer.connections_[0].closed_);
             auto second = co_await handle.get("/second").send();
             EXPECT_TRUE(second.connection_info().reused_);
-            EXPECT_EQ(second.connection_info().peer_ip_, "127.0.0.2");
+            EXPECT_EQ(second.connection_info().peer_ip_.to_string(), "127.0.0.2");
             (void)co_await second.text();
             lookups.join();
         });

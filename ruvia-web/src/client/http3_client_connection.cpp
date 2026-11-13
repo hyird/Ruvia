@@ -39,6 +39,7 @@
 #include "client/http_client_transport_error.h"
 #include "http3/http3_quic_runtime.h"
 #include "http3/http3_udp_receive.h"
+#include "server/peer_address.h"
 #include "tls/tls_peer.h"
 #include "tls/tls_random.h"
 
@@ -1079,15 +1080,17 @@ public:
         if (!connect_endpoint_) {
             throw std::logic_error("HTTP/3 connect requires a selected resolver endpoint");
         }
+        const auto resolved_peer_ip =
+            to_ip_address(connect_endpoint_->address()).normalized_ipv4();
         if (pool_.config().address_validator_ &&
-            !(*pool_.config().address_validator_)(connect_endpoint_->address().to_string(), connect_endpoint_->port())) {
+            !(*pool_.config().address_validator_)(resolved_peer_ip, connect_endpoint_->port())) {
             throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP/3 dial address rejected");
         }
         remote_ = *connect_endpoint_;
         socket_ = make_pmr_object<asio::ip::udp::socket>(process_resource(), pool_.io_context());
         socket_->open(remote_.protocol());
         socket_->connect(remote_);
-        peer_ip_ = remote_.address().to_string();
+        peer_ip_ = resolved_peer_ip;
         local_ = socket_->local_endpoint();
         connect_duration_ = std::chrono::steady_clock::now() - connect_started;
         tls_started_at_ = std::chrono::steady_clock::now();
@@ -1323,7 +1326,7 @@ public:
     std::exception_ptr failure_;
     std::uint64_t generation_{};
     std::uint64_t connection_id_{};
-    std::pmr::string peer_ip_{process_resource()};
+    ip_address peer_ip_{};
     std::size_t requests_{};
     std::chrono::steady_clock::time_point tls_started_at_;
     std::chrono::steady_clock::duration connect_duration_{}, tls_duration_{};

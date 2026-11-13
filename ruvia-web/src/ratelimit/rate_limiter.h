@@ -122,6 +122,9 @@ public:
     [[nodiscard]] bool has_default_rule() const noexcept {
         return default_rule_per_worker_.has_value();
     }
+    [[nodiscard]] std::size_t capacity() const noexcept {
+        return slots_.size();
+    }
 
     // Every decision takes the instant it is made for as a value, so the table
     // itself never reads a clock. Instants must not run backwards per key; an
@@ -134,6 +137,11 @@ public:
     [[nodiscard]] std::optional<rate_limit_rejection> allow_route(std::uintptr_t route_scope,
         const void* rule_declaration, std::string_view remote_address, const rate_limit_rule& rule,
         std::chrono::steady_clock::time_point now) noexcept;
+
+    [[nodiscard]] rate_limit_decision decide_default(
+        std::string_view key, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] rate_limit_decision decide_rule(rate_limit_scope scope, std::string_view key,
+        const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
 
 private:
     [[nodiscard]] std::optional<rate_limit_rejection> allow(rate_limit_scope scope, std::string_view key,

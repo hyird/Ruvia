@@ -92,12 +92,6 @@ private:
 [[nodiscard]] bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name,
     const http_connection_nominated_fields& nominated, bool retain_upgrade = false) noexcept;
 
-[[nodiscard]] bool is_http_hop_by_hop_request_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade = false) noexcept;
-
-[[nodiscard]] bool is_http_hop_by_hop_response_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade = false) noexcept;
-
 [[nodiscard]] bool is_http_hop_by_hop_trailer_field(std::string_view field_name,
     const http_connection_nominated_fields& nominated = http_connection_nominated_fields{}) noexcept;
 

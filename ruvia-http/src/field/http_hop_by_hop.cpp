@@ -191,16 +191,6 @@ bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name,
     return is_http_hop_by_hop_field_name(field_name) || nominated.contains(field_name);
 }
 
-bool is_http_hop_by_hop_request_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
-    return is_http_hop_by_hop_or_nominated_field(field_name, nominated, retain_upgrade);
-}
-
-bool is_http_hop_by_hop_response_field(std::string_view field_name,
-    const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
-    return is_http_hop_by_hop_or_nominated_field(field_name, nominated, retain_upgrade);
-}
-
 bool is_http_hop_by_hop_trailer_field(
     std::string_view field_name, const http_connection_nominated_fields& nominated) noexcept {
     return is_http_hop_by_hop_field_name(field_name) || nominated.contains(field_name);

@@ -8,6 +8,9 @@
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_observation.h"
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+#include "ruvia/http/http3_connection.h"
+#endif
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/web/context.h"
 
@@ -148,6 +151,43 @@ private:
     const http2_header_metadata& metadata_;
 };
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+class http3_frame_record final {
+public:
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
+    [[nodiscard]] const http3_frame_metadata& metadata() const noexcept {
+        return metadata_;
+    }
+
+private:
+    friend struct detail::server_observation_access;
+    constexpr http3_frame_record(std::uint64_t connection_id, const http3_frame_metadata& metadata) noexcept
+        : connection_id_(connection_id),
+          metadata_(metadata) {}
+    std::uint64_t connection_id_;
+    const http3_frame_metadata& metadata_;
+};
+
+class http3_field_record final {
+public:
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
+    [[nodiscard]] const http3_field_metadata& metadata() const noexcept {
+        return metadata_;
+    }
+
+private:
+    friend struct detail::server_observation_access;
+    constexpr http3_field_record(std::uint64_t connection_id, const http3_field_metadata& metadata) noexcept
+        : connection_id_(connection_id),
+          metadata_(metadata) {}
+    std::uint64_t connection_id_;
+    const http3_field_metadata& metadata_;
+};
+#endif
 
 namespace detail {
 using tls_client_hello_callback_ref = callback_ref<void(const tls_client_hello_record&) noexcept>;
@@ -155,6 +195,10 @@ using http2_input_callback_ref = callback_ref<void(const http2_input_record&) no
 #if defined(RUVIA_ENABLE_HTTP2)
 using http2_frame_callback_ref = callback_ref<void(const http2_frame_record&) noexcept>;
 using http2_headers_callback_ref = callback_ref<void(const http2_headers_record&) noexcept>;
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+using http3_frame_callback_ref = callback_ref<void(const http3_frame_record&) noexcept>;
+using http3_field_callback_ref = callback_ref<void(const http3_field_record&) noexcept>;
 #endif
 }  // namespace detail
 
@@ -167,6 +211,10 @@ using http2_input_callback = move_only_function<void(const http2_input_record&) 
 #if defined(RUVIA_ENABLE_HTTP2)
 using http2_frame_callback = move_only_function<void(const http2_frame_record&) noexcept>;
 using http2_headers_callback = move_only_function<void(const http2_headers_record&) noexcept>;
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+using http3_frame_callback = move_only_function<void(const http3_frame_record&) noexcept>;
+using http3_field_callback = move_only_function<void(const http3_field_record&) noexcept>;
 #endif
 
 }  // namespace ruvia

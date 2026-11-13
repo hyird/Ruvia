@@ -33,6 +33,10 @@ struct http_server_callbacks final {
     http2_frame_callback http2_frame_;
     http2_headers_callback http2_headers_;
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+    http3_frame_callback http3_frame_;
+    http3_field_callback http3_field_;
+#endif
     connection_admission_callback connection_admission_;
     connection_open_callback connection_open_;
     connection_close_callback connection_close_;

@@ -698,8 +698,9 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     for (;;) {
         // Pipelined responses held back for one coalesced write. Bound to the
         // work set, which keeps any held output until it is written.
-        http1_response_output<stream_type> response_output(
-            stream, response_head, work_set.deferred_access_, options_.access_log_, remote_address, scanner_entry);
+        http1_response_output<stream_type> response_output(stream, response_head,
+            work_set.deferred_access_, options_.access_log_,
+            base_route_services.get_conn_info().remote().address(), scanner_entry);
 
         request_memory request_memory_value(options_.server_.request_arena_initial_bytes_, work_set.arena_block_);
         // Work-set storage outlives this arena. Release its descriptor block
@@ -1042,8 +1043,9 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 std::make_exception_ptr(rejected->exception()), parsed_value, routes_value,
                 request_memory_value, admission->services(), response));
         }
+        const auto peer_ip = base_route_services.get_conn_info().remote().address();
         http_response_tail fallback_tail(parsed_value.request(),
-            http_response_coding_policy::disabled(), remote_address, remote_address, request_start);
+            http_response_coding_policy::disabled(), peer_ip, peer_ip, request_start);
         auto& tail = admission ? admission->tail() : fallback_tail;
         auto connection_plan = request_completion->connection_plan();
         if (request_completion->buffered_response() != nullptr) {

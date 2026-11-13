@@ -80,21 +80,18 @@ http1_deferred_access_log::http1_deferred_access_log(std::pmr::polymorphic_alloc
       text_(allocator) {}
 
 void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
-    std::string_view remote_address, std::string_view client_address,
-    std::chrono::steady_clock::time_point start, http_status_code status,
-    const request_io_metrics& io_metrics) {
+    ip_address client_address, std::chrono::steady_clock::time_point start,
+    http_status_code status, const request_io_metrics& io_metrics) {
     const auto method = request.method();
     const auto path = request.path();
-    const auto client = client_address == remote_address ? std::string_view{} : client_address;
     const auto text_begin = text_.size();
-    const auto required_text = text_begin + method.size() + path.size() + client.size();
+    const auto required_text = text_begin + method.size() + path.size();
     if (required_text > text_.capacity()) {
         text_.reserve(
             std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
     }
     text_.append(method);
     text_.append(path);
-    text_.append(client);
     if (entries_.size() == entries_.capacity()) {
         entries_.reserve(std::max<std::size_t>(8, entries_.capacity() * 2));
     }
@@ -103,7 +100,7 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
         .text_begin_ = text_begin,
         .method_bytes_ = method.size(),
         .path_bytes_ = path.size(),
-        .client_address_bytes_ = client.size(),
+        .client_address_ = client_address,
         .start_ = start,
         .io_metrics_ = io_metrics,
         .known_method_ = request.known_method(),
@@ -113,24 +110,20 @@ void http1_deferred_access_log::defer(std::size_t head_end, const http_request& 
 }
 
 void http1_deferred_access_log::complete(
-    const access_log_sink& access_log, std::string_view remote_address, std::size_t written) noexcept {
+    const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept {
     const std::string_view text = text_;
     for (const auto& entry : entries_) {
         if (entry.head_end_ > written) {
             break;
         }
         const auto fields = text.substr(entry.text_begin_);
-        const auto client_address =
-            entry.client_address_bytes_ == 0
-                ? remote_address
-                : fields.substr(entry.method_bytes_ + entry.path_bytes_, entry.client_address_bytes_);
         access_log.invoke(access_log_record_access::make({
             .method_ = fields.substr(0, entry.method_bytes_),
             .known_method_ = entry.known_method_,
             .path_ = fields.substr(entry.method_bytes_, entry.path_bytes_),
             .protocol_version_ = entry.protocol_version_,
             .remote_address_ = remote_address,
-            .client_address_ = client_address,
+            .client_address_ = entry.client_address_,
             .status_ = entry.status_,
             .duration_micros_ = access_log_record_access::duration_since(entry.start_),
             .db_count_ = entry.io_metrics_.db_count_,

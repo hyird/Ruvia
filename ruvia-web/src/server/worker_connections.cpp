@@ -591,7 +591,7 @@ http_server_stats worker_connections::stats() const {
         }
         const auto active = gauge->count_.active();
         if (gauge->serving_.load(std::memory_order_relaxed) || active != 0) {
-            result.listeners_.push_back({.address_ = std::pmr::string(gauge->endpoint_.address().to_string(), process_resource()),
+            result.listeners_.push_back({.address_ = to_ip_address(gauge->endpoint_.address()),
                 .port_ = gauge->endpoint_.port(),
                 .active_connections_ = active});
         }

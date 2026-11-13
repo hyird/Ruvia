@@ -141,4 +141,9 @@ private:
 // before using codings(); an empty span in either error state is not identity.
 [[nodiscard]] http_content_coding_field_result request_content_coding(
     const http_request& request) noexcept;
+
+// Allowlist compressibility policy for dynamic response compression and static
+// precompression: text/*, +json, +xml, and common text/font/wasm/icon media
+// types, excluding any type naming a zip container.
+[[nodiscard]] bool is_http_media_type_compressible(std::string_view content_type_value) noexcept;
 }  // namespace ruvia

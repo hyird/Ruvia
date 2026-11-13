@@ -1,7 +1,9 @@
 #pragma once
 
 #include <ctime>
+#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_known_method.h"
@@ -89,4 +91,12 @@ struct http_etag_preconditions final {
 [[nodiscard]] bool http_if_range_allows(std::string_view header_value, std::string_view etag,
     std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept;
 
+// Single-value RFC 9110 §8.8.2 entity-tag validation, comparison, and weakening.
+[[nodiscard]] bool is_valid_http_entity_tag(std::string_view value) noexcept;
+[[nodiscard]] bool is_weak_http_entity_tag(std::string_view value) noexcept;
+[[nodiscard]] bool is_strong_http_entity_tag(std::string_view value) noexcept;
+[[nodiscard]] bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept;
+[[nodiscard]] bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept;
+[[nodiscard]] std::pmr::string weaken_http_etag(
+    std::string_view etag, std::pmr::memory_resource* resource = nullptr);
 }  // namespace ruvia

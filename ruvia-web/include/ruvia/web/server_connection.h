@@ -1,10 +1,14 @@
 #pragma once
 
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
 #include <optional>
 #include <span>
+#include <string>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/operation_options.h"
@@ -111,8 +115,16 @@ public:
     // partial write cannot be withdrawn) and throws std::system_error
     // (timed_out or operation_canceled); a stop requested before the operation
     // starts sends nothing. The server's write_timeout_ still applies.
+    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
+        return write_owned(std::move(bytes), std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> write(string_type&&, operation_options = {}) && = delete;
     // Ends the send direction: TCP shuts down its send side, TLS sends
     // close_notify. Reading remains available until the peer ends its own.
     // Writing afterwards throws std::logic_error; finishing again does nothing.
@@ -134,6 +146,7 @@ private:
         const worker_handle& worker_value, void* target, read_type read, write_type write, finish_type finish_value,
         abort_type abort_value) noexcept;
     void require_active() const;
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
 
     const worker_handle& worker_;
     void* target_;

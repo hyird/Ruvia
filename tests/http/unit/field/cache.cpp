@@ -16,7 +16,7 @@ TEST(Ruvia, parse_cache_control_flags_and_ages) {
         static_cast<std::uint16_t>(ruvia::cache_control_directive::immutable))));
     EXPECT_TRUE(cc.max_age().has_value());
     EXPECT_EQ(*cc.max_age(), std::uint64_t{60});
-    EXPECT_EQ(*cc.s_max_age(), std::uint64_t{120});
+    EXPECT_EQ(*cc.s_maxage(), std::uint64_t{120});
     EXPECT_EQ(*cc.stale_while_revalidate(), std::uint64_t{30});
 }
 
@@ -82,7 +82,7 @@ TEST(Ruvia, parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
     const auto cc = ruvia::parse_cache_control(
         R"(max-age="6\0", s-maxage="1\20", stale-while-revalidate="\30", stale-if-error="4\5")");
     EXPECT_EQ(cc.max_age().value_or(0), std::uint64_t{60});
-    EXPECT_EQ(cc.s_max_age().value_or(0), std::uint64_t{120});
+    EXPECT_EQ(cc.s_maxage().value_or(0), std::uint64_t{120});
     EXPECT_EQ(cc.stale_while_revalidate().value_or(0), std::uint64_t{30});
     EXPECT_EQ(cc.stale_if_error().value_or(0), std::uint64_t{45});
 }
@@ -90,7 +90,7 @@ TEST(Ruvia, parse_cache_control_decodes_quoted_pairs_in_delta_seconds) {
 TEST(Ruvia, parse_cache_control_rejects_bad_delta_seconds) {
     const auto cc = ruvia::parse_cache_control("max-age=abc, s-maxage=");
     EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(!cc.s_max_age().has_value());
+    EXPECT_TRUE(!cc.s_maxage().has_value());
 }
 
 TEST(Ruvia, parse_cache_control_rejects_whitespace_around_equals) {
@@ -99,7 +99,7 @@ TEST(Ruvia, parse_cache_control_rejects_whitespace_around_equals) {
         "stale-if-error=\t45, no-cache =\"Set-Cookie\", private = auth, "
         "no-cache= \"ETag\", private= auth");
     EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_TRUE(!cc.s_max_age().has_value());
+    EXPECT_TRUE(!cc.s_maxage().has_value());
     EXPECT_TRUE(!cc.stale_while_revalidate().has_value());
     EXPECT_TRUE(!cc.stale_if_error().has_value());
     EXPECT_TRUE(!cc.has(ruvia::cache_control_directive::no_cache));
@@ -117,7 +117,7 @@ TEST(Ruvia, parse_cache_control_freshness_uses_first_occurrence) {
         "stale-while-revalidate=30, stale-while-revalidate=300, "
         "stale-if-error=45, stale-if-error=450");
     EXPECT_EQ(duplicated.max_age().value_or(0), std::uint64_t{60});
-    EXPECT_EQ(duplicated.s_max_age().value_or(0), std::uint64_t{120});
+    EXPECT_EQ(duplicated.s_maxage().value_or(0), std::uint64_t{120});
     EXPECT_EQ(duplicated.stale_while_revalidate().value_or(0), std::uint64_t{30});
     EXPECT_EQ(duplicated.stale_if_error().value_or(0), std::uint64_t{45});
 
@@ -126,7 +126,7 @@ TEST(Ruvia, parse_cache_control_freshness_uses_first_occurrence) {
     const auto invalid_first =
         ruvia::parse_cache_control("max-age=invalid, max-age=3600, s-maxage=, s-maxage=7200");
     EXPECT_TRUE(!invalid_first.max_age().has_value());
-    EXPECT_TRUE(!invalid_first.s_max_age().has_value());
+    EXPECT_TRUE(!invalid_first.s_maxage().has_value());
 }
 
 TEST(Ruvia, cache_control_field_parser_combines_repeated_lines) {
@@ -138,7 +138,7 @@ TEST(Ruvia, cache_control_field_parser_combines_repeated_lines) {
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::public_value));
     EXPECT_TRUE(cc.has(ruvia::cache_control_directive::no_transform));
     EXPECT_TRUE(!cc.max_age().has_value());
-    EXPECT_EQ(cc.s_max_age().value_or(0), std::uint64_t{120});
+    EXPECT_EQ(cc.s_maxage().value_or(0), std::uint64_t{120});
 }
 
 TEST(Ruvia, parse_cache_control_delta_seconds_overflow_saturates) {
@@ -146,7 +146,7 @@ TEST(Ruvia, parse_cache_control_delta_seconds_overflow_saturates) {
         "max-age=184467440737095516150, "
         "s-maxage=\"184467440737095516150\"");
     EXPECT_EQ(cc.max_age().value_or(0), (std::numeric_limits<std::uint64_t>::max)());
-    EXPECT_EQ(cc.s_max_age().value_or(0), (std::numeric_limits<std::uint64_t>::max)());
+    EXPECT_EQ(cc.s_maxage().value_or(0), (std::numeric_limits<std::uint64_t>::max)());
 }
 
 TEST(Ruvia, parse_cache_control_does_not_split_quoted_extension_values) {

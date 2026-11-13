@@ -771,4 +771,67 @@ void http_content_transcoder::reset() {
     phase_ = phase::active;
 }
 
+http_worker_codecs::http_worker_codecs(std::pmr::memory_resource* resource) noexcept
+    : resource_(detail::http_pmr_resource_or_default(resource)),
+      gzip_(http_content_coding::gzip, resource_),
+      deflate_(http_content_coding::deflate, resource_),
+      brotli_(http_content_coding::brotli, resource_),
+      zstd_(http_content_coding::zstd, resource_) {}
+
+http_worker_codecs::~http_worker_codecs() {
+    for (auto* pool : {&gzip_.streaming_, &deflate_.streaming_, &brotli_.streaming_, &zstd_.streaming_}) {
+        for (std::size_t i = 0; i < pool->count_; ++i) {
+            destroy_stream_encoder(*pool->free_[i]);
+        }
+        pool->count_ = 0;
+    }
+}
+
+http_content_encode_context& http_worker_codecs::encoder(http_content_coding coding) {
+    return encoders(coding).buffered_;
+}
+
+http_worker_codecs::coding_encoders_type& http_worker_codecs::encoders(http_content_coding coding) {
+    switch (coding) {
+        case http_content_coding::gzip:
+            return gzip_;
+        case http_content_coding::deflate:
+            return deflate_;
+        case http_content_coding::brotli:
+            return brotli_;
+        case http_content_coding::zstd:
+            return zstd_;
+        case http_content_coding::identity:
+            break;
+    }
+    throw std::logic_error("identity content coding has no encoder");
+}
+
+http_stream_encoder_lease http_worker_codecs::acquire_stream_encoder(http_content_coding coding) {
+    auto& pool = encoders(coding).streaming_;
+    if (pool.count_ != 0) {
+        return http_stream_encoder_lease(*this, *pool.free_[--pool.count_]);
+    }
+    return http_stream_encoder_lease(
+        *this, *detail::construct_http_pmr_object<http_content_encoder>(
+                   resource_, coding, resource_));
+}
+
+void http_worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexcept {
+    auto& pool = encoders(encoder.coding()).streaming_;
+    if (pool.count_ < pool.free_.size()) {
+        try {
+            encoder.reset();
+            pool.free_[pool.count_++] = &encoder;
+            return;
+        } catch (...) {
+        }
+    }
+    destroy_stream_encoder(encoder);
+}
+
+void http_worker_codecs::destroy_stream_encoder(http_content_encoder& encoder) noexcept {
+    detail::destroy_http_pmr_object(&encoder, resource_);
+}
+
 }  // namespace ruvia

@@ -41,7 +41,7 @@ namespace {
 
 }  // namespace
 
-void connection_failure_sink::invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept {
+void connection_failure_sink::invoke(ip_address remote_address, std::exception_ptr exception) const noexcept {
     if (exception == nullptr || is_connection_end(exception)) {
         return;
     }
@@ -53,6 +53,10 @@ void connection_failure_sink::invoke(std::string_view remote_address, std::excep
         return;
     }
     ruvia::report_unhandled_failure("web connection", exception);
+}
+
+void connection_failure_sink::invoke(std::string_view remote_address, std::exception_ptr exception) const noexcept {
+    invoke(ip_address::parse(remote_address).value_or(ip_address{}), std::move(exception));
 }
 
 void http_server_options::set_server(const server_config& config) {
@@ -68,9 +72,9 @@ void http_server_options::set_server(const server_config& config) {
                 "compression maximum size must not be smaller than the synchronous size");
         }
     }
-    std::optional<cors_options> cors;
+    std::optional<http_cors_policy> cors;
     if (config.cors_) {
-        cors.emplace(make_cors_options(*config.cors_, process_resource()));
+        cors.emplace(*config.cors_, process_resource());
     }
     server_ = config;
     compression_ = config.compression_;
@@ -84,19 +88,12 @@ void http_server_options::set_rate_limit(const rate_limit_config& config) {
 }
 
 void http_server_options::set_trusted_proxies(const trusted_proxy_config& config) {
-    trusted_proxy_set parsed(process_resource());
-    parsed.trust_x_forwarded_proto(config.trust_x_forwarded_proto_);
-    for (const auto& cidr : config.cidrs_) {
-        const auto block = parse_trusted_proxy_block(cidr);
-        if (!block) {
-            // A typo here would silently trust nothing and leave every
-            // client identified as the proxy, so it fails startup instead.
-            throw std::invalid_argument(
-                "trusted proxy must be an IP address or CIDR block");
-        }
-        parsed.add(*block);
-    }
-    trusted_proxies_ = std::move(parsed);
+    http_client_ip_config ip_config(process_resource());
+    ip_config.enabled_ = !config.cidrs_.empty();
+    ip_config.trusted_proxies_ = config.cidrs_;
+    ip_config.forwarding_headers_ = config.forwarding_headers_;
+    ip_config.trust_x_forwarded_proto_ = config.trust_x_forwarded_proto_;
+    trusted_proxies_ = http_client_ip_extractor(ip_config, process_resource());
 }
 
 http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,

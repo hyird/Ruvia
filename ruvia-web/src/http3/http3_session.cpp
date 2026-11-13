@@ -144,7 +144,7 @@ public:
     http3_response_stream_sink(http3_session& session, http3_stream& stream, multiplexed_stream_signal& signal,
         std::pmr::memory_resource* resource, http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding, const compression_config* compression,
-        const cors_options* cors) noexcept
+        const http_cors_policy* cors) noexcept
         : multiplexed_response_stream_sink_base(
               stream, signal, resource, request_method, codecs, response_coding, compression, cors),
           session_(session) {}
@@ -398,7 +398,21 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .max_concurrent_streams_ = static_cast<std::size_t>(http3_max_concurrent_requests),
         .max_stream_output_bytes_ = http3_stream_output_bytes,
         .enable_connect_protocol_ = true,
-        .enable_h3_datagram_ = true};
+        .enable_h3_datagram_ = true,
+        .frame_observer_ = services_.options_.http3_frame_
+                               ? +[](void* target, const http3_frame_metadata& metadata) noexcept {
+                                     const auto& self = *static_cast<http3_session*>(target);
+                                     self.services_.options_.http3_frame_(
+                                         server_observation_access::http3_frame(self.connection_id_, metadata));
+                                 }
+                               : nullptr,
+        .field_observer_ = services_.options_.http3_field_ ? +[](void* target, const http3_field_metadata& metadata) noexcept {
+            const auto& self = *static_cast<http3_session*>(target);
+            self.services_.options_.http3_field_(
+                server_observation_access::http3_field(self.connection_id_, metadata));
+        }
+                                                           : nullptr,
+        .observer_context_ = this};
     connection_.emplace(http3_quic_connection::server({
         .crypto_callbacks_ = crypto_callbacks,
         .owner_callbacks_ = {.get_new_connection_id_ = new_connection_id, .remove_connection_id_ = remove_connection_id},

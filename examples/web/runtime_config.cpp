@@ -92,16 +92,12 @@ int main() {
         if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
             compression.emplace();
         }
-        std::optional<ruvia::cors_config> cors;
+        std::optional<ruvia::http_cors_policy_config> cors;
         if (env_value.get<bool>("RUVIA_CORS").value_or(false)) {
-            cors = ruvia::cors_config{
-                .request_headers_ =
-                    {
-                        .mode_ = ruvia::cors_request_headers_mode::fixed,
-                        .names_ = {"content-type", "authorization"},
-                    },
-                .max_age_ = std::chrono::seconds(600),
-            };
+            ruvia::http_cors_policy_config policy;
+            policy.allowed_headers_ = {"content-type", "authorization"};
+            policy.max_age_ = std::chrono::seconds(600);
+            cors = std::move(policy);
         }
         app.server({
             .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),

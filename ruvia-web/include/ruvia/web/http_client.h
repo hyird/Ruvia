@@ -646,11 +646,6 @@ public:
     http_client_request& body(std::span<const std::byte> bytes);
     // Replaces every per-request option, including the informational callback.
     http_client_request& configure(http_client_request_options options);
-    // 在跨源跳转前 await，可异步 upsert 目的 origin；false 保留原响应。
-    // token 合并宿主、调用方取消与总截止期；回调须协作取消，返回后才释放借用 origin。
-    http_client_request& redirect_policy(move_only_function<task<bool>(http_origin_view, stop_token)> policy);
-    http_client_request& redirect_policy(http_client_redirect_observer policy);
-    http_client_request& redirect_policy(http_client_async_redirect_observer policy);
     // Per-hop redirect observation and control callback invoked on every
     // redirect hop (same-origin and cross-origin alike) before following it.
     // Returning false stops following and returns the redirect response.
@@ -697,7 +692,6 @@ private:
     // redirect hop's exchange shares.
     http_client_request_options request_options_;
     std::shared_ptr<http_client_informational_callback> informational_callback_;
-    move_only_function<task<bool>(http_origin_view, stop_token)> redirect_policy_;
     http_client_redirect_observer redirect_observer_;
     http_client_async_redirect_observer async_redirect_observer_;
     bool has_body_{false};

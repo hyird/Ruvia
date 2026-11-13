@@ -12,6 +12,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/ip_address.h"
 
 namespace ruvia {
@@ -58,17 +59,24 @@ struct http_client_ip_config final {
     // Priority-ordered forwarding headers. When empty, defaults to
     // {"X-Forwarded-For", "Forwarded"}.
     std::pmr::vector<http_forwarded_header_spec> forwarding_headers_;
+    // Enable only when every trusted proxy sanitizes and appends matching
+    // X-Forwarded-For / X-Forwarded-Proto elements.
+    bool trust_x_forwarded_proto_{false};
 };
 
 struct http_client_ip_result final {
     ip_address address_{};
     bool from_forwarded_header_{false};
+    std::optional<http_scheme> scheme_{};
 
     [[nodiscard]] constexpr ip_address address() const noexcept {
         return address_;
     }
     [[nodiscard]] constexpr bool from_forwarded_header() const noexcept {
         return from_forwarded_header_;
+    }
+    [[nodiscard]] constexpr std::optional<http_scheme> scheme() const noexcept {
+        return scheme_;
     }
 
     friend constexpr bool operator==(const http_client_ip_result&, const http_client_ip_result&) noexcept = default;
@@ -77,11 +85,22 @@ struct http_client_ip_result final {
 // Stateless client IP extractor for deployments behind trusted reverse proxies.
 class http_client_ip_extractor final {
 public:
+    explicit http_client_ip_extractor(std::pmr::memory_resource* resource = nullptr)
+        : trusted_cidrs_(detail::http_pmr_resource_or_default(resource)),
+          headers_(detail::http_pmr_resource_or_default(resource)),
+          enabled_(false) {}
+
     explicit http_client_ip_extractor(const http_client_ip_config& config,
         std::pmr::memory_resource* resource = nullptr);
 
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return enabled_;
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return !enabled_ || trusted_cidrs_.empty();
+    }
+    [[nodiscard]] constexpr bool trust_x_forwarded_proto() const noexcept {
+        return trust_x_forwarded_proto_;
     }
     [[nodiscard]] bool is_trusted_proxy(const ip_address& address) const noexcept;
     [[nodiscard]] bool is_trusted_proxy(std::string_view address_text) const noexcept;
@@ -112,6 +131,7 @@ private:
     std::pmr::vector<ip_cidr> trusted_cidrs_;
     std::pmr::vector<compiled_header> headers_;
     bool enabled_{true};
+    bool trust_x_forwarded_proto_{false};
 };
 
 [[nodiscard]] inline http_client_ip_result extract_http_client_ip(

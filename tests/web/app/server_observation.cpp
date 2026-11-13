@@ -24,9 +24,11 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "ruvia/http/http_fingerprint.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/rate_limit.h"
 
 #include "app_run.h"
 #include "tcp_port_reservation.h"
@@ -91,6 +93,26 @@ public:
         http2_input_[input.connection_id()].append(reinterpret_cast<const char*>(bytes.data()), bytes.size());
     }
 
+#if defined(RUVIA_ENABLE_HTTP3)
+    void add(const ruvia::http3_frame_record& frame) {
+        std::lock_guard lock(mutex_);
+        http3_collectors_[frame.connection_id()].observe_frame(frame.metadata());
+    }
+
+    void add(const ruvia::http3_field_record& field) {
+        std::lock_guard lock(mutex_);
+        http3_collectors_[field.connection_id()].observe_field(field.metadata());
+    }
+
+    [[nodiscard]] std::string http3_fingerprint(std::uint64_t connection_id) const {
+        std::lock_guard lock(mutex_);
+        const auto found = http3_collectors_.find(connection_id);
+        if (found == http3_collectors_.end() || !found->second.complete()) {
+            return {};
+        }
+        return std::string(found->second.fingerprint());
+    }
+#endif
     [[nodiscard]] std::vector<client_hello_copy> client_hellos(std::uint64_t connection_id) const {
         std::lock_guard lock(mutex_);
         std::vector<client_hello_copy> result;
@@ -118,6 +140,9 @@ private:
     std::vector<client_hello_copy> client_hellos_;
     std::map<std::uint64_t, std::string> http2_input_;
     std::size_t http2_reads_{0};
+#if defined(RUVIA_ENABLE_HTTP3)
+    std::map<std::uint64_t, ruvia::http3_fingerprint_collector> http3_collectors_;
+#endif
 };
 
 observed_records& records() {
@@ -310,6 +335,10 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         .on_start([] { started().release(); })
         .on_tls_client_hello([](const ruvia::tls_client_hello_record& hello) noexcept { records().add(hello); })
         .on_http2_input([](const ruvia::http2_input_record& input) noexcept { records().add(input); });
+#if defined(RUVIA_ENABLE_HTTP3)
+    app.on_http3_frame([](const ruvia::http3_frame_record& frame) noexcept { records().add(frame); })
+        .on_http3_field([](const ruvia::http3_field_record& field) noexcept { records().add(field); });
+#endif
 
     std::set<std::uint64_t> connection_ids;
     {
@@ -357,6 +386,7 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         EXPECT_EQ(hellos[0].local_address_, "127.0.0.1");
         EXPECT_EQ(hellos[0].local_port_, http3_port);
         EXPECT_EQ(hellos[0].remote_address_, "127.0.0.1");
+        EXPECT_FALSE(records().http3_fingerprint(quic_id).empty());
 #endif
         app.stop();
         runner.join();
@@ -365,6 +395,9 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
 
     const auto observed = records().counts();
     app.on_tls_client_hello(nullptr).on_http2_input(nullptr);
+#if defined(RUVIA_ENABLE_HTTP3)
+    app.on_http3_frame(nullptr).on_http3_field(nullptr);
+#endif
     {
         ruvia::test::app_run runner(app);
         ASSERT_TRUE(started().try_acquire_for(10s));
@@ -380,4 +413,41 @@ TEST(Ruvia, server_observers_see_client_hellos_and_http2_input_by_connection_id)
         runner.join();
     }
     EXPECT_EQ(records().counts(), observed);
+}
+
+TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalization) {
+    std::array<char, ruvia::rate_limit_key_buffer_bytes> buf1{};
+    std::array<char, ruvia::rate_limit_key_buffer_bytes> buf2{};
+    const auto k1 = ruvia::format_rate_limit_address_key("2001:db8:1:2::1", buf1);
+    const auto k2 = ruvia::format_rate_limit_address_key("2001:db8:1:2::ffff", buf2);
+    EXPECT_EQ(k1, k2);
+
+    const auto v4 = ruvia::format_rate_limit_address_key("192.0.2.9", buf1);
+    const auto mapped = ruvia::format_rate_limit_address_key("::ffff:192.0.2.9", buf2);
+    EXPECT_EQ(v4, mapped);
+
+    ruvia::sliding_window_rate_limiter limiter({
+        .rule_ = {.max_requests_ = 2, .window_ = std::chrono::seconds(10)},
+        .capacity_per_worker_ = 64,
+    });
+    const auto t0 = std::chrono::steady_clock::now();
+    const auto ip = *ruvia::ip_address::parse("203.0.113.5");
+    const auto d1 = limiter.decide(ip, t0);
+    EXPECT_TRUE(d1.allowed());
+    EXPECT_EQ(d1.limit(), 2U);
+    EXPECT_EQ(d1.remaining(), 1U);
+
+    const auto d2 = limiter.decide(ip, t0);
+    EXPECT_TRUE(d2.allowed());
+    EXPECT_EQ(d2.remaining(), 0U);
+
+    const auto d3 = limiter.decide(ip, t0);
+    EXPECT_FALSE(d3.allowed());
+    EXPECT_GE(d3.retry_after_seconds(), 1U);
+
+    ruvia::http_response resp;
+    ruvia::apply_rate_limit_headers(resp, d3);
+    EXPECT_TRUE(resp.header("Retry-After").has_value());
+    EXPECT_EQ(resp.header("X-RateLimit-Limit"), std::optional<std::string_view>("2"));
+    EXPECT_EQ(resp.header("X-RateLimit-Remaining"), std::optional<std::string_view>("0"));
 }

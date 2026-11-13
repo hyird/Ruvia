@@ -38,7 +38,7 @@ int main() {
 | `task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const` | 仅 POSIX：异步复制全部 worker 的监听 socket，供 exec 热升级交接 |
 | `task<bool> close_connection(worker_handle caller, std::uint64_t id)` | 异步按 ID 请求断开整条连接，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `on_connection_admission(...)` / `on_connection_open(...)` / `on_connection_close(...)` | 配置传输准入、生命周期与连接附加状态，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
-| `on_http2_frame(...)` / `on_http2_headers(...)` | 启用结构化帧与 HPACK 字段观察；要求 `RUVIA_ENABLE_HTTP2`，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
+| `on_http2_frame(...)` / `on_http2_headers(...)` / `on_http3_frame(...)` / `on_http3_field(...)` | 启用 HTTP/2 结构化帧与 HPACK 字段观察（需 `RUVIA_ENABLE_HTTP2`）及 HTTP/3 帧与 QPACK 字段观察（需 `RUVIA_ENABLE_HTTP3`），见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
 | `template <middleware M, typename... Args> application& use_at(middleware_scope_options options, Args&&... args)` | 注册路径前缀作用域中间件（如 `{.prefix_ = "/api"}`，按完整路径段匹配；前缀 `"/"` 抛出 `std::invalid_argument`，全局请用 `use`） |
 | `template <typename S, typename... Args> application& use_worker_state(Args&&... args)` | 注册 per-worker 状态类型 `S`，在每个 worker 启动时独立构造一份实例 |
@@ -100,7 +100,7 @@ int main() {
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
 | `request_arena_initial_bytes_` | `std::size_t`（默认 4 KiB） | 请求 Arena 初始字节数，须大于零；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存资源) |
 | `compression_` | `std::optional<compression_config>`（默认不启用） | 宿主级响应内容协商压缩（gzip / deflate / br / zstd）与预压缩静态变体协商，见下文“压缩、CORS 与可信代理配置” |
-| `cors_` | `std::optional<cors_config>`（默认不启用） | 宿主级 CORS 策略，含路由引擎 `OPTIONS` 预检回答 |
+| `cors_` | `std::optional<http_cors_policy_config>`（默认不启用） | 宿主级 CORS 策略（复用 `ruvia::http_cors_policy`），含路由引擎 `OPTIONS` 预检回答 |
 
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
@@ -223,7 +223,7 @@ ruvia::app().listen({
 | `tls_config::certificate_store_` | 共享证书库；不能同时配置固定 `identity_`、`sni_` 或 `local_addresses_` |
 | `tls_config::default_certificate_` | 未配置选择器时使用的证书 ID |
 | `tls_config::select_certificate_` | `shared_ptr<const tls_certificate_selector>`；必须配合证书库，完全接管身份选择 |
-| `tls_certificate_selection` | 连接 ID、真实本端/对端地址（`optional<ip_address>` / `ip_address`）及端口、SNI、QUIC 标志、legacy version，以及 cipher suites、signature algorithms、supported versions/groups、ALPN 的借用视图 |
+| `tls_certificate_selection` | 连接 ID、真实本端/对端地址（`optional<ip_address>` / `ip_address`）及端口、SNI、QUIC 标志、legacy version，以及主机字节序 `span<const uint16_t>` 的 cipher suites、signature algorithms、supported versions/groups 与 `span<const string_view>` 的 ALPN 协议名借用视图 |
 | `offers_signature_algorithm(code)` | 按 TLS 签名方案编号检查客户端能力，可用于 RSA / ECDSA 选择 |
 
 - **发布与所有权**：每次变更原子发布不可变快照；握手在调用选择器前取得快照，期间替换或删除所选 ID 不影响该握手。已建立连接保留原证书引用，不重建上下文、会话缓存或票据密钥。
@@ -255,15 +255,13 @@ ruvia::app().listen({
   - **HEAD 回退**：`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`；拒绝 identity 时同样编码 0 字节体。
   - **显式 HEAD**：`RUVIA_HEAD` 返回空非文件响应体时不压缩该空体；按声明的 `Content-Length` 决定是否添加编码，支持逗号分隔的相同值，无声明时仅在拒绝 identity 时添加。添加编码后去掉未知的编码长度（RFC 9110 §8.6）；未声明长度的显式空 `HEAD` 响应省略 `Content-Length`。
   - **请求解码**：按 `Content-Encoding` 透明解码时，前 64 KiB 输出在事件循环内完成，更大的表示改在阻塞池上解码。无阻塞池或池拒绝时仍在事件循环内解码，请求必须得到内容；两条路径均受解码上限约束。
-- `cors_config`：
-  - `origin_`：`cors_origin_config{.mode_ = cors_origin_mode::any | exact | credentialed_exact, .value_ = "..."}`
-  - `request_headers_`：`cors_request_headers_config{.mode_ = cors_request_headers_mode::reflect | fixed, .names_ = {...}}`
-  - `expose_headers_`：`std::pmr::vector<std::pmr::string>`
-  - `max_age_`：`std::optional<std::chrono::seconds>`
-  - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；缺少任一项仍按普通 CORS 响应处理。
+- `http_cors_policy_config`（`"ruvia/http/http_cors.h"`）：
+  - `allow_any_origin_`、`allowed_origins_`（精确 Origin、`*` 或尾缀域名模式）、`allowed_origin_suffixes_`、`allowed_methods_`、`allowed_headers_`、`reflect_request_headers_`、`expose_headers_`、`allow_credentials_`、`max_age_`。
+  - 默认构造 `http_cors_policy_config{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置任一列表时仅匹配所列项。
+  - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；未固定 `allowed_methods_` 时自动提升路由生成的 `Allow` 响应头为 `Access-Control-Allow-Methods`。
   - **完整校验**：策略在新增授权头前校验 `Origin` 与 `OPTIONS` 的预检字段；请求首部列表即使采用固定授权模式也须完整合法。
   - **反射与优先级**：反射模式将通过全量校验的跨行 `Access-Control-Request-Headers` 合并为单一响应字段，不覆盖应用已设置的响应头。
-- `trusted_proxy_config`：`cidrs_`（受信任代理网段列表，如 `{"127.0.0.1/32", "10.0.0.0/8"}`）、`trust_x_forwarded_proto_`（是否信任代理传入的 `X-Forwarded-Proto`）。
+- `trusted_proxy_config`：`cidrs_`（受信任代理网段列表，如 `{"127.0.0.1/32", "10.0.0.0/8"}`）、`forwarding_headers_`（优先级转发头规格列表，默认 `X-Forwarded-For` > `Forwarded`）、`trust_x_forwarded_proto_`（是否信任代理传入的 `X-Forwarded-Proto`）。底层统一由 `ruvia::http_client_ip_extractor` 执行。
 
 ---
 
@@ -357,8 +355,10 @@ ruvia::app()
 | `tls_client_hello_record::quic()` | HTTP/3（QUIC）连接为 `true`，TCP 上的 TLS 为 `false` |
 | `tls_client_hello_record::message()` | 完整 ClientHello 握手消息：`msg_type`（1）、3 字节长度与正文，已完成记录层或 CRYPTO 帧重组（[RFC 9846 §4.1.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.1.2)） |
 | `http2_input_record::bytes()` | 一次读取的已解密 HTTP/2 连接入站字节 |
-| `http2_frame_record::connection_id()` / `metadata()` | 所属连接与结构化帧事实；由 `on_http2_frame()` 注册 |
+| `http2_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/2 结构化帧事实；由 `on_http2_frame()` 注册 |
 | `http2_headers_record::connection_id()` / `metadata()` | 所属连接与 HPACK 原始字段次序；由 `on_http2_headers()` 注册 |
+| `http3_frame_record::connection_id()` / `metadata()` | 所属连接与 HTTP/3 结构化帧事实；由 `on_http3_frame()` 注册 |
+| `http3_field_record::connection_id()` / `metadata()` | 所属连接与 QPACK 原始字段次序；由 `on_http3_field()` 注册 |
 
 - **ClientHello 时机**：每个收到的 ClientHello 交付一次，先于 SNI 与证书选择；HelloRetryRequest 之后的第二个 ClientHello 再次交付。TCP TLS 与 HTTP/3 均覆盖。
 - **HTTP/2 输入顺序**：同一连接的记录按线上顺序拼接，即从客户端连接前言（[RFC 9113 §3.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-3.4)）开始的完整入站字节；TLS ALPN `h2` 与明文 prior-knowledge 两条路径一致。分块边界是读取边界，不是帧边界。
@@ -667,7 +667,7 @@ routes.websocket("/ws", [](ruvia::context& c) -> ruvia::task<void> {
 routes.freeze();
 ruvia::http_server server(loop,
     {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
-    {.compression_ = ruvia::compression_config{}, .cors_ = ruvia::cors_config{}});
+    {.compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_config{}});
 server.listen({.address_ = "127.0.0.1", .http_ = 8080,
     .dispatch_ = ruvia::listener_dispatch::request_stream});
 co_await server.start();
@@ -900,7 +900,7 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"ruvia/web/controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})`；两者的拒绝都经 `on_error` 应答为 `429` |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
 | `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |

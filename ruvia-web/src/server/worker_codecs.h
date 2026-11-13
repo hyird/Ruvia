@@ -13,54 +13,8 @@
 
 namespace ruvia::detail {
 
-class worker_codecs;
+using stream_encoder_lease = http_stream_encoder_lease;
 
-// An incremental encoder on loan from worker_codecs for one response stream.
-// Destroying the lease hands the encoder back; the worker resets it and keeps
-// it for the next stream, so streamed and SSE responses reuse codec state the
-// way buffered responses reuse the worker's whole-buffer contexts. A lease
-// whose encoder failed is discarded instead: failed codec state is freed, never
-// pooled.
-class stream_encoder_lease final {
-public:
-    stream_encoder_lease(const stream_encoder_lease&) = delete;
-    stream_encoder_lease& operator=(const stream_encoder_lease&) = delete;
-    stream_encoder_lease(stream_encoder_lease&& other) noexcept
-        : codecs_(std::exchange(other.codecs_, nullptr)),
-          encoder_(std::exchange(other.encoder_, nullptr)) {}
-    ~stream_encoder_lease() {
-        release();
-    }
-
-    [[nodiscard]] http_content_encoder& encoder() & noexcept RUVIA_LIFETIMEBOUND {
-        return *encoder_;
-    }
-    http_content_encoder& encoder() && = delete;
-
-    void discard() noexcept;
-
-private:
-    friend class worker_codecs;
-
-    stream_encoder_lease(worker_codecs& codecs, http_content_encoder& encoder) noexcept
-        : codecs_(&codecs),
-          encoder_(&encoder) {}
-
-    void release() noexcept;
-
-    worker_codecs* codecs_{nullptr};
-    http_content_encoder* encoder_{nullptr};
-};
-
-// The web worker's reusable codec state. Everything is created on first use
-// from the process resource and lives until the worker is destroyed, so codec
-// memory is sized per worker rather than per request or connection. Only
-// synchronous work on the owning worker thread may borrow it: inline response
-// compression takes one encoder per content coding (each coding has one fixed
-// level), response streams borrow a pooled incremental encoder for their
-// lifetime, and server WebSocket connections share the no-context-takeover
-// deflate set. Offloaded compression runs on another thread and keeps its own
-// codec.
 class worker_codecs final {
 public:
     worker_codecs() noexcept;
@@ -68,68 +22,20 @@ public:
     worker_codecs(const worker_codecs&) = delete;
     worker_codecs& operator=(const worker_codecs&) = delete;
 
-    // `coding` is a compressing coding; identity has no encoder and throws
-    // std::logic_error. The context returns nullopt only for its output budget,
-    // throws on codec failure, and remains reusable after either outcome.
-    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding);
+    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding) {
+        return content_codecs_.encoder(coding);
+    }
 
-    // A fresh incremental encoder for `coding` (a compressing coding; identity
-    // throws std::logic_error): a pooled one when the worker holds any, else a
-    // new one from the process resource. Each coding keeps a bounded free list;
-    // a returned encoder past that bound, a discarded one, or one whose reset
-    // fails, is freed.
-    [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding);
+    [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding) {
+        return content_codecs_.acquire_stream_encoder(coding);
+    }
 
     [[nodiscard]] websocket_deflate_codecs& websocket_deflate() noexcept {
         return websocket_deflate_;
     }
 
 private:
-    friend class stream_encoder_lease;
-
-    // Idle stream encoders retained per coding. Stream encoders use reduced
-    // windows (brotli 512 KiB, zstd its level default), but each still holds
-    // its working memory while pooled, so the bound keeps a burst of streams
-    // from pinning memory for the worker's whole life.
-    static constexpr std::size_t max_pooled_stream_encoders = 8;
-
-    struct stream_encoder_pool_type final {
-        std::array<http_content_encoder*, max_pooled_stream_encoders> free_{};
-        std::size_t count_{0};
-    };
-
-    struct coding_encoders_type final {
-        coding_encoders_type(http_content_coding coding, std::pmr::memory_resource* resource) noexcept
-            : buffered_(coding, resource) {}
-
-        http_content_encode_context buffered_;
-        stream_encoder_pool_type streaming_;
-    };
-
-    [[nodiscard]] coding_encoders_type& encoders(http_content_coding coding);
-    void release_stream_encoder(http_content_encoder& encoder) noexcept;
-    void destroy_stream_encoder(http_content_encoder& encoder) noexcept;
-
-    coding_encoders_type gzip_;
-    coding_encoders_type deflate_;
-    coding_encoders_type brotli_;
-    coding_encoders_type zstd_;
+    http_worker_codecs content_codecs_;
     websocket_deflate_codecs websocket_deflate_;
 };
-
-// Detach the complete lease before reset or destruction; do not touch it afterward.
-inline void stream_encoder_lease::release() noexcept {
-    if (encoder_ != nullptr) {
-        auto* const codecs = std::exchange(codecs_, nullptr);
-        codecs->release_stream_encoder(*std::exchange(encoder_, nullptr));
-    }
-}
-
-inline void stream_encoder_lease::discard() noexcept {
-    if (encoder_ != nullptr) {
-        auto* const codecs = std::exchange(codecs_, nullptr);
-        codecs->destroy_stream_encoder(*std::exchange(encoder_, nullptr));
-    }
-}
-
 }  // namespace ruvia::detail

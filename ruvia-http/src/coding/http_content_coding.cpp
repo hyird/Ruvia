@@ -14,6 +14,7 @@
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_accept_encoding.h"
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
@@ -524,5 +525,49 @@ std::optional<http_content_coding> negotiate_http_content_coding(
     const http_request& request, std::span<const http_content_coding> candidates) noexcept {
     const auto selection = select_http_accept_encoding(request, candidates);
     return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
+}
+
+bool is_http_media_type_compressible(std::string_view content_type_value) noexcept {
+    const auto media_type = http_media_type_only(content_type_value);
+    if (media_type.empty()) {
+        return false;
+    }
+    const auto starts_with = [&](std::string_view prefix) noexcept {
+        return media_type.size() >= prefix.size() &&
+               http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
+    };
+    const auto ends_with = [&](std::string_view suffix) noexcept {
+        return media_type.size() >= suffix.size() &&
+               http_ascii_equals_ignore_case(
+                   media_type.substr(media_type.size() - suffix.size()), suffix);
+    };
+    if (ends_with("zip")) {
+        return false;
+    }
+    if (starts_with("text/") || ends_with("+json") || ends_with("+xml")) {
+        return true;
+    }
+    static constexpr std::array<std::string_view, 14> compressible_types{
+        "application/json",
+        "application/javascript",
+        "application/x-javascript",
+        "application/ecmascript",
+        "application/wasm",
+        "application/xml",
+        "application/x-ndjson",
+        "application/vnd.ms-fontobject",
+        "font/ttf",
+        "font/otf",
+        "application/x-font-ttf",
+        "application/x-font-otf",
+        "image/x-icon",
+        "image/vnd.microsoft.icon",
+    };
+    for (const auto type : compressible_types) {
+        if (http_ascii_equals_ignore_case(media_type, type)) {
+            return true;
+        }
+    }
+    return false;
 }
 }  // namespace ruvia

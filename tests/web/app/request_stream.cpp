@@ -787,7 +787,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         failures().clear();
     }
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2, .compression_ = ruvia::compression_config{}, .cors_ = ruvia::cors_config{}})
+    app.server({.worker_count_ = 2, .compression_ = ruvia::compression_config{}, .cors_ = ruvia::http_cors_policy_config{}})
         .listen({stream_listener, routes_listener})
         .blocking_pool({.thread_count_ = 2})
         .use_worker_state<runtime_state>()

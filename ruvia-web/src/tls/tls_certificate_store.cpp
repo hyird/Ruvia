@@ -128,13 +128,7 @@ std::size_t tls_certificate_store::size() const noexcept {
 }
 
 bool tls_certificate_selection::offers_signature_algorithm(std::uint16_t algorithm) const noexcept {
-    for (std::size_t i = 0; i + 1 < signature_algorithms_.size(); i += 2) {
-        if ((std::to_integer<unsigned int>(signature_algorithms_[i]) << 8 |
-                std::to_integer<unsigned int>(signature_algorithms_[i + 1])) == algorithm) {
-            return true;
-        }
-    }
-    return false;
+    return std::ranges::find(signature_algorithms_, algorithm) != signature_algorithms_.end();
 }
 
 std::shared_ptr<const detail::tls_certificate_snapshot> detail::tls_certificate_store_access::snapshot(

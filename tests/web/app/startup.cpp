@@ -96,7 +96,7 @@ public:
 
     ruvia::task<ruvia::http_response> connection(ruvia::context& context) {
         const auto info = context.conn();
-        std::pmr::string result(info.client().address(), ruvia::process_resource());
+        std::pmr::string result = info.client().address().to_string(ruvia::process_resource());
         result += info.via_trusted_proxy() ? ":proxy" : ":direct";
         result += info.scheme() == ruvia::http_scheme::https ? ":https" : ":http";
         co_return context.text(std::string_view(result));

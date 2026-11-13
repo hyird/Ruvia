@@ -1422,6 +1422,33 @@ application& application::on_http2_headers(std::nullptr_t) & {
     return on_http2_headers(http2_headers_callback{});
 }
 #endif
+#if defined(RUVIA_ENABLE_HTTP3)
+application& application::on_http3_frame(http3_frame_callback callback_value) & {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register HTTP/3 frame hook while app is running",
+        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+            std::swap(state_value.http3_frame_callback_, callback_value);
+            state_value.options_.http3_frame_ = detail::callback_access::ref(state_value.http3_frame_callback_);
+        });
+}
+
+application& application::on_http3_frame(std::nullptr_t) & {
+    return on_http3_frame(http3_frame_callback{});
+}
+
+application& application::on_http3_field(http3_field_callback callback_value) & {
+    return detail::mutate_stopped_app(*this, *state_,
+        "cannot register HTTP/3 field hook while app is running",
+        [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
+            std::swap(state_value.http3_field_callback_, callback_value);
+            state_value.options_.http3_field_ = detail::callback_access::ref(state_value.http3_field_callback_);
+        });
+}
+
+application& application::on_http3_field(std::nullptr_t) & {
+    return on_http3_field(http3_field_callback{});
+}
+#endif
 
 application& application::on_connection(connection_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
