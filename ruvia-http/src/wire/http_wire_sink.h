@@ -14,7 +14,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
 
-#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
 
 // The single HTTP/1 wire-emission toolkit: sinks, the field-line emitter, and
 // the overlap-safe writer used by every pre-measured head/trailer writer.

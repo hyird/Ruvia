@@ -13,7 +13,7 @@
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "parser/field_line_folding.h"
+#include "http1/http_header_block_parser.h"
 
 namespace ruvia {
 

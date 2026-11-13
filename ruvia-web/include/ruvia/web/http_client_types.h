@@ -26,8 +26,29 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/client_tcp_config.h"
 #include "ruvia/web/tls_config.h"
+
+namespace ruvia {
+
+enum class tcp_no_delay_policy : std::uint8_t {
+    system_default,
+    enable,
+};
+
+enum class tcp_keep_alive_policy : std::uint8_t {
+    system_default,
+    enable,
+};
+
+// Socket policies applied to every outbound TCP connection of one client.
+// Establishment fails when an enabled policy cannot be applied.
+struct client_tcp_config final {
+    tcp_no_delay_policy no_delay_{tcp_no_delay_policy::enable};
+    tcp_keep_alive_policy keep_alive_{tcp_keep_alive_policy::enable};
+};
+
+}  // namespace ruvia
+
 namespace ruvia {
 
 // The HTTP versions a request may use: at least one, each built into this

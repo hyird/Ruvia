@@ -23,13 +23,7 @@
 #include "ruvia/http/http_status.h"
 
 #include "field/http_connection_fields.h"
-#include "field/http_entity_tag.h"
-#include "field/http_interim_response_validation.h"
-#include "field/response_field_validation.h"
-#include "response/http_final_response_control_plan.h"
-#include "response/http_response_header_bits.h"
 #include "response/http_response_header_state.h"
-#include "response/http_response_header_storage.h"
 #include "wire/http_wire_sink.h"
 
 namespace ruvia {

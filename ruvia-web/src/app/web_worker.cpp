@@ -14,9 +14,8 @@
 #include "ruvia/web/redis/redis_session.h"
 #endif
 
-#include "app/web_worker_dispatch.h"
+#include "app/app_state.h"
 #include "integration/worker_capabilities.h"
-#include "integration/worker_client_registry_view.h"
 
 namespace ruvia {
 

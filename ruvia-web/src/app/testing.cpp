@@ -19,16 +19,14 @@
 #include "ruvia/web/dotenv.h"
 
 #include "context/context_services.h"
-#include "http/http_protocol_error_info.h"
 #include "http/inline_http_header_views.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
 #include "server/config_validation.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_options.h"
-#include "server/http_server_options_validation.h"
+#include "server/inbound_transport_error.h"
 #include "server/response_file_source.h"
-#include "server/worker_codecs.h"
 
 namespace ruvia {
 

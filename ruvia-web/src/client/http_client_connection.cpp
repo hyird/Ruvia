@@ -10,7 +10,7 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
-#include "server/peer_address.h"
+#include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {
 namespace {

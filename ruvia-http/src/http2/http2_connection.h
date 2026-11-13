@@ -1,4 +1,6 @@
 #include "ruvia/http/http_request_trailers.h"
+
+#include "websocket/http_websocket_permessage_deflate.h"
 #pragma once
 
 // HTTP/2 sans-I/O connection core.
@@ -64,19 +66,15 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "coding/http_content_length.h"
+#include "coding/http_content_coding.h"
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
-#include "field/http_te_fields.h"
-#include "memory/geometric_reserve.h"
 #include "memory/http_c_library_memory.h"
 #include "parser/http_request_target.h"
 #include "response/http_binary_response_fields.h"
-#include "response/http_framed_response_head_plan.h"
-#include "response/http_response_header_bits.h"
+#include "response/http_response_header_state.h"
 #include "websocket/http_websocket_handshake_fields.h"
-#include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
 

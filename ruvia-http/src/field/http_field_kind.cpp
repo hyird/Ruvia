@@ -22,9 +22,6 @@
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response.h"
 
-#include "field/http_entity_tag.h"
-#include "field/http_quality_value.h"
-
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
 // quoted-string forms, and validating a Content-Type field. Matching a media
@@ -39,15 +36,13 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "coding/http_content_coding.h"
-#include "field/field_value_scan.h"
 #include "field/http_connection_fields.h"
 #include "field/http_request_field_validation.h"
 #include "field/http_structured_fields.h"
-#include "field/http_te_fields.h"
-#include "field/response_field_validation.h"
+#include "http1/http_header_block_parser.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
-#include "response/http_response_header_bits.h"
+#include "response/http_response_header_state.h"
 
 namespace ruvia::detail {
 

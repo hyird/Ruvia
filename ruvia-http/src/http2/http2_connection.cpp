@@ -11,7 +11,7 @@
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_io_buffer.h"
 
-#include "memory/geometric_reserve.h"
+#include "memory/http_c_library_memory.h"
 
 namespace ruvia::detail {
 

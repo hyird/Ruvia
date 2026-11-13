@@ -28,17 +28,15 @@
 #include "ruvia/http/http_known_method.h"
 
 #include "client/client_happy_eyeballs.h"
-#include "client/client_host_resolver.h"
 #include "client/client_tls.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_response_decoding.h"
+#include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
+#include "http3/http3_endpoint.h"
 #include "http3/http3_session.h"
-#include "http3/http3_udp_receive.h"
-#include "server/peer_address.h"
-#include "tls/tls_peer.h"
-#include "tls/tls_random.h"
+#include "server/connection_lifecycle.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

@@ -1,5 +1,3 @@
-#include "client/client_request_policy.h"
-
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
@@ -21,6 +19,7 @@
 #include "client/client_tls.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
+#include "client/http_client_response_memory.h"
 
 namespace ruvia::detail {
 

@@ -29,14 +29,11 @@
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
-#include "app/env_state.h"
 #include "integration/named_capability.h"
 #include "integration/runtime_control_completion.h"
 #include "router/route_table.h"
 #include "server/config_validation.h"
-#include "server/http_server_options_validation.h"
-#include "server/http_server_tls_contexts.h"
-#include "server/http_server_tls_identity.h"
+#include "server/http_server_options.h"
 #include "server/prepared_listener_state.h"
 
 #ifdef RUVIA_ENABLE_DATABASE

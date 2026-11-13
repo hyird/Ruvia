@@ -21,7 +21,7 @@
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_state.h"
 #include "http/inline_http_header_views.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia {
 namespace detail {

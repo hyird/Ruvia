@@ -19,7 +19,6 @@
 
 #include "client/http_client_config_storage.h"
 #include "client/http_client_response_memory.h"
-#include "client/http_client_worker_limits.h"
 #include "integration/named_capability.h"
 #include "tls/tls_credential.h"
 

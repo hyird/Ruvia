@@ -14,8 +14,6 @@
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
-#include "client/http_client_result_budget.h"
-#include "client/http_client_worker_limits.h"
 
 namespace ruvia::detail {
 

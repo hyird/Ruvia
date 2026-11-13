@@ -37,14 +37,11 @@
 #include "http2/http2_sans_io_session.h"
 #include "integration/operation_interrupt.h"
 #include "integration/worker_capabilities.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
-#include "server/http_server_tls_contexts.h"
-#include "server/peer_address.h"
-#include "server/tcp_accept_error.h"
-#include "server/tcp_socket_policies.h"
-#include "tls/tls_peer.h"
-#include "tls/tls_served_certificate.h"
+#include "server/http_server_options.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

@@ -16,8 +16,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "memory/geometric_reserve.h"
-#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia::detail {

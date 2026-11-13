@@ -23,9 +23,7 @@
 #include "ruvia/http/http_set_cookie.h"
 
 #include "field/http_connection_fields.h"
-#include "field/response_field_validation.h"
-#include "response/http_response_header_bits.h"
-#include "response/http_response_header_storage.h"
+#include "response/http_response_header_state.h"
 #include "wire/http_wire_sink.h"
 
 namespace ruvia::detail {

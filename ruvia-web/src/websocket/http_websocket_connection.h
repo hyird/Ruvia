@@ -36,7 +36,6 @@
 #include "ruvia/web/websocket.h"
 
 #include "context/context_access.h"
-#include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "server/inbound_buffer_budget.h"

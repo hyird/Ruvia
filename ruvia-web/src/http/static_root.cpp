@@ -18,13 +18,13 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/fnv1a.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 
-#include "http/inline_text_concat.h"
+#include "http/inline_http_header_views.h"
 #include "http/static_file_variant.h"
 #include "http/static_path_normalization.h"
 #include "http/static_root_index.h"

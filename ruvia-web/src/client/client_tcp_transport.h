@@ -27,9 +27,9 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
-#include "client/client_host_resolver.h"
+#include "client/client_happy_eyeballs.h"
 #include "client/client_tls.h"
-#include "server/tcp_socket_policies.h"
+#include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {
 

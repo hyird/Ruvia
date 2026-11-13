@@ -1,5 +1,3 @@
-#include "server/http_server_tls_identity.h"
-
 #include <algorithm>
 #include <cstddef>
 #include <limits>
@@ -21,7 +19,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "tls/dns_host.h"
+#include "server/http_server_options.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_protocol_policy.h"
 

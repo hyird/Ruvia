@@ -23,12 +23,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_content_codec.h"
-
-#include "coding/codec_slot.h"
-#include "coding/http_content_codec.h"
+#include "coding/http_content_coding.h"
 #include "coding/http_zlib_stream.h"
-#include "memory/http_address_overlap.h"
 #include "memory/http_c_library_memory.h"
 
 // Brotli (RFC 7932) state with tracked working memory.

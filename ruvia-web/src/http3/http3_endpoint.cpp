@@ -35,9 +35,8 @@
 #include <asio/error.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "http3/http3_udp_receive.h"
-#include "server/peer_address.h"
-#include "tls/tls_random.h"
+#include "server/connection_lifecycle.h"
+#include "tls/tls_protocol_policy.h"
 #if defined(_WIN32)
 #include "server/windows_acceptor.h"
 #endif
@@ -219,10 +218,9 @@ inline std::error_code send_http3_packet(asio::ip::udp::socket& socket, const as
 
 #include <string_view>
 
-#include "ruvia/core/fnv1a.h"
+#include "ruvia/core/worker_ref.h"
 
-#include "http3/http3_connection_id.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

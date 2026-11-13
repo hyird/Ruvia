@@ -40,21 +40,18 @@
 
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_protocol_error_info.h"
-#include "http/http_stream_end.h"
 #include "http/request_body_loader.h"
 #include "http3/http3_endpoint.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_buffered_response.h"
 #include "server/http_response_stream_dispatch.h"
-#include "server/http_server_tls_contexts.h"
+#include "server/http_server_options.h"
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
 #include "server/multiplexed_stream_signal.h"
-#include "server/peer_address.h"
-#include "tls/tls_peer.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

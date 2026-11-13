@@ -7,9 +7,7 @@
 #include <limits>
 #include <utility>
 
-#include "ruvia/http/http_content_codec.h"
-
-#include "coding/http_content_codec.h"
+#include "coding/http_content_coding.h"
 
 namespace ruvia::detail {
 

@@ -12,7 +12,7 @@
 
 #include "ruvia/http/http_base64.h"
 
-#include "http/inline_text_concat.h"
+#include "http/inline_http_header_views.h"
 
 namespace ruvia::detail {
 // The digests behind signed cookies (SHA-256) and JWT HS256/HS384/HS512.

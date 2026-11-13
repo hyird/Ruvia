@@ -27,7 +27,7 @@
 
 #include "auth/constant_time.h"
 #include "auth/cookie_signature.h"
-#include "http/inline_text_concat.h"
+#include "http/inline_http_header_views.h"
 
 namespace ruvia {
 

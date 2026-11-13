@@ -15,7 +15,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/web/prepared_listener.h"
 #include "ruvia/web/server_config.h"
 
 #include "integration/runtime_control_completion.h"

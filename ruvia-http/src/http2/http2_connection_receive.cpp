@@ -7,7 +7,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_length.h"
+#include "coding/http_content_coding.h"
 #include "http1/http_client_response_head.h"
 #include "http2/http2_connection.h"
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field

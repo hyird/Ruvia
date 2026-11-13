@@ -42,18 +42,17 @@
 #include "ruvia/web/error.h"
 
 #include "context/context_services.h"
-#include "http3/http3_connection_id.h"
+#include "http3/http3_endpoint.h"
 #include "router/route_table.h"
 #include "server/connection_count.h"
 #include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
-#include "server/http_server_tls_contexts.h"
+#include "server/http_server_options.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/response_file_source.h"
-#include "tls/tls_random.h"
-#include "tls/tls_served_certificate.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 

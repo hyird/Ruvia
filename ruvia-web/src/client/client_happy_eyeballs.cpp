@@ -14,8 +14,6 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/http/http_number_format.h"
 
-#include "client/client_host_resolver.h"
-
 namespace ruvia::detail {
 
 client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker,

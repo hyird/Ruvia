@@ -23,7 +23,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait_result.h"
 
 #include "worker_task_fixture.h"
 

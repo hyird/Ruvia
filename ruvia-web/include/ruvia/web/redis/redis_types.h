@@ -18,7 +18,7 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/client_tcp_config.h"
+#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 

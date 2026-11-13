@@ -31,14 +31,13 @@
 
 #include "client/http_client_connection.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_response_decoding.h"
+#include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
 #include "http/http_socket_tunnel_transport.h"
-#include "http/http_stream_end.h"
 #include "http/inline_http_header_views.h"
-#include "http/tls_tunnel_output.h"
 #include "server/inbound_buffer_budget.h"
+#include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
 namespace {

@@ -14,7 +14,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait_result.h"
+#include "ruvia/core/worker_wait.h"
 
 // The connection-slot bookkeeping every pooled client shares: lease scheduling,
 // stop-token cancellation addressed by operation id, and one deadline timer per

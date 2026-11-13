@@ -17,7 +17,6 @@
 #include "field/http_field_kind.h"
 #include "http1/http_client_response_head.h"
 #include "http1/http_header_block_parser.h"
-#include "parser/field_line_folding.h"
 #include "response/http_response_header_state.h"
 
 namespace ruvia::detail {

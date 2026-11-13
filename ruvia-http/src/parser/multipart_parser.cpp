@@ -14,7 +14,7 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
 
-#include "parser/field_line_folding.h"
+#include "http1/http_header_block_parser.h"
 
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field

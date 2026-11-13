@@ -1,5 +1,16 @@
 #pragma once
 
+#include "ruvia/core/task.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/web/context.h"
+#include "ruvia/web/request_stream.h"
+
+#include "router/route_table.h"
+
+// listener_dispatch::request_stream: what a request stream connection resolves
+// every request to in place of the route table, and the one run of the
+// application's request_stream callback every transport reaches through it.
+
 #include <array>
 #include <cstddef>
 #include <exception>
@@ -17,30 +28,51 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/task.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_interim_response.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
 
 #include "context/context_access.h"
 #include "context/context_services.h"
-#include "http/http_protocol_error_info.h"
 #include "http/http_tunnel_session.h"
 #include "http/inline_http_header_views.h"
-#include "router/route_table.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
-#include "server/request_stream_dispatch.h"
-#include "server/worker_codecs.h"
+#include "server/inbound_transport_error.h"
 #include "websocket/http_websocket_connection.h"
+
+namespace ruvia::detail {
+
+class route_entry;
+
+// A request stream route runs no middleware and declares no body limit. A
+// tunnel request -- CONNECT, extended CONNECT, or an HTTP/1.1 Upgrade without
+// content -- resolves to an upgrade route whose callback commits the tunnel
+// itself (accept_tunnel()); any other request to a response stream route with
+// a streamed body.
+[[nodiscard]] route_resolution resolve_request_stream_route(bool tunnel) noexcept;
+
+// Whether `route` is the tunnel route resolve_request_stream_route() yields.
+[[nodiscard]] bool is_request_stream_tunnel_route(const route_entry& route) noexcept;
+
+// Whether an HTTP/1 request of a request stream connection is a tunnel
+// request; `content` is whether it carries request content.
+[[nodiscard]] bool http1_request_stream_tunnel(const http_request& request, bool content) noexcept;
+
+// Runs the connection's callback for a tunnel request in the context its
+// upgrade route built. `accept` commits the success head and establishes the
+// tunnel; a refusal writes through the protocol's ordinary response stream,
+// which the upgrade driver must bind before dispatching this context.
+[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept,
+    const request_stream_websocket_accept* accept_websocket = nullptr);
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

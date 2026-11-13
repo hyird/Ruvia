@@ -8,8 +8,6 @@
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/connection_events.h"
-#include "ruvia/web/prepared_listener.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/server_connection.h"

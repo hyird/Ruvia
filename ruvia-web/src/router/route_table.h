@@ -33,7 +33,7 @@
 #include "context/context_access.h"
 #include "context/context_services.h"
 #include "http/static_file_variant.h"
-#include "server/document_root_binding.h"
+#include "server/http_server_options.h"
 #include "websocket/http_websocket_liveness.h"
 
 namespace ruvia::detail {

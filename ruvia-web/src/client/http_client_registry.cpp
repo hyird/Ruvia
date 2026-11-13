@@ -17,7 +17,7 @@
 #include "client/client_lifecycle.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_result_budget.h"
+#include "client/http_client_response_memory.h"
 
 namespace ruvia::detail {
 namespace {

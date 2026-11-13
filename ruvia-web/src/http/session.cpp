@@ -22,8 +22,8 @@
 #include "ruvia/web/redis/redis_session.h"
 
 #include "context/context_access.h"
-#include "http/inline_text_concat.h"
-#include "tls/tls_random.h"
+#include "http/inline_http_header_views.h"
+#include "tls/tls_protocol_policy.h"
 #endif
 
 namespace ruvia {

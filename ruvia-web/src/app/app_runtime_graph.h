@@ -29,13 +29,11 @@
 #include "http3/http3_endpoint.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
-#include "server/document_root_binding.h"
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/windows_acceptor.h"
-#include "server/worker_codecs.h"
 #include "server/worker_connections.h"
 
 namespace ruvia {

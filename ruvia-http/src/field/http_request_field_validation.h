@@ -13,7 +13,7 @@
 
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
-#include "memory/geometric_reserve.h"
+#include "memory/http_c_library_memory.h"
 #include "parser/http_request_target.h"
 namespace ruvia::detail {
 

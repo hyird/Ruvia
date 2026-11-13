@@ -11,7 +11,7 @@
 #include "client/client_tls.h"
 #include "integration/named_capability.h"
 #include "server/config_validation.h"
-#include "server/tcp_socket_policies.h"
+#include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {
 

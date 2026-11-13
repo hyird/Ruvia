@@ -1,24 +1,131 @@
 #pragma once
 
+#include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_protocol_version.h"
 
-#include "coding/http_content_length.h"
+#include "coding/http_content_coding.h"
 #include "coding/http_transfer_encoding.h"
-#include "field/field_value_scan.h"
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
 #include "parser/http_header_descriptor_storage.h"
+
+namespace ruvia::detail {
+
+// The first input byte occupies the low byte, independent of native byte order.
+// The caller must provide at least eight readable bytes.
+[[nodiscard]] inline std::uint64_t load_http_field_value_word(const char* data) noexcept {
+    std::uint64_t bytes;
+    std::memcpy(&bytes, data, sizeof(bytes));
+    if constexpr (std::endian::native == std::endian::big) {
+        bytes = 0;
+        for (std::size_t index = 0; index < sizeof(bytes); ++index) {
+            bytes |= static_cast<std::uint64_t>(static_cast<unsigned char>(data[index])) << (index * 8);
+        }
+    }
+    return bytes;
+}
+
+// The first set high bit identifies the first invalid input byte. DEL detection
+// can also mark later bytes, but never changes the position of its first match.
+[[nodiscard]] inline std::uint64_t invalid_http_field_value_mask(std::uint64_t bytes_value) noexcept {
+    constexpr std::uint64_t ones = 0x0101010101010101ULL;
+    constexpr std::uint64_t high_bits = ones * 0x80U;
+    constexpr std::uint64_t low_bits = ones * 0x7fU;
+    const auto del = bytes_value ^ low_bits;
+    // Setting each high bit prevents inter-byte borrow when testing < SP.
+    // Exclude original high-bit bytes so obs-text remains valid.
+    const auto controls = ~((bytes_value | high_bits) - ones * 0x20U) & ~bytes_value;
+    const auto special = (controls | ((del - ones) & ~del)) & high_bits;
+    if (special == 0) {
+        return 0;
+    }
+    // This exact HTAB mask cannot carry between bytes or hide a DEL match.
+    const auto tabs = bytes_value ^ (ones * 9U);
+    const auto tab_bits = ~(((tabs & low_bits) + low_bits) | tabs | low_bits);
+    return special & ~tab_bits;
+}
+
+[[nodiscard]] inline std::size_t http_field_value_prefix_size(std::string_view value) noexcept {
+    std::size_t index = 0;
+    while (value.size() - index >= sizeof(std::uint64_t)) {
+        const auto bytes_value = load_http_field_value_word(value.data() + index);
+        if (const auto invalid = invalid_http_field_value_mask(bytes_value); invalid != 0) {
+            return index + static_cast<std::size_t>(std::countr_zero(invalid)) / 8;
+        }
+        index += sizeof(bytes_value);
+    }
+    while (index < value.size() && is_http_field_value_char(static_cast<unsigned char>(value[index]))) {
+        ++index;
+    }
+    return index;
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+enum class field_line_folding_policy { mime,
+    http };
+
+// A fold always starts with CRLF followed by SP/HTAB. Leave bare CR/LF and
+// ordinary field separators visible to the protocol's field validator.
+[[nodiscard]] inline std::size_t find_field_line_fold(
+    std::string_view input, std::size_t start = 0) noexcept {
+    auto position = input.find("\r\n", start);
+    while (position != std::string_view::npos) {
+        if (position + 2 < input.size() && is_http_ows_char(input[position + 2])) {
+            return position;
+        }
+        position = input.find("\r\n", position + 2);
+    }
+    return std::string_view::npos;
+}
+
+// first_fold comes from find_field_line_fold. The caller owns storage through
+// every use of the resulting views; input must not borrow that storage.
+// MIME removes only CRLF. HTTP replaces the complete obs-fold, including its
+// adjacent OWS/RWS, with SP before field values are interpreted (RFC 9112 5.2).
+inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_fold,
+    field_line_folding_policy policy, std::string& storage) {
+    storage.clear();
+    storage.reserve(input.size());
+    std::size_t segment_begin = 0;
+    for (auto position = first_fold; position != std::string_view::npos;) {
+        auto segment_end = position;
+        auto next_segment = position + 2;
+        if (policy == field_line_folding_policy::http) {
+            while (segment_end > segment_begin && is_http_ows_char(input[segment_end - 1])) {
+                --segment_end;
+            }
+            while (next_segment < input.size() && is_http_ows_char(input[next_segment])) {
+                ++next_segment;
+            }
+        }
+        storage.append(input.substr(segment_begin, segment_end - segment_begin));
+        if (policy == field_line_folding_policy::http) {
+            storage.push_back(' ');
+        }
+        segment_begin = next_segment;
+        position = find_field_line_fold(input, next_segment);
+    }
+    storage.append(input.substr(segment_begin));
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

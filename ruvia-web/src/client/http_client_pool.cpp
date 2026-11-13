@@ -22,11 +22,11 @@
 
 #include "client/client_tls.h"
 #include "client/http_client_connection.h"
+#include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
-#include "client/http_client_result_budget.h"
 #include "client/http_client_transport_error.h"
 #include "integration/operation_lane_lease.h"
-#include "server/peer_address.h"
+#include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {
 namespace {

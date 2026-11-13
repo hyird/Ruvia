@@ -364,7 +364,7 @@ ruvia::app()
 - **连接标识**：`c.conn().connection_id()` 在进程内跨 worker、宿主与重新启动保持唯一，退役 ID 永不复用；同一连接上的全部请求与观察记录共享。已服务连接永不为 0，`test_app` 请求无连接，恒为 0。
 - **结构化 HTTP/2**：要求 `RUVIA_ENABLE_HTTP2`；帧与字段观察直接复用协议解析器，适合提取 Akamai 指纹所需事实，不重建请求字段顺序。字段、序号、规范化 flags 与无效输入的可观察范围见 [Sans-I/O 观察契约](core-and-http.md#421-帧与字段观察)；原始线上字节仍使用 `on_http2_input()`。
 
-#### 1.6.2 准入、生命周期与主动断连（`"ruvia/web/connection_events.h"`）
+#### 1.6.2 准入、生命周期与主动断连（`"ruvia/web/http_server.h"`）
 
 | 应用注册入口 | `http_server_callbacks` 字段 | 契约 |
 | --- | --- | --- |

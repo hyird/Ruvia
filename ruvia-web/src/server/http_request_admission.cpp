@@ -19,12 +19,12 @@
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_target_origin.h"
 
-#include "http/http_protocol_error_info.h"
 #include "ratelimit/rate_limiter.h"
 #include "router/route_table.h"
 #include "server/http_connection_state.h"
 #include "server/http_response_compression.h"
-#include "tls/tls_served_certificate.h"
+#include "server/inbound_transport_error.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

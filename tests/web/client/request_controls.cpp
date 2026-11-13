@@ -18,7 +18,6 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_websocket_request.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"

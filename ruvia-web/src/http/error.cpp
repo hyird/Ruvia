@@ -28,7 +28,7 @@
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia {
 namespace {

@@ -24,9 +24,9 @@
 
 #include "ruvia/core/blocking_pool.h"
 
-#include "integration/runtime_control_gate.h"
+#include "integration/runtime_control_completion.h"
 #include "server/http_server_listener.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {

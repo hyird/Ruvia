@@ -40,7 +40,6 @@
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
 #include "http/inline_http_header_views.h"
-#include "http/inline_text_concat.h"
 #include "http/session_access.h"
 #include "integration/operation_interrupt.h"
 #include "integration/operation_lane_lease.h"

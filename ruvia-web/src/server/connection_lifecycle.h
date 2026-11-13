@@ -2,20 +2,160 @@
 
 #include <algorithm>
 #include <array>
+#include <cerrno>
+#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 
 #include <asio/detail/socket_ops.hpp>
+#include <asio/error.hpp>
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
 
-#include "ruvia/web/connection_events.h"
+#include "ruvia/http/ip_address.h"
+#include "ruvia/web/http_client_types.h"
+#include "ruvia/web/server_config.h"
 
+#include "ratelimit/rate_limiter.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
-#include "server/peer_address.h"
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline ip_address to_ip_address(const asio::ip::address& address) noexcept {
+    if (address.is_v4()) {
+        return ip_address::ipv4(address.to_v4().to_bytes());
+    }
+    const auto v6 = address.to_v6();
+    return ip_address::ipv6(v6.to_bytes(), static_cast<std::uint32_t>(v6.scope_id()));
+}
+
+[[nodiscard]] inline asio::ip::address to_asio_address(const ip_address& address) noexcept {
+    if (address.family() == ip_address_family::ipv4) {
+        asio::ip::address_v4::bytes_type bytes{};
+        std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
+        return asio::ip::address_v4(bytes);
+    }
+    asio::ip::address_v6::bytes_type bytes{};
+    std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
+    return asio::ip::address_v6(bytes, address.scope_id());
+}
+
+// The peer address a connection's services name, shared by TCP and QUIC
+// sessions: dotted IPv4, also for an IPv4-mapped IPv6 peer, otherwise the
+// RFC 5952 IPv6 text.
+inline void assign_peer_address(std::string& output, const asio::ip::address& address) {
+    asio::ip::address_v4 v4;
+    if (address.is_v4()) {
+        v4 = address.to_v4();
+    } else {
+        const auto v6 = address.to_v6();
+        if (!v6.is_v4_mapped()) {
+            const auto bytes = v6.to_bytes();
+            std::array<char, 64> ipv6_buffer;
+            asio::error_code ec;
+            const char* formatted = asio::detail::socket_ops::inet_ntop(
+                ASIO_OS_DEF(AF_INET6), bytes.data(), ipv6_buffer.data(),
+                ipv6_buffer.size(), v6.scope_id(), ec);
+            if (formatted == nullptr) {
+                asio::detail::throw_error(ec);
+            }
+            output.assign(formatted, std::strlen(formatted));
+            return;
+        }
+        v4 = asio::ip::make_address_v4(asio::ip::v4_mapped, v6);
+    }
+    const auto v4_bytes = v4.to_bytes();
+    std::array<char, 15> buffer;
+    const auto formatted = format_ipv4_octets(v4_bytes.data(), buffer);
+    output.assign(formatted.data(), formatted.size());
+}
+
+}  // namespace ruvia::detail
+
+#if defined(_WIN32)
+#include <winerror.h>
+#endif
+
+namespace ruvia::detail {
+
+enum class accept_error_action : std::uint8_t { retry,
+    report_and_retry,
+    fail };
+
+// Peer disappearance and readiness races are normal accept outcomes. Resource
+// and network failures leave the listener usable but must remain observable.
+[[nodiscard]] inline accept_error_action classify_accept_error(const std::error_code& error) noexcept {
+    if (error == asio::error::connection_aborted || error == asio::error::connection_reset ||
+        error == asio::error::eof || error == asio::error::try_again ||
+        error == asio::error::would_block || error == asio::error::interrupted
+#if defined(_WIN32)
+        || (error.category() == asio::system_category() && error.value() == ERROR_NETNAME_DELETED)
+#endif
+    ) {
+        return accept_error_action::retry;
+    }
+    if (error == asio::error::no_descriptors || error == asio::error::no_buffer_space ||
+        error == asio::error::no_memory || error == std::errc::too_many_files_open_in_system ||
+        error == std::errc::protocol_error || error == asio::error::network_down ||
+        error == asio::error::network_unreachable || error == asio::error::host_unreachable ||
+        error == asio::error::no_protocol_option || error == asio::error::operation_not_supported ||
+        error == asio::error::no_permission || error == asio::error::timed_out) {
+        return accept_error_action::report_and_retry;
+    }
+#if defined(EHOSTDOWN) && defined(ENONET)
+    if (error.category() == asio::system_category() && (error.value() == EHOSTDOWN || error.value() == ENONET)) {
+        return accept_error_action::report_and_retry;
+    }
+#endif
+    return accept_error_action::fail;
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+inline void validate_client_tcp_config(const client_tcp_config& config) {
+    switch (config.no_delay_) {
+        case tcp_no_delay_policy::system_default:
+        case tcp_no_delay_policy::enable:
+            break;
+        default:
+            throw std::invalid_argument("TCP no-delay policy is invalid");
+    }
+    switch (config.keep_alive_) {
+        case tcp_keep_alive_policy::system_default:
+        case tcp_keep_alive_policy::enable:
+            break;
+        default:
+            throw std::invalid_argument("TCP keepalive policy is invalid");
+    }
+}
+
+// Returns the error of the first enabled policy that cannot be applied.
+[[nodiscard]] inline std::error_code apply_tcp_socket_policies(
+    asio::ip::tcp::socket& socket, const client_tcp_config& config) noexcept {
+    std::error_code error;
+    if (config.no_delay_ == tcp_no_delay_policy::enable) {
+        socket.set_option(asio::ip::tcp::no_delay(true), error);
+        if (error) {
+            return error;
+        }
+    }
+    if (config.keep_alive_ == tcp_keep_alive_policy::enable) {
+        socket.set_option(asio::socket_base::keep_alive(true), error);
+    }
+    return error;
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

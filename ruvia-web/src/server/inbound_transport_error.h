@@ -1,10 +1,45 @@
 #pragma once
 
+#include <cstdint>
+#include <string_view>
 #include <system_error>
 
 #include <asio/error.hpp>
+#include <asio/ssl/error.hpp>
 
-#include "http/http_stream_end.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/web/error.h"
+
+namespace ruvia::detail {
+
+// http_error_info borrows its fields. The caller's http_protocol_error lvalue
+// must outlive any suspension of the error handler that reads this view.
+[[nodiscard]] inline http_error_info copy_http_protocol_error_info(
+    const http_protocol_error& error RUVIA_LIFETIMEBOUND) noexcept {
+    return http_error_info({.status_ = error.status(),
+        .code_ = error.code(),
+        .message_ = std::string_view(error.what())});
+}
+http_error_info copy_http_protocol_error_info(const http_protocol_error&&) = delete;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+enum class http_stream_end : std::uint8_t { keep_open,
+    end };
+
+// Whether a read error marks the end of input rather than a read failure: a
+// TCP FIN or TLS close_notify (eof), or a TLS peer that closed TCP without
+// close_notify (stream_truncated). Message-delimited protocols above the
+// stream still detect a truncated message themselves; the transport only
+// reports that no more bytes follow.
+[[nodiscard]] inline bool is_stream_read_end(const std::error_code& error) noexcept {
+    return error == asio::error::eof || error == asio::ssl::error::stream_truncated;
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

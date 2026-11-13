@@ -16,7 +16,6 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "client/client_tls.h"
-#include "tls/tls_served_certificate.h"
 namespace ruvia::detail {
 namespace {
 

@@ -24,7 +24,6 @@
 #include "request/http_request_access.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_permessage_deflate.h"
-#include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia::detail {
 namespace {

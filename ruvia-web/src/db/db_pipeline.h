@@ -50,8 +50,6 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/core/fnv1a.h"
-
 namespace ruvia::detail {
 
 template <typename driver_type>

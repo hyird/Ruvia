@@ -1,4 +1,3 @@
-#include "server/http_server_tls_contexts.h"
 
 #include <array>
 #include <chrono>
@@ -18,13 +17,13 @@
 
 #include "ruvia/http/http_ascii.h"
 
-#include "server/peer_address.h"
+#include "server/connection_lifecycle.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_quic_connection.h"
 #endif
 
 #include "auth/constant_time.h"
-#include "server/http_server_tls_identity.h"
+#include "server/http_server_options.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_protocol_policy.h"
 

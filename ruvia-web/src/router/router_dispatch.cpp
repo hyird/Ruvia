@@ -49,8 +49,8 @@
 
 #include "http/request_body_loader.h"
 #include "http/session_access.h"
-#include "integration/borrowed_clients.h"
 #include "integration/operation_interrupt.h"
+#include "integration/worker_capabilities.h"
 #include "ratelimit/rate_limiter.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"

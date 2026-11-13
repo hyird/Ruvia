@@ -21,7 +21,7 @@
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_session.h"
 
-#include "client/client_host_resolver.h"
+#include "client/client_happy_eyeballs.h"
 #include "db/db_config_storage.h"
 #include "db/db_digest.h"
 #include "db/db_registry.h"

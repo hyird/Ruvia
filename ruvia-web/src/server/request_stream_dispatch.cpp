@@ -1,5 +1,3 @@
-#include "server/request_stream_dispatch.h"
-
 #include <exception>
 #include <optional>
 #include <span>
@@ -13,6 +11,8 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
+
+#include "server/http_upgrade_route.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 #endif

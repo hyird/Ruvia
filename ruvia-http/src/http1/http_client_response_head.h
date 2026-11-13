@@ -11,7 +11,7 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_length.h"
+#include "coding/http_content_coding.h"
 #include "coding/http_transfer_encoding.h"
 #include "field/http_connection_fields.h"
 #include "parser/http_header_descriptor_storage.h"

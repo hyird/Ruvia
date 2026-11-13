@@ -29,7 +29,7 @@
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
 #include "server/response_file_source.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia {
 namespace {

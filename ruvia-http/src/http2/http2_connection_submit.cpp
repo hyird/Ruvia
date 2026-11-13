@@ -19,10 +19,9 @@
 
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
-#include "memory/geometric_reserve.h"
+#include "memory/http_c_library_memory.h"
 #include "parser/http_request_target.h"
 #include "response/http_binary_response_fields.h"
-#include "response/http_final_response_control_plan.h"
 #include "response/http_response_header_state.h"
 #include "websocket/http_websocket_handshake_fields.h"
 

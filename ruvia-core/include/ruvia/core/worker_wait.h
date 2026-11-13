@@ -15,7 +15,6 @@
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/core/worker_wait_result.h"
 
 // Building blocks of a worker-bound wait with a single pending waiter, as used
 // by channel and one_shot. A composed primitive owns a shared domain state

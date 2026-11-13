@@ -15,7 +15,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/server_config.h"
 
-#include "server/worker_codecs.h"
+#include "server/http_server_options.h"
 
 namespace ruvia::detail {
 

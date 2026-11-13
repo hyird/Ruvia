@@ -23,7 +23,7 @@
 #include "ruvia/http/ip_address.h"
 
 #include "field/http_date_calendar.h"
-#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
 #include "parser/http_uri_grammar.h"
 #include "wire/http_wire_sink.h"
 

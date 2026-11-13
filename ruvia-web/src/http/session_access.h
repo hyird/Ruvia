@@ -11,7 +11,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia {
 class session_middleware;

@@ -13,8 +13,8 @@
 #include "ruvia/core/socket.h"
 
 #include "client/client_happy_eyeballs.h"
-#include "http/http_stream_end.h"
-#include "tls/tls_peer.h"
+#include "server/inbound_transport_error.h"
+#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 

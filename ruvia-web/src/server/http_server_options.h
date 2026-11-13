@@ -1,21 +1,197 @@
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <span>
+#include <utility>
+#include <vector>
 
-#include "ruvia/web/connection_events.h"
+#include <asio/ip/address.hpp>
+#include <openssl/types.h>
+
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_content_codec.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_content_encoder.h"
+#include "ruvia/http/websocket_deflate_codecs.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/server_connection.h"
 #include "ruvia/web/server_observation.h"
 
-#include "server/document_root_binding.h"
+#include "server/http_server_listener.h"
+
+namespace ruvia {
+
+class static_root;
+
+namespace detail {
+
+// One immutable document-root snapshot. The application's refresher builds it
+// once and every worker shares it; reference counting happens only when a
+// snapshot is published, adopted, or retired, never per request.
+using document_root_snapshot = std::shared_ptr<const static_root>;
+
+// One worker's adopted snapshot plus that worker's request leases on it. Only
+// the owning worker touches the counter, so leasing stays a plain increment.
+// The worker keeps a superseded generation until its leases drain, which keeps
+// the snapshot alive for requests that still borrow it.
+class document_root_generation final {
+public:
+    explicit document_root_generation(document_root_snapshot root) noexcept
+        : root_(std::move(root)) {}
+
+    ~document_root_generation() {
+        if (leases_ != 0) {
+            // A binding still points into this generation. Destroying it would
+            // leave the request with a dangling root and counter.
+            std::terminate();
+        }
+    }
+
+    document_root_generation(const document_root_generation&) = delete;
+    document_root_generation& operator=(const document_root_generation&) = delete;
+
+    [[nodiscard]] const static_root* root() const noexcept {
+        return root_.get();
+    }
+
+    [[nodiscard]] bool leased() const noexcept {
+        return leases_ != 0;
+    }
+
+private:
+    friend class document_root_binding;
+
+    document_root_snapshot root_;
+    std::size_t leases_{0};
+};
+
+// A request-time view of the configured document root. The object is
+// deliberately not default-constructible or aggregate-initializable: callers
+// choose between no root and a worker's current generation. It is move-only
+// because a configured binding is also the request's lease on that generation;
+// copying the view would make that ownership boundary ambiguous and could
+// reintroduce a dangling static_root after a refresh.
+class document_root_binding final {
+public:
+    [[nodiscard]] static document_root_binding none() noexcept {
+        return document_root_binding(nullptr);
+    }
+
+    [[nodiscard]] static document_root_binding configured(document_root_generation& generation) noexcept {
+        ++generation.leases_;
+        return document_root_binding(&generation);
+    }
+
+    ~document_root_binding() {
+        reset();
+    }
+
+    document_root_binding(const document_root_binding&) = delete;
+    document_root_binding& operator=(const document_root_binding&) = delete;
+
+    document_root_binding(document_root_binding&& other) noexcept
+        : generation_(std::exchange(other.generation_, nullptr)) {}
+
+    document_root_binding& operator=(document_root_binding&& other) noexcept {
+        if (this != &other) {
+            reset();
+            generation_ = std::exchange(other.generation_, nullptr);
+        }
+        return *this;
+    }
+
+    [[nodiscard]] const static_root* root() const noexcept {
+        return generation_ == nullptr ? nullptr : generation_->root();
+    }
+
+private:
+    explicit document_root_binding(document_root_generation* generation) noexcept
+        : generation_(generation) {}
+
+    void reset() noexcept {
+        auto* const generation = std::exchange(generation_, nullptr);
+        if (generation != nullptr) {
+            if (generation->leases_ == 0) {
+                std::terminate();
+            }
+            --generation->leases_;
+        }
+    }
+
+    document_root_generation* generation_;
+};
+
+}  // namespace detail
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+using stream_encoder_lease = http_stream_encoder_lease;
+
+class worker_codecs final {
+public:
+    worker_codecs() noexcept = default;
+    ~worker_codecs() = default;
+    worker_codecs(const worker_codecs&) = delete;
+    worker_codecs& operator=(const worker_codecs&) = delete;
+
+    [[nodiscard]] http_content_encode_context& encoder(http_content_coding coding) {
+        return content_codecs_.encoder(coding);
+    }
+
+    [[nodiscard]] stream_encoder_lease acquire_stream_encoder(http_content_coding coding) {
+        return content_codecs_.acquire_stream_encoder(coding);
+    }
+
+    [[nodiscard]] websocket_deflate_codecs& websocket_deflate() noexcept {
+        return websocket_deflate_;
+    }
+
+private:
+    http_worker_codecs content_codecs_;
+    websocket_deflate_codecs websocket_deflate_;
+};
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Validates every TLS setting of one listener before any credential is read,
+// then parses each identity (primary, SNI and local-address identities) from
+// its PEM files or in-memory PEM, and the client CA bundle, exactly once.
+// Invalid settings throw std::invalid_argument; unreadable, mismatched or
+// invalid credentials throw asio::system_error. File names reach OpenSSL as
+// UTF-8, which its file BIOs decode (on Windows into _wfopen), so no path is
+// narrowed through the ANSI code page. Passwords and PEM text are only
+// borrowed while their identity is parsed and are never copied; an empty
+// password uses the noninteractive default and terminal prompting is disabled.
+[[nodiscard]] http_server_listener_definition::tls load_http_server_tls(
+    const tls_config& config);
+
+// The identities of `config` alone, validated then parsed as by
+// load_http_server_tls(); for application::replace_tls_identities().
+[[nodiscard]] std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
+    const tls_config& config);
+
+// Throws std::invalid_argument unless `config` keeps the client certificate
+// policy (the same CA path and requirement) and the outgoing record limit
+// `current` was loaded with: replacing identities never changes them.
+void ensure_same_http_server_tls_policy(const http_server_listener_definition::tls& current, const tls_config& config);
+
+// Installs client-certificate verification into a worker's TLS context.
+// Never touches the file system.
+void configure_http_server_client_certificates(SSL_CTX& context_value,
+    const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates);
+
+}  // namespace ruvia::detail
 
 namespace ruvia {
 class env;
@@ -230,4 +406,135 @@ struct http_server_options final {
     }
 };
 
+}  // namespace ruvia::detail
+
+namespace ruvia {
+struct listen_config;
+}
+
+namespace ruvia::detail {
+
+// Owns every inherited socket and cleanses every TLS secret, including when
+// configuration validation or allocation fails.
+[[nodiscard]] std::vector<http_server_listener_definition> load_server_listeners(
+    std::span<const listen_config> configs);
+
+// Rejects collisions in their separate TCP and HTTP/3 UDP endpoint namespaces.
+void ensure_new_listener_endpoints(std::span<const http_server_listener_definition> existing,
+    std::span<const http_server_listener_definition> added);
+
+void validate_server_limits(const server_config& config);
+
+// `listener` prepared for a run with `options`: a clone sharing its loaded
+// credentials and inherited sockets, with a ticket key ring whose epochs
+// start at `key_origin`, the run's origin for every TLS listener, and with
+// HTTP/3 its connection ID secret. Throws std::invalid_argument for a
+// listener the run cannot serve, including a connection or request_stream
+// listener whose application callback `options` lacks.
+[[nodiscard]] http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
+    const http_server_options& options, std::chrono::steady_clock::time_point key_origin);
+
+class validated_http_server_configuration final {
+public:
+    validated_http_server_configuration(const validated_http_server_configuration&) = delete;
+    validated_http_server_configuration& operator=(const validated_http_server_configuration&) = delete;
+    validated_http_server_configuration(validated_http_server_configuration&&) = default;
+    validated_http_server_configuration& operator=(validated_http_server_configuration&&) = default;
+
+    [[nodiscard]] std::span<const http_server_listener_definition> listeners() const& noexcept RUVIA_LIFETIMEBOUND {
+        return listeners_;
+    }
+    std::span<const http_server_listener_definition> listeners() const&& = delete;
+
+    [[nodiscard]] const http_server_options& options() const& noexcept RUVIA_LIFETIMEBOUND {
+        return options_;
+    }
+    const http_server_options& options() const&& = delete;
+
+    // Where the ticket key epochs of every TLS listener of the run start,
+    // including listeners added while it runs.
+    [[nodiscard]] std::chrono::steady_clock::time_point tls_key_origin() const noexcept {
+        return tls_key_origin_;
+    }
+
+private:
+    validated_http_server_configuration(
+        std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+
+    friend validated_http_server_configuration validate_http_server_configuration(
+        std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+
+    std::vector<http_server_listener_definition> listeners_;
+    http_server_options options_;
+    std::chrono::steady_clock::time_point tls_key_origin_;
+};
+
+[[nodiscard]] validated_http_server_configuration validate_http_server_configuration(
+    std::span<const http_server_listener_definition> listeners, http_server_options&& options);
+
+}  // namespace ruvia::detail
+
+#if defined(RUVIA_ENABLE_HTTP3)
+namespace ruvia {
+class http3_quic_connection;
+struct http3_connection_options;
+}  // namespace ruvia
+#endif
+
+namespace ruvia::detail {
+
+// Builds one worker's TLS contexts of a listener at startup, from its loaded
+// definition: the TCP context (TLS 1.1..1.3, h2 only with TLS >= 1.2,
+// http/1.1, http/1.0, or connection dispatch's custom ALPN) and, with an
+// HTTP/3 service, the QUIC context (TLS 1.3 only, ALPN h3 only, opt-in early
+// data). Neither carries an identity: each
+// handshake selects one from the identity set the session holds when its
+// server_name is known (exact SNI, wildcard SNI, the local address bound by
+// bind_tls_local_address(), else the primary) and installs it on its own SSL.
+// Both bind resumption to the offered server_name and share the worker's copy
+// of the listener's ticket keys. Replacing identities never rebuilds them, so
+// their session caches and ticket keys survive it. observe_client_hello
+// installs the message callback that delivers each connection's ClientHello
+// to its observe_tls_client_hello() observation; without it no observation
+// branch is installed. A listener without TLS keeps no context.
+void configure_http_server_tls_contexts(http_server_session_config& session, bool observe_client_hello);
+
+using prepared_http_server_session =
+    std::unique_ptr<http_server_session_config>;
+
+// Builds a stable-address candidate off the owner loop. Its contexts borrow
+// only its own fields; move the owning pointer, never the session itself.
+[[nodiscard]] prepared_http_server_session prepare_http_server_session_config(
+    const http_server_listener_definition& definition, bool observe_client_hello);
+
+// Attaches the local address a connection arrived at, which identity
+// selection matches against local-address identities. The caller keeps it
+// alive and unchanged for the SSL's whole lifetime; a connection without one
+// never matches them.
+void bind_tls_local_address(SSL& tls, const asio::ip::address& local_address);
+
+// A selector needs the same stable endpoint/connection binding as an observer,
+// even when no observer is registered. Does not install message observation.
+[[nodiscard]] bool tls_certificate_selection_enabled(const http_server_session_config& session) noexcept;
+
+// One connection's on_tls_client_hello delivery: every field of the record
+// except the message, which the ClientHello supplies.
+struct tls_client_hello_observation final {
+    tls_client_hello_callback_ref callback_;
+    server_observation_access::tls_client_hello_fields fields_;
+};
+
+// Attaches `observation` to a connection's SSL created from a context that
+// configure_http_server_tls_contexts() built with observe_client_hello. The
+// caller keeps it alive and unchanged for the SSL's whole lifetime.
+void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& observation);
+
+#if defined(RUVIA_ENABLE_HTTP3)
+// Called after binding the QUIC connection, before receiving its Initial.
+// `version` is the QUIC version of the client's first Initial. The caller
+// owns resumption_context for the entire SSL lifetime.
+void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
+    std::uint32_t version, const http3_connection_options& options, bool early_data,
+    std::array<unsigned char, 32>& resumption_context);
+#endif
 }  // namespace ruvia::detail

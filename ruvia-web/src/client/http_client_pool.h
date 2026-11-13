@@ -36,13 +36,10 @@
 #include "ruvia/http/http_priority.h"
 #include "ruvia/web/http_client.h"
 
-#include "client/client_request_policy.h"
 #include "client/client_tcp_transport.h"
 #include "client/http_client_config_storage.h"
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_memory.h"
-#include "client/http_client_result_budget.h"
-#include "client/http_client_worker_limits.h"
 
 #ifdef RUVIA_ENABLE_HTTP3
 namespace ruvia::detail {

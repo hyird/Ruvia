@@ -32,11 +32,9 @@
 #include "ruvia/core/timer.h"
 
 #include "server/connection_count.h"
-#include "server/tcp_accept_error.h"
+#include "server/connection_lifecycle.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3/http3_connection_id.h"
 #include "http3/http3_endpoint.h"
-#include "http3/http3_udp_receive.h"
 #endif
 
 namespace ruvia::detail {

@@ -54,11 +54,9 @@
 #include "context/context_access.h"
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_protocol_error_info.h"
 #include "http/http_socket_tunnel_transport.h"
 #include "http/http_tunnel_session.h"
 #include "http/request_body_loader.h"
-#include "http/tls_tunnel_output.h"
 #include "http2/http2_sans_io_session.h"
 #include "integration/operation_interrupt.h"
 #include "router/route_table.h"
@@ -76,9 +74,7 @@
 #include "server/inbound_socket_stream.h"
 #include "server/inbound_transport_error.h"
 #include "server/multiplexed_stream_signal.h"
-#include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
-#include "server/worker_codecs.h"
 #include "server/worker_connections.h"
 
 namespace ruvia::detail {

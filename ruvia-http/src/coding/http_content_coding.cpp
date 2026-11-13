@@ -12,18 +12,14 @@
 
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
-#include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
-#include "coding/http_content_codec.h"
-#include "field/http_quality_value.h"
+#include "field/http_connection_fields.h"
 #include "request/http_request_access.h"
-#include "response/http_response_header_bits.h"
 #include "response/http_response_header_state.h"
-#include "response/http_response_header_storage.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,

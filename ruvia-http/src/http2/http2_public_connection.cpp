@@ -21,7 +21,9 @@
 #include "http2/http2_connection.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "request/http_request_access.h"
-#include "websocket/websocket_server_negotiation.h"
+#include "websocket/http_websocket_handshake_fields.h"
+#include "websocket/http_websocket_permessage_deflate.h"
+
 namespace ruvia {
 
 http2_setting_entry http2_received_settings::at(std::size_t index) const {

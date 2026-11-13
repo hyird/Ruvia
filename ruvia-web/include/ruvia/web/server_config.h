@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,6 +16,7 @@
 #include <vector>
 
 #include "ruvia/core/move_only_function.h"
+#include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client_ip.h"
@@ -601,4 +603,114 @@ using connection_failure_callback = move_only_function<void(const connection_fai
 // and throws std::logic_error.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using app_hook = move_only_function<void()>;
+}  // namespace ruvia
+
+namespace ruvia {
+namespace detail {
+class prepared_listener_state;
+struct prepared_listener_access;
+}  // namespace detail
+
+// 拥有一批已绑定但尚未接入的监听事务。TCP 握手可能完成，但处理器不会执行。
+// prepare 成功时 TLS、QUIC 与全部 worker 资源已就绪；同宿主的其他监听
+// 控制等待该事务结束。多个端点须用 prepare_listeners 同批准备，不能在持有
+// 票据时再 await 本宿主监听控制。先发布业务配置，再 activate()。
+// 任一项准备失败、放弃票据或宿主关闭均回滚整批，不影响原有监听。
+// 可跨线程移动、析构；activate/cancel 必须在 prepare 的 caller worker 上 await。
+// 消耗型操作在调用时接管句柄；丢弃冷任务或析构句柄均请求回滚。
+// 析构不阻塞；cancel() 等待回滚完成。caller 与宿主循环须驱动至操作完成。
+class prepared_listener final {
+public:
+    prepared_listener(prepared_listener&&) noexcept;
+    prepared_listener& operator=(prepared_listener&&) noexcept;
+    prepared_listener(const prepared_listener&) = delete;
+    prepared_listener& operator=(const prepared_listener&) = delete;
+    ~prepared_listener();
+
+    // 只提交已完成的准备；已关闭宿主或空句柄抛 logic_error。
+    [[nodiscard]] task<void> activate() &&;
+    [[nodiscard]] task<void> cancel() &&;
+    [[nodiscard]] bool valid() const noexcept;
+
+private:
+    explicit prepared_listener(std::shared_ptr<detail::prepared_listener_state>) noexcept;
+    std::shared_ptr<detail::prepared_listener_state> state_;
+    friend struct detail::prepared_listener_access;
+};
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+class connection_event final {
+public:
+    connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept
+        : id_(id),
+          local_(std::move(local)),
+          remote_(std::move(remote)),
+          quic_(quic) {}
+    [[nodiscard]] std::uint64_t connection_id() const noexcept {
+        return id_;
+    }
+    [[nodiscard]] const ip_endpoint& local() const& noexcept RUVIA_LIFETIMEBOUND {
+        return local_;
+    }
+    const ip_endpoint& local() const&& = delete;
+    [[nodiscard]] const ip_endpoint& remote() const& noexcept RUVIA_LIFETIMEBOUND {
+        return remote_;
+    }
+    const ip_endpoint& remote() const&& = delete;
+    [[nodiscard]] bool quic() const noexcept {
+        return quic_;
+    }
+
+private:
+    std::uint64_t id_;
+    ip_endpoint local_;
+    ip_endpoint remote_;
+    bool quic_;
+};
+
+enum class connection_close_reason : std::uint8_t {
+    normal,
+    peer_eof,
+    timeout,
+    cancelled,
+    aborted,
+    protocol_error,
+    transport_error,
+    handler_error,
+};
+
+struct connection_close_info final {
+    connection_close_reason reason_{connection_close_reason::normal};
+    // Transport bytes actually received/sent, including TLS ciphertext and
+    // QUIC retransmissions; replayed prefixes never count twice.
+    std::uint64_t bytes_in_{};
+    std::uint64_t bytes_out_{};
+    // New HTTP request heads, once per request; raw connections remain zero.
+    std::uint64_t requests_{};
+};
+
+namespace detail {
+using connection_admission_callback_ref = callback_ref<bool(const connection_event&) noexcept>;
+using connection_open_callback_ref = callback_ref<std::shared_ptr<void>(const connection_event&)>;
+using connection_close_callback_ref = callback_ref<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
+}  // namespace detail
+
+// Synchronous worker callbacks; targets must support concurrent workers. False
+// admission silently rejects before creating TLS or protocol session resources.
+// Rejected connections have no open/close events. Every admitted connection has
+// one open and one close, including failed handshakes and cancelled cold tasks.
+// The optional shared state returned by open is retained through close. Contexts
+// borrow its connection slot; connection_state() copies its shared ownership.
+// The close argument borrows that shared_ptr only for the callback; copy it to
+// retain the object beyond connection retirement.
+// Close runs after ID retirement, outside locks, before the server releases its
+// state reference. Admission and close must not throw. If open throws, close
+// still runs once with empty state, and the failure reaches the failure sink.
+using connection_admission_callback = move_only_function<bool(const connection_event&) noexcept>;
+using connection_open_callback = move_only_function<std::shared_ptr<void>(const connection_event&)>;
+using connection_close_callback = move_only_function<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
+
 }  // namespace ruvia

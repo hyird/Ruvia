@@ -41,18 +41,16 @@
 
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_protocol_error_info.h"
-#include "http/http_stream_end.h"
 #include "integration/operation_interrupt.h"
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
 #include "server/http_response_compression.h"
 #include "server/http_response_stream_dispatch.h"
+#include "server/http_server_options.h"
+#include "server/http_upgrade_route.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
-#include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
-#include "server/worker_codecs.h"
 
 namespace ruvia {
 

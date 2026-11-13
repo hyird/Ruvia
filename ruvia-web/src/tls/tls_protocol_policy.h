@@ -1,11 +1,24 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
 #include <string_view>
 
+#include <openssl/bio.h>
+#include <openssl/rand.h>
+#include <openssl/ssl.h>
 #include <openssl/types.h>
+#include <openssl/x509.h>
+
+#include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_target_origin.h"
 
 namespace ruvia::detail {
 
@@ -62,6 +75,196 @@ private:
     std::uint64_t record_limit_;
     native_tls_context_scope* previous_;
     std::exception_ptr failure_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline bool is_ascii_dns_alnum(unsigned char byte) noexcept {
+    return (byte >= '0' && byte <= '9') || (byte >= 'A' && byte <= 'Z') ||
+           (byte >= 'a' && byte <= 'z');
+}
+
+[[nodiscard]] inline bool is_ascii_dns_digit(unsigned char byte) noexcept {
+    return byte >= '0' && byte <= '9';
+}
+
+// Validates an ASCII transport hostname with an optional root dot. This is
+// intentionally narrower than a DNS owner name or URI reg-name; the
+// four-numeric-label exclusion is lexical and does not parse IPv4 addresses.
+[[nodiscard]] inline bool is_valid_dns_host(std::string_view host) noexcept {
+    if (host.ends_with('.')) {
+        host.remove_suffix(1);
+    }
+    if (host.empty() || host.ends_with('.') || host.size() > 253) {
+        return false;
+    }
+
+    std::size_t labels = 0;
+    bool saw_dot = false;
+    bool all_labels_numeric = true;
+    std::size_t label_start = 0;
+    while (label_start < host.size()) {
+        const auto label_end = host.find('.', label_start);
+        const auto end = label_end == std::string_view::npos ? host.size() : label_end;
+        const auto label_length = end - label_start;
+        if (label_length == 0 || label_length > 63) {
+            return false;
+        }
+        const auto first = static_cast<unsigned char>(host[label_start]);
+        const auto last = static_cast<unsigned char>(host[end - 1]);
+        if (!is_ascii_dns_alnum(first) || !is_ascii_dns_alnum(last)) {
+            return false;
+        }
+
+        bool label_numeric = true;
+        for (std::size_t i = label_start; i < end; ++i) {
+            const auto byte = static_cast<unsigned char>(host[i]);
+            if (!is_ascii_dns_alnum(byte) && byte != '-') {
+                return false;
+            }
+            label_numeric = label_numeric && is_ascii_dns_digit(byte);
+        }
+        all_labels_numeric = all_labels_numeric && label_numeric;
+        ++labels;
+        if (label_end == std::string_view::npos) {
+            break;
+        }
+        saw_dot = true;
+        label_start = end + 1;
+    }
+    return !(saw_dot && labels == 4 && all_labels_numeric);
+}
+
+}  // namespace ruvia::detail
+
+// What a finished TLS handshake negotiated with the peer: the selected ALPN
+// protocol, the offered server_name and the verified peer certificate identity.
+
+namespace ruvia::detail {
+
+// The ALPN protocol the handshake selected; empty when none was negotiated.
+[[nodiscard]] inline std::string_view tls_selected_alpn(SSL& ssl) noexcept {
+    const unsigned char* selected = nullptr;
+    unsigned int size = 0;
+    SSL_get0_alpn_selected(&ssl, &selected, &size);
+    return {reinterpret_cast<const char*>(selected), size};
+}
+
+// The host_name the client offered in server_name (RFC 6066 §3); empty when
+// it offered none. The view lives as long as the SSL.
+[[nodiscard]] inline std::string_view tls_server_name(SSL& ssl) noexcept {
+    const char* name = SSL_get_servername(&ssl, TLSEXT_NAMETYPE_host_name);
+    return name == nullptr ? std::string_view{} : std::string_view(name);
+}
+
+// Surface certificate presence independently of its Subject: RFC 5280 section
+// 4.1.2.6 permits an empty DN with a critical subjectAltName. Conversion failure
+// must not turn a verified identity into the "no certificate" alternative.
+inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, std::string& out) {
+    out.clear();
+    const X509* const certificate = SSL_get0_peer_certificate(ssl);
+    if (certificate == nullptr) {
+        return std::nullopt;
+    }
+    const X509_NAME* subject = X509_get_subject_name(certificate);
+    if (subject == nullptr) {
+        throw std::runtime_error("TLS client certificate has no subject");
+    }
+    // Render the DN in RFC 2253 form through a memory BIO. Unlike
+    // X509_NAME_oneline into a fixed 256-byte buffer, this captures the full
+    // subject without silent truncation and produces the unambiguous,
+    // standard-parseable form recommended for authorization.
+    const auto bio = std::unique_ptr<BIO, decltype(&BIO_free)>(BIO_new(BIO_s_mem()), &BIO_free);
+    if (bio == nullptr) {
+        throw std::runtime_error("TLS client certificate subject buffer could not be allocated");
+    }
+    if (X509_NAME_print_ex(bio.get(), subject, 0, XN_FLAG_RFC2253) < 0) {
+        throw std::runtime_error("TLS client certificate subject could not be rendered");
+    }
+    char* data = nullptr;
+    const long length = BIO_get_mem_data(bio.get(), &data);
+    if (length < 0 || (length > 0 && data == nullptr)) {
+        throw std::runtime_error("TLS client certificate subject could not be read");
+    }
+    if (length > 0) {
+        out.assign(data, static_cast<std::size_t>(length));
+    }
+    return std::string_view(out);
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Fills bytes from OpenSSL's CSPRNG. Returns false when the generator cannot
+// produce output; callers translate that into their own failure contract.
+[[nodiscard]] inline bool fill_random_bytes(std::span<unsigned char> bytes) noexcept {
+    return RAND_bytes_ex(nullptr, bytes.data(), bytes.size(), 0) == 1;
+}
+
+// Lowercase hex characters of a token: 24 random bytes, 192 bits.
+inline constexpr std::size_t secure_token_size = 48;
+
+[[nodiscard]] inline std::string_view generate_secure_token(std::span<char, secure_token_size> buffer) {
+    std::array<unsigned char, secure_token_size / 2> raw;
+    if (!fill_random_bytes(raw)) {
+        throw std::runtime_error("secure random generation failed");
+    }
+    http_encode_lower_hex(buffer.data(), std::span<const unsigned char>(raw));
+    return std::string_view(buffer.data(), buffer.size());
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// The certificate one server TLS connection presented, answering RFC 9110
+// §7.4's question whether it is valid for a request's target host. RFC 9525
+// §6.3 matching: subjectAltName DNS-ID or IP-ID only (the subject CN is never
+// consulted), a wildcard only as a whole left-most label. Matching against the
+// certificate, not the SNI name, keeps RFC 9113 §9.1.1 connection reuse
+// working for every name the certificate covers.
+//
+// Lives on the connection's frame after the handshake and is used only on its
+// thread. Verdicts are cached for the last few distinct hosts, so a
+// connection pays OpenSSL's certificate scan once per host, not per request.
+class tls_served_certificate final {
+public:
+    // `certificate` is the leaf the handshake selected and installed on its
+    // SSL (SSL_get_certificate), borrowed for the connection's lifetime;
+    // null fails every check closed.
+    explicit tls_served_certificate(X509* certificate) noexcept
+        : certificate_(certificate) {}
+
+    tls_served_certificate(const tls_served_certificate&) = delete;
+    tls_served_certificate& operator=(const tls_served_certificate&) = delete;
+
+    // `origin` must ask for verify_certificate.
+    [[nodiscard]] bool covers(const http_target_origin& origin) noexcept;
+
+private:
+    // DNS names are at most 253 octets without the trailing dot; a longer
+    // host is checked without caching.
+    static constexpr std::size_t cached_key_capacity = 253;
+    static constexpr std::size_t key_storage_capacity = 256;
+    static constexpr std::size_t cache_size = 4;
+
+    struct cached_verdict final {
+        std::uint8_t key_offset_{0};
+        std::uint8_t key_size_{0};
+        http_target_host_kind kind_{http_target_host_kind::dns_name};
+        bool covered_{false};
+    };
+
+    [[nodiscard]] bool check(const http_target_origin& origin) const noexcept;
+
+    X509* certificate_;
+    std::array<char, key_storage_capacity> key_storage_{};
+    std::array<cached_verdict, cache_size> cache_{};
+    std::uint16_t key_used_{0};
+    std::uint8_t cached_{0};
 };
 
 }  // namespace ruvia::detail

@@ -7,13 +7,13 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/web/http_client_websocket_request.h"
+#include "ruvia/web/http_client.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_state.h"
 #include "http/inline_http_header_views.h"
-#include "tls/tls_random.h"
+#include "tls/tls_protocol_policy.h"
 #include "websocket/http_websocket_connection.h"
 
 namespace ruvia::detail {

@@ -18,7 +18,7 @@
 
 #include "client/http_client_connection.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_response_decoding.h"
+#include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
 #include "client/http_client_transport_error.h"
 #include "http/inline_http_header_views.h"

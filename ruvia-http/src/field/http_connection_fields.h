@@ -1,20 +1,90 @@
-#include "ruvia/http/http_field_values.h"
 #pragma once
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <span>
 #include <string_view>
 #include <type_traits>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_interim_response.h"
 
 #include "field/http_field_kind.h"
-#include "response/http_response_header_bits.h"
+
+namespace ruvia::detail {
+
+inline constexpr std::uint32_t response_header_content_length = 1U << 0;
+inline constexpr std::uint32_t response_header_content_encoding = 1U << 1;
+inline constexpr std::uint32_t response_header_content_type = 1U << 2;
+inline constexpr std::uint32_t response_header_connection = 1U << 3;
+inline constexpr std::uint32_t response_header_vary = 1U << 4;
+inline constexpr std::uint32_t response_header_date = 1U << 5;
+inline constexpr std::uint32_t response_header_server = 1U << 6;
+inline constexpr std::uint32_t response_header_cache_control = 1U << 7;
+inline constexpr std::uint32_t response_header_transfer_encoding = 1U << 8;
+inline constexpr std::uint32_t response_header_allow = 1U << 9;
+inline constexpr std::uint32_t response_header_access_control_allow_origin = 1U << 10;
+inline constexpr std::uint32_t response_header_access_control_allow_credentials = 1U << 11;
+inline constexpr std::uint32_t response_header_access_control_allow_methods = 1U << 12;
+inline constexpr std::uint32_t response_header_access_control_allow_headers = 1U << 13;
+inline constexpr std::uint32_t response_header_access_control_max_age = 1U << 14;
+inline constexpr std::uint32_t response_header_access_control_expose_headers = 1U << 15;
+inline constexpr std::uint32_t response_header_accept_ranges = 1U << 16;
+inline constexpr std::uint32_t response_header_content_range = 1U << 17;
+inline constexpr std::uint32_t response_header_etag = 1U << 18;
+inline constexpr std::uint32_t response_header_last_modified = 1U << 19;
+inline constexpr std::uint32_t response_header_location = 1U << 20;
+inline constexpr std::uint32_t response_header_set_cookie = 1U << 21;
+inline constexpr std::size_t response_known_header_count = 22;
+inline constexpr std::uint32_t response_header_upgrade = 1U << 22;
+inline constexpr std::uint32_t response_header_trailer = 1U << 23;
+inline constexpr std::uint32_t response_header_keep_alive = 1U << 24;
+inline constexpr std::uint32_t response_header_proxy_connection = 1U << 25;
+
+[[nodiscard]] inline constexpr std::size_t response_known_header_slot(std::uint32_t bit) noexcept {
+    constexpr std::uint32_t known_mask = (1U << response_known_header_count) - 1U;
+    if (bit == 0 || (bit & ~known_mask) != 0 || (bit & (bit - 1U)) != 0) {
+        return response_known_header_count;
+    }
+    return static_cast<std::size_t>(std::countr_zero(bit));
+}
+
+[[nodiscard]] inline bool response_header_append_forbidden(std::uint32_t bit) noexcept {
+    return bit == response_header_content_length || bit == response_header_content_type ||
+           bit == response_header_date || bit == response_header_server ||
+           bit == response_header_transfer_encoding || bit == response_header_allow ||
+           bit == response_header_access_control_allow_origin ||
+           bit == response_header_access_control_allow_credentials ||
+           bit == response_header_access_control_max_age || bit == response_header_accept_ranges ||
+           bit == response_header_content_range || bit == response_header_etag ||
+           bit == response_header_last_modified || bit == response_header_location;
+}
+
+[[nodiscard]] std::uint32_t classify_response_header_name(std::string_view name) noexcept;
+
+// RFC 7541 §7.1.3 / RFC 9204 §4.2.1: credential-bearing fields use the
+// never-indexed literal so an intermediary never places them in a shared dynamic table.
+[[nodiscard]] inline bool http_field_never_indexed(std::string_view name) noexcept {
+    const auto field = classify_http_field_name(name);
+    return field.kind_ == http_field_kind::authorization ||
+           field.kind_ == http_field_kind::proxy_authorization ||
+           field.kind_ == http_field_kind::cookie ||
+           field.response_bit_ == response_header_set_cookie;
+}
+
+[[nodiscard]] std::string_view response_known_header_lowercase_name(std::uint32_t known_bit) noexcept;
+
+}  // namespace ruvia::detail
+
+#pragma once
 
 namespace ruvia::detail {
 
@@ -356,6 +426,328 @@ enum class http_response_control_field_status : std::uint8_t {
 [[nodiscard]] inline bool http_response_upgrade_pair_valid(
     const http_connection_options& connection_options, const http_upgrade_protocols& upgrade_protocols) noexcept {
     return !upgrade_protocols.has_field() || connection_options.upgrade();
+}
+
+}  // namespace ruvia::detail
+
+// Shared quality parsing (RFC 9110 section 12.4.2). Token fields use one
+// optional weight; media ranges extract q from their parameters.
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline int http_parse_quality_value(std::string_view value) noexcept {
+    value = http_trim_ows(value);
+    if (value == "1") {
+        return 1000;
+    }
+    if (value == "0") {
+        return 0;
+    }
+    if (value.size() >= 2 && value[1] == '.' && (value[0] == '0' || value[0] == '1')) {
+        int quality = value[0] == '1' ? 1000 : 0;
+        if (value[0] == '1') {
+            for (std::size_t i = 2; i < value.size(); ++i) {
+                if (i > 4 || value[i] != '0') {
+                    return -1;
+                }
+            }
+            return quality;
+        }
+
+        int scale = 100;
+        for (std::size_t i = 2; i < value.size(); ++i) {
+            if (i > 4 || value[i] < '0' || value[i] > '9') {
+                return -1;
+            }
+            quality += (value[i] - '0') * scale;
+            scale /= 10;
+        }
+        return quality;
+    }
+    return -1;
+}
+
+// Token-based Accept fields allow one optional weight, not media parameters.
+// The list visitor has already trimmed surrounding OWS. Invalid weights are
+// unacceptable rather than inheriting the unweighted default quality.
+[[nodiscard]] inline int http_weight_parameter(std::string_view value) noexcept {
+    const auto semicolon = value.find(';');
+    if (semicolon == std::string_view::npos) {
+        return 1000;
+    }
+    auto weight = http_trim_ows(value.substr(semicolon + 1));
+    if (weight.size() < 3 || http_ascii_to_lower(static_cast<unsigned char>(weight[0])) != 'q' ||
+        weight[1] != '=') {
+        return 0;
+    }
+    const auto qvalue = weight.substr(2);
+    if (qvalue != http_trim_ows(qvalue)) {
+        return 0;
+    }
+    const auto parsed_value = http_parse_quality_value(qvalue);
+    return parsed_value < 0 ? 0 : parsed_value;
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+enum class response_field_status : std::uint8_t {
+    ok,
+    invalid,
+    repeated_singleton,
+};
+
+// One state per generated response header section. Content-Type's single media
+// type cannot be combined into a list (RFC 9110 section 5.3).
+class response_field_state final {
+private:
+    friend response_field_status validate_response_field(http_field_kind kind, std::string_view value,
+        response_field_state& state) noexcept;
+
+    bool content_type_seen_{false};
+};
+
+// Sender-only response metadata semantics. Callers validate field-name/value bytes
+// and retain protocol-specific framing, connection, and forbidden-field rules.
+// A fresh state also validates one value before an http_response setter commits
+// its replacement; the setter owns the separate append/replace policy.
+[[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value,
+    response_field_state& state) noexcept;
+
+[[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+enum class http_interim_response_header_validation_status : std::uint8_t {
+    ok,
+    invalid_header,
+    content_length_forbidden,
+    transfer_encoding_forbidden,
+    trailer_forbidden,
+    repeated_singleton,
+};
+
+// Incremental sender validation for a version-neutral interim head. Recipients
+// use their version's field syntax and message-boundary rules instead: 1xx
+// framing advertisements do not establish content (RFC 9112 section 6.3 and
+// RFC 9113 section 8.1.1).
+class http_interim_response_sender_validator final {
+public:
+    // kind_out receives the field identity of an accepted line.
+    [[nodiscard]] http_interim_response_header_validation_status validate(
+        std::string_view name, std::string_view value,
+        http_field_kind* kind_out = nullptr) noexcept {
+        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
+            return http_interim_response_header_validation_status::invalid_header;
+        }
+
+        const auto field = classify_http_field_name(name);
+        const auto known_bit = field.response_bit_;
+        const auto kind = field.kind_;
+        switch (kind) {
+            case http_field_kind::content_length:
+                return http_interim_response_header_validation_status::content_length_forbidden;
+            case http_field_kind::transfer_encoding:
+                return http_interim_response_header_validation_status::transfer_encoding_forbidden;
+            case http_field_kind::trailer:
+                return http_interim_response_header_validation_status::trailer_forbidden;
+            default:
+                break;
+        }
+        switch (validate_response_field(kind, value, fields_)) {
+            case response_field_status::ok:
+                break;
+            case response_field_status::invalid:
+                return http_interim_response_header_validation_status::invalid_header;
+            case response_field_status::repeated_singleton:
+                return http_interim_response_header_validation_status::repeated_singleton;
+        }
+        if (known_bit != 0 && known_bit != response_header_content_type && (known_bits_ & known_bit) != 0 &&
+            response_header_append_forbidden(known_bit)) {
+            return http_interim_response_header_validation_status::repeated_singleton;
+        }
+        known_bits_ |= known_bit;
+        if (kind_out != nullptr) {
+            *kind_out = kind;
+        }
+        return http_interim_response_header_validation_status::ok;
+    }
+
+private:
+    response_field_state fields_;
+    std::uint32_t known_bits_{0};
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline std::string_view http_trim_weak_etag_prefix(std::string_view value) noexcept {
+    if (value.size() >= 2 && value[0] == 'W' && value[1] == '/') {
+        value.remove_prefix(2);
+    }
+    return value;
+}
+
+template <http_temporary_owning_char_string value_type>
+std::string_view http_trim_weak_etag_prefix(value_type&&) = delete;
+
+[[nodiscard]] inline bool http_is_weak_etag(std::string_view value) noexcept {
+    return value.size() >= 2 && value[0] == 'W' && value[1] == '/';
+}
+
+[[nodiscard]] inline bool http_is_strong_etag(std::string_view value) noexcept {
+    return !value.empty() && value.front() == '"';
+}
+
+[[nodiscard]] inline bool http_strong_etag_equals(
+    std::string_view left, std::string_view right) noexcept {
+    return !http_is_weak_etag(left) && !http_is_weak_etag(right) && left == right;
+}
+
+[[nodiscard]] inline bool http_weak_etag_equals(
+    std::string_view left, std::string_view right) noexcept {
+    return http_trim_weak_etag_prefix(left) == http_trim_weak_etag_prefix(right);
+}
+
+struct http_etag_list_match_result final {
+    bool valid_;
+    bool matched_;
+};
+
+[[nodiscard]] inline http_etag_list_match_result http_parse_etag_list_matches(
+    std::string_view values, std::string_view expected, bool strong) noexcept {
+    bool matched = false;
+    std::size_t offset = 0;
+
+    while (offset < values.size()) {
+        while (offset < values.size() && (is_http_ows_char(values[offset]) || values[offset] == ',')) {
+            ++offset;
+        }
+        if (offset == values.size()) {
+            break;
+        }
+
+        const std::size_t begin = offset;
+        if (values.substr(offset).starts_with("W/")) {
+            offset += 2;
+        }
+        if (offset == values.size() || values[offset] != '"') {
+            return {false, false};
+        }
+        ++offset;
+        while (offset < values.size() && values[offset] != '"') {
+            const auto byte = static_cast<unsigned char>(values[offset]);
+            if (byte != 0x21 && !(byte >= 0x23 && byte <= 0x7e) && byte < 0x80) {
+                return {false, false};
+            }
+            ++offset;
+        }
+        if (offset == values.size()) {
+            return {false, false};
+        }
+        ++offset;
+        const auto entity_tag = values.substr(begin, offset - begin);
+        matched = matched || (strong ? http_strong_etag_equals(entity_tag, expected)
+                                     : http_weak_etag_equals(entity_tag, expected));
+
+        while (offset < values.size() && is_http_ows_char(values[offset])) {
+            ++offset;
+        }
+        if (offset < values.size() && values[offset] != ',') {
+            return {false, false};
+        }
+    }
+    return {true, matched};
+}
+
+}  // namespace ruvia::detail
+
+#pragma once
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline bool http_is_client_supported_te_transfer_coding(std::string_view coding) noexcept {
+    return http_is_gzip_coding_token(coding) || http_ascii_equals_ignore_case(coding, "deflate");
+}
+
+[[nodiscard]] inline bool is_valid_http_te_field_item(
+    std::string_view item, http_field_list_role role) noexcept {
+    const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');
+    const auto coding = http_trim_ows(item.substr(0, first_semicolon));
+    if (!is_valid_http_header_name(coding)) {
+        return false;
+    }
+    if (http_ascii_equals_ignore_case(coding, "trailers")) {
+        return first_semicolon == item.size();
+    }
+    // RFC 9112 section 7.4: a client MUST NOT list chunked in TE. That binds
+    // the sender; a recipient treats it as an always-acceptable coding.
+    if (role == http_field_list_role::sender &&
+        !http_is_client_supported_te_transfer_coding(coding)) {
+        return false;
+    }
+
+    // Validate transfer-parameter syntax and TE's weight in the same walk.
+    // Unlike other parameters, q permits neither BWS around '=' nor a quoted
+    // value. Recipients accept extension parameters; clients advertise only
+    // the codings they can decode, with an optional weight.
+    bool quality_seen = false;
+    return http_all_parameters(item.substr(first_semicolon),
+        [&quality_seen, role](std::string_view parameter) noexcept {
+            const auto equals = parameter.find('=');
+            if (equals == std::string_view::npos) {
+                return false;
+            }
+            const auto raw_name = parameter.substr(0, equals);
+            const auto raw_value = parameter.substr(equals + 1);
+            const auto name = http_trim_ows(raw_name);
+            const auto value = http_trim_ows(raw_value);
+            if (http_ascii_equals_ignore_case(name, "q")) {
+                if (quality_seen || raw_name != name || raw_value != value ||
+                    http_parse_quality_value(value) < 0) {
+                    return false;
+                }
+                quality_seen = true;
+                return true;
+            }
+            return role == http_field_list_role::recipient && is_valid_http_transfer_parameter(parameter);
+        });
+}
+
+[[nodiscard]] inline bool is_valid_http_te_field_value(
+    std::string_view value, http_field_list_role role) noexcept {
+    // RFC 9112 section 7.4 explicitly permits an empty TE field. It advertises
+    // no optional transfer coding; chunked remains implicitly acceptable.
+    if (http_trim_ows(value).empty()) {
+        return true;
+    }
+
+    // A client generating TE is held to the sender's no-empty-member rule.
+    return http_visit_list_members(value, role, [role](std::string_view item) noexcept {
+        return is_valid_http_te_field_item(item, role) ? http_field_list_parse_status::ok
+                                                       : http_field_list_parse_status::malformed;
+    }) == http_field_list_parse_status::ok;
+}
+
+// HTTP/2 carries no transfer codings, so TE may only advertise
+// "trailers" (RFC 9113 section 8.2.2). The member is an
+// unprefixed ABNF literal and therefore case-insensitive (RFC 7405 section
+// 2.1); list members are OWS-trimmed (RFC 9110 section 5.6.1). Recipients
+// ignore empty members and accept empty lists (RFC 9110 section 10.1.4).
+// This sender API requires a nonempty list without empty members.
+[[nodiscard]] inline bool is_valid_binary_http_te_field_value(
+    std::string_view value, http_field_list_role role) noexcept {
+    bool has_member = false;
+    const auto status = http_visit_list_members(value, role, [&has_member](std::string_view member) noexcept {
+        has_member = true;
+        return http_ascii_equals_ignore_case(member, "trailers") ? http_field_list_parse_status::ok
+                                                                 : http_field_list_parse_status::malformed;
+    });
+    return status == http_field_list_parse_status::ok && (role == http_field_list_role::recipient || has_member);
 }
 
 }  // namespace ruvia::detail

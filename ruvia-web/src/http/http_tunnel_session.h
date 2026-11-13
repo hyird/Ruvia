@@ -14,7 +14,6 @@
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"
-#include "http/http_stream_end.h"
 #include "integration/operation_interrupt.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"

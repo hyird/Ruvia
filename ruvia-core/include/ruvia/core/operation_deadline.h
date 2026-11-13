@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "ruvia/core/duration.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 
 namespace ruvia {
 

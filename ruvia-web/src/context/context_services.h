@@ -25,8 +25,108 @@
 #include "ruvia/web/streaming.h"
 
 #include "integration/request_io_metrics.h"
-#include "integration/worker_client_registry_view.h"
 #include "server/connection_lifecycle.h"
+
+namespace ruvia {
+
+class http_client;
+class http_client_ref;
+class stop_token;
+class operation_scope;
+
+#ifdef RUVIA_ENABLE_DATABASE
+class db_session;
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+class redis_session;
+#endif
+namespace detail {
+
+class borrowed_clients;
+class db_registry;
+struct request_io_metrics;
+class http_client_registry;
+class redis_registry;
+
+// A copyable view of the complete client registry set owned by one worker, or
+// of the clients a router borrows for its dispatches. The only other state is
+// detached: partial registry graphs are not representable. Detached views are
+// only placeholders for contexts built without worker capabilities; an
+// attached view never outlives its worker, which joins all posted work before
+// destroying its registries, nor a router's dispatch.
+class worker_client_registry_view final {
+public:
+    [[nodiscard]] static constexpr worker_client_registry_view detached() noexcept {
+        return worker_client_registry_view(nullptr);
+    }
+
+    constexpr worker_client_registry_view(http_client_registry& http_clients
+#ifdef RUVIA_ENABLE_DATABASE
+        ,
+        db_registry& databases
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+        ,
+        redis_registry& redis
+#endif
+        ) noexcept
+        : http_clients_(&http_clients)
+#ifdef RUVIA_ENABLE_DATABASE
+          ,
+          databases_(&databases)
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+          ,
+          redis_(&redis)
+#endif
+    {
+    }
+
+    explicit constexpr worker_client_registry_view(const borrowed_clients& borrowed) noexcept
+        : borrowed_(&borrowed) {}
+
+    [[nodiscard]] constexpr bool attached() const noexcept {
+        return http_clients_ != nullptr || borrowed_ != nullptr;
+    }
+
+    // `io_metrics` is the request's counter block, or null outside a request.
+#ifdef RUVIA_ENABLE_DATABASE
+    [[nodiscard]] db_session db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
+        const stop_token& stop_token) const;
+    [[nodiscard]] db_session db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+        request_io_metrics* io_metrics, const stop_token& stop_token) const;
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+    [[nodiscard]] redis_session redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
+        const stop_token& stop_token) const;
+    [[nodiscard]] redis_session redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+        request_io_metrics* io_metrics, const stop_token& stop_token) const;
+#endif
+
+    [[nodiscard]] http_client_ref client(
+        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+    [[nodiscard]] http_client_ref client(std::string_view alias,
+        ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
+
+private:
+    explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
+
+    [[nodiscard]] const http_client& borrowed_http_clients(std::string_view alias) const;
+
+    const borrowed_clients* borrowed_{nullptr};
+    http_client_registry* http_clients_{nullptr};
+#ifdef RUVIA_ENABLE_DATABASE
+    db_registry* databases_{nullptr};
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+    redis_registry* redis_{nullptr};
+#endif
+};
+
+}  // namespace detail
+}  // namespace ruvia
 
 namespace ruvia {
 

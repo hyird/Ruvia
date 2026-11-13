@@ -13,7 +13,6 @@
 
 #include "ruvia/core/duration.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 
 namespace {
 

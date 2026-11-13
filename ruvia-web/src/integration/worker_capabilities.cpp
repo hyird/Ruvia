@@ -13,7 +13,6 @@
 
 #include "client/http_client_registry.h"
 #include "context/context_services.h"
-#include "integration/borrowed_clients.h"
 #include "integration/named_capability.h"
 
 #ifdef RUVIA_ENABLE_DATABASE

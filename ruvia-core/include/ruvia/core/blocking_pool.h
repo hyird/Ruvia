@@ -44,7 +44,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait_result.h"
+#include "ruvia/core/worker_wait.h"
 
 namespace ruvia {
 

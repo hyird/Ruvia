@@ -47,8 +47,6 @@
 #include "context/context_access.h"
 #include "context/context_services.h"
 #include "context/http_interim_response_output.h"
-#include "http/http_protocol_error_info.h"
-#include "http/http_stream_end.h"
 #include "http/http_tunnel_session.h"
 #include "http/request_body_loader.h"
 #include "http2/http2_sans_io_session.h"

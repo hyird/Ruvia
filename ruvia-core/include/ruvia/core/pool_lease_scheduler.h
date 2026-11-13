@@ -11,7 +11,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/core/worker_wait_result.h"
+#include "ruvia/core/worker_wait.h"
 
 namespace ruvia {
 class pool_lease_acquire;

@@ -19,7 +19,7 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
-#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
@@ -32,7 +32,7 @@
 
 #include "ruvia/http/websocket_deflate_codecs.h"
 
-#include "coding/codec_slot.h"
+#include "coding/http_content_coding.h"
 #include "coding/http_zlib_stream.h"
 
 namespace ruvia::detail {

@@ -47,7 +47,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_websocket_request.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
