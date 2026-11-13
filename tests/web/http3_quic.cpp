@@ -60,7 +60,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 
-#include "client_operation_fixture.h"
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"
 

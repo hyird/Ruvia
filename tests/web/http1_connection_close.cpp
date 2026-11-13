@@ -58,7 +58,9 @@
 
 #include <asio/ssl/context.hpp>
 
+#if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
+#endif
 #include "ruvia/http/http_request.h"
 
 #if defined(RUVIA_ENABLE_HTTP2)
@@ -76,6 +78,34 @@
 #include "http_server_fixture.h"
 #endif
 
+#include <algorithm>
+#include <cctype>
+#include <iostream>
+#include <limits>
+#include <new>
+#include <variant>
+
+#include <asio/bind_cancellation_slot.hpp>
+#include <asio/cancellation_signal.hpp>
+#include <asio/read_until.hpp>
+#include <asio/socket_base.hpp>
+
+#include "ruvia/http/http_response.h"
+#include "ruvia/web/http_client.h"
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "ruvia/http/http2_connection.h"
+#endif
+#if defined(RUVIA_ENABLE_HTTP2)
+#include "http_server_fixture.h"
+#endif
+#include <asio/co_spawn.hpp>
+#include <asio/executor_work_guard.hpp>
+#include <asio/post.hpp>
+#include <asio/use_awaitable.hpp>
+
+#if defined(RUVIA_ENABLE_REDIS)
+#include "ruvia/web/redis/redis.h"
+#endif
 namespace peer_reset_test {
 
 using namespace std::chrono_literals;
@@ -1645,3 +1675,2816 @@ TEST(Ruvia, standalone_sliding_window_rate_limiter_and_address_key_canonicalizat
     EXPECT_EQ(resp.header("X-RateLimit-Limit"), std::optional<std::string_view>("2"));
     EXPECT_EQ(resp.header("X-RateLimit-Remaining"), std::optional<std::string_view>("0"));
 }
+
+// Inbound buffer budgets on the streamed request body and CONNECT tunnel
+// paths. This executable owns its application with small inbound budgets.
+
+namespace http1_inbound_memory_test {
+
+constexpr auto scan_interval = std::chrono::milliseconds(10);
+// A tunnel's reused read window takes a little over 4 KiB: one fits the
+// connection budget with room for a small chunk, two fit the worker budget,
+// three do not. A streamed body's 8 KiB read buffer fits neither.
+constexpr std::size_t connection_budget = 6000;
+constexpr std::size_t worker_budget = 10000;
+
+[[nodiscard]] ruvia::server_config inbound_memory_config() {
+    return {
+        .worker_count_ = 1,
+        .connection_scan_interval_ = scan_interval,
+        .max_inbound_buffer_bytes_per_worker_ = worker_budget,
+        .max_inbound_buffer_bytes_per_connection_ = connection_budget,
+    };
+}
+
+class inbound_memory_routes final {
+    RUVIA_ROUTES_BEGIN(inbound_memory_routes)
+    RUVIA_POST("/inbound-buffered", buffered_body);
+    RUVIA_POST("/inbound-stream", stream_body, ruvia::stream_body);
+    RUVIA_CONNECT("inbound-tunnel.test:443", tunnel);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> buffered_body(ruvia::context& context_value) {
+        const auto body = co_await context_value.req().text();
+        co_return context_value.text(
+            std::string(std::to_string(body.size())));
+    }
+
+    ruvia::task<ruvia::http_response> stream_body(ruvia::context& context_value) {
+        auto& reader = context_value.req().body_reader();
+        std::size_t received = 0;
+        while (const auto chunk = co_await reader.read()) {
+            received += chunk->size();
+        }
+        co_return context_value.text(std::string(std::to_string(received)));
+    }
+
+    // Acknowledges each borrowed chunk and reports inbound budget exhaustion.
+    ruvia::task<void> tunnel(ruvia::context& context_value) {
+        auto& tunnel_value = context_value.tunnel();
+        bool limited = false;
+        for (;;) {
+            std::optional<std::span<const std::byte>> chunk;
+            try {
+                chunk = co_await tunnel_value.read();
+            } catch (const std::bad_alloc&) {
+                limited = true;
+            }
+            if (!chunk) {
+                break;
+            }
+            co_await tunnel_value.write("ok\n");
+        }
+        co_await tunnel_value.write(limited ? "limited\n" : "end\n");
+    }
+};
+
+class test_client final {
+public:
+    test_client(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint)
+        : io_(io),
+          socket_(io) {
+        socket_.connect(server_endpoint);
+    }
+
+    void send(std::string_view bytes) {
+        asio::write(socket_, asio::buffer(bytes));
+    }
+
+    void finish_sending() {
+        socket_.shutdown(asio::ip::tcp::socket::shutdown_send);
+    }
+
+    // Everything up to and including `delimiter`, or nullopt when the stream
+    // ends or 5 s pass first.
+    [[nodiscard]] std::optional<std::string> read_until(std::string_view delimiter) {
+        std::optional<std::size_t> found;
+        asio::async_read_until(socket_, asio::dynamic_buffer(input_), delimiter,
+            [&found](const std::error_code& error, std::size_t bytes) {
+                if (!error) {
+                    found = bytes;
+                }
+            });
+        run();
+        if (!found) {
+            return std::nullopt;
+        }
+        std::string result(std::string_view(input_).substr(0, *found));
+        input_.erase(0, *found);
+        return result;
+    }
+
+    // Everything until the server ends the stream (or 5 s pass).
+    [[nodiscard]] std::string read_to_end() {
+        asio::async_read(socket_, asio::dynamic_buffer(input_), [](const std::error_code&, std::size_t) {});
+        run();
+        return std::exchange(input_, std::string{});
+    }
+
+    void close() {
+        std::error_code ignored;
+        socket_.close(ignored);
+    }
+
+private:
+    void run() {
+        io_.restart();
+        io_.run_for(std::chrono::seconds(5));
+        if (!io_.stopped()) {
+            std::error_code ignored;
+            socket_.cancel(ignored);
+            io_.restart();
+            io_.run();
+        }
+    }
+
+    asio::io_context& io_;
+    asio::ip::tcp::socket socket_;
+    std::string input_{};
+};
+
+constexpr std::string_view connect_request =
+    "CONNECT inbound-tunnel.test:443 HTTP/1.1\r\nHost: inbound-tunnel.test:443\r\n\r\n";
+
+[[nodiscard]] bool open_tunnel(test_client& client) {
+    client.send(connect_request);
+    const auto head = client.read_until("\r\n\r\n");
+    return head && head->starts_with("HTTP/1.1 200 ");
+}
+
+}  // namespace http1_inbound_memory_test
+
+TEST(Ruvia, streamed_request_body_reads_count_against_the_connection_inbound_budget) {
+    using namespace http1_inbound_memory_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+    {
+        // A body that arrives with its head needs no reader buffer.
+        test_client client(io, server.endpoint());
+        client.send(
+            "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 16\r\nConnection: close\r\n\r\n"
+            "0123456789abcdef");
+        const auto response = client.read_to_end();
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.ends_with("\r\n\r\n16"));
+        client.close();
+    }
+    {
+        // The reader's 8 KiB socket buffer exceeds the connection budget.
+        test_client client(io, server.endpoint());
+        client.send(
+            "POST /inbound-stream HTTP/1.1\r\nHost: localhost\r\nContent-Length: 20000\r\nConnection: close\r\n\r\n" +
+            std::string(20000, 'b'));
+        const auto response = client.read_to_end();
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 503 "));
+        EXPECT_TRUE(response.find("inbound_buffer_limit") != std::string::npos);
+        client.close();
+    }
+    server.finish();
+}
+
+TEST(Ruvia, tunnel_reads_count_against_the_connection_inbound_budget) {
+    using namespace http1_inbound_memory_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+    test_client client(io, server.endpoint());
+    EXPECT_TRUE(open_tunnel(client));
+    client.send(std::string(20000, 't'));
+    client.finish_sending();
+    const auto output = client.read_to_end();
+    EXPECT_TRUE(output.ends_with("limited\n"));
+    client.close();
+    server.finish();
+}
+
+TEST(Ruvia, tunnel_reads_count_against_the_worker_inbound_budget) {
+    using namespace http1_inbound_memory_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+    // Two tunnels each hold their read window, within their own connection
+    // budgets; a third tunnel's first read exceeds the worker's.
+    test_client first(io, server.endpoint());
+    test_client second(io, server.endpoint());
+    for (auto* const client : {&first, &second}) {
+        EXPECT_TRUE(open_tunnel(*client));
+        client->send("a");
+        EXPECT_TRUE(client->read_until("\n") == std::optional<std::string>(std::in_place, "ok\n"));
+    }
+    test_client third(io, server.endpoint());
+    EXPECT_TRUE(open_tunnel(third));
+    EXPECT_TRUE(third.read_to_end() == "limited\n");
+    third.close();
+    for (auto* const client : {&first, &second}) {
+        client->finish_sending();
+        EXPECT_TRUE(client->read_to_end() == "end\n");
+        client->close();
+    }
+    server.finish();
+}
+
+#if defined(RUVIA_ENABLE_HTTP2)
+TEST(Ruvia, http2_request_body_inbound_budget_exhaustion_answers_with_503) {
+    using namespace http1_inbound_memory_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, inbound_memory_config());
+
+    auto& client_io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(client_io);
+    const auto url = "http://127.0.0.1:" + std::to_string(server.endpoint().port());
+
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_client client(attachment.loop(),
+            {.base_url_ = url, .versions_ = {.http1_ = false, .http2_ = true}});
+        const std::string payload(12000, 'h');
+        for (const std::string_view path : {"/inbound-buffered", "/inbound-stream"}) {
+            auto response = co_await client.client().post(path).body(payload).send();
+            EXPECT_EQ(response.status(), ruvia::http_status::service_unavailable);
+            const auto body = co_await response.text();
+            EXPECT_NE(body.text().find("inbound_buffer_limit"), std::string_view::npos);
+        }
+        co_await client.shutdown();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    std::jthread driver([&] { attachment.run(); });
+    driver.join();
+    std::move(root).get();
+    server.finish();
+}
+#endif
+
+// Inline buffered-response compression on one worker, whose encoders are
+// reused across responses. This executable owns its application, so the
+// app-wide compression policy cannot change the bodies of other suites.
+
+namespace http1_response_compression_test {
+
+// Every fixture passes the same configuration: whichever case runs first
+// fixes the shared application's server_config.
+[[nodiscard]] ruvia::server_config compressing_server() {
+    return {.worker_count_ = 1,
+        .connection_scan_interval_ = std::chrono::milliseconds(5),
+        .compression_ = ruvia::compression_config{.min_bytes_ = 16, .sync_bytes_ = 64 * 1024}};
+}
+
+[[nodiscard]] std::string make_body(std::size_t size, unsigned seed) {
+    std::string body(size, '\0');
+    unsigned state_value = seed * 2654435761U + 3U;
+    for (std::size_t i = 0; i < size; ++i) {
+        state_value = state_value * 1103515245U + 12345U;
+        body[i] = static_cast<char>('a' + ((state_value >> 16U) % 6U) + ((i / 48U) % 5U));
+    }
+    return body;
+}
+
+// Cover both sides of the configured inline ceiling without changing policy between cases.
+const std::string small_body(make_body(3'000, 1));
+const std::string large_body(make_body(60'000, 2));
+const std::string offloaded_body(make_body(128 * 1024, 3));
+
+[[nodiscard]] const std::filesystem::path& file_dir() {
+    static const ruvia::test::scoped_temp_directory directory("ruvia-response-compression");
+    return directory.path();
+}
+
+std::unique_ptr<ruvia::static_root> resident_root;
+std::unique_ptr<ruvia::static_root> coded_root;
+
+class response_compression_routes final {
+    RUVIA_ROUTES_BEGIN(response_compression_routes)
+    RUVIA_GET("/compression-small", small);
+    RUVIA_GET("/compression-large", large);
+    RUVIA_GET("/compression-offloaded", offloaded);
+    RUVIA_GET("/compression-tiny", tiny);
+    RUVIA_GET("/compression-digest", digest);
+    RUVIA_GET("/compression-file", file);
+    RUVIA_GET("/compression-static", static_file);
+    RUVIA_GET("/compression-coded-static", coded_static_file);
+    RUVIA_GET("/compression-head", small);
+    RUVIA_HEAD("/compression-head", head_declared);
+    RUVIA_GET("/compression-head-bare", small);
+    RUVIA_HEAD("/compression-head-bare", head_bare);
+    RUVIA_GET("/compression-empty-get", empty_get);
+    RUVIA_GET("/compression-redirect", redirect_get);
+    RUVIA_GET("/compression-zero-file", zero_file);
+    RUVIA_GET("/compression-zero-static", zero_static_file);
+    RUVIA_GET("/compression-head-comma", small);
+    RUVIA_HEAD("/compression-head-comma", head_comma_declared);
+    RUVIA_GET("/compression-head-zero", empty_get);
+    RUVIA_HEAD("/compression-head-zero", head_zero_declared);
+    RUVIA_GET("/compression-custom-coding", custom_coding);
+    RUVIA_GET("/compression-mixed-rejected", mixed_rejected_coding);
+    RUVIA_POST("/compression-echo-decoded", echo_decoded);
+    RUVIA_GET("/compression-zero-declared", head_zero_declared);
+    RUVIA_GET("/compression-stream", stream);
+    RUVIA_GET("/compression-stream-held", hold_stream);
+    RUVIA_GET("/compression-stream-custom", stream_custom_coding);
+    RUVIA_GET("/compression-stream-mixed", stream_mixed_coding);
+    RUVIA_GET("/compression-stream-204", stream_no_content);
+    RUVIA_GET("/compression-stream-304", stream_not_modified);
+    RUVIA_GET("/compression-validators", validators);
+    RUVIA_GET("/compression-media", media);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> small(ruvia::context& context_value) {
+        co_return context_value.text(std::string_view(small_body));
+    }
+
+    ruvia::task<ruvia::http_response> large(ruvia::context& context_value) {
+        co_return context_value.text(std::string_view(large_body));
+    }
+
+    ruvia::task<ruvia::http_response> offloaded(ruvia::context& context_value) {
+        co_return context_value.text(std::string_view(offloaded_body));
+    }
+
+    ruvia::task<ruvia::http_response> head_declared(ruvia::context& context_value) {
+        context_value.draft().header("Content-Length", std::to_string(small_body.size()));
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> head_bare(ruvia::context& context_value) {
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> empty_get(ruvia::context& context_value) {
+        context_value.draft().header("ETag", "\"empty-v1\"");
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> redirect_get(ruvia::context& context_value) {
+        co_return context_value.redirect({.location_ = "/compression-small"});
+    }
+    ruvia::task<ruvia::http_response> zero_file(ruvia::context& context_value) {
+        const auto path = file_dir() / "zero.txt";
+        co_return co_await context_value.file({.path_ = path});
+    }
+    ruvia::task<ruvia::http_response> zero_static_file(ruvia::context& context_value) {
+        co_return co_await context_value.static_file(*resident_root, {.relative_path_ = "zero.txt"});
+    }
+    ruvia::task<ruvia::http_response> head_comma_declared(ruvia::context& context_value) {
+        const auto len = std::string(std::to_string(small_body.size()));
+        context_value.draft().header("Content-Length", std::string(len) + ", " + len);
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> head_zero_declared(ruvia::context& context_value) {
+        context_value.draft().header("ETag", "\"empty-v1\"");
+        context_value.draft().header("Content-Length", "0");
+        co_return context_value.text("");
+    }
+    ruvia::task<ruvia::http_response> custom_coding(ruvia::context& context_value) {
+        auto resp = context_value.text("custom-encoded-payload");
+        ruvia::http_accepted_encoding_quality quality;
+        quality.update(context_value.req().header("Accept-Encoding").value_or(""), "x-custom");
+        if (quality.accepts(false)) {
+            resp.header("Content-Encoding", "x-custom");
+        }
+        co_return resp;
+    }
+    ruvia::task<ruvia::http_response> mixed_rejected_coding(ruvia::context& context_value) {
+        auto resp = context_value.text("mixed-encoded-payload");
+        resp.header("Content-Encoding", "br, x-custom");
+        co_return resp;
+    }
+    ruvia::task<ruvia::http_response> echo_decoded(ruvia::context& context_value) {
+        const auto body = co_await context_value.req().text();
+        co_return context_value.text(body);
+    }
+    ruvia::task<void> stream(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        const std::string_view body(small_body);
+        co_await writer.write(body.substr(0, body.size() / 2));
+        co_await writer.write(body.substr(body.size() / 2));
+        co_await writer.end();
+    }
+    ruvia::task<void> hold_stream(ruvia::context& context_value) {
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write(std::string_view(small_body));
+        static_cast<void>(co_await writer.sleep(std::chrono::hours(1)));
+    }
+
+    ruvia::task<void> stream_custom_coding(ruvia::context& context_value) {
+        context_value.draft().header("Content-Encoding", "x-custom");
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("custom-stream-payload");
+        co_await writer.end();
+    }
+    ruvia::task<void> stream_mixed_coding(ruvia::context& context_value) {
+        context_value.draft().header("Content-Encoding", "br, x-custom");
+        auto& writer = context_value.stream_text();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("mixed-stream-payload");
+        co_await writer.end();
+    }
+    ruvia::task<void> stream_no_content(ruvia::context& context_value) {
+        context_value.draft().status(ruvia::http_status::no_content);
+        co_await context_value.stream_text().end();
+    }
+    ruvia::task<void> stream_not_modified(ruvia::context& context_value) {
+        context_value.draft().status(ruvia::http_status::not_modified);
+        co_await context_value.stream_text().end();
+    }
+    ruvia::task<ruvia::http_response> tiny(ruvia::context& context_value) {
+        co_return context_value.text("hello");
+    }
+
+    ruvia::task<ruvia::http_response> validators(ruvia::context& context_value) {
+        auto resp = context_value.text(std::string_view(small_body));
+        resp.header("ETag", context_value.req().query("etag").value_or(""));
+        resp.header("Accept-Ranges", "bytes");
+        co_return resp;
+    }
+
+    ruvia::task<ruvia::http_response> media(ruvia::context& context_value) {
+        auto resp = context_value.text(std::string_view(small_body));
+        const auto type = context_value.req().query("type").value_or("");
+        if (type.empty()) {
+            resp.remove_header("Content-Type");
+        } else {
+            resp.header("Content-Type", type);
+        }
+        co_return resp;
+    }
+
+    ruvia::task<ruvia::http_response> digest(ruvia::context& context_value) {
+        const auto field = context_value.req().query("field").value_or("");
+        context_value.draft().header(field, "sha-256=:AAAA:");
+        co_return context_value.text(std::string_view(small_body));
+    }
+
+    ruvia::task<ruvia::http_response> file(ruvia::context& context_value) {
+        static const std::filesystem::path path = file_dir() / "file.txt";
+        co_return co_await context_value.file({.path_ = path});
+    }
+
+    ruvia::task<ruvia::http_response> static_file(ruvia::context& context_value) {
+        co_return co_await context_value.static_file(*resident_root, {.relative_path_ = "resident.txt"});
+    }
+
+    ruvia::task<ruvia::http_response> coded_static_file(ruvia::context& context_value) {
+        co_return co_await context_value.static_file(*coded_root, {.relative_path_ = "asset.txt"});
+    }
+};
+
+// Sends one request and returns every byte the server wrote before closing,
+// or nullopt when the connection is still open after 5 s.
+[[nodiscard]] std::optional<std::string> fetch_response(
+    const asio::ip::tcp::endpoint& server_endpoint, std::string_view request) {
+    auto& io = ruvia::test::new_test_io_context();
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server_endpoint);
+    asio::write(socket, asio::buffer(request));
+    std::string output{};
+    bool closed = false;
+    asio::async_read(socket, asio::dynamic_buffer(output),
+        [&closed](const std::error_code&, std::size_t) { closed = true; });
+    io.run_for(std::chrono::seconds(5));
+    if (!closed) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+[[nodiscard]] std::string lower_head(std::string_view response) {
+    std::string head(response.substr(0, response.find("\r\n\r\n")));
+    std::ranges::transform(head, head.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return head;
+}
+
+// The response head's field lines without Date, which may tick between two
+// requests.
+[[nodiscard]] std::vector<std::string> head_fields(std::string_view response) {
+    std::vector<std::string> fields{};
+    const auto head = lower_head(response);
+    for (auto begin = head.find("\r\n"); begin != std::string::npos;) {
+        begin += 2;
+        const auto end = head.find("\r\n", begin);
+        const auto line = std::string_view(head).substr(begin, end == std::string::npos ? std::string::npos : end - begin);
+        if (!line.starts_with("date:")) {
+            fields.emplace_back(line);
+        }
+        begin = end;
+    }
+    std::ranges::sort(fields);
+    return fields;
+}
+
+[[nodiscard]] bool has_field(const std::vector<std::string>& fields, std::string_view prefix) {
+    return std::ranges::any_of(fields, [prefix](const std::string& line) { return line.starts_with(prefix); });
+}
+
+[[nodiscard]] std::string expected_encoding(ruvia::http_content_coding coding, std::string_view body) {
+    const auto result_value = ruvia::encode_http_content(coding, body, {.max_encoded_bytes_ = body.size() - 1});
+    return result_value.has_value() ? std::string(*result_value) : std::string();
+}
+
+[[nodiscard]] std::string_view response_body(std::string_view response) {
+    const auto separator = response.find("\r\n\r\n");
+    return separator == std::string_view::npos ? std::string_view{} : response.substr(separator + 4);
+}
+
+[[nodiscard]] std::string head_request(std::string_view target, std::string_view fields) {
+    return "HEAD " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\n" + std::string(fields) +
+           "Connection: close\r\n\r\n";
+}
+
+[[nodiscard]] std::string get_request(std::string_view target, std::string_view fields) {
+    return "GET " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\n" + std::string(fields) +
+           "Connection: close\r\n\r\n";
+}
+
+}  // namespace http1_response_compression_test
+
+TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) {
+    using namespace http1_response_compression_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::identity,
+        ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate,
+        ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
+    for (const auto coding : codings) {
+        const auto token = ruvia::http_content_coding_token(coding);
+        std::string fields("Accept-Encoding: ");
+        fields.append(token).append("\r\n");
+        const auto check_coding = [coding, token](std::string_view response) {
+            const auto headers = head_fields(response);
+            if (coding == ruvia::http_content_coding::identity) {
+                EXPECT_FALSE(has_field(headers, "content-encoding:"));
+            } else {
+                std::string expected("content-encoding: ");
+                expected.append(token);
+                EXPECT_TRUE(has_field(headers, expected));
+            }
+        };
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-stream", fields));
+        ASSERT_TRUE(head.has_value());
+        EXPECT_TRUE(head->starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response_body(*head).empty());
+        check_coding(*head);
+
+        // HTTP/1.0 close delimiting isolates content encoding from chunk framing.
+        std::string request("GET /compression-stream HTTP/1.0\r\nHost: localhost\r\n");
+        request.append(fields).append("\r\n");
+        const auto get = fetch_response(server.endpoint(), request);
+        ASSERT_TRUE(get.has_value());
+        EXPECT_NE(std::string_view(*get).substr(0, get->find("\r\n")).find(" 200 "), std::string_view::npos);
+        check_coding(*get);
+        if (coding == ruvia::http_content_coding::identity) {
+            EXPECT_EQ(response_body(*get), std::string_view(small_body));
+        } else {
+            const auto decoded = ruvia::decode_http_content(std::array{coding}, response_body(*get),
+                {.max_decoded_bytes_ = small_body.size()});
+            const auto* body = std::get_if<std::string>(&decoded);
+            ASSERT_NE(body, nullptr);
+            EXPECT_EQ(*body, small_body);
+        }
+    }
+    server.finish();
+}
+
+TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const auto failures_before = ruvia::app().stats().connection_failures_;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        constexpr std::string_view request =
+            "GET /compression-stream-held HTTP/1.0\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n";
+        asio::write(client, asio::buffer(request));
+        std::string prefix;
+        asio::read_until(client, asio::dynamic_buffer(prefix), "\r\n\r\n");
+        ASSERT_TRUE(has_field(head_fields(prefix), "content-encoding: gzip"));
+        if (prefix.size() == prefix.find("\r\n\r\n") + 4) {
+            char byte;
+            asio::read(client, asio::buffer(&byte, 1));
+        }
+        client.set_option(asio::socket_base::linger(true, 0));
+        client.close();
+    }
+    server.finish();
+
+    const auto response = fetch_response(server.endpoint(),
+        "GET /compression-stream HTTP/1.0\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n");
+    ASSERT_TRUE(response.has_value());
+    EXPECT_TRUE(has_field(head_fields(*response), "content-encoding: gzip"));
+    const auto decoded = ruvia::decode_http_content(
+        std::array{ruvia::http_content_coding::gzip}, response_body(*response),
+        {.max_decoded_bytes_ = small_body.size()});
+    const auto* body = std::get_if<std::string>(&decoded);
+    ASSERT_NE(body, nullptr);
+    EXPECT_EQ(*body, small_body);
+    server.finish();
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
+}
+
+TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::gzip,
+        ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
+    // Each encoder serves several responses of alternating sizes in a row.
+    for (int round = 0; round < 2; ++round) {
+        for (const auto coding : codings) {
+            for (const bool large : {true, false, true}) {
+                const std::string_view path = large ? "/compression-large" : "/compression-small";
+                const std::string_view body = large ? large_body : small_body;
+                const auto token = ruvia::http_content_coding_token(coding);
+                const auto output = fetch_response(server.endpoint(),
+                    "GET " + std::string(path) + " HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: " +
+                        std::string(token) + "\r\nConnection: close\r\n\r\n");
+                EXPECT_TRUE(output.has_value());
+                const auto text = (output ? std::string_view(*output) : std::string_view{});
+                EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+                EXPECT_TRUE(lower_head(text).find("\r\ncontent-encoding: " + std::string(token) + "\r\n") !=
+                            std::string::npos);
+                const auto separator = text.find("\r\n\r\n");
+                EXPECT_TRUE(separator != std::string::npos);
+                if (separator != std::string::npos) {
+                    const auto expected = expected_encoding(coding, body);
+                    EXPECT_TRUE(!expected.empty());
+                    EXPECT_TRUE(std::string_view(text).substr(separator + 4) == expected);
+                }
+            }
+        }
+    }
+    server.finish();
+}
+
+// context::file and static_file serve fixed file representations: a small
+// file's bytes travel in memory on GET but still are not runtime-compressed,
+// so GET and HEAD carry the same identity fields (RFC 9110 9.3.2).
+TEST(Ruvia, http1_file_representations_are_not_runtime_compressed) {
+    using namespace http1_response_compression_test;
+    namespace fs = std::filesystem;
+    std::error_code ignored;
+    fs::remove_all(file_dir(), ignored);
+    fs::create_directories(file_dir());
+    for (const auto* name : {"file.txt", "resident.txt"}) {
+        std::ofstream(file_dir() / name, std::ios::binary) << small_body;
+    }
+    resident_root = std::make_unique<ruvia::static_root>(file_dir(),
+        ruvia::static_root_options{
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+            .resident_max_bytes_ = 16 * 1024,
+            .resident_budget_bytes_ = 16 * 1024,
+        });
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    for (const std::string_view path : {"/compression-file", "/compression-static"}) {
+        const auto fetch = [&](std::string_view method) {
+            return fetch_response(server.endpoint(), std::string(method) + " " + std::string(path) +
+                                                         " HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: "
+                                                         "gzip\r\nConnection: close\r\n\r\n")
+                .value_or(std::string{});
+        };
+        const auto get = fetch("GET");
+        const auto head = fetch("HEAD");
+        EXPECT_TRUE(get.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+        const auto get_fields = head_fields(get);
+        EXPECT_TRUE(get_fields == head_fields(head));
+        EXPECT_TRUE(!has_field(get_fields, "content-encoding:"));
+        EXPECT_TRUE(has_field(get_fields, "content-length: " + std::string(std::to_string(small_body.size()))));
+        EXPECT_TRUE(has_field(get_fields, "etag: \""));
+        // static_file negotiates indexed precompressed variants; context::file
+        // has no coding dimension at all.
+        EXPECT_EQ(has_field(get_fields, "vary: accept-encoding"), path == "/compression-static");
+        const auto separator = get.find("\r\n\r\n");
+        EXPECT_TRUE(separator != std::string::npos);
+        if (separator != std::string::npos) {
+            EXPECT_TRUE(std::string_view(get).substr(separator + 4) == small_body);
+        }
+    }
+    server.finish();
+    resident_root.reset();
+    fs::remove_all(file_dir(), ignored);
+}
+
+// RFC 9530 §2/§3: Content-Digest and Repr-Digest are computed over the content
+// as sent, including its content coding, so the framework must not encode a
+// body whose integrity fields the application already computed.
+TEST(Ruvia, http1_compression_keeps_responses_with_integrity_fields_identity) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    for (const std::string_view field : {"Content-Digest", "Repr-Digest", "Content-MD5"}) {
+        const auto text = fetch_response(server.endpoint(),
+            get_request("/compression-digest?field=" + std::string(field), "Accept-Encoding: gzip\r\n"))
+                              .value_or(std::string{});
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+        const auto fields = head_fields(text);
+        EXPECT_TRUE(!has_field(fields, "content-encoding:"));
+        EXPECT_TRUE(has_field(fields, "content-length: " + std::string(std::to_string(small_body.size()))));
+        EXPECT_TRUE(response_body(text) == small_body);
+    }
+    server.finish();
+}
+
+// RFC 9110 §12.5.3: a client that refuses identity accepts a listed coding, so a
+// body below min_bytes_ is encoded instead of answered with 406.
+TEST(Ruvia, http1_compression_encodes_small_bodies_when_identity_is_refused) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const auto refused = fetch_response(server.endpoint(),
+        get_request("/compression-tiny", "Accept-Encoding: gzip, identity;q=0\r\n"))
+                             .value_or(std::string{});
+    EXPECT_TRUE(refused.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(refused), "content-encoding: gzip"));
+    const auto decoded = ruvia::decode_http_content(std::array{ruvia::http_content_coding::gzip}, response_body(refused),
+        {.max_decoded_bytes_ = 64});
+    const auto* plain = std::get_if<std::string>(&decoded);
+    EXPECT_TRUE(plain != nullptr && std::string_view(*plain) == "hello");
+
+    // With identity acceptable, the size threshold still keeps it identity.
+    const auto accepted =
+        fetch_response(server.endpoint(), get_request("/compression-tiny", "Accept-Encoding: gzip\r\n")).value_or(std::string{});
+    EXPECT_TRUE(accepted.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(!has_field(head_fields(accepted), "content-encoding:"));
+    EXPECT_TRUE(response_body(accepted) == "hello");
+    server.finish();
+}
+
+// RFC 9110 §8.8.3 / §14.3: a coded representation weakens a strong ETag, drops
+// a value that is not an entity-tag, and stops advertising identity ranges.
+TEST(Ruvia, http1_compression_rewrites_validators_and_range_support) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const struct {
+        std::string_view query_;
+        std::optional<std::string_view> expected_;
+    } cases[] = {
+        {"%22v1%22", "etag: w/\"v1\""},
+        {"W%2F%22v2%22", "etag: w/\"v2\""},
+        {"abc", std::nullopt},
+        {"%22unterminated", std::nullopt},
+    };
+    for (const auto& test : cases) {
+        const auto text = fetch_response(server.endpoint(),
+            get_request("/compression-validators?etag=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
+                              .value_or(std::string{});
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+        const auto fields = head_fields(text);
+        EXPECT_TRUE(has_field(fields, "content-encoding: gzip"));
+        EXPECT_TRUE(!has_field(fields, "accept-ranges:"));
+        if (test.expected_.has_value()) {
+            EXPECT_TRUE(has_field(fields, *test.expected_));
+        } else {
+            EXPECT_TRUE(!has_field(fields, "etag:"));
+        }
+    }
+
+    // Identity keeps both fields untouched.
+    const auto identity = fetch_response(server.endpoint(),
+        get_request("/compression-validators?etag=%22v1%22", "Accept-Encoding: identity\r\n"))
+                              .value_or(std::string{});
+    EXPECT_TRUE(has_field(head_fields(identity), "etag: \"v1\""));
+    EXPECT_TRUE(has_field(head_fields(identity), "accept-ranges: bytes"));
+    server.finish();
+}
+
+// One allowlist decides compressibility: already-compressed and unknown media
+// types, and a response without Content-Type, stay identity.
+TEST(Ruvia, http1_compression_encodes_only_compressible_media_types) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const struct {
+        std::string_view query_;
+        bool encoded_;
+    } cases[] = {
+        {"application%2Fjson", true},
+        {"application%2Fld%2Bjson", true},
+        {"image%2Fsvg%2Bxml", true},
+        {"font%2Fwoff2", false},
+        {"application%2Fepub%2Bzip", false},
+        {"application%2Fx-7z-compressed", false},
+        {"application%2Fx-unknown", false},
+        {"", false},
+    };
+    for (const auto& test : cases) {
+        const auto text = fetch_response(server.endpoint(),
+            get_request("/compression-media?type=" + std::string(test.query_), "Accept-Encoding: gzip\r\n"))
+                              .value_or(std::string{});
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+        EXPECT_EQ(has_field(head_fields(text), "content-encoding: gzip"), test.encoded_);
+        if (!test.encoded_) {
+            EXPECT_TRUE(response_body(text) == small_body);
+        }
+    }
+    server.finish();
+}
+
+// RFC 9110 §12.5.5: an application-encoded body is sent or refused (406)
+// depending on Accept-Encoding, so the 200 varies on it like a framework coding.
+TEST(Ruvia, http1_application_encoded_responses_vary_on_accept_encoding) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    for (const std::string_view path :
+        {std::string_view("/compression-custom-coding"), std::string_view("/compression-stream-custom")}) {
+        const auto text = fetch_response(server.endpoint(), get_request(path, "Accept-Encoding: x-custom\r\n"))
+                              .value_or(std::string{});
+        EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+        const auto fields = head_fields(text);
+        EXPECT_TRUE(has_field(fields, "content-encoding: x-custom"));
+        EXPECT_TRUE(has_field(fields, "vary: accept-encoding"));
+    }
+    server.finish();
+}
+
+// RFC 9110 §8.4 / §14.6: a multipart/byteranges body cannot carry the coding of
+// the representation it slices, so several ranges of a precompressed variant
+// are answered with the full coded representation; one range stays a 206.
+TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
+    using namespace http1_response_compression_test;
+    namespace fs = std::filesystem;
+    const ruvia::test::scoped_temp_directory directory("ruvia-response-compression-coded");
+    const auto& dir = directory.path();
+    const std::string sidecar("gz-sidecar-bytes");
+    std::ofstream(dir / "asset.txt", std::ios::binary) << "plain-asset-body";
+    std::ofstream(dir / "asset.txt.gz", std::ios::binary) << sidecar;
+    coded_root = std::make_unique<ruvia::static_root>(dir,
+        ruvia::static_root_options{
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+            .range_requests_ = ruvia::static_range_request_policy::honor,
+        });
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    const auto multi = fetch_response(server.endpoint(),
+        get_request("/compression-coded-static", "Accept-Encoding: gzip\r\nRange: bytes=0-1,4-5\r\n"))
+                           .value_or(std::string{});
+    EXPECT_TRUE(multi.starts_with("HTTP/1.1 200 "));
+    const auto multi_fields = head_fields(multi);
+    EXPECT_TRUE(has_field(multi_fields, "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(multi_fields, "content-type: multipart/byteranges"));
+    EXPECT_TRUE(response_body(multi) == sidecar);
+
+    const auto single = fetch_response(server.endpoint(),
+        get_request("/compression-coded-static", "Accept-Encoding: gzip\r\nRange: bytes=0-1\r\n"))
+                            .value_or(std::string{});
+    EXPECT_TRUE(single.starts_with("HTTP/1.1 206 "));
+    const auto single_fields = head_fields(single);
+    EXPECT_TRUE(has_field(single_fields, "content-encoding: gzip"));
+    EXPECT_TRUE(has_field(single_fields, "content-range: bytes 0-1/" + std::string(std::to_string(sidecar.size()))));
+    EXPECT_TRUE(response_body(single) == "gz");
+
+    // RFC 9110 §15.5.17: the empty 416 does not describe coded or typed content.
+    for (const std::string_view coding : {"gzip", "gzip, identity;q=0"}) {
+        const auto unsatisfied = fetch_response(server.endpoint(),
+            get_request("/compression-coded-static",
+                "Accept-Encoding: " + std::string(coding) + "\r\nRange: bytes=100-200\r\n"))
+                                     .value_or(std::string{});
+        EXPECT_TRUE(unsatisfied.starts_with("HTTP/1.1 416 "));
+        const auto unsatisfied_fields = head_fields(unsatisfied);
+        EXPECT_TRUE(!has_field(unsatisfied_fields, "content-encoding:"));
+        EXPECT_TRUE(!has_field(unsatisfied_fields, "content-type:"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "content-range: bytes */" + std::string(std::to_string(sidecar.size()))));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "accept-ranges: bytes"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "etag:"));
+        EXPECT_TRUE(has_field(unsatisfied_fields, "vary: accept-encoding"));
+    }
+
+    // The identity representation still answers several ranges with multipart.
+    const auto identity = fetch_response(server.endpoint(),
+        get_request("/compression-coded-static", "Accept-Encoding: identity\r\nRange: bytes=0-1,4-5\r\n"))
+                              .value_or(std::string{});
+    EXPECT_TRUE(identity.starts_with("HTTP/1.1 206 "));
+    EXPECT_TRUE(has_field(head_fields(identity), "content-type: multipart/byteranges"));
+    EXPECT_TRUE(identity.find("\r\nContent-Encoding:") == std::string::npos);
+    server.finish();
+    coded_root.reset();
+}
+
+// RFC 9110 §8.6: a HEAD response's Content-Length equals the GET content length
+// or is absent. An explicit HEAD route that only declares the GET length must
+// get GET's coding without the encoded length of its own empty body.
+TEST(Ruvia, http1_explicit_head_route_matches_get_coding_without_false_length) {
+    using namespace http1_response_compression_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+    for (const std::string_view fields : {"Accept-Encoding: gzip\r\n", "Accept-Encoding: gzip, identity;q=0\r\n"}) {
+        const auto get = fetch_response(server.endpoint(), get_request("/compression-head", fields)).value_or(std::string{});
+        EXPECT_TRUE(has_field(head_fields(get), "content-encoding: gzip"));
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-head", fields)).value_or(std::string{});
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+        const auto head_line_fields = head_fields(head);
+        EXPECT_TRUE(has_field(head_line_fields, "content-encoding: gzip"));
+        EXPECT_TRUE(!has_field(head_line_fields, "content-length:"));
+        EXPECT_TRUE(response_body(head).empty());
+    }
+    // Without a declared length, identity stays and no length is claimed.
+    const auto bare =
+        fetch_response(server.endpoint(), head_request("/compression-head-bare", "Accept-Encoding: gzip\r\n"))
+            .value_or(std::string{});
+    EXPECT_TRUE(bare.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(!has_field(head_fields(bare), "content-encoding:"));
+    EXPECT_TRUE(!has_field(head_fields(bare), "content-length:"));
+    const auto refused = fetch_response(server.endpoint(),
+        head_request("/compression-head-bare", "Accept-Encoding: gzip, identity;q=0\r\n"))
+                             .value_or(std::string{});
+    EXPECT_TRUE(refused.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(refused), "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(head_fields(refused), "content-length:"));
+    // Identity accepted with an identity GET keeps the declared length.
+    const auto identity =
+        fetch_response(server.endpoint(), head_request("/compression-head", "Accept-Encoding: identity\r\n"))
+            .value_or(std::string{});
+    EXPECT_TRUE(has_field(head_fields(identity), "content-length: " + std::string(std::to_string(small_body.size()))));
+    server.finish();
+}
+
+TEST(Ruvia, http1_head_fallback_on_empty_get_files_and_redirects_matches_get_headers) {
+    using namespace http1_response_compression_test;
+    namespace fs = std::filesystem;
+    std::error_code ignored;
+    fs::remove_all(file_dir(), ignored);
+    fs::create_directories(file_dir());
+    {
+        std::ofstream(file_dir() / "zero.txt", std::ios::binary);
+        std::ofstream(file_dir() / "file.txt", std::ios::binary) << small_body;
+    }
+    resident_root = std::make_unique<ruvia::static_root>(file_dir(),
+        ruvia::static_root_options{
+            .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all},
+            .resident_max_bytes_ = 16 * 1024,
+            .resident_budget_bytes_ = 16 * 1024,
+        });
+
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, compressing_server());
+
+    // 1. HEAD fallback on 0-byte GET route matches GET under both identity and refused identity.
+    for (const std::string_view fields :
+        {std::string_view("Accept-Encoding: identity\r\n"),
+            std::string_view("Accept-Encoding: gzip, identity;q=0\r\n")}) {
+        const auto get = fetch_response(server.endpoint(), get_request("/compression-empty-get", fields)).value_or(std::string{});
+        const auto head = fetch_response(server.endpoint(), head_request("/compression-empty-get", fields)).value_or(std::string{});
+        EXPECT_TRUE(get.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(head_fields(get) == head_fields(head));
+        EXPECT_TRUE(response_body(head).empty());
+    }
+
+    // 2. 0-byte file, 0-byte static_file, and redirect emit Content-Length: 0 on both GET and HEAD.
+    for (const std::string_view path :
+        {std::string_view("/compression-zero-file"), std::string_view("/compression-zero-static"),
+            std::string_view("/compression-redirect")}) {
+        const auto get = fetch_response(server.endpoint(), get_request(path, "")).value_or(std::string{});
+        const auto head = fetch_response(server.endpoint(), head_request(path, "")).value_or(std::string{});
+        EXPECT_TRUE(head_fields(get) == head_fields(head));
+        EXPECT_TRUE(has_field(head_fields(head), "content-length: 0"));
+        EXPECT_TRUE(response_body(head).empty());
+    }
+
+    // 3. Explicit HEAD route with comma-separated identical Content-Length ("3000, 3000").
+    const auto comma_head = fetch_response(
+        server.endpoint(), head_request("/compression-head-comma", "Accept-Encoding: gzip\r\n"))
+                                .value_or(std::string{});
+    EXPECT_TRUE(comma_head.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(comma_head), "content-encoding: gzip"));
+    EXPECT_TRUE(!has_field(head_fields(comma_head), "content-length:"));
+
+    // 4. Explicit HEAD route with Content-Length: 0 keeps Content-Length: 0 when identity is accepted.
+    const auto zero_declared_get = fetch_response(
+        server.endpoint(), get_request("/compression-head-zero", "Accept-Encoding: gzip\r\n"))
+                                       .value_or(std::string{});
+    const auto zero_declared_head = fetch_response(
+        server.endpoint(), head_request("/compression-head-zero", "Accept-Encoding: gzip\r\n"))
+                                        .value_or(std::string{});
+    EXPECT_TRUE(head_fields(zero_declared_get) == head_fields(zero_declared_head));
+    EXPECT_TRUE(has_field(head_fields(zero_declared_head), "content-length: 0"));
+    for (const std::string_view path :
+        {std::string_view("/compression-head-zero"), std::string_view("/compression-zero-declared")}) {
+        const auto refused_zero_get = fetch_response(
+            server.endpoint(), get_request(path, "Accept-Encoding: gzip, identity;q=0\r\n"))
+                                          .value_or(std::string{});
+        const auto refused_zero_head = fetch_response(
+            server.endpoint(), head_request(path, "Accept-Encoding: gzip, identity;q=0\r\n"))
+                                           .value_or(std::string{});
+        EXPECT_TRUE(head_fields(refused_zero_get) == head_fields(refused_zero_head));
+        EXPECT_TRUE(has_field(head_fields(refused_zero_head), "content-encoding: gzip"));
+        EXPECT_TRUE(has_field(head_fields(refused_zero_head), "content-length: 20"));
+    }
+
+    // 5. Custom Content-Encoding negotiation and mixed rejected coding stacks.
+    const auto custom_ok = fetch_response(server.endpoint(),
+        get_request("/compression-custom-coding", "Accept-Encoding: x-custom, identity;q=0\r\n"))
+                               .value_or(std::string{});
+    EXPECT_TRUE(custom_ok.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(custom_ok), "content-encoding: x-custom"));
+
+    const auto mixed_rejected = fetch_response(
+        server.endpoint(), get_request("/compression-mixed-rejected", "Accept-Encoding: br;q=0\r\n"))
+                                    .value_or(std::string{});
+    EXPECT_TRUE(mixed_rejected.starts_with("HTTP/1.1 406 "));
+    const auto stream_custom_ok = fetch_response(server.endpoint(),
+        get_request("/compression-stream-custom", "Accept-Encoding: x-custom, identity;q=0\r\n"))
+                                      .value_or(std::string{});
+    EXPECT_TRUE(stream_custom_ok.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(has_field(head_fields(stream_custom_ok), "content-encoding: x-custom"));
+
+    const auto stream_custom_rejected = fetch_response(server.endpoint(),
+        get_request("/compression-stream-custom", "Accept-Encoding: gzip\r\n"))
+                                            .value_or(std::string{});
+    EXPECT_TRUE(stream_custom_rejected.starts_with("HTTP/1.1 406 "));
+
+    const auto stream_mixed_rejected = fetch_response(server.endpoint(),
+        get_request("/compression-stream-mixed", "Accept-Encoding: br, x-custom;q=0\r\n"))
+                                           .value_or(std::string{});
+    EXPECT_TRUE(stream_mixed_rejected.starts_with("HTTP/1.1 406 "));
+
+    const auto stream_204 = fetch_response(server.endpoint(),
+        get_request("/compression-stream-204", "Accept-Encoding: *;q=0\r\n"))
+                                .value_or(std::string{});
+    EXPECT_TRUE(stream_204.starts_with("HTTP/1.1 204 "));
+
+    const auto stream_304 = fetch_response(server.endpoint(),
+        get_request("/compression-stream-304", "Accept-Encoding: *;q=0\r\n"))
+                                .value_or(std::string{});
+    EXPECT_TRUE(stream_304.starts_with("HTTP/1.1 304 "));
+
+    const auto range_416_custom = fetch_response(server.endpoint(),
+        get_request("/compression-file",
+            "Range: bytes=10000-20000\r\nAccept-Encoding: x-custom, identity;q=0\r\n"))
+                                      .value_or(std::string{});
+    EXPECT_TRUE(range_416_custom.starts_with("HTTP/1.1 416 "));
+
+    // 6. Request Content-Encoding with >8 identity tokens does not fail with 415.
+    const auto id9 = fetch_response(server.endpoint(),
+        "POST /compression-echo-decoded HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Encoding: identity, identity, identity, identity, identity, identity, identity, identity, identity\r\n"
+        "Content-Length: 5\r\nConnection: close\r\n\r\nhello")
+                         .value_or(std::string{});
+    EXPECT_TRUE(id9.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response_body(id9) == "hello");
+
+    const auto gz_hello = *ruvia::encode_http_content(
+        ruvia::http_content_coding::gzip, "hello", {.max_encoded_bytes_ = 1024});
+    const auto id8_gz = fetch_response(server.endpoint(),
+        "POST /compression-echo-decoded HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Encoding: identity, identity, identity, identity, identity, identity, identity, identity, gzip\r\n"
+        "Content-Length: " +
+            std::string(std::to_string(gz_hello.size())) + "\r\nConnection: close\r\n\r\n" + std::string(gz_hello))
+                            .value_or(std::string{});
+    EXPECT_TRUE(id8_gz.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response_body(id8_gz) == "hello");
+
+    server.finish();
+    resident_root.reset();
+    fs::remove_all(file_dir(), ignored);
+}
+
+// Application-wide response policy (CORS, access log, session commit) on the
+// heads that do not pass through the buffered response tail: response streams
+// and CONNECT/WebSocket handshakes. This executable owns its application, so
+// the app-wide CORS policy and access-log hook cannot leak into other suites.
+
+namespace http1_response_policy_test {
+
+struct access_entry final {
+    std::string method_{};
+    std::string path_{};
+    ruvia::http_status_code status_;
+};
+
+std::mutex access_mutex;
+std::vector<access_entry> access_entries{};
+
+// Every fixture passes the same configuration: whichever case runs first
+// fixes the shared application's server_config.
+[[nodiscard]] ruvia::server_config cors_server() {
+    return {.worker_count_ = 1,
+        .connection_scan_interval_ = std::chrono::milliseconds(5),
+        .cors_ = ruvia::http_cors_policy_config{}};
+}
+
+void install_policy_access_logger() {
+    ruvia::app().on_access(nullptr).on_access([](const ruvia::access_log_record& record) noexcept {
+        try {
+            std::lock_guard lock(access_mutex);
+            access_entries.push_back(
+                {std::string(record.method()), std::string(record.path()), record.status()});
+        } catch (...) {
+        }
+    });
+}
+
+[[nodiscard]] std::vector<access_entry> take_access_entries() {
+    std::lock_guard lock(access_mutex);
+    return std::exchange(access_entries, std::vector<access_entry>{});
+}
+
+// Rejects the CONNECT before the tunnel handshake is committed.
+class connect_denying_middleware final {
+public:
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next&) {
+        throw ruvia::http_error({.status_ = ruvia::http_status::forbidden, .message_ = "denied"});
+        co_return;
+    }
+};
+
+#ifdef RUVIA_ENABLE_REDIS
+// Clears the session bound by the enclosing session_middleware, then lets the
+// route continue. No cookie was presented, so the commit touches no Redis key.
+class session_clearing_middleware final {
+public:
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
+        c.session().clear();
+        co_await next_value();
+    }
+};
+#endif
+
+std::atomic<int> head_loop_writes{0};
+std::atomic<bool> head_loop_aborted{false};
+std::atomic<bool> head_loop_sleep_rejected{false};
+std::atomic<bool> head_loop_token_stopped{false};
+std::atomic<bool> head_loop_completed{false};
+std::atomic<bool> naive_loop_failed{false};
+std::atomic<bool> naive_loop_finished{false};
+std::atomic<bool> read_after_write_failed{false};
+std::atomic<bool> read_after_write_finished{false};
+std::mutex read_after_write_mutex;
+std::string read_after_write_body{};
+
+// Turns every exception from the rest of the chain into a 500, as
+// error-wrapping middleware does.
+class exception_converting_middleware final {
+public:
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next_value) {
+        try {
+            co_await next_value();
+        } catch (...) {
+            throw ruvia::http_error({.status_ = ruvia::http_status::internal_server_error, .message_ = "converted"});
+        }
+    }
+};
+
+class response_policy_routes final {
+    RUVIA_ROUTES_BEGIN(response_policy_routes)
+    RUVIA_GET("/policy-stream", stream);
+    RUVIA_GET("/policy-secure-stream", stream, ruvia::security_headers_middleware);
+    RUVIA_GET("/policy-trailer-stream", trailer_stream);
+    RUVIA_GET("/policy-plain", plain);
+    RUVIA_GET("/policy-head-loop", head_loop);
+    RUVIA_GET("/policy-head-naive", head_naive);
+    RUVIA_GET("/policy-head-read-after-write", head_read_after_write);
+    RUVIA_GET("/policy-head-convert", stream, exception_converting_middleware);
+    RUVIA_GET("/policy-stream-fail-after-commit", stream_fail_after_commit, exception_converting_middleware);
+    RUVIA_GET_WS("/policy-websocket", websocket);
+    RUVIA_CONNECT("policy-target.test:443", tunnel);
+    RUVIA_CONNECT("denied-target.test:443", tunnel, connect_denying_middleware);
+#ifdef RUVIA_ENABLE_REDIS
+    RUVIA_CONNECT("session-target.test:443", tunnel, (ruvia::http_tunnel_route_config{}),
+        ruvia::session_middleware, session_clearing_middleware);
+#endif
+    RUVIA_ROUTES_END
+
+    ruvia::task<void> stream(ruvia::context& context_value) {
+        if (context_value.req().query("fail").has_value()) {
+            context_value.draft().header("Content-Range", "bytes 0-2/10");
+            throw ruvia::http_error({.status_ = ruvia::http_status::conflict});
+        }
+        if (co_await context_value.stream().commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await context_value.stream().write("chunk");
+    }
+
+    ruvia::task<void> stream_fail_after_commit(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        if (!context_value.committed() || !output.committed()) {
+            co_return;
+        }
+        co_await output.write("partial");
+        throw std::runtime_error("failed after stream commit");
+    }
+
+    // 完成态不是取消：不启动正文生产，误用 write/sleep 必须明确拒绝。
+    ruvia::task<void> head_loop(ruvia::context& context_value) {
+        if (context_value.req().query("not-modified").has_value()) {
+            context_value.draft().status(ruvia::http_status::not_modified);
+        }
+        auto& output = context_value.stream_text();
+        const auto token = context_value.stop_token();
+        const auto phase = co_await output.commit();
+        if (phase == ruvia::stream_commit_result::body) {
+            co_await output.write("tick");
+            head_loop_writes.store(1);
+        } else {
+            head_loop_writes.store(-1);
+            try {
+                co_await output.write("late");
+            } catch (const std::logic_error&) {
+                head_loop_writes.store(0);
+            }
+            try {
+                static_cast<void>(co_await output.sleep(std::chrono::seconds(10)));
+            } catch (const std::logic_error&) {
+                head_loop_sleep_rejected.store(true);
+            }
+        }
+        head_loop_aborted.store(output.aborted());
+        head_loop_token_stopped.store(token.stop_requested());
+        co_await output.end();
+        head_loop_completed.store(true);
+    }
+
+    // 即使没有轮询 aborted，显式提交结果也在循环开始前结束 HEAD。
+    ruvia::task<void> head_naive(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            naive_loop_finished.store(true);
+            co_return;
+        }
+        try {
+            for (int i = 0; i < 1000; ++i) {
+                co_await output.write("tick");
+                static_cast<void>(co_await ruvia::sleep_for(context_value.worker(), std::chrono::milliseconds(10)));
+            }
+        } catch (...) {
+            naive_loop_failed.store(true);
+            naive_loop_finished.store(true);
+            throw;
+        }
+        naive_loop_finished.store(true);
+    }
+
+    ruvia::task<void> head_read_after_write(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        try {
+            const auto phase = co_await output.commit();
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await output.write("first");
+            }
+            const auto body = co_await context_value.req().text();
+            {
+                std::lock_guard lock(read_after_write_mutex);
+                read_after_write_body.assign(body);
+            }
+            if (phase == ruvia::stream_commit_result::body) {
+                co_await output.write("tick");
+            }
+        } catch (...) {
+            read_after_write_failed.store(true);
+            read_after_write_finished.store(true);
+            throw;
+        }
+        read_after_write_finished.store(true);
+    }
+
+    ruvia::task<void> trailer_stream(ruvia::context& context_value) {
+        auto& output = context_value.stream_text();
+        context_value.draft().header("Trailer", "X-Complete");
+        if (co_await output.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await output.write("body");
+        const std::array<ruvia::http_header_view, 1> trailers{{{"X-Complete", "yes"}}};
+        co_await output.end(trailers);
+    }
+
+    ruvia::task<ruvia::http_response> plain(ruvia::context& context_value) {
+        co_return context_value.text("plain");
+    }
+
+    ruvia::task<void> websocket(ruvia::context&) {
+        co_return;
+    }
+
+    ruvia::task<void> tunnel(ruvia::context& context_value) {
+        co_await context_value.tunnel().finish();
+    }
+};
+
+// Sends `request` and returns every byte the server wrote before closing, or
+// nullopt when the connection is still open after 5 s. Responses end with the
+// connection (Connection: close, HTTP/1.0, or a failed CONNECT). Only an
+// upgraded exchange -- a 101 or a CONNECT 2xx -- half-closes once its head has
+// arrived, so that the tunnel or WebSocket ends; any other early FIN would
+// read as the client leaving a streamed response still in flight.
+[[nodiscard]] std::optional<std::string> exchange(
+    const asio::ip::tcp::endpoint& server_endpoint, std::string_view request) {
+    auto& io = ruvia::test::new_test_io_context();
+    asio::ip::tcp::socket socket(io);
+    socket.connect(server_endpoint);
+    asio::write(socket, asio::buffer(request));
+    std::string output{};
+    bool closed = false;
+    asio::async_read_until(
+        socket, asio::dynamic_buffer(output), "\r\n\r\n", [&](const std::error_code& error, std::size_t) {
+            if (error) {
+                closed = true;
+                return;
+            }
+            const bool upgraded = output.starts_with("HTTP/1.1 101 ") ||
+                                  (request.starts_with("CONNECT ") && output.starts_with("HTTP/1.1 2"));
+            if (upgraded) {
+                std::error_code ignored;
+                socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+            }
+            asio::async_read(socket, asio::dynamic_buffer(output),
+                [&closed](const std::error_code&, std::size_t) { closed = true; });
+        });
+    io.run_for(std::chrono::seconds(5));
+    if (!closed) {
+        return std::nullopt;
+    }
+    return output;
+}
+
+// Field names are case-insensitive; compare the head in lower case.
+[[nodiscard]] std::string lower_head(std::string_view response) {
+    std::string head(response.substr(0, response.find("\r\n\r\n")));
+    std::ranges::transform(head, head.begin(), [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return head;
+}
+
+}  // namespace http1_response_policy_test
+
+TEST(Ruvia, http1_response_stream_head_carries_the_application_cors_policy) {
+    using namespace http1_response_policy_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    install_policy_access_logger();
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto response = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(response.has_value());
+    const auto output = (response ? std::string_view(*response) : std::string_view{});
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
+    EXPECT_TRUE(output.find("chunk") != std::string::npos);
+}
+TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    std::string names{};
+    for (unsigned i = 0; i != 128; ++i) {
+        if (!names.empty()) {
+            names.append(", ");
+        }
+        names.append("x-name-").append(std::to_string(i));
+    }
+    const auto response = http1_response_policy_test::exchange(server.endpoint(),
+        std::string("OPTIONS /policy-stream HTTP/1.1\r\nHost: localhost\r\n"
+                    "Origin: https://client.test\r\nAccess-Control-Request-Method: GET\r\n"
+                    "Access-Control-Request-Headers: ") +
+            names +
+            "\r\nAccess-Control-Request-Headers: x-final\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(response.has_value());
+    const auto output = (response ? std::string_view(*response) : std::string_view{});
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 204 "));
+    const auto head = lower_head(output);
+    const auto expected = std::string("\r\naccess-control-allow-headers: ") + names + ", x-final\r\n";
+    EXPECT_TRUE(head.find(expected) != std::string::npos);
+    const auto first = head.find("\r\naccess-control-allow-headers:");
+    EXPECT_TRUE(first != std::string::npos &&
+                head.find("\r\naccess-control-allow-headers:", first + 1) == std::string::npos);
+}
+
+TEST(Ruvia, http1_cors_requires_options_origin_and_requested_method_for_preflight) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    for (const auto& [method, fields] : {
+             std::array<std::string_view, 2>{"OPTIONS", "Origin: https://client.test\r\n"},
+             {"OPTIONS", "Access-Control-Request-Method: GET\r\n"},
+             {"GET", "Origin: https://client.test\r\nAccess-Control-Request-Method: GET\r\n"}}) {
+        const auto response = http1_response_policy_test::exchange(server.endpoint(),
+            std::string(method) + " /policy-stream HTTP/1.1\r\nHost: localhost\r\n" +
+                std::string(fields) + "Access-Control-Request-Headers: x-token\r\nConnection: close\r\n\r\n");
+        ASSERT_TRUE(response.has_value());
+        const auto& output = *response;
+        EXPECT_TRUE(output.starts_with(method == "OPTIONS" ? "HTTP/1.1 204 " : "HTTP/1.1 200 "));
+        const auto head = lower_head(output);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-origin: *\r\n") != std::string::npos) << output;
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-methods:") == std::string::npos) << output;
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-headers:") == std::string::npos) << output;
+    }
+    server.finish();
+}
+
+TEST(Ruvia, http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    for (const auto& [origin, method, names] : {
+             std::array<std::string_view, 3>{"https://client.test/path", "GET", "x-good"},
+             {"https://client.test", "BAD METHOD", "x-good"},
+             {"https://client.test", "GET", "x-good, bad name"}}) {
+        std::string request("OPTIONS /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: ");
+        request.append(origin).append("\r\nAccess-Control-Request-Method: ").append(method).append("\r\nAccess-Control-Request-Headers: ").append(names).append("\r\nConnection: close\r\n\r\n");
+        const auto response = http1_response_policy_test::exchange(server.endpoint(), request);
+        EXPECT_TRUE(response.has_value());
+        const auto output = (response ? std::string_view(*response) : std::string_view{});
+        EXPECT_TRUE(output.starts_with("HTTP/1.1 204 "));
+        const auto head = lower_head(output);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-origin:") == std::string::npos);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-methods:") == std::string::npos);
+        EXPECT_TRUE(head.find("\r\naccess-control-allow-headers:") == std::string::npos);
+    }
+    server.finish();
+}
+
+// Trailers are optional metadata: an HTTP/1.0 close-delimited stream drops the
+// Trailer field and the trailer section instead of failing with 500.
+TEST(Ruvia, http1_response_stream_discards_trailers_it_cannot_frame) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto http10 = http1_response_policy_test::exchange(server.endpoint(), "GET /policy-trailer-stream HTTP/1.0\r\nHost: localhost\r\n\r\n");
+    const auto http11 = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(http10.has_value());
+    const auto http10_output = (http10 ? std::string_view(*http10) : std::string_view{});
+    EXPECT_TRUE(http10_output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(http10_output).find("\r\ntrailer:") == std::string::npos);
+    EXPECT_TRUE(http10_output.ends_with("\r\n\r\nbody"));
+    EXPECT_TRUE(http11.has_value());
+    const auto http11_output = (http11 ? std::string_view(*http11) : std::string_view{});
+    EXPECT_TRUE(lower_head(http11_output).find("\r\ntrailer: x-complete") != std::string::npos);
+    EXPECT_TRUE(http11_output.ends_with("0\r\nX-Complete: yes\r\n\r\n"));
+}
+
+// RFC 9110 9.3.2: HEAD on a response-stream GET route answers like GET
+// without content, and the connection stays framed for the next request. A
+// websocket GET route is an upgrade, not a representation, so HEAD stays 405.
+TEST(Ruvia, http1_head_falls_back_to_response_stream_get_routes) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto pipelined = http1_response_policy_test::exchange(server.endpoint(),
+        "HEAD /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\n\r\n"
+        "HEAD /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    const auto websocket = http1_response_policy_test::exchange(server.endpoint(),
+        "HEAD /policy-websocket HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    EXPECT_TRUE(pipelined.has_value());
+    const auto output = (pipelined ? std::string_view(*pipelined) : std::string_view{});
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(lower_head(output).find("\r\naccess-control-allow-origin: *") != std::string::npos);
+    EXPECT_TRUE(output.find("chunk") == std::string::npos);
+    EXPECT_TRUE(output.find("body") == std::string::npos);
+    const auto second = output.find("HTTP/1.1 200 ", 1);
+    EXPECT_TRUE(second != std::string::npos);
+    const auto third = output.find("HTTP/1.1 200 ", second == std::string::npos ? output.size() : second + 1);
+    EXPECT_TRUE(third != std::string::npos);
+    EXPECT_TRUE(output.ends_with("\r\n\r\nplain"));
+
+    EXPECT_TRUE(websocket.has_value());
+    const auto websocket_output = (websocket ? std::string_view(*websocket) : std::string_view{});
+    EXPECT_TRUE(websocket_output.starts_with("HTTP/1.1 405 "));
+    EXPECT_TRUE(lower_head(websocket_output).find("\r\nallow: get, options") != std::string::npos);
+}
+
+// 完成头后不生产正文；非法写/等待明确失败，正常完成仍不是 abort。
+TEST(Ruvia, http1_head_only_stream_completes_without_cancellation) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "HEAD /policy-head-loop HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    EXPECT_TRUE(output.has_value());
+    const auto text = (output ? std::string_view(*output) : std::string_view{});
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("tick") == std::string::npos);
+    EXPECT_TRUE(text.ends_with("\r\n\r\nplain"));
+    EXPECT_TRUE(text.find("late") == std::string::npos);
+    EXPECT_EQ(head_loop_writes.load(), 0);
+    EXPECT_TRUE(!head_loop_aborted.load());
+    EXPECT_TRUE(!head_loop_token_stopped.load());
+    EXPECT_TRUE(head_loop_sleep_rejected.load());
+    EXPECT_TRUE(head_loop_completed.load());
+}
+
+TEST(Ruvia, http1_not_modified_stream_commit_completes_without_abort) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-head-loop?not-modified HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(output.has_value());
+    EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).starts_with("HTTP/1.1 304 "));
+    EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).ends_with("\r\n\r\n"));
+    EXPECT_EQ(head_loop_writes.load(), 0);
+    EXPECT_TRUE(!head_loop_aborted.load());
+    EXPECT_TRUE(!head_loop_token_stopped.load());
+}
+
+TEST(Ruvia, http1_security_policy_covers_stream_head_and_precommit_error) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    for (const auto request : {
+             "GET /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+             "HEAD /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+             "GET /policy-secure-stream?fail HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n"}) {
+        const auto output = http1_response_policy_test::exchange(server.endpoint(), request);
+        EXPECT_TRUE(output.has_value());
+        EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).find("X-Frame-Options: DENY\r\n") != std::string::npos);
+        EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).find("Content-Range:") == std::string::npos);
+    }
+    server.finish();
+}
+
+// HEAD 在提交时完成，不等待客户端断开，也不启动无限正文循环。
+TEST(Ruvia, http1_head_only_producer_finishes_at_commit) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    for (const std::string_view request : {
+             std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\n\r\n"),
+             std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"),
+         }) {
+        naive_loop_failed.store(false);
+        naive_loop_finished.store(false);
+        {
+            asio::ip::tcp::socket socket(io);
+            socket.connect(server.endpoint());
+            asio::write(socket, asio::buffer(request));
+            std::string head{};
+            asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
+            EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+            socket.close();
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (!naive_loop_finished.load() && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        EXPECT_TRUE(naive_loop_finished.load());
+        EXPECT_TRUE(!naive_loop_failed.load());
+    }
+
+    read_after_write_failed.store(false);
+    read_after_write_finished.store(false);
+    {
+        std::lock_guard lock(read_after_write_mutex);
+        read_after_write_body.clear();
+    }
+    {
+        asio::ip::tcp::socket socket(io);
+        socket.connect(server.endpoint());
+        asio::write(socket,
+            asio::buffer(std::string_view(
+                "HEAD /policy-head-read-after-write HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\n")));
+        std::string head{};
+        asio::read_until(socket, asio::dynamic_buffer(head), "\r\n\r\n");
+        EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
+        asio::write(socket, asio::buffer(std::string_view("hello")));
+        socket.close();
+    }
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (!read_after_write_finished.load() && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    EXPECT_TRUE(read_after_write_finished.load());
+    EXPECT_TRUE(!read_after_write_failed.load());
+    {
+        std::lock_guard lock(read_after_write_mutex);
+        EXPECT_EQ(read_after_write_body, "hello");
+    }
+    server.finish();
+}
+
+// Head-only completion raises nothing: middleware converting every exception
+// into a 500 sees a normal success, so HEAD on a stream route completes and
+// the connection stays usable for the pipelined GET.
+TEST(Ruvia, http1_head_only_stream_is_a_success_for_error_converting_middleware) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "HEAD /policy-head-convert HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+
+    EXPECT_TRUE(output.has_value());
+    const auto text = (output ? std::string_view(*output) : std::string_view{});
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("chunk") == std::string::npos);
+    EXPECT_TRUE(text.find("HTTP/1.1 500 ") == std::string::npos);
+    EXPECT_TRUE(text.ends_with("\r\n\r\nplain"));
+}
+
+TEST(Ruvia, http1_stream_failure_after_commit_is_not_converted_to_buffered_response_by_middleware) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-stream-fail-after-commit HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(output.has_value());
+    const auto text = (output ? std::string_view(*output) : std::string_view{});
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.find("partial") != std::string::npos);
+    EXPECT_TRUE(text.find("0\r\n\r\n") == std::string::npos);
+}
+
+// A failed CONNECT closes the connection: bytes the client already sent for
+// the tunnel are never parsed as another request (RFC 9110 9.3.6).
+TEST(Ruvia, http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    for (const std::string_view authority : {"unrouted-target.test:443", "denied-target.test:443"}) {
+        const std::string request(std::string("CONNECT ") + std::string(authority) + " HTTP/1.1\r\nHost: " +
+                                  std::string(authority) + "\r\n\r\nGET /policy-plain HTTP/1.1\r\nHost: smuggled\r\n\r\n");
+        const auto output = http1_response_policy_test::exchange(server.endpoint(), request);
+        EXPECT_TRUE(output.has_value());
+        const auto text = (output ? std::string_view(*output) : std::string_view{});
+        EXPECT_TRUE(!text.starts_with("HTTP/1.1 2"));
+        EXPECT_TRUE(lower_head(text).find("\r\nconnection: close") != std::string::npos);
+        EXPECT_TRUE(text.find("HTTP/1.1 ", 1) == std::string::npos);
+    }
+    server.finish();
+}
+
+// TE without the TE connection option only fails to advertise trailers; the
+// request itself is served.
+TEST(Ruvia, http1_te_without_connection_option_is_ignored) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-plain HTTP/1.1\r\nTE: trailers\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(output.has_value());
+    EXPECT_TRUE((output ? std::string_view(*output) : std::string_view{}).starts_with("HTTP/1.1 200 "));
+}
+
+TEST(Ruvia, http1_successful_upgrades_are_access_logged_once_with_their_handshake_status) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    static_cast<void>(take_access_entries());
+
+    const auto tunnel = http1_response_policy_test::exchange(server.endpoint(),
+        "CONNECT policy-target.test:443 HTTP/1.1\r\nHost: policy-target.test:443\r\n\r\n");
+    EXPECT_TRUE(tunnel.has_value());
+    EXPECT_TRUE((tunnel ? std::string_view(*tunnel) : std::string_view{}).starts_with("HTTP/1.1 200 "));
+
+    const auto websocket = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-websocket HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
+    EXPECT_TRUE(websocket.has_value());
+    EXPECT_TRUE((websocket ? std::string_view(*websocket) : std::string_view{}).starts_with("HTTP/1.1 101 "));
+    server.finish();
+
+    const auto entries = take_access_entries();
+    EXPECT_EQ(entries.size(), std::size_t{2});
+    if (entries.size() == 2) {
+        EXPECT_EQ(entries[0].method_, std::string("CONNECT"));
+        EXPECT_TRUE(entries[0].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[1].method_, std::string("GET"));
+        EXPECT_EQ(entries[1].path_, std::string("/policy-websocket"));
+        EXPECT_TRUE(entries[1].status_ == ruvia::http_status::switching_protocols);
+    }
+}
+
+// Pipelined responses may leave in one coalesced write, after the requests
+// that produced them were already replaced by later ones; each still gets
+// exactly one record, in request order, with its own method, path and status.
+TEST(Ruvia, http1_pipelined_responses_are_access_logged_in_order) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    static_cast<void>(take_access_entries());
+
+    const auto output = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "HEAD /policy-plain HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-missing HTTP/1.1\r\nHost: localhost\r\n\r\n"
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(output.has_value());
+    const auto text = (output ? std::string_view(*output) : std::string_view{});
+    EXPECT_TRUE(text.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(text.ends_with("plain"));
+
+    const auto entries = take_access_entries();
+    EXPECT_EQ(entries.size(), std::size_t{4});
+    if (entries.size() == 4) {
+        EXPECT_EQ(entries[0].method_, std::string("GET"));
+        EXPECT_EQ(entries[0].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[0].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[1].method_, std::string("HEAD"));
+        EXPECT_EQ(entries[1].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[1].status_ == ruvia::http_status::ok);
+        EXPECT_EQ(entries[2].method_, std::string("GET"));
+        EXPECT_EQ(entries[2].path_, std::string("/policy-missing"));
+        EXPECT_TRUE(entries[2].status_ == ruvia::http_status::not_found);
+        EXPECT_EQ(entries[3].path_, std::string("/policy-plain"));
+        EXPECT_TRUE(entries[3].status_ == ruvia::http_status::ok);
+    }
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+TEST(Ruvia, http1_connect_handshake_carries_the_committed_session_cookie) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    const auto tunnel = http1_response_policy_test::exchange(server.endpoint(),
+        "CONNECT session-target.test:443 HTTP/1.1\r\nHost: session-target.test:443\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(tunnel.has_value());
+    const auto output = (tunnel ? std::string_view(*tunnel) : std::string_view{});
+    EXPECT_TRUE(output.starts_with("HTTP/1.1 200 "));
+    // The cleared session's expiring cookie is part of the tunnel's only head.
+    EXPECT_TRUE(lower_head(output).find("\r\nset-cookie: sid=;") != std::string::npos);
+}
+#endif
+
+TEST(Ruvia, http_server_fixture_reservations_stay_bound_without_accepting_clients) {
+    using namespace http1_response_policy_test;
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io, cors_server());
+    ruvia::test::tcp_port_reservation first(io);
+    ruvia::test::tcp_port_reservation second(io);
+    EXPECT_TRUE(first.endpoint() != second.endpoint());
+    EXPECT_TRUE(first.endpoint() != server.endpoint());
+    EXPECT_TRUE(second.endpoint() != server.endpoint());
+
+    std::error_code error;
+#if !defined(_WIN32)
+    // POSIX: a reservation stays bound, including before the real server starts.
+    // Windows keeps only a named lease so the server's exclusive bind can succeed.
+    asio::ip::tcp::acceptor contender(io);
+    contender.open(asio::ip::tcp::v4());
+    contender.bind(first.endpoint(), error);
+    EXPECT_TRUE(error == asio::error::address_in_use);
+#endif
+
+    // It must not be a listener that can steal a client's connection.
+    asio::ip::tcp::socket client(io);
+    client.connect(first.endpoint(), error);
+    EXPECT_TRUE(error == asio::error::connection_refused);
+
+    const auto response = http1_response_policy_test::exchange(server.endpoint(),
+        "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+    server.finish();
+    EXPECT_TRUE(response.has_value());
+    EXPECT_TRUE((response ? std::string_view(*response) : std::string_view{}).ends_with("\r\n\r\nplain"));
+}
+
+namespace stream_disconnect_test {
+using namespace std::chrono_literals;
+using clock_type = std::chrono::steady_clock;
+std::atomic<std::size_t> finished{}, cancelled{}, errors{}, context_cancelled{}, body_cancelled{}, body_complete{};
+std::atomic<std::size_t> pipeline_cancelled{};
+std::atomic<std::size_t> write_entered{};
+// Upgraded writes to a peer that stops reading, and how many of them failed.
+std::atomic<std::size_t> stalled_upgrade_writes{}, stalled_upgrade_failures{};
+// More than loopback socket buffers absorb, so the write stays blocked.
+constexpr std::size_t stalled_upgrade_bytes = std::size_t{16} << 20;
+ruvia::stop_source explicit_stop;
+
+struct completion final {
+    ~completion() {
+        finished.fetch_add(1);
+    }
+};
+
+class routes final {
+    RUVIA_ROUTES_BEGIN(routes)
+    RUVIA_GET("/disconnect/events", events);
+    RUVIA_GET("/disconnect/pipeline", pipeline);
+    RUVIA_GET("/disconnect/pipeline-wait", pipeline_wait);
+    RUVIA_GET("/disconnect/body", body);
+    RUVIA_POST("/disconnect/echo", echo);
+    RUVIA_POST("/disconnect/post-sse", post_sse);
+    RUVIA_GET("/disconnect/health", health);
+    RUVIA_GET("/disconnect/slow", slow);
+    RUVIA_GET("/disconnect/h2-bulk", h2_bulk);
+    RUVIA_GET_WS("/disconnect/websocket-stall", websocket_stall);
+    RUVIA_CONNECT("stall.test:443", tunnel_stall);
+    RUVIA_ROUTES_END
+
+    ruvia::task<void> events(ruvia::context& c) {
+        completion done;
+        const auto mode = c.req().query("mode").value_or("token");
+        const auto original = c.stop_token();
+        auto writer = c.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        const ruvia::stop_group wait_stop(original, mode == "explicit" ? explicit_stop.token() : ruvia::stop_token{});
+        const auto token = wait_stop.token();
+        co_await writer.write({.data_ = "first"});
+        if (mode == "write" || mode == "timeout") {
+            // 大块写入让关闭、写完成和写超时竞争同一个连接生命周期。
+            const std::string bulk(8 * 1024 * 1024, 'x');
+            write_entered.fetch_add(1);
+            co_await c.stream().write(bulk);
+            co_return;
+        }
+        // 超大无符号等待不得窄化成负值后立即完成；客户端断开仍须唤醒它。
+        const auto huge = std::chrono::duration<std::uint64_t, std::milli>{
+            (std::numeric_limits<std::uint64_t>::max)()};
+        const auto result = mode == "writer" ? co_await writer.sleep(huge)
+                                             : co_await ruvia::sleep_for(c.worker(), 10s, token);
+        if (result == ruvia::timer_sleep_result::stop_requested) {
+            cancelled.fetch_add(1);
+        }
+        if (original.stop_requested()) {
+            context_cancelled.fetch_add(1);
+        }
+    }
+
+    ruvia::task<void> pipeline(ruvia::context& c) {
+        auto& writer = c.stream();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("pipeline-first");
+        if (co_await ruvia::sleep_for(c.worker(), 100ms, c.stop_token()) ==
+            ruvia::timer_sleep_result::stop_requested) {
+            pipeline_cancelled.fetch_add(1);
+        }
+        co_await writer.write("pipeline-last");
+    }
+
+    // A streamed request pipelined behind another: an idle wait on its stop.
+    ruvia::task<void> pipeline_wait(ruvia::context& c) {
+        auto& writer = c.stream();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write("wait-first");
+        if (co_await ruvia::sleep_for(c.worker(), 150ms, c.stop_token()) ==
+            ruvia::timer_sleep_result::stop_requested) {
+            pipeline_cancelled.fetch_add(1);
+        }
+        co_await writer.write("wait-last");
+    }
+
+    // The request body completes only after the handler starts; detection
+    // begins with the read that completes it, early commit or not.
+    ruvia::task<void> body(ruvia::context& c) {
+        auto& writer = c.stream();
+        const bool early = c.req().query("early").has_value();
+        if (early) {
+            if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+                static_cast<void>(co_await c.req().text());
+                co_return;
+            }
+            co_await writer.write("early");
+        }
+        const auto received = co_await c.req().text();
+        body_complete.fetch_add(1);
+        if (!early && co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write(received);
+        if (c.req().query("wait").has_value() &&
+            co_await ruvia::sleep_for(c.worker(), 10s, c.stop_token()) == ruvia::timer_sleep_result::stop_requested) {
+            body_cancelled.fetch_add(1);
+        }
+    }
+
+    ruvia::task<void> post_sse(ruvia::context& c) {
+        const auto received = co_await c.req().text();
+        auto writer = c.stream_sse();
+        if (co_await writer.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        co_await writer.write({.data_ = received});
+    }
+
+    ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
+        const auto text = co_await c.req().text();
+        co_return c.text(text);
+    }
+
+    ruvia::task<ruvia::http_response> health(ruvia::context& c) {
+        co_return c.text("healthy");
+    }
+
+    // A buffered response that leaves only after 100ms, so a client can end
+    // its request direction before the server writes anything.
+    ruvia::task<ruvia::http_response> slow(ruvia::context& c) {
+        (void)co_await ruvia::sleep_for(c.worker(), 100ms);
+        co_return c.text("slow-done");
+    }
+
+    ruvia::task<ruvia::http_response> h2_bulk(ruvia::context& c) {
+        co_return c.text(std::string(stalled_upgrade_bytes, 'b'));
+    }
+
+    // The WebSocket route keeps its default lifecycle: no heartbeat.
+    ruvia::task<void> websocket_stall(ruvia::context& c) {
+        stalled_upgrade_writes.fetch_add(1);
+        try {
+            co_await c.websocket().binary(std::string(stalled_upgrade_bytes, 'w'));
+        } catch (const std::system_error&) {
+            stalled_upgrade_failures.fetch_add(1);
+        }
+    }
+
+    ruvia::task<void> tunnel_stall(ruvia::context& c) {
+        stalled_upgrade_writes.fetch_add(1);
+        try {
+            co_await c.tunnel().write(std::string(stalled_upgrade_bytes, 't'));
+        } catch (const std::system_error&) {
+            stalled_upgrade_failures.fetch_add(1);
+        }
+    }
+};
+
+#if defined(RUVIA_ENABLE_HTTP2)
+using ruvia::test::append_frame;
+
+void append_u32(std::string& out, std::uint32_t value) {
+    for (int shift = 24; shift >= 0; shift -= 8) {
+        out.push_back(static_cast<char>((value >> shift) & 0xff));
+    }
+}
+
+// A prior-knowledge HTTP/2 connection that opens every flow-control window to
+// its maximum, so the server's output is limited only by the socket, then
+// sends one request on stream 1: a large buffered GET or a CONNECT tunnel.
+std::string http2_request_without_reading(bool tunnel) {
+    constexpr std::uint32_t max_window = 0x7fffffffU;
+    std::string wire(ruvia::http2_client_preface);
+    std::string settings({0x00, 0x04});
+    append_u32(settings, max_window);
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, settings);
+    std::string increment{};
+    append_u32(increment, max_window - 65535U);
+    append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0, increment);
+    std::string block;
+    if (tunnel) {
+        ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "stall.test:443");
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+    } else {
+        ruvia::hpack_encoder::encode_header(block, ":method", "GET");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/disconnect/h2-bulk");
+        append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
+    }
+    return wire;
+}
+
+#endif
+
+// 异步客户端给每次 I/O 设置独立截止时间，回归失败不会挂住测试进程。
+class peer final {
+public:
+    peer(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, bool tls)
+        : io_(io),
+          context_(asio::ssl::context::tls_client),
+          stream_(io, context_),
+          tls_(tls) {
+        context_.set_verify_mode(asio::ssl::verify_none);
+        bool connected = false;
+        asio::error_code connect_error;
+        stream_.next_layer().async_connect(endpoint, [&](const asio::error_code& ec) {
+            connect_error = ec;
+            connected = true;
+        });
+        if (!wait_for_completion(connected, 2s)) {
+            throw std::runtime_error("disconnect test connect timed out");
+        }
+        if (connect_error) {
+            throw std::system_error(connect_error);
+        }
+        if (tls_) {
+            bool handshaken = false;
+            asio::error_code handshake_error;
+            stream_.async_handshake(asio::ssl::stream_base::client, [&](asio::error_code ec) {
+                handshake_error = ec;
+                handshaken = true;
+            });
+            if (!wait_for_completion(handshaken, 2s)) {
+                throw std::runtime_error("disconnect test TLS handshake timed out");
+            }
+            if (handshake_error) {
+                throw std::system_error(handshake_error);
+            }
+        }
+    }
+    void send(std::string_view bytes) {
+        bool written = false;
+        asio::error_code error;
+        const auto complete = [&](asio::error_code ec, std::size_t) {
+            error = ec;
+            written = true;
+        };
+        if (tls_) {
+            asio::async_write(stream_, asio::buffer(bytes), complete);
+        } else {
+            asio::async_write(stream_.next_layer(), asio::buffer(bytes), complete);
+        }
+        if (!wait_for_completion(written, 2s)) {
+            throw std::runtime_error("disconnect test write timed out");
+        }
+        if (error) {
+            throw std::system_error(error);
+        }
+    }
+    std::string read_until(std::string_view marker, std::chrono::milliseconds timeout = 2s) {
+        std::string output{};
+        std::array<char, 16384> bytes;
+        const auto deadline = clock_type::now() + timeout;
+        while (clock_type::now() < deadline) {
+            asio::error_code ec;
+            std::size_t n = 0;
+            bool read = false;
+            const auto complete = [&](asio::error_code error, std::size_t count) {
+                ec = error;
+                n = count;
+                read = true;
+            };
+            if (tls_) {
+                stream_.async_read_some(asio::buffer(bytes), complete);
+            } else {
+                stream_.next_layer().async_read_some(asio::buffer(bytes), complete);
+            }
+            const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - clock_type::now());
+            const bool completed = wait_for_completion(read, std::max(remaining, 0ms));
+            output.append(bytes.data(), n);
+            if (!marker.empty() && output.find(marker) != std::string::npos) {
+                return output;
+            }
+            if (!completed || ec) {
+                return output;
+            }
+        }
+        return output;
+    }
+    void half_close() {
+        asio::error_code ignored;
+        stream_.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+    }
+    // TLS 1.3 half-close: close_notify ends only the sending direction. The
+    // shutdown then waits for the server's close_notify; cancel that read so
+    // the response stays readable. Callers send it while the server stays
+    // quiet for far longer than the 20ms the close_notify write needs.
+    void send_close_notify() {
+        asio::cancellation_signal cancel;
+        bool completed = false;
+        asio::error_code error;
+        stream_.async_shutdown(asio::bind_cancellation_slot(cancel.slot(), [&](asio::error_code ec) {
+            error = ec;
+            completed = true;
+        }));
+        io_.restart();
+        io_.run_for(20ms);
+        if (!completed) {
+            cancel.emit(asio::cancellation_type::terminal);
+            wait_for_completion(completed, 2s);
+        }
+        if ((SSL_get_shutdown(stream_.native_handle()) & SSL_SENT_SHUTDOWN) == 0) {
+            throw std::runtime_error("TLS close_notify was not sent");
+        }
+        // The server may close first: answering with its close_notify, or,
+        // having abandoned a lone request, without one.
+        if (error && error != asio::error::operation_aborted && error != asio::error::eof &&
+            error != asio::ssl::error::stream_truncated) {
+            throw std::system_error(error);
+        }
+    }
+    // A clean end of the request direction: TCP FIN, or TLS close_notify. A
+    // bare TCP FIN under TLS is a truncation instead (half_close()).
+    void end_requests() {
+        if (tls_) {
+            send_close_notify();
+        } else {
+            half_close();
+        }
+    }
+    void request_key_update() {
+        if (SSL_key_update(stream_.native_handle(), SSL_KEY_UPDATE_REQUESTED) != 1) {
+            throw std::runtime_error("TLS key update failed");
+        }
+    }
+    void close(bool notify = false, bool reset = false) {
+        if (notify && tls_) {
+            asio::error_code ec;
+            bool shutdown = false;
+            stream_.async_shutdown([&](asio::error_code error) {
+                ec = error;
+                shutdown = true;
+            });
+            const bool completed = wait_for_completion(shutdown, 2s);
+            if ((SSL_get_shutdown(stream_.native_handle()) & SSL_SENT_SHUTDOWN) == 0) {
+                throw std::runtime_error("TLS close_notify was not sent");
+            }
+            if (completed && ec && ec != asio::error::eof && ec != asio::ssl::error::stream_truncated) {
+                throw std::system_error(ec);
+            }
+        }
+        asio::error_code ignored;
+        if (reset) {
+            stream_.next_layer().set_option(asio::socket_base::linger(true, 0), ignored);
+        }
+        stream_.next_layer().close(ignored);
+    }
+
+private:
+    bool wait_for_completion(bool& completed, std::chrono::milliseconds timeout) {
+        io_.restart();
+        io_.run_for(timeout);
+        if (completed) {
+            return true;
+        }
+        // 关闭后排完组合操作，回调和借用缓冲都先于本次调用返回而退役。
+        asio::error_code ignored;
+        stream_.next_layer().close(ignored);
+        io_.restart();
+        io_.run();
+        return false;
+    }
+    asio::io_context& io_;
+    asio::ssl::context context_;
+    asio::ssl::stream<asio::ip::tcp::socket> stream_;
+    bool tls_;
+};
+
+void check_pipeline_upload(asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, std::size_t size, bool defer_body) {
+    peer client(io, endpoint, tls);
+    client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_TRUE(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
+    if (tls) {
+        client.request_key_update();
+    }
+    const std::string payload(size, 'p');
+    const auto prefix = defer_body ? size / 2 : size;
+    std::string request("POST /disconnect/echo HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: ");
+    request.append(std::to_string(size));
+    request.append("\r\n\r\n");
+    request.append(payload.data(), prefix);
+    client.send(request);
+    std::string output{};
+    if (defer_body) {
+        // 前一响应结束后，EOF 监测器必须 join；剩余上传由后续请求接管。
+        output = client.read_until("pipeline-last");
+        client.send(std::string_view(payload).substr(prefix));
+    }
+    output += client.read_until({}, 3s);
+    if (!output.ends_with(payload)) {
+        std::cerr << "stream_disconnect pipeline: tls=" << tls << " size=" << size << " deferred=" << defer_body
+                  << " received=" << output.size() << " response=" << std::string_view(output).substr(0, 256) << '\n';
+    }
+    EXPECT_TRUE(output.find("pipeline-last") != std::string::npos);
+    EXPECT_TRUE(output.ends_with(payload));
+    EXPECT_TRUE(output.find("HTTP/1.1 200 ") != std::string::npos);
+}
+
+// RFC 9112 section 9.6: a FIN behind pipelined requests closes only the
+// request direction. The stream in progress and every request received before
+// the FIN -- a streamed one idling on its stop included -- complete; then the
+// server closes without reading that end again as abandonment.
+void check_pipeline_half_close(asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, bool trailing_buffered) {
+    peer client(io, endpoint, tls);
+    const auto cancelled_before = pipeline_cancelled.load();
+    client.send("GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    EXPECT_TRUE(client.read_until("pipeline-first").find("pipeline-first") != std::string::npos);
+    // The streamed request is either the last one before the FIN, with no byte
+    // behind it, or followed by a buffered one.
+    client.send(std::string("GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n") +
+                (trailing_buffered ? "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n" : ""));
+    // Under TLS the TLS engine then reports the end to every later read at
+    // once, with no transport read: a pipelined stream must not re-read it.
+    client.end_requests();
+    // Read to the server's close: no Connection: close was requested, so only
+    // the request direction's end can close it before the 3s read deadline.
+    const auto begin = clock_type::now();
+    const auto output = client.read_until({}, 3s);
+    EXPECT_TRUE(clock_type::now() - begin < 2s);
+    const auto first_end = output.find("pipeline-last");
+    const auto waited_end = output.find("wait-last");
+    const auto health = output.find("healthy");
+    EXPECT_TRUE(first_end != std::string::npos);
+    EXPECT_TRUE(waited_end != std::string::npos && waited_end > first_end);
+    EXPECT_TRUE(output.find("0\r\n\r\n", waited_end) != std::string::npos);
+    if (trailing_buffered) {
+        EXPECT_TRUE(health != std::string::npos && health > waited_end);
+    } else {
+        EXPECT_TRUE(health == std::string::npos);
+    }
+    EXPECT_EQ(pipeline_cancelled.load(), cancelled_before);
+}
+
+std::string request(std::string_view mode) {
+    return "GET /disconnect/events?mode=" + std::string(mode) + " HTTP/1.1\r\nHost: localhost\r\n\r\n";
+}
+
+// How the client ends a pipelined burst whose last request is a streamed
+// response idling on its stop.
+enum class pipeline_end { immediate,
+    after_last_started,
+    truncated };
+
+// A request received behind another one -- whatever route answered that one,
+// and whenever the end arrives -- treats a clean end of the request direction
+// as a half-close: it completes, then the server closes. A TLS truncation
+// (TCP FIN without close_notify) still ends it as abandonment.
+void check_pipelined_stream_end(asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls, std::string_view leading_requests,
+    std::string_view leading_marker, pipeline_end end) {
+    peer client(io, endpoint, tls);
+    const auto cancelled_before = pipeline_cancelled.load();
+    client.send(std::string(leading_requests) + "GET /disconnect/pipeline-wait HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    std::string output{};
+    if (end == pipeline_end::after_last_started) {
+        // The streamed request already runs, its predecessors done: the end
+        // arrives with nothing buffered behind any request.
+        output = client.read_until("wait-first");
+        EXPECT_TRUE(output.find("wait-first") != std::string::npos);
+        client.end_requests();
+    } else if (end == pipeline_end::truncated) {
+        client.half_close();
+    } else {
+        client.end_requests();
+    }
+    const auto begin = clock_type::now();
+    output += client.read_until({}, 3s);
+    EXPECT_TRUE(clock_type::now() - begin < 2s);
+    const auto leading_end = output.find(leading_marker);
+    EXPECT_TRUE(leading_end != std::string::npos);
+    const auto waited_end = output.find("wait-last");
+    if (end == pipeline_end::truncated) {
+        // The stream is abandoned: stopped in its wait, or failing its first
+        // write when the truncation is seen before it.
+        EXPECT_TRUE(waited_end == std::string::npos);
+        return;
+    }
+    EXPECT_TRUE(waited_end != std::string::npos && waited_end > leading_end);
+    EXPECT_TRUE(output.find("0\r\n\r\n", waited_end) != std::string::npos);
+    EXPECT_EQ(pipeline_cancelled.load(), cancelled_before);
+}
+
+// A FIN (or close_notify) with no request before or behind the stream is the
+// client leaving (Go net/http, Pingora, nginx): the request stops and the
+// stream truncates.
+void check_single_stream_end(asio::io_context& io,
+    const asio::ip::tcp::endpoint& endpoint, bool tls) {
+    peer client(io, endpoint, tls);
+    const auto before = cancelled.load();
+    const auto context_before = context_cancelled.load();
+    client.send(request("token"));
+    EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
+    client.end_requests();
+    ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
+    EXPECT_EQ(context_cancelled.load(), context_before + 1);
+    EXPECT_TRUE(client.read_until("0\r\n\r\n", 500ms).find("0\r\n\r\n") == std::string::npos);
+    client.close();
+}
+
+std::size_t fd_count() {
+#ifdef __linux__
+    std::error_code ec;
+    std::size_t count = 0;
+    for (std::filesystem::directory_iterator it("/proc/self/fd", ec), end; !ec && it != end; it.increment(ec)) {
+        ++count;
+    }
+    return count;
+#else
+    return 0;
+#endif
+}
+}  // namespace stream_disconnect_test
+
+using namespace stream_disconnect_test;
+
+TEST(Ruvia, http1_stream_peer_close_stops_request_and_recycles_connections) {
+    using namespace stream_disconnect_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    ruvia::test::tls_identity identity("localhost");
+    const auto private_key = identity.private_key_file();
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation plain_reservation(io);
+    ruvia::test::tcp_port_reservation tls_reservation(io);
+    const auto plain_endpoint = plain_reservation.endpoint();
+    const auto tls_endpoint = tls_reservation.endpoint();
+    auto& app = ruvia::app();
+    static std::binary_semaphore started{0};
+    app.server({.worker_count_ = 2, .idle_timeout_ = 15s, .connection_scan_interval_ = 5ms, .write_timeout_ = 150ms})
+        .listen({.address_ = "127.0.0.1", .http_ = plain_endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}})
+        .on_error([](ruvia::context& c, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+            errors.fetch_add(1);
+            std::cerr << "stream_disconnect error: " << error.code() << ": " << error.message() << '\n';
+            c.draft().status(error.status());
+            co_return c.text("unexpected-error");
+        })
+        .on_start([] { started.release(); });
+    ruvia::test::app_run runner(app);
+    std::exception_ptr client_failure;
+    const bool ready = started.try_acquire_for(10s);
+    EXPECT_TRUE(ready);
+    try {
+        if (ready) {
+            for (const bool tls : {false, true}) {
+                const auto endpoint = tls ? tls_endpoint : plain_endpoint;
+                // An idle SSE (no write, no writer.sleep()) observes the client
+                // leaving through context::stop_token(): FIN, TLS close_notify, or RST.
+                struct close_kind final {
+                    bool notify_;
+                    bool reset_;
+                };
+                for (const auto mode : {"token", "writer"}) {
+                    for (const auto kind : {close_kind{false, false}, close_kind{true, false}, close_kind{false, true}}) {
+                        peer client(io, endpoint, tls);
+                        const auto before = cancelled.load();
+                        const auto context_before = context_cancelled.load();
+                        client.send(request(mode));
+                        EXPECT_TRUE(client.read_until("data: first").find("data: first") != std::string::npos);
+                        const auto begin = clock_type::now();
+                        client.close(kind.notify_, kind.reset_);
+                        ruvia::test::wait_until([&] { return cancelled.load() == before + 1; }, 2s);
+                        EXPECT_TRUE(clock_type::now() - begin < 2s);
+                        EXPECT_EQ(context_cancelled.load(), context_before + 1);
+                        ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                    }
+                }
+                peer body_client(io, endpoint, tls);
+                const auto complete_before = body_complete.load();
+                body_client.send("GET /disconnect/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\nConnection: close\r\n\r\n");
+                std::this_thread::sleep_for(20ms);
+                body_client.send("hello-world");
+                EXPECT_TRUE(body_client.read_until("0\r\n\r\n").find("hello-world") != std::string::npos);
+                EXPECT_EQ(body_complete.load(), complete_before + 1);
+                // Committed before its body arrived: the read completing the
+                // body starts detection, so the idle wait still ends on close.
+                peer waiting_body_client(io, endpoint, tls);
+                const auto body_cancelled_before = body_cancelled.load();
+                waiting_body_client.send("GET /disconnect/body?early=1&wait=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\n");
+                EXPECT_TRUE(waiting_body_client.read_until("early").find("early") != std::string::npos);
+                waiting_body_client.send("hello-world");
+                EXPECT_TRUE(waiting_body_client.read_until("hello-world").find("hello-world") != std::string::npos);
+                const auto body_close_begin = clock_type::now();
+                waiting_body_client.close();
+                ruvia::test::wait_until([&] { return body_cancelled.load() == body_cancelled_before + 1; }, 2s);
+                EXPECT_TRUE(clock_type::now() - body_close_begin < 2s);
+                peer post_sse_client(io, endpoint, tls);
+                post_sse_client.send("POST /disconnect/post-sse HTTP/1.1\r\nHost: localhost\r\nContent-Length: 10\r\nConnection: close\r\n\r\n{\"id\":\"1\"}");
+                const auto post_sse_output = post_sse_client.read_until("0\r\n\r\n");
+                EXPECT_TRUE(post_sse_output.find("text/event-stream") != std::string::npos);
+                EXPECT_TRUE(post_sse_output.find("data: {\"id\":\"1\"}") != std::string::npos);
+                peer early_client(io, endpoint, tls);
+                early_client.send("GET /disconnect/body?early=1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 11\r\n\r\n");
+                EXPECT_TRUE(early_client.read_until("early").find("early") != std::string::npos);
+                early_client.send("hello-worldGET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+                const auto early_output = early_client.read_until({});
+                EXPECT_TRUE(early_output.find("hello-world") != std::string::npos);
+                EXPECT_TRUE(early_output.find("healthy") == std::string::npos);
+                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+
+                const auto pipeline_cancelled_before = pipeline_cancelled.load();
+                for (const std::size_t size : {std::size_t{31}, std::size_t{256 * 1024}}) {
+                    check_pipeline_upload(io, endpoint, tls, size, false);
+                    if (tls) {
+                        check_pipeline_upload(io, endpoint, true, size, true);
+                    }
+                }
+                // Pipelined bytes arriving during the stream are retained, not
+                // read as the client leaving.
+                EXPECT_EQ(pipeline_cancelled.load(), pipeline_cancelled_before);
+                for (const bool trailing_buffered : {false, true}) {
+                    check_pipeline_half_close(io, endpoint, tls, trailing_buffered);
+                }
+                constexpr std::string_view slow_request = "GET /disconnect/slow HTTP/1.1\r\nHost: localhost\r\n\r\n";
+                const std::string two_buffered(std::string(slow_request) + "GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\n\r\n");
+                // [buffered, streamed] and [buffered, buffered, streamed]: no
+                // monitor ran before the stream, which still completes.
+                check_pipelined_stream_end(io, endpoint, tls, slow_request, "slow-done", pipeline_end::immediate);
+                check_pipelined_stream_end(io, endpoint, tls, two_buffered, "healthy", pipeline_end::immediate);
+                // [streamed, streamed] with the end after the first completed.
+                check_pipelined_stream_end(io, endpoint, tls,
+                    "GET /disconnect/pipeline HTTP/1.1\r\nHost: localhost\r\n\r\n", "pipeline-last",
+                    pipeline_end::after_last_started);
+                if (tls) {
+                    check_pipelined_stream_end(io, endpoint, tls, slow_request, "slow-done", pipeline_end::truncated);
+                }
+                check_single_stream_end(io, endpoint, tls);
+                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                for (const auto mode : {"write", "timeout"}) {
+                    peer racing(io, endpoint, tls);
+                    const auto writes_before = write_entered.load();
+                    racing.send(request(mode));
+                    EXPECT_TRUE(racing.read_until("data: first").find("data: first") != std::string::npos);
+                    ruvia::test::wait_until([&] { return write_entered.load() == writes_before + 1; }, 2s);
+                    if (std::string_view(mode) == "timeout") {
+                        ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                    }
+                    racing.close(false, true);
+                    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                }
+                // write_timeout_ bounds every write of an upgraded connection
+                // as well: a WebSocket without heartbeat or a CONNECT tunnel
+                // whose peer stops reading is closed once its write makes no
+                // progress, long before idle_timeout_.
+                for (const auto upgrade : {std::string_view("GET /disconnect/websocket-stall HTTP/1.1\r\nHost: localhost\r\n"
+                                                            "Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n"
+                                                            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"),
+                         std::string_view("CONNECT stall.test:443 HTTP/1.1\r\nHost: stall.test:443\r\n\r\n")}) {
+                    peer stalled(io, endpoint, tls);
+                    const auto writes_before = stalled_upgrade_writes.load();
+                    const auto failures_before = stalled_upgrade_failures.load();
+                    stalled.send(upgrade);
+                    const auto head = stalled.read_until("\r\n\r\n");
+                    EXPECT_TRUE(head.starts_with(upgrade.starts_with("GET") ? "HTTP/1.1 101 " : "HTTP/1.1 200 "));
+                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
+                    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 5s);
+                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
+                    stalled.close(false, true);
+                }
+            }
+#if defined(RUVIA_ENABLE_HTTP2)
+            // The HTTP/2 reader keeps its connection idle (or long_lived for
+            // a tunnel) while the writer is blocked; write_timeout_ still
+            // closes a connection whose peer stopped reading.
+            for (const bool tunnel : {false, true}) {
+                peer stalled(io, plain_endpoint, false);
+                const auto writes_before = stalled_upgrade_writes.load();
+                const auto failures_before = stalled_upgrade_failures.load();
+                stalled.send(http2_request_without_reading(tunnel));
+                if (tunnel) {
+                    ruvia::test::wait_until([&] { return stalled_upgrade_writes.load() == writes_before + 1; }, 2s);
+                }
+                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 5s);
+                if (tunnel) {
+                    ruvia::test::wait_until([&] { return stalled_upgrade_failures.load() == failures_before + 1; }, 2s);
+                }
+                stalled.close(false, true);
+            }
+#endif
+            peer explicit_peer(io, plain_endpoint, false);
+            const auto explicit_before = cancelled.load();
+            const auto explicit_context_before = context_cancelled.load();
+            explicit_peer.send(request("explicit"));
+            EXPECT_TRUE(explicit_peer.read_until("data: first").find("data: first") != std::string::npos);
+            explicit_stop.request_stop();
+            ruvia::test::wait_until([&] { return cancelled.load() == explicit_before + 1; }, 2s);
+            EXPECT_EQ(context_cancelled.load(), explicit_context_before);
+            explicit_peer.close();
+            ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+
+            const auto fd_baseline = fd_count();
+            std::size_t fd_peak = fd_baseline, active_peak = 0;
+            std::chrono::milliseconds recycle_max{0};
+            constexpr std::size_t batch_size = 64, batches = 36;
+            for (std::size_t batch = 0; batch < batches; ++batch) {
+                std::vector<std::unique_ptr<peer>> clients{};
+                for (std::size_t index = 0; index < batch_size; ++index) {
+                    auto client = std::make_unique<peer>(io, plain_endpoint, false);
+                    client->send(request("token"));
+                    EXPECT_TRUE(client->read_until("data: first").find("data: first") != std::string::npos);
+                    clients.push_back(std::move(client));
+                }
+                active_peak = std::max(active_peak, app.stats().active_connections_);
+                fd_peak = std::max(fd_peak, fd_count());
+                const auto before = cancelled.load();
+                const auto context_before = context_cancelled.load();
+                const auto begin = clock_type::now();
+                for (auto& client : clients) {
+                    client->close();
+                }
+                ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+                EXPECT_EQ(cancelled.load(), before + batch_size);
+                EXPECT_EQ(context_cancelled.load(), context_before + batch_size);
+                recycle_max = std::max(recycle_max, std::chrono::duration_cast<std::chrono::milliseconds>(clock_type::now() - begin));
+            }
+            const auto fd_final = fd_count();
+            EXPECT_EQ(active_peak, batch_size);
+#ifdef __linux__
+            EXPECT_TRUE(fd_final <= fd_baseline);
+#endif
+            peer recovery(io, plain_endpoint, false);
+            recovery.send("GET /disconnect/health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
+            EXPECT_TRUE(recovery.read_until("healthy").find("healthy") != std::string::npos);
+            recovery.close();
+            ruvia::test::wait_until([&] { return app.stats().active_connections_ == 0; }, 2s);
+            std::cout << "stream_disconnect metrics: total=" << batch_size * batches << " peak_active=" << active_peak
+                      << " fd_baseline=" << fd_baseline << " fd_peak=" << fd_peak << " fd_final=" << fd_final
+                      << " max_recycle_ms=" << recycle_max.count() << " errors=" << errors.load()
+                      << " connection_failures=" << app.stats().connection_failures_
+                      << " refused=" << app.stats().connections_refused_
+                      << " max_connections_per_worker=" << *ruvia::server_config{}.max_connections_per_worker_ << '\n';
+            EXPECT_EQ(app.stats().connections_refused_, std::size_t{0});
+
+            // 在同一个有限等待上竞争 worker stop 和 peer EOF。
+            peer stopping(io, plain_endpoint, false);
+            const auto before_stop = finished.load();
+            stopping.send(request("token"));
+            EXPECT_TRUE(stopping.read_until("data: first").find("data: first") != std::string::npos);
+            app.stop();
+            stopping.close();
+            ruvia::test::wait_until([&] { return finished.load() == before_stop + 1; }, 2s);
+        }
+    } catch (...) {
+        client_failure = std::current_exception();
+        app.stop();
+    }
+    runner.join();
+    EXPECT_EQ(app.stats().connection_failures_, std::size_t{0});
+    EXPECT_EQ(app.stats().accept_failures_, std::size_t{0});
+    EXPECT_EQ(app.stats().worker_failures_, std::size_t{0});
+    if (client_failure) {
+        std::rethrow_exception(client_failure);
+    }
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+
+TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    const auto rejected = [](const ruvia::session_config& config) {
+        try {
+            const ruvia::session_middleware middleware(config);
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+        return false;
+    };
+
+    auto config = ruvia::session_config{};
+    config.redis_alias_ = "";
+    EXPECT_TRUE(rejected(config));
+
+    config = ruvia::session_config{};
+    config.cookie_name_ = "bad cookie";
+    EXPECT_TRUE(rejected(config));
+
+    config = ruvia::session_config{};
+    config.key_prefix_ = "";
+    EXPECT_TRUE(rejected(config));
+
+    config = ruvia::session_config{};
+    config.ttl_ = std::chrono::seconds::zero();
+    EXPECT_TRUE(rejected(config));
+
+    // A new session is written with a millisecond expiry.
+    constexpr auto max_ttl = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::milliseconds::max());
+    config.ttl_ = max_ttl + std::chrono::seconds(1);
+    EXPECT_TRUE(rejected(config));
+    config.ttl_ = std::chrono::seconds::max();
+    EXPECT_TRUE(rejected(config));
+}
+
+namespace session_test {
+
+// Writes a cookie under the session's name before clearing the session, so the
+// commit stage finds a same-name Set-Cookie already in the response. The
+// session middleware only runs on matched requests, so this needs a route.
+class same_name_cookie_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/session-test")
+    RUVIA_ROUTES_BEGIN(same_name_cookie_controller)
+    RUVIA_GET("/same-name-cookie", same_name_cookie);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> same_name_cookie(ruvia::context& c) {
+        c.draft().set_cookie({.name_ = "ruvia_session", .value_ = "handler"});
+        c.session().clear();
+        co_return c.text("ok");
+    }
+};
+
+class stored_session_controller final {
+public:
+    RUVIA_ROUTES_BEGIN(stored_session_controller)
+    RUVIA_GET("/session-ids/:space/read", read);
+    RUVIA_GET("/session-ids/:space/set", set);
+    RUVIA_GET("/session-ids/:space/clear", clear);
+    RUVIA_GET("/session-ids/:space/rotate", rotate);
+    RUVIA_GET("/session-ids/b/stale", stale);
+    RUVIA_GET("/session-store", stored);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> read(ruvia::context& c) {
+        auto value = c.session();
+        co_return c.text(value.data().empty() ? "empty" : value.data());
+    }
+
+    ruvia::task<ruvia::http_response> set(ruvia::context& c) {
+        c.session().set("private");
+        co_return c.text("set");
+    }
+
+    ruvia::task<ruvia::http_response> clear(ruvia::context& c) {
+        c.session().clear();
+        co_return c.text("clear");
+    }
+
+    ruvia::task<ruvia::http_response> rotate(ruvia::context& c) {
+        c.session().regenerate();
+        co_return c.text("rotate");
+    }
+
+    ruvia::task<ruvia::http_response> stale(ruvia::context& c) {
+        // Revoke after middleware loaded the session but before response commit.
+        const auto id = c.req().cookie("sid_b");
+        if (id) {
+            const std::string key = "sess:a" + std::string(*id);
+            (void)co_await c.redis().del(key);
+        }
+        c.session().regenerate();
+        co_return c.text("stale");
+    }
+
+    ruvia::task<ruvia::http_response> stored(ruvia::context& c) {
+        const auto id = c.req().query("id");
+        const std::string key = "sess:" + std::string(id.value_or(""));
+        const auto value = co_await c.redis().get(key);
+        co_return c.text(value ? std::string_view(*value) : "empty");
+    }
+};
+
+struct session_response final {
+    unsigned status_;
+    std::string body_{};
+    std::string cookie_{};
+};
+
+[[nodiscard]] session_response request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view target, std::string_view cookie = {}) {
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    const std::string wire = "GET " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::string(cookie) + "\r\n\r\n";
+    asio::write(socket, asio::buffer(wire));
+    socket.non_blocking(true);
+    std::string response{};
+    std::array<char, 4096> buffer;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+        std::error_code error;
+        const auto size = socket.read_some(asio::buffer(buffer), error);
+        response.append(buffer.data(), size);
+        if (error == asio::error::eof) {
+            break;
+        }
+        if (error && error != asio::error::would_block && error != asio::error::try_again) {
+            throw std::system_error(error);
+        }
+        if (std::chrono::steady_clock::now() >= deadline) {
+            throw std::runtime_error("session HTTP response timed out");
+        }
+        if (error) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+    }
+    const auto head_end = response.find("\r\n\r\n");
+    if (!response.starts_with("HTTP/1.1 ") || head_end == std::string::npos) {
+        throw std::runtime_error("invalid session HTTP response");
+    }
+    session_response result{static_cast<unsigned>(std::get<0>(ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)))), std::string(std::string_view(response).substr(head_end + 4)), std::string{}};
+    const auto cookie_start = response.find("\r\nSet-Cookie: ");
+    if (cookie_start != std::string::npos && cookie_start < head_end) {
+        const auto start = cookie_start + std::string_view("\r\nSet-Cookie: ").size();
+        result.cookie_.assign(std::string_view(response).substr(start, response.find(';', start) - start));
+    }
+    return result;
+}
+
+}  // namespace session_test
+
+TEST(Ruvia, session_cookie_replaces_a_same_name_cookie_set_by_the_handler) {
+    using namespace session_test;
+    ruvia::test_app app;
+    {
+        ruvia::session_config config;
+        config.cookie_name_ = "ruvia_session";
+        app.use<ruvia::session_middleware>(config);
+    }
+
+    const auto response = app.request(ruvia::test_request::get("/session-test/same-name-cookie"));
+    EXPECT_EQ(response.status(), ruvia::http_status::ok);
+    std::size_t session_cookies = 0;
+    bool expired = false;
+    for (const auto& header : response.headers()) {
+        if (header.name() != std::string_view("Set-Cookie") || !header.value().starts_with("ruvia_session=")) {
+            continue;
+        }
+        ++session_cookies;
+        expired = expired || (header.value().starts_with("ruvia_session=;") &&
+                                 header.value().find("; Expires=Thu, 01 Jan 1970 00:00:00 GMT") != std::string_view::npos &&
+                                 header.value().find("Max-Age") == std::string_view::npos);
+    }
+    EXPECT_EQ(session_cookies, std::size_t{1});
+    EXPECT_TRUE(expired);
+}
+
+TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
+    using namespace session_test;
+    // Construct before the shared HTTP runtime so the server retires its Redis
+    // client before this peer is destroyed at process exit.
+    static ruvia::test::redis_session_store_peer peer([] {
+        std::map<std::string, std::string> store;
+        for (const auto size : {47, 48, 49, 128}) {
+            store.emplace("sess:" + std::string(size, 'b'), "existing");
+        }
+        store.emplace("sess:" + std::string(48, 'B'), "existing");
+        store.emplace("sess:" + std::string(48, 'g'), "existing");
+        return store;
+    }());
+    ruvia::app()
+        .redis({.config_ = {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = std::chrono::seconds(2), .command_timeout_ = std::chrono::seconds(2)}})
+        .use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/a"},
+            ruvia::session_config{.cookie_name_ = "sid_a", .key_prefix_ = "sess:"})
+        .use_at<ruvia::session_middleware>({.prefix_ = "/session-ids/b"},
+            ruvia::session_config{.cookie_name_ = "sid_b", .key_prefix_ = "sess:a"});
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const auto request = [&](std::string_view path, std::string_view cookie = {}) {
+        return session_test::request(io, server.endpoint(), path, cookie);
+    };
+    const auto expect = [&](std::string_view path, std::string_view cookie, std::string_view body) {
+        const auto response = request(path, cookie);
+        EXPECT_EQ(response.status_, 200U);
+        EXPECT_EQ(response.body_, body);
+        return response;
+    };
+
+    // These IDs have actual stored values. Rejection must hide the data and
+    // leave it unchanged across both clear and regenerate, not merely avoid a
+    // backend error. Uppercase and non-hex IDs still remain invalid at length 48.
+    for (const auto& id : {std::string(47, 'b'), std::string(49, 'b'), std::string(128, 'b'),
+             std::string(48, 'B'), std::string(48, 'g')}) {
+        const auto cookie = std::string("sid_a=") + id;
+        expect("/session-ids/a/read", cookie, "empty");
+        expect("/session-ids/a/clear", cookie, "clear");
+        const auto rotated = expect("/session-ids/a/rotate", cookie, "rotate");
+        EXPECT_TRUE(rotated.cookie_.empty());
+        expect(std::string("/session-store?id=") + id, {}, "existing");
+    }
+
+    // A freshly minted B session must not be loadable or mutable through A's
+    // shorter prefix, even though raw prefix + presented ID names the same key.
+    for (const auto action : {"read", "clear", "rotate"}) {
+        const auto created = expect("/session-ids/b/set", {}, "set");
+        EXPECT_TRUE(created.cookie_.starts_with("sid_b="));
+        EXPECT_EQ(created.cookie_.size(), std::size_t{6 + 48});
+        const auto alias = "sid_a=a" + std::string(std::string_view(created.cookie_).substr(6));
+        const auto response = expect(std::string("/session-ids/a/") + action, alias,
+            std::string_view(action) == "read" ? "empty" : action);
+        if (std::string_view(action) != "clear") {
+            EXPECT_TRUE(response.cookie_.empty());
+        }
+        expect("/session-ids/b/read", created.cookie_, "private");
+        expect("/session-ids/b/clear", created.cookie_, "clear");
+        expect("/session-ids/b/read", created.cookie_, "empty");
+    }
+
+    // An already-stored 48-character ID retains the same raw key format.
+    const auto existing = "sid_a=" + std::string(48, 'b');
+    const auto loaded = expect("/session-ids/a/read", existing, "existing");
+    EXPECT_TRUE(loaded.cookie_.empty());
+    const auto rotated = expect("/session-ids/a/rotate", existing, "rotate");
+    EXPECT_EQ(rotated.cookie_.size(), std::size_t{6 + 48});
+    EXPECT_TRUE(rotated.cookie_ != existing);
+    expect("/session-ids/a/read", existing, "empty");
+    expect("/session-ids/a/read", rotated.cookie_, "existing");
+    expect("/session-ids/a/clear", rotated.cookie_, "clear");
+    expect("/session-ids/a/read", rotated.cookie_, "empty");
+
+    const auto created = expect("/session-ids/b/set", {}, "set");
+    const auto stale = request("/session-ids/b/stale", created.cookie_);
+    EXPECT_EQ(stale.status_, 409U);
+    EXPECT_TRUE(stale.cookie_.empty());
+    expect("/session-ids/b/read", created.cookie_, "empty");
+    server.finish();
+    ruvia::test::reset_app_callbacks(ruvia::app());
+}
+
+#endif

@@ -54,8 +54,8 @@ public:
     }
 
     RUVIA_ROUTES_BEGIN(conflicting_controller)
-    RUVIA_GET("/conflict/:id", first);
-    RUVIA_GET("/conflict/:name", second);
+    RUVIA_GET("/conflict/:id/files", first);
+    RUVIA_GET("/conflict/:name/files", second);
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> first(ruvia::context& context) {
@@ -95,6 +95,19 @@ ruvia::task<void> serve_request(ruvia::request_stream& request) {
 }  // namespace route_dispatch_isolation_test
 
 using namespace route_dispatch_isolation_test;
+
+TEST(Ruvia, route_conflict_rejects_equal_precedence_dynamic_routes_at_startup) {
+    reject_controller = false;
+    ruvia::test_app app;
+    std::string message{};
+    try {
+        (void)app.request(ruvia::test_request::get("/conflict/1/files"));
+    } catch (const std::invalid_argument& error) {
+        message = error.what();
+    }
+    EXPECT_TRUE(message.find("GET /conflict/:id/files") != std::string::npos);
+    EXPECT_TRUE(message.find("GET /conflict/:name/files") != std::string::npos);
+}
 
 TEST(Ruvia, nonrouted_listeners_ignore_conflicts_and_unused_controller_and_middleware_constructors) {
     asio::io_context io;
