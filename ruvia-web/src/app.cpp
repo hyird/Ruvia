@@ -93,8 +93,7 @@
 #include <openssl/evp.h>
 #include <openssl/ocsp.h>
 
-#include "ruvia/core/task_scope.h"
-
+#include "ruvia/core/event_loop.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
 #endif

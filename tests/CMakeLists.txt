@@ -93,133 +93,133 @@ endif()
 
 if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
-    ruvia_add_web_standalone_test(ruvia_app_startup 30 web/app/startup.cpp)
-    ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/app/lifecycle.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_startup 30 web/startup.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_lifecycle 60 web/lifecycle.cpp)
     if(RUVIA_ENABLE_REDIS)
         # Owns a Redis-backed session application and an isolated stateful peer.
-        ruvia_add_web_standalone_test(ruvia_session_tests 30 web/http/session.cpp)
+        ruvia_add_web_standalone_test(ruvia_session_tests 30 web/session.cpp)
     endif()
-    ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/accept_ownership.cpp)
     if(RUVIA_ENABLE_HTTP2)
-        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/http/http2_goaway.cpp)
-        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/http/http2_request_limit.cpp)
-        ruvia_add_web_standalone_test(ruvia_app_http2_frame_observation 60 web/app/http2_frame_observation.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/http2_goaway.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/http2_request_limit.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_frame_observation 60 web/http2_frame_observation.cpp)
     endif()
-    ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/tls_paths.cpp)
     # Trusts the loopback peer in its second run.
-    ruvia_add_web_standalone_test(ruvia_app_misdirected_request 30 web/app/misdirected_request.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_misdirected_request 30 web/misdirected_request.cpp)
     # Owns an application with ClientHello and HTTP/2 input observers.
-    ruvia_add_web_standalone_test(ruvia_app_server_observation 60 web/app/server_observation.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_server_observation 60 web/server_observation.cpp)
     # Owns an application whose HTTPS identities it selects and replaces at
     # runtime, on a wildcard address too.
-    ruvia_add_web_standalone_test(ruvia_app_tls_identities 60 web/app/tls_identities.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_tls_identities 60 web/tls_identities.cpp)
     # Owns applications whose listeners hand connections to on_connection,
     # with short idle timeouts and a connection-failure hook.
-    ruvia_add_web_standalone_test(ruvia_app_server_connection 60 web/app/server_connection.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_server_connection 60 web/server_connection.cpp)
     # Owns an application whose listeners it adopts, duplicates, adds and
     # removes while running, across several runs.
-    ruvia_add_web_standalone_test(ruvia_app_listener_sockets 120 web/app/listener_sockets.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_listener_sockets 120 web/listener_sockets.cpp)
     # Owns an application whose request-stream listeners hand every request to
     # on_request_stream beside an ordinary routes listener with middleware.
-    ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/app/request_stream.cpp)
-    ruvia_add_web_standalone_test(ruvia_http_server 60 web/app/http_server.cpp)
-    ruvia_add_web_standalone_test(ruvia_router 60 web/app/router.cpp)
-    ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
-    ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/app/connection_lifecycle.cpp)
-    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/app/websocket_standalone_server.cpp)
-    ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/request_stream.cpp)
+    ruvia_add_web_standalone_test(ruvia_http_server 60 web/http_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_router 60 web/router.cpp)
+    ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/http_server_group.cpp)
+    ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/connection_lifecycle.cpp)
+    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket_standalone_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/listener_transactions.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.
-    ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/app/route_encoded_duplicate.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/route_conflict.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/route_encoded_duplicate.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/route_protocol.cpp)
+    ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/route_dot_segment.cpp)
     set(_ruvia_tcp_client_test_sources
-        web/http/http1_websocket.cpp)
+        web/http1_websocket.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
-            web/http/http2_connect.cpp)
+            web/http2_connect.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         ${_ruvia_tcp_client_test_sources})
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_server_admission_tests 60
-        web/http/server_admission.cpp)
+        web/server_admission.cpp)
     # Owns an application with an app-wide CORS policy and access-log hook, so
     # it cannot share the process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_response_policy_tests 60
-        web/http/http1_response_policy.cpp)
+        web/http1_response_policy.cpp)
     # Owns an application with an app-wide compression policy, which would
     # otherwise encode the bodies other server suites compare.
     ruvia_add_web_standalone_test(ruvia_response_compression_tests 60
-        web/http/http1_response_compression.cpp)
+        web/http1_response_compression.cpp)
     # Owns an application with small inbound budgets.
     ruvia_add_web_standalone_test(ruvia_inbound_memory_tests 60
-        web/http/http1_inbound_memory.cpp)
+        web/http1_inbound_memory.cpp)
     # Owns a TLS application with a short write timeout, which must not time
     # the handler cases of the other server suites.
     ruvia_add_web_standalone_test(ruvia_interim_phase_timeout_tests 30
-        web/http/http1_interim_phase_timeout.cpp)
+        web/http1_interim_phase_timeout.cpp)
     # Owns a TLS application whose cleartext listener only redirects to HTTPS.
     ruvia_add_web_standalone_test(ruvia_auto_https_redirect_tests 30
-        web/http/http1_auto_https_redirect.cpp)
+        web/http1_auto_https_redirect.cpp)
     # Owns an application with an application-wide error handler that must
     # observe no peer reset.
     ruvia_add_web_standalone_test(ruvia_peer_reset_tests 60
-        web/http/http1_peer_reset.cpp)
+        web/http1_peer_reset.cpp)
     ruvia_add_web_standalone_test(ruvia_stream_disconnect_tests 120
-        web/http/http1_stream_disconnect.cpp)
+        web/http1_stream_disconnect.cpp)
     # Owns an application with a short idle timeout and a TLS listener.
     ruvia_add_web_standalone_test(ruvia_connection_close_tests 30
-        web/http/http1_connection_close.cpp)
+        web/http1_connection_close.cpp)
     # Owns an application with a document root shadowing a guarded route.
     ruvia_add_web_standalone_test(ruvia_document_root_tests 60
-        web/http/document_root.cpp)
+        web/document_root.cpp)
     # Owns a multi-worker application whose document root changes under it.
     ruvia_add_web_standalone_test(ruvia_document_root_refresh_tests 60
-        web/http/document_root_refresh.cpp)
+        web/document_root_refresh.cpp)
     # Owns application stop/restart with a leased document-root generation.
     ruvia_add_web_standalone_test(ruvia_document_root_shutdown_tests 30
-        web/http/document_root_shutdown.cpp)
+        web/document_root_shutdown.cpp)
     # Owns an application with a short write timeout, a one-thread blocking
     # pool and a connection-failure hook, then runs it without a pool.
     ruvia_add_web_standalone_test(ruvia_file_response_failure_tests 30
-        web/http/file_response_failure.cpp)
+        web/file_response_failure.cpp)
     # Owns named fixed origins and redirect policies on the process application.
     ruvia_add_web_standalone_test(ruvia_http_client_api_tests 60
-        web/http/client_handle_and_response.cpp)
+        web/client_handle_and_response.cpp)
     # Owns the process application whose routes stall each client operation.
     ruvia_add_web_standalone_test(ruvia_http_client_operation_tests 60
-        web/http/client_operation_interruption.cpp)
+        web/client_operation_interruption.cpp)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
-        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http/http3_quic.cpp)
+        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3_quic.cpp)
         # Owns a four-worker application serving HTTP/3 beside its HTTPS
         # listener, stopped gracefully at its end.
-        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http/http3_serving.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3_serving.cpp)
     endif()
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
-    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/(db_pool|db_query|jwt|redis)\\.cpp$")
+    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(db_pool|jwt|redis)\\.cpp$")
     if(NOT RUVIA_ENABLE_HTTP2)
-        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/http2_")
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2_")
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
-        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/http3_")
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http3_")
     endif()
     list(REMOVE_ITEM _ruvia_web_unit_sources ${_ruvia_web_standalone_sources})
     if(RUVIA_ENABLE_JWT)
-        list(APPEND _ruvia_web_unit_sources web/http/jwt.cpp)
+        list(APPEND _ruvia_web_unit_sources web/jwt.cpp)
     endif()
     if(RUVIA_ENABLE_REDIS)
-        list(APPEND _ruvia_web_unit_sources web/http/redis.cpp)
+        list(APPEND _ruvia_web_unit_sources web/redis.cpp)
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-        list(APPEND _ruvia_web_unit_sources web/http/db_pool.cpp web/http/db_query.cpp)
+        list(APPEND _ruvia_web_unit_sources web/db_pool.cpp)
     endif()
     list(SORT _ruvia_web_unit_sources)
 

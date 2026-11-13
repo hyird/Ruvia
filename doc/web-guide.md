@@ -521,7 +521,7 @@ ruvia::app()
 | `worker()` / `stats()` | 核心 worker 与宿主统计；统计可跨线程读取 |
 
 ```cpp
-#include "ruvia/core/task_scope.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 
 ruvia::task<void> answer(ruvia::request_stream& stream) {

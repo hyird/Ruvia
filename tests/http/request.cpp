@@ -31,8 +31,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "content_decoding_fixture.h"
-#include "test_exceptions.h"
-
 namespace {
 
 // Appends the trailer section that ends the chunked `wire` the way an HTTP/1

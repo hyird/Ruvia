@@ -37,7 +37,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/http_client.h"

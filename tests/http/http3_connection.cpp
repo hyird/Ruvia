@@ -23,13 +23,12 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
 
-#include "test_exceptions.h"
-
+#include "content_decoding_fixture.h"
 namespace ruvia::test {
 
 // Stream data delivered to the peer whose QUIC acknowledgement has not been

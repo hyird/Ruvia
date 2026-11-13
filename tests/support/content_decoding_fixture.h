@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <exception>
 #include <limits>
 #include <new>
 #include <optional>
@@ -28,6 +29,7 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
+
 namespace ruvia::test {
 
 using ruvia::decode_http_content;
@@ -508,6 +510,25 @@ public:
 private:
     std::deque<std::string> retained_;
 };
+
+}  // namespace ruvia::test
+
+#endif
+
+#ifndef RUVIA_TEST_EXCEPTIONS_DEFINED
+#define RUVIA_TEST_EXCEPTIONS_DEFINED
+
+namespace ruvia::test {
+
+template <typename fn_type>
+[[nodiscard]] inline bool throws_on(fn_type&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
 
 }  // namespace ruvia::test
 

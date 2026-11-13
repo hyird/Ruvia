@@ -42,8 +42,6 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/websocket_handshake.h"
-
 namespace ruvia {
 
 std::string_view http_content_coding_token(http_content_coding coding) noexcept {

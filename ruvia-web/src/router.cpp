@@ -19,7 +19,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
@@ -50,7 +49,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/http/websocket_handshake.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/web/model.h"
 
 #ifdef RUVIA_ENABLE_REDIS

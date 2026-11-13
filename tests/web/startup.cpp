@@ -1,0 +1,745 @@
+#include <gtest/gtest.h>
+
+#include <array>
+#include <atomic>
+#include <chrono>
+#include <cstddef>
+#include <exception>
+#include <future>
+#include <memory>
+#include <semaphore>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <thread>
+#include <utility>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/tcp.hpp>
+#include <asio/ssl/stream.hpp>
+#include <asio/write.hpp>
+
+#include "ruvia/core/event_loop.h"
+#include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
+
+#include "http_server_fixture.h"
+namespace startup_test {
+
+using namespace std::chrono_literals;
+
+enum class startup_outcome { fail,
+    stop_during_worker_startup,
+    stop_in_hook,
+    stop_from_caller,
+    serve };
+
+struct startup_state final {
+    startup_outcome outcome_{};
+    std::atomic<unsigned> live_workers_{};
+    std::atomic<unsigned> destroyed_workers_{};
+    std::atomic<unsigned> requests_{};
+    std::atomic<bool> initialized_{};
+    std::atomic<bool> startup_job_cancelled_{};
+    std::atomic<bool> worker_startup_blocked_{};
+    std::binary_semaphore hook_entered_{0};
+    std::binary_semaphore release_hook_{0};
+    unsigned second_hooks_{};
+    unsigned stop_hooks_{};
+    std::thread::id start_thread_{};
+    std::thread::id stop_thread_{};
+    std::atomic<bool> websocket_message_{};
+    std::atomic<bool> websocket_end_{};
+    std::atomic<bool> websocket_failed_{};
+};
+
+struct worker_state final {
+    explicit worker_state(std::shared_ptr<startup_state> owner_value)
+        : state_(std::move(owner_value)) {
+        state_->live_workers_.fetch_add(1);
+    }
+    ~worker_state() {
+        state_->live_workers_.fetch_sub(1);
+        state_->destroyed_workers_.fetch_add(1);
+    }
+    std::shared_ptr<startup_state> state_;
+};
+
+class startup_controller final {
+public:
+    RUVIA_ROUTES_BEGIN(startup_controller)
+    RUVIA_GET("/ready", ready);
+    RUVIA_GET("/connection", connection);
+    RUVIA_POST("/limited", limited, ruvia::body_limit<16>);
+    RUVIA_GET_WS("/socket", read_websocket);
+    RUVIA_ROUTES_END
+
+    ruvia::task<ruvia::http_response> ready(ruvia::context& context) {
+        auto& state_value = *context.worker_state<worker_state>().state_;
+        state_value.requests_.fetch_add(1);
+        co_return context.text(std::string_view(state_value.initialized_.load() ? "initialized" : "premature"));
+    }
+
+    ruvia::task<ruvia::http_response> limited(ruvia::context& context) {
+        co_return context.text(std::string_view("accepted"));
+    }
+
+    ruvia::task<ruvia::http_response> connection(ruvia::context& context) {
+        const auto info = context.conn();
+        std::string result = info.client().address().to_string();
+        result += info.via_trusted_proxy() ? ":proxy" : ":direct";
+        result += info.scheme() == ruvia::http_scheme::https ? ":https" : ":http";
+        co_return context.text(std::string_view(result));
+    }
+
+    ruvia::task<void> read_websocket(ruvia::context& context) {
+        auto& state_value = *context.worker_state<worker_state>().state_;
+        auto& websocket_value = context.websocket();
+        try {
+            const auto first = co_await websocket_value.read();
+            state_value.websocket_message_ = first.has_value() && first->payload() == std::string_view("hi");
+            const auto end = co_await websocket_value.read();
+            state_value.websocket_end_ = !end.has_value();
+        } catch (...) {
+            state_value.websocket_failed_ = true;
+        }
+    }
+};
+
+// Startup hooks may block independently of application::stop().
+class startup_run final {
+public:
+    explicit startup_run(ruvia::application& app, startup_state& state_value)
+        : app_(app),
+          state_(state_value),
+          run_(app) {}
+
+    ~startup_run() {
+        if (!joined_) {
+            app_.stop();
+            state_.release_hook_.release();
+        }
+    }
+    void stop_and_join() {
+        app_.stop();
+        state_.release_hook_.release();
+        join();
+    }
+    void join() {
+        joined_ = true;
+        try {
+            run_.join();
+        } catch (...) {
+            failure_ = std::current_exception();
+        }
+    }
+    [[nodiscard]] std::thread::id id() const noexcept {
+        return run_.id();
+    }
+    std::exception_ptr failure_;
+
+private:
+    ruvia::application& app_;
+    startup_state& state_;
+    ruvia::test::app_run run_;
+    bool joined_{};
+};
+
+std::string read_response(asio::ip::tcp::socket& socket) {
+    std::string response{};
+    std::array<char, 1024> buffer;
+    const auto deadline_value = std::chrono::steady_clock::now() + 3s;
+    while (std::chrono::steady_clock::now() < deadline_value) {
+        asio::error_code error;
+        const auto size = socket.read_some(asio::buffer(buffer), error);
+        response.append(buffer.data(), size);
+        if (response.find("initialized") != std::string::npos ||
+            (error && error != asio::error::would_block && error != asio::error::try_again)) {
+            break;
+        }
+        std::this_thread::sleep_for(1ms);
+    }
+    return response;
+}
+
+bool forwarded_connection_matches(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    std::string_view forwarding, std::string_view expected) {
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    const std::string request = "GET /connection HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n" +
+                                std::string(forwarding) + "\r\n";
+    asio::write(socket, asio::buffer(request));
+    socket.non_blocking(true);
+    const auto response = read_response(socket);
+    const auto body_start = response.find("\r\n\r\n");
+    return response.starts_with("HTTP/1.1 200 ") && body_start != std::string::npos &&
+           std::string_view(response).substr(body_start + 4) == expected;
+}
+
+// The listener's ticket keys are shared by every worker, so each resumption
+// attempt succeeds regardless of which worker accepts it. Offering the session
+// must never fail a handshake.
+bool resume_tls_session(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    std::unique_ptr<SSL_SESSION, decltype(&SSL_SESSION_free)> session(nullptr, SSL_SESSION_free);
+    for (int attempt = 0; attempt < 6; ++attempt) {
+        asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+        asio::error_code error;
+        stream.next_layer().connect(endpoint, error);
+        if (!error && session && SSL_set_session(stream.native_handle(), session.get()) != 1) {
+            return false;
+        }
+        if (!error) {
+            stream.handshake(asio::ssl::stream_base::client, error);
+        }
+        if (error) {
+            return false;
+        }
+        if (!session) {
+            // TLS 1.3 tickets precede the response, so the first response
+            // bytes mean they were processed. Capture the session before the
+            // server can close the connection.
+            constexpr std::string_view request = "GET /missing HTTP/1.1\r\nHost: localhost\r\n\r\n";
+            asio::write(stream, asio::buffer(request), error);
+            std::array<char, 1024> buffer;
+            if (error || stream.read_some(asio::buffer(buffer), error) == 0 || error) {
+                return false;
+            }
+            session.reset(SSL_get1_session(stream.native_handle()));
+            if (!session || SSL_SESSION_is_resumable(session.get()) != 1) {
+                return false;
+            }
+        } else if (SSL_session_reused(stream.native_handle()) != 1) {
+            return false;
+        }
+        // OpenSSL marks the session of an SSL freed without a local shutdown
+        // as unresumable; record a clean local close so later attempts can offer it.
+        SSL_set_shutdown(stream.native_handle(), SSL_SENT_SHUTDOWN);
+    }
+    return true;
+}
+
+using ruvia::test::read_to_end;
+
+// RFC 8446 §6.1: closing after a Connection: close response sends close_notify,
+// so the client observes a clean TLS end instead of a truncated stream.
+bool tls_close_sends_close_notify(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    constexpr std::string_view request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(request), error);
+    }
+    if (error) {
+        return false;
+    }
+    asio::error_code end;
+    const auto response = read_to_end(stream, end);
+    return response.starts_with("HTTP/1.1 404 ") && end == asio::error::eof &&
+           (SSL_get_shutdown(stream.native_handle()) & SSL_RECEIVED_SHUTDOWN) != 0;
+}
+
+[[nodiscard]] std::size_t count_occurrences(std::string_view text, std::string_view marker) {
+    std::size_t count = 0;
+    for (auto position = text.find(marker); position != std::string_view::npos;
+        position = text.find(marker, position + marker.size())) {
+        ++count;
+    }
+    return count;
+}
+
+// An idle TLS connection waits for its next request like a plain one. Two
+// heads larger than that wait's first read arrive in one TLS record, so most
+// of their plaintext is already decrypted inside the engine; both are still
+// answered, and so is a request sent after the connection went idle.
+bool tls_keep_alive_serves_decrypted_and_later_requests(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    const auto request = "GET /missing HTTP/1.1\r\nHost: localhost\r\nX-Padding: " + std::string(1024, 'p') + "\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(std::string(request) + request), error);
+    }
+    std::string received{};
+    std::array<char, 4096> buffer;
+    while (!error && count_occurrences(received, "HTTP/1.1 404 ") < 2) {
+        const auto size = stream.read_some(asio::buffer(buffer), error);
+        received.append(buffer.data(), size);
+    }
+    if (error) {
+        return false;
+    }
+    std::this_thread::sleep_for(20ms);
+    constexpr std::string_view last = "GET /missing HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+    asio::write(stream, asio::buffer(last), error);
+    if (error) {
+        return false;
+    }
+    asio::error_code end;
+    received += read_to_end(stream, end);
+    return end == asio::error::eof && count_occurrences(received, "HTTP/1.1 404 ") == 3;
+}
+
+// Reject an oversized Expect request before its body is sent. The client must
+// receive the final status, not 100 Continue, and the unread body precludes reuse.
+bool rejected_expect_upload_closes_without_body(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint) {
+    asio::ip::tcp::socket socket(io);
+    asio::error_code error;
+    socket.connect(endpoint, error);
+    constexpr std::string_view request =
+        "POST /limited HTTP/1.1\r\nHost: localhost\r\n"
+        "Content-Length: 1048576\r\nExpect: 100-continue\r\n\r\n";
+    if (!error) {
+        asio::write(socket, asio::buffer(request), error);
+    }
+    if (error) {
+        return false;
+    }
+    asio::error_code end;
+    const auto response = read_to_end(socket, end);
+    return response.starts_with("HTTP/1.1 413 ") && response.find("\r\n\r\n") != std::string::npos &&
+           response.find("HTTP/1.1 100 ") == std::string::npos && end == asio::error::eof;
+}
+
+// A TLS peer that drops TCP without close_notify ends the server websocket
+// read side exactly like an orderly close instead of failing the read.
+bool tls_websocket_truncation_ends_read(
+    asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const startup_state& state_value) {
+    asio::ssl::context client(asio::ssl::context::tls_client);
+    client.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+    asio::error_code error;
+    stream.next_layer().connect(endpoint, error);
+    if (!error) {
+        stream.handshake(asio::ssl::stream_base::client, error);
+    }
+    constexpr std::string_view upgrade =
+        "GET /socket HTTP/1.1\r\n"
+        "Host: localhost\r\n"
+        "Connection: Upgrade\r\n"
+        "Upgrade: websocket\r\n"
+        "Sec-WebSocket-Version: 13\r\n"
+        "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
+    if (!error) {
+        asio::write(stream, asio::buffer(upgrade), error);
+    }
+    std::string head{};
+    char byte{};
+    while (!error && !head.ends_with("\r\n\r\n")) {
+        if (stream.read_some(asio::buffer(&byte, 1), error) == 1) {
+            head.push_back(byte);
+        }
+    }
+    if (error || !head.starts_with("HTTP/1.1 101 ")) {
+        return false;
+    }
+    // One masked text frame (zero masking key), then a TCP FIN without close_notify.
+    constexpr std::array<char, 8> frame{'\x81', '\x82', '\0', '\0', '\0', '\0', 'h', 'i'};
+    asio::write(stream, asio::buffer(frame), error);
+    if (error) {
+        return false;
+    }
+    stream.next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
+    const auto deadline_value = std::chrono::steady_clock::now() + 3s;
+    while (!state_value.websocket_end_.load() && !state_value.websocket_failed_.load() &&
+           std::chrono::steady_clock::now() < deadline_value) {
+        std::this_thread::sleep_for(1ms);
+    }
+    return state_value.websocket_message_.load() && state_value.websocket_end_.load() &&
+           !state_value.websocket_failed_.load();
+}
+
+}  // namespace startup_test
+
+using namespace startup_test;
+
+TEST(Ruvia, app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
+    auto& app = ruvia::app();
+    for (const auto cidr : {"127.0.0.0/8", "::ffff:127.0.0.0/104", "::ffff:127.0.0.1/128", "::ffff:127.0.0.0/96", "::ffff:127.0.0.0/0", "2001:db8::/32"}) {
+        bool accepted = true;
+        try {
+            app.trusted_proxies({.cidrs_ = {cidr}});
+        } catch (const std::invalid_argument&) {
+            accepted = false;
+        }
+        EXPECT_TRUE(accepted);
+    }
+    for (const auto cidr : {"127.0.0.0/33", "::ffff:127.0.0.0/129", "::ffff:127.0.0.0/", "::ffff:127.0.0.0/-1"}) {
+        bool rejected = false;
+        try {
+            app.trusted_proxies({.cidrs_ = {cidr}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+    }
+    app.trusted_proxies({});
+}
+
+// A CIDR without '/' is exactly one IP literal, so trusted proxy configuration
+// exposes the strict literal parser: complete IPv4/IPv6 text only, no ports,
+// brackets, padding, partial IPv4 or invalid IPv6 zones.
+TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
+    auto& app = ruvia::app();
+    for (const std::string_view literal : {"192.0.2.1", "0.0.0.0", "255.255.255.255",
+             "2001:0db8:1234:5678:90ab:cdef:1234:5678", "fe80::1%12", "::ffff:192.0.2.1"}) {
+        bool accepted = true;
+        try {
+            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+        } catch (const std::invalid_argument&) {
+            accepted = false;
+        }
+        EXPECT_TRUE(accepted);
+    }
+    for (const std::string_view literal : {std::string_view{}, std::string_view("not an address"),
+             std::string_view("192.0.2.1\0suffix", 16), std::string_view("192.0.2.1suffix"),
+             std::string_view("192.0.2.1:80"), std::string_view("[::1]:80"), std::string_view("[::1]"),
+             std::string_view("192.0.2"), std::string_view("01.2.3.4"), std::string_view("192.0.2.256"),
+             std::string_view("192.0.2.1."), std::string_view(".192.0.2.1"), std::string_view("192.0.2.1%1"),
+             std::string_view("fe80::1%"), std::string_view("fe80::1%1%2"), std::string_view("::1 "),
+             std::string_view("1"), std::string_view("::ffff:01.2.3.4"), std::string_view("::ffff:192.0.2"),
+             std::string_view("fe80::1%12:80"), std::string_view("fe80::1%12 "), std::string_view("fe80::1%1]:80"),
+             std::string_view("fe80::1%0"), std::string_view("fe80::1%01"), std::string_view("fe80::1%-1"),
+             std::string_view("fe80::1%+1"), std::string_view("fe80::1%12abc"), std::string_view("fe80::1%4294967296"),
+             std::string_view("fe80::1%99999999999999999999"),
+             std::string_view("fe80::1%nonexistent_ruvia_zone_id")}) {
+        bool rejected = false;
+        try {
+            app.trusted_proxies({.cidrs_ = {std::string(literal)}});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+    }
+    app.trusted_proxies({});
+}
+
+// application is a process singleton with sealed controller registration. This functional
+// test runs in its own executable and exercises retries against the same config.
+TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
+    ruvia::test::tls_identity identity("localhost");
+    const auto private_key = identity.private_key_file();
+    auto state_value = std::make_shared<startup_state>();
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2, .worker_queue_capacity_ = 16, .max_connections_per_worker_ = 4})
+        .trusted_proxies({.cidrs_ = {"::ffff:127.0.0.0/104"}, .trust_x_forwarded_proto_ = true})
+        .blocking_pool(nullptr)
+        .use_worker_state<worker_state>([state_value] {
+            if (state_value->outcome_ == startup_outcome::stop_during_worker_startup &&
+                !state_value->worker_startup_blocked_.exchange(true)) {
+                // Hold one worker inside startup while the lifecycle caller waits for it.
+                state_value->hook_entered_.release();
+                state_value->release_hook_.acquire();
+            }
+            return state_value;
+        });
+
+    // Separate configurations cannot claim one endpoint; sharing HTTP and
+    // HTTPS is explicit within a single listen_config.
+    bool duplicate_rejected = false;
+    try {
+        app.listen({
+            {.address_ = "127.0.0.1", .http_ = 12345, .https_ = 12345, .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}},
+            {.address_ = "127.0.0.1", .http_ = 12345},
+        });
+    } catch (const std::invalid_argument&) {
+        duplicate_rejected = true;
+    }
+    EXPECT_TRUE(duplicate_rejected);
+
+    for (const bool occupy_http : {true, false}) {
+        asio::io_context io;
+        asio::ip::tcp::acceptor occupied(io);
+        occupied.open(asio::ip::tcp::v4());
+#if defined(_WIN32)
+        // The server intentionally uses SO_REUSEADDR on Windows. Only an
+        // exclusive external listener makes this conflict deterministic.
+        const BOOL exclusive = TRUE;
+        if (::setsockopt(occupied.native_handle(), SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+                reinterpret_cast<const char*>(&exclusive), sizeof(exclusive)) != 0) {
+            throw std::system_error(::WSAGetLastError(), asio::system_category());
+        }
+#endif
+        occupied.bind({asio::ip::address_v4::loopback(), 0});
+        occupied.listen();
+        ruvia::test::tcp_port_reservation reservation(io);
+        const auto available_endpoint = reservation.endpoint();
+        const auto occupied_port = occupied.local_endpoint().port();
+        app.listen({.address_ = "127.0.0.1",
+            .http_ = occupy_http ? occupied_port : available_endpoint.port(),
+            .https_ = occupy_http ? available_endpoint.port() : occupied_port,
+            .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}}});
+        auto failed_run = std::async(std::launch::async, [&app] {
+            try {
+                app.run();
+                return std::exception_ptr{};
+            } catch (...) {
+                return std::current_exception();
+            }
+        });
+        const bool returned = failed_run.wait_for(3s) == std::future_status::ready;
+        EXPECT_TRUE(returned);
+        if (!returned) {
+            app.stop();
+        }
+        EXPECT_TRUE(failed_run.get() != nullptr);
+        EXPECT_TRUE(app.workers().empty());
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
+        EXPECT_EQ(state_value->requests_.load(), 0U);
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
+        // Failure of either service must also retire the other service's
+        // listeners, including ones prepared by a different worker.
+        asio::ip::tcp::socket socket(io);
+        asio::error_code error;
+        socket.connect(available_endpoint, error);
+        EXPECT_TRUE(error == asio::error::connection_refused);
+    }
+
+    app.on_start([state_value, &app] {
+        state_value->start_thread_ = std::this_thread::get_id();
+        auto workers = app.workers();
+        if (workers.size() != 2 || state_value->live_workers_.load() != 2) {
+            throw std::runtime_error("start hook ran before worker initialization");
+        }
+        for (auto& worker : workers) {
+            struct job_result final {
+                std::binary_semaphore completed_{0};
+                bool valid_{};
+            };
+            auto result_value = std::make_shared<job_result>();
+            const auto posted = worker.post([state_value, result_value](ruvia::web_worker_context& context_value) -> ruvia::task<void> {
+                result_value->valid_ = context_value.worker().is_current() &&
+                                       context_value.worker_state<worker_state>().state_ == state_value;
+                result_value->completed_.release();
+                co_return;
+            });
+            if (!posted.accepted() || !result_value->completed_.try_acquire_for(3s) || !result_value->valid_) {
+                throw std::runtime_error("ready worker could not execute a startup job");
+            }
+        }
+        if (state_value->outcome_ == startup_outcome::stop_from_caller) {
+            std::promise<void> completion;
+            auto done = completion.get_future();
+            const auto posted = workers.front().post([state_value, completion = std::move(completion)](ruvia::web_worker_context& context_value) mutable -> ruvia::task<void> {
+                state_value->hook_entered_.release();
+                const auto result_value = co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token());
+                state_value->startup_job_cancelled_.store(result_value == ruvia::timer_sleep_result::stop_requested);
+                completion.set_value();
+            });
+            if (!posted.accepted()) {
+                throw std::runtime_error("ready worker rejected startup initialization");
+            }
+            // The lifecycle caller can wait for cancellable worker initialization.
+            // application::stop() must wake it without requiring this caller to join first.
+            done.get();
+            return;
+        }
+        state_value->hook_entered_.release();
+        state_value->release_hook_.acquire();
+        if (state_value->outcome_ == startup_outcome::fail) {
+            throw std::runtime_error("startup hook failed");
+        }
+        if (state_value->outcome_ == startup_outcome::stop_in_hook) {
+            app.stop();
+        }
+    });
+    app.on_start([state_value] {
+        ++state_value->second_hooks_;
+        state_value->initialized_.store(true);
+    });
+    app.on_stop([state_value] {
+        ++state_value->stop_hooks_;
+        state_value->stop_thread_ = std::this_thread::get_id();
+    });
+
+    for (const auto outcome : {startup_outcome::fail, startup_outcome::stop_during_worker_startup,
+             startup_outcome::stop_in_hook, startup_outcome::stop_from_caller, startup_outcome::serve}) {
+        state_value->outcome_ = outcome;
+        state_value->initialized_.store(false);
+        state_value->startup_job_cancelled_.store(false);
+        state_value->worker_startup_blocked_.store(false);
+        state_value->requests_.store(0);
+        const auto second_hooks = state_value->second_hooks_;
+        const auto stop_hooks = state_value->stop_hooks_;
+        const auto destroyed_workers = state_value->destroyed_workers_.load();
+        asio::io_context io;
+        ruvia::test::tcp_port_reservation reservation(io);
+        ruvia::test::tcp_port_reservation tls_reservation(io);
+        const auto endpoint = reservation.endpoint();
+        const auto tls_endpoint = tls_reservation.endpoint();
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port(), .https_ = tls_endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}, .client_certificates_ = {.ca_file_ = identity.ca_file_}}});
+        startup_run run(app, *state_value);
+        const auto owner_thread = run.id();
+        const bool entered = state_value->hook_entered_.try_acquire_for(3s);
+        EXPECT_TRUE(entered);
+        if (!entered) {
+            // Join before inspecting an exception produced by the startup thread.
+            run.stop_and_join();
+            if (run.failure_) {
+                std::rethrow_exception(run.failure_);
+            }
+            return;
+        }
+        if (outcome == startup_outcome::stop_during_worker_startup) {
+            // A stop request that cancels worker startup is not a startup
+            // failure: run() returns normally and leaves no partial service.
+            std::this_thread::sleep_for(25ms);
+            // No worker handle escapes before every worker is ready.
+            EXPECT_TRUE(app.workers().empty());
+            app.stop();
+            state_value->release_hook_.release();
+            run.join();
+            EXPECT_TRUE(run.failure_ == nullptr);
+            EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+            EXPECT_EQ(state_value->live_workers_.load(), 0U);
+            EXPECT_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
+            EXPECT_EQ(state_value->second_hooks_, second_hooks);
+            EXPECT_EQ(state_value->requests_.load(), 0U);
+            continue;
+        }
+        EXPECT_TRUE(state_value->start_thread_ == owner_thread);
+
+        // A completed TCP handshake can queue in the kernel backlog, but neither
+        // an accept nor a request dispatch is allowed before hooks finish.
+        asio::ip::tcp::socket socket(io);
+        socket.connect(endpoint);
+        constexpr std::string_view request = "GET /ready HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n";
+        asio::write(socket, asio::buffer(request));
+        socket.non_blocking(true);
+        std::this_thread::sleep_for(25ms);
+        std::array<char, 256> premature;
+        asio::error_code error;
+        EXPECT_EQ(socket.read_some(asio::buffer(premature), error), std::size_t{0});
+        EXPECT_TRUE(error == asio::error::would_block || error == asio::error::try_again);
+        EXPECT_EQ(state_value->requests_.load(), 0U);
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
+        auto escaped_worker = app.workers().front();
+        if (outcome == startup_outcome::stop_from_caller) {
+            app.stop();
+        } else {
+            state_value->release_hook_.release();
+        }
+        if (outcome == startup_outcome::serve) {
+            EXPECT_TRUE(read_response(socket).find("initialized") != std::string::npos);
+            // A final response lingers only until the peer ends its input
+            // (RFC 9112 §9.6); the peer's close then releases server capacity.
+            socket.close();
+            const auto close_deadline = std::chrono::steady_clock::now() + 1s;
+            while (app.stats().active_connections_ != 0 &&
+                   std::chrono::steady_clock::now() < close_deadline) {
+                std::this_thread::sleep_for(1ms);
+            }
+            EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
+                "198.51.100.7:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 192.0.2.1, 128.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
+                "128.3.4.5:proxy:http"));
+            // RFC 7239: the rightmost untrusted element is the client hop even
+            // when it names no address; a client-written `for` left of it is
+            // never believed, and the trusted hop's proto still applies.
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9\r\nForwarded: proto=https\r\n", "127.0.0.1:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9, for=unknown;proto=https\r\n", "127.0.0.1:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=203.0.113.9;proto=http, for=_hidden;proto=https, for=127.0.0.2\r\n",
+                "127.0.0.2:proxy:https"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "Forwarded: for=192.0.2.1;proto=https, for=\"[2001:db8::1]:4711\";proto=http, for=127.0.0.2\r\n",
+                "2001:db8::1:proxy:http"));
+            EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
+                "X-Forwarded-For: 198.51.100.7, unknown, 127.3.4.5\r\nX-Forwarded-Proto: http, https, http\r\n",
+                "127.3.4.5:proxy:https"));
+            // Optional client-certificate verification must not turn session
+            // resumption into a fatal handshake error, and every resumption
+            // succeeds whichever of the two workers accepts it.
+            EXPECT_TRUE(resume_tls_session(io, tls_endpoint));
+            EXPECT_TRUE(tls_close_sends_close_notify(io, tls_endpoint));
+            EXPECT_TRUE(tls_keep_alive_serves_decrypted_and_later_requests(io, tls_endpoint));
+            EXPECT_TRUE(rejected_expect_upload_closes_without_body(io, endpoint));
+            EXPECT_TRUE(tls_websocket_truncation_ends_read(io, tls_endpoint, *state_value));
+            app.stop();
+        }
+        run.join();
+        EXPECT_TRUE(state_value->stop_thread_ == owner_thread);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
+        EXPECT_EQ(state_value->destroyed_workers_.load(), destroyed_workers + 2);
+        EXPECT_TRUE(!escaped_worker.valid());
+        EXPECT_TRUE(!escaped_worker.accepting());
+        EXPECT_EQ(state_value->second_hooks_, second_hooks + (outcome == startup_outcome::serve ? 1 : 0));
+        EXPECT_EQ(state_value->requests_.load(), outcome == startup_outcome::serve ? 1U : 0U);
+        EXPECT_EQ(state_value->startup_job_cancelled_.load(), outcome == startup_outcome::stop_from_caller);
+        if (outcome == startup_outcome::fail) {
+            EXPECT_TRUE(run.failure_ != nullptr);
+            if (run.failure_) {
+                try {
+                    std::rethrow_exception(run.failure_);
+                } catch (const std::runtime_error& failure) {
+                    EXPECT_EQ(std::string(failure.what()), std::string("startup hook failed"));
+                }
+            }
+        } else {
+            EXPECT_TRUE(run.failure_ == nullptr);
+        }
+    }
+
+    // A stop() that wins the race against run() is kept for that run, which
+    // returns without starting; the latch is consumed, so the next run starts.
+    {
+        state_value->outcome_ = startup_outcome::serve;
+        const auto second_hooks = state_value->second_hooks_;
+        const auto stop_hooks = state_value->stop_hooks_;
+        asio::io_context io;
+        ruvia::test::tcp_port_reservation reservation(io);
+        const auto endpoint = reservation.endpoint();
+        app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+        app.stop();
+        auto latched = std::async(std::launch::async, [&app] { app.run(); });
+        const bool returned = latched.wait_for(3s) == std::future_status::ready;
+        EXPECT_TRUE(returned);
+        if (!returned) {
+            app.stop();
+            state_value->release_hook_.release();
+        }
+        latched.get();
+        EXPECT_EQ(state_value->second_hooks_, second_hooks);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 1);
+        EXPECT_EQ(state_value->live_workers_.load(), 0U);
+
+        startup_run run(app, *state_value);
+        const bool entered = state_value->hook_entered_.try_acquire_for(3s);
+        EXPECT_TRUE(entered);
+        if (!entered) {
+            run.stop_and_join();
+            if (run.failure_) {
+                std::rethrow_exception(run.failure_);
+            }
+            return;
+        }
+        app.stop();
+        state_value->release_hook_.release();
+        run.join();
+        EXPECT_TRUE(run.failure_ == nullptr);
+        EXPECT_EQ(state_value->second_hooks_, second_hooks);
+        EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 2);
+    }
+    app.trusted_proxies({});
+}

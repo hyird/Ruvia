@@ -15,7 +15,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
 
 namespace ruvia::test {
 
@@ -136,3 +135,21 @@ void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
 }
 
 }  // namespace ruvia::test
+#ifndef RUVIA_TEST_EXCEPTIONS_DEFINED
+#define RUVIA_TEST_EXCEPTIONS_DEFINED
+
+namespace ruvia::test {
+
+template <typename fn_type>
+[[nodiscard]] inline bool throws_on(fn_type&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+
+}  // namespace ruvia::test
+
+#endif

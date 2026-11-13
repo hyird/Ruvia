@@ -27,11 +27,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
 
 #include "content_decoding_fixture.h"
-#include "test_exceptions.h"
-
 namespace {
 
 using ruvia::http1_client_request_buffer_too_small;

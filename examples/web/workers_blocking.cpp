@@ -17,7 +17,7 @@
 #include <thread>
 #include <utility>
 
-#include "ruvia/core/task_scope.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"

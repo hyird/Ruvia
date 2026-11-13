@@ -21,14 +21,14 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 

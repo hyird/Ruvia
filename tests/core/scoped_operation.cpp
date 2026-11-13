@@ -10,10 +10,8 @@
 #include <utility>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
 
-#include "test_exceptions.h"
-
+#include "worker_task_fixture.h"
 namespace ruvia::test::scoped_operation_tests {
 
 template <typename worker_type>

@@ -177,7 +177,7 @@ ruvia::task<void> stream_subscription(
 
 ## 3. WebSocket 服务端
 
-头文件：`"ruvia/web/context.h"`、`"ruvia/http/websocket_handshake.h"`。
+头文件：`"ruvia/web/context.h"`、`"ruvia/http/http_client.h"`。
 参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
@@ -267,7 +267,7 @@ private:
 - **帧规则**：首帧携带 opcode，后续为续帧（opcode 0）；`permessage-deflate` 下 RSV1 只在首帧，整条消息是一条跨分片的 DEFLATE 流，每块以 sync flush 结尾，末块去掉 `00 00 FF FF`；文本跨分片校验 UTF-8，消息上限按整条消息累计；`bytes_sent()` 随每个分片累计。
 - **未完成中止**：写入器析构或 `abort()` 时消息未完成即中止会话（对端无法得知消息边界），记为 `aborted`；写入器借用 `websocket`，随其失效。
 
-`websocket_termination`（`"ruvia/http/websocket_handshake.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
+`websocket_termination`（`"ruvia/http/http_client.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
 
 | 取值 | 触发 |
 | --- | --- |

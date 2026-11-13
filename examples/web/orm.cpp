@@ -18,7 +18,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/task_scope.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/middleware.h"
 

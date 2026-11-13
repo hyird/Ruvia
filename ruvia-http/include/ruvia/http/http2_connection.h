@@ -22,8 +22,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
-
 namespace ruvia {
 
 namespace detail {

@@ -55,7 +55,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/http_header.h"
@@ -103,8 +102,8 @@
 #include <asio/ip/udp.hpp>
 #include <asio/ssl/context.hpp>
 
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/context.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
