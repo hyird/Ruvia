@@ -19,6 +19,8 @@
 
 namespace ruvia::detail {
 
+class connection_lifecycle;
+
 // Worker-owned connection activity tracking options, copied from the server
 // configuration after validate_server_limits has checked every duration.
 struct connection_scanner_options final {
@@ -145,6 +147,12 @@ public:
         entry& operator=(const entry&) = delete;
         entry(entry&&) = delete;
         entry& operator=(entry&&) = delete;
+        void bind_lifecycle(connection_lifecycle* lifecycle) noexcept {
+            lifecycle_ = lifecycle;
+        }
+        [[nodiscard]] connection_lifecycle* lifecycle() const noexcept {
+            return lifecycle_;
+        }
         void touch() noexcept;
         // Records transport progress of a write: activity that also renews
         // the write stall clock.
@@ -245,6 +253,7 @@ public:
         void sync_reusable() noexcept;
         void unlink_reusable() noexcept;
         connection_transport transport_{};
+        connection_lifecycle* lifecycle_{};
         connection_scanner* scanner_{nullptr};
         entry* prev_{nullptr};
         entry* next_{nullptr};

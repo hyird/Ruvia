@@ -19,6 +19,7 @@ namespace ruvia {
 namespace detail {
 template <typename stream_type>
 class server_connection_session;
+class connection_lifecycle;
 
 // What the worker knows of an accepted connection. Every view borrows
 // connection-owned storage that outlives the server_connection.
@@ -36,14 +37,14 @@ struct server_connection_fields final {
     std::uint16_t remote_port_;
     std::optional<tls_type> tls_;
     const std::shared_ptr<void>* state_{};
+    connection_lifecycle* lifecycle_{};
 };
 }  // namespace detail
 
 // One connection a listener_dispatch::connection listener accepted, handed to
-// application::on_connection: the decrypted byte stream of a TLS listener's
-// connection once its handshake completed, the socket's bytes otherwise. The
-// server owns it and it is valid only while the callback task runs; every
-// member must be used on the worker running that task.
+// its host's connection callback: the decrypted byte stream after a TLS
+// handshake, the socket's bytes otherwise. The host owns it only while the
+// callback task runs; every member runs on that callback's worker.
 //
 // One read and one output operation (write or finish) may run at a time,
 // concurrently with each other. The connection is subject to the server's
@@ -51,7 +52,7 @@ struct server_connection_fields final {
 // admit another connection), its read buffer counts against the inbound
 // buffer budgets, idle_timeout_ closes it after that long without a read or
 // write completing, write_timeout_ closes it when a write makes no progress
-// for that long, and application::stop() closes it at once and requests
+// for that long, and host shutdown closes it at once and requests its
 // stop_token(). A closed connection fails its pending and later operations
 // with std::system_error.
 class server_connection final {
@@ -61,18 +62,18 @@ public:
     server_connection(server_connection&&) = delete;
     server_connection& operator=(server_connection&&) = delete;
 
-    // conn_info::id() of this connection; equal to connection_id() of its
+    // conn_info::connection_id() of this connection; equal to connection_id() of its
     // on_tls_client_hello records.
-    [[nodiscard]] constexpr std::uint64_t id() const noexcept {
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return id_;
     }
 
     // The server address the connection reached.
-    [[nodiscard]] constexpr conn_info::endpoint local() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
         return local_;
     }
 
-    [[nodiscard]] constexpr conn_info::endpoint remote() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
         return remote_;
     }
 
@@ -118,7 +119,8 @@ public:
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
     // Closes the connection at once, failing operations still running.
-    void abort() noexcept;
+    void abort() & noexcept;
+    void abort() && = delete;
 
 private:
     template <typename stream_type>
@@ -140,8 +142,8 @@ private:
     finish_type finish_;
     abort_type abort_;
     std::uint64_t id_;
-    conn_info::endpoint local_;
-    conn_info::endpoint remote_;
+    ip_endpoint local_;
+    ip_endpoint remote_;
     std::optional<tls_connection_transport> tls_;
     ::ruvia::stop_token stop_token_;
     const std::shared_ptr<void>* state_;
@@ -155,14 +157,14 @@ namespace detail {
 using connection_callback_ref = callback_ref<task<void>(server_connection&)>;
 }  // namespace detail
 
-// application-owned connection handler of every listener_dispatch::connection
-// listener, invoked on the worker that accepted the connection; workers call
-// the same target concurrently, so it must be thread-safe. When the returned
+// Host-owned handler of every listener_dispatch::connection listener.
+// application may share one target across workers; http_server_group builds
+// a target per worker through its callback factory. When the returned
 // task completes the server ends the connection: TLS sends close_notify
 // unless the handler finished or aborted it, then the socket closes. A task
 // that throws aborts the connection; its exception reaches
 // on_connection_failure unless it is a peer reset or close, or I/O the
-// server cancelled (timeouts, stop()).
+// server cancelled (timeouts or host shutdown).
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using connection_callback = move_only_function<task<void>(server_connection&)>;
 

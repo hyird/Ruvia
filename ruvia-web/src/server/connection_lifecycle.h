@@ -1,7 +1,10 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstring>
+#include <exception>
+#include <limits>
 #include <memory>
 #include <string_view>
 #include <utility>
@@ -11,6 +14,8 @@
 #include "ruvia/web/connection_events.h"
 
 #include "server/connection_scanner.h"
+#include "server/inbound_transport_error.h"
+#include "server/peer_address.h"
 
 namespace ruvia::detail {
 
@@ -63,8 +68,9 @@ public:
             if (bound_) {
                 transport_.close();
             }
+            info_.reason_ = connection_close_reason::handler_error;
             if (closed_) {
-                closed_(event_, state_);
+                closed_(event_, state_, info_);
             }
             throw;
         }
@@ -80,6 +86,7 @@ public:
           event_(other.event_),
           closed_(other.closed_),
           state_(std::move(other.state_)),
+          info_(other.info_),
           transport_(other.transport_),
           aborted_(other.aborted_),
           bound_(other.bound_),
@@ -109,11 +116,15 @@ public:
             next_->prev_ = prev_;
         }
         registry_ = nullptr;
-        if (closed_) {
-            closed_(event_, state_);
+        const auto closed = closed_;
+        const auto event = event_;
+        const auto info = info_;
+        const auto state = std::move(state_);
+        if (closed) {
+            closed(event, state, info);
         }
     }
-    [[nodiscard]] std::uint64_t id() const noexcept {
+    [[nodiscard]] std::uint64_t connection_id() const noexcept {
         return event_.connection_id();
     }
     [[nodiscard]] const std::shared_ptr<void>& state() const noexcept {
@@ -122,8 +133,57 @@ public:
     [[nodiscard]] std::string_view local_address() const noexcept {
         return local_text_.data();
     }
-    [[nodiscard]] const connection_endpoint& local_endpoint() const noexcept {
+    [[nodiscard]] const ip_endpoint& local_endpoint() const noexcept {
         return event_.local();
+    }
+    [[nodiscard]] const ip_endpoint& remote_endpoint() const noexcept {
+        return event_.remote();
+    }
+    void set_reason(connection_close_reason reason) noexcept {
+        // Keep the initiating cause when teardown subsequently cancels I/O.
+        if (info_.reason_ == connection_close_reason::normal ||
+            (info_.reason_ == connection_close_reason::peer_eof && reason != connection_close_reason::normal)) {
+            info_.reason_ = reason;
+        }
+    }
+    void note_read(std::size_t bytes) noexcept {
+        add_bytes(info_.bytes_in_, bytes);
+    }
+    void note_write(std::size_t bytes) noexcept {
+        add_bytes(info_.bytes_out_, bytes);
+    }
+    void note_request() noexcept {
+        add_bytes(info_.requests_, 1);
+    }
+    void note_error(const std::error_code& error) noexcept {
+        if (!error || error == asio::error::would_block || error == asio::error::try_again ||
+            error == asio::error::interrupted) {
+            return;
+        }
+        if (is_stream_read_end(error)) {
+            set_reason(connection_close_reason::peer_eof);
+        } else if (error == asio::error::timed_out || error == std::errc::timed_out) {
+            set_reason(connection_close_reason::timeout);
+        } else if (error == asio::error::operation_aborted || error == std::errc::operation_canceled ||
+                   error == asio::error::bad_descriptor) {
+            set_reason(connection_close_reason::cancelled);
+        } else if (error == std::errc::protocol_error || error.category() == asio::error::get_ssl_category()) {
+            set_reason(connection_close_reason::protocol_error);
+        } else {
+            set_reason(connection_close_reason::transport_error);
+        }
+    }
+    void note_exception(const std::exception_ptr& failure) noexcept {
+        if (failure == nullptr) {
+            return;
+        }
+        try {
+            std::rethrow_exception(failure);
+        } catch (const inbound_transport_error& error) {
+            note_error(error.code());
+        } catch (...) {
+            set_reason(connection_close_reason::handler_error);
+        }
     }
     [[nodiscard]] std::uint32_t interface_index() const noexcept {
         return interface_index_;
@@ -139,6 +199,7 @@ public:
         }
     }
     void abort() noexcept {
+        set_reason(connection_close_reason::aborted);
         aborted_ = true;
         if (bound_) {
             transport_.close();
@@ -150,8 +211,12 @@ public:
 
 private:
     friend class connection_registry;
+    static void add_bytes(std::uint64_t& value, std::size_t bytes) noexcept {
+        const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
+        value += (std::min)(maximum - value, static_cast<std::uint64_t>(bytes));
+    }
     void format_local() noexcept {
-        const auto& address = event_.local().address();
+        const auto address = to_asio_address(event_.local().address());
         asio::error_code error;
         if (address.is_v4()) {
             const auto bytes = address.to_v4().to_bytes();
@@ -171,6 +236,7 @@ private:
     connection_event event_;
     connection_close_callback_ref closed_;
     std::shared_ptr<void> state_;
+    connection_close_info info_;
     connection_transport transport_;
     bool aborted_{};
     bool bound_{};
@@ -183,7 +249,7 @@ inline bool connection_registry::close_connection(std::uint64_t id) noexcept {
         return false;
     }
     for (auto* node = head_; node != nullptr; node = node->next_) {
-        if (node->id() == id) {
+        if (node->connection_id() == id) {
             node->abort();
             return true;
         }

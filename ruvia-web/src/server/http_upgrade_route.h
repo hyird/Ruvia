@@ -134,7 +134,7 @@ task<std::error_code> write_websocket_handshake(stream_type& stream,
 
 namespace ruvia::detail {
 
-[[nodiscard]] inline websocket_connection_options make_server_websocket_connection_options(
+[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(
     const http_server_options& options, websocket_compression negotiated,
     const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
     // Directions without context takeover borrow the worker's codecs, which
@@ -219,8 +219,8 @@ template <typename session_type, typename establish_type, typename finish_type>
 template <typename stream_type>
 class websocket_upgrade_commit final {
 public:
-    static constexpr bool native_stream = server_websocket_connection<stream_type>::native_stream;
-    using stream_argument_type = typename server_websocket_connection<stream_type>::stream_argument_type;
+    static constexpr bool native_stream = websocket_session_connection<stream_type>::native_stream;
+    using stream_argument_type = typename websocket_session_connection<stream_type>::stream_argument_type;
 
     websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
         std::string_view subprotocol, std::pmr::memory_resource& resource)
@@ -257,7 +257,7 @@ public:
 
     void abort() noexcept {
         if constexpr (native_stream) {
-            server_websocket_connection<stream_type>::close_stream(*stream_);
+            websocket_session_connection<stream_type>::close_stream(*stream_);
         } else {
             stream_.abort();
         }
@@ -300,9 +300,9 @@ struct tunnel_upgrade_session_operation final {
     commit_websocket_type& commit_websocket_;
     std::optional<session_type>& session_;
     http_tunnel_route_config config_{endpoint_.config()};
-    std::optional<server_websocket_connection<transport_type>> websocket_session_{};
+    std::optional<websocket_session_connection<transport_type>> websocket_session_{};
     struct websocket_borrow final {
-        explicit websocket_borrow(server_websocket_connection<transport_type>& connection)
+        explicit websocket_borrow(websocket_session_connection<transport_type>& connection)
             : value_(make_websocket_facade(connection, *process_resource())) {}
         websocket value_;
     };
@@ -352,7 +352,7 @@ struct tunnel_upgrade_session_operation final {
                 websocket_endpoint.lifecycle(),
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
                 inbound_, pending_,
-                make_server_websocket_connection_options(options_, committed->compression(), websocket_endpoint.deflate(),
+                make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(),
                     websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)),
                 committed->release_subprotocol());
         } catch (...) {
@@ -386,7 +386,7 @@ struct tunnel_upgrade_session_operation final {
             websocket_.reset();
             if (websocket_session_) {
                 co_await finish_websocket_session(*websocket_session_, failure,
-                    options_.connection_failure_, services_.get_conn_info().remote().address());
+                    options_.connection_failure_, services_.remote_address());
             } else if (failure) {
                 std::rethrow_exception(failure);
             }
@@ -399,7 +399,7 @@ struct tunnel_upgrade_session_operation final {
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
         return finish_tunnel_session(session_value, std::move(failure),
-            options_.connection_failure_, services_.get_conn_info().remote().address(),
+            options_.connection_failure_, services_.remote_address(),
             scanner_entry_, config_.peer_transport_fin_timeout_);
     }
 };
@@ -433,7 +433,7 @@ template <typename transport_type, typename commit_upgrade_type, typename commit
 
 template <typename stream_type, typename commit_upgrade_type>
 struct websocket_upgrade_session_operation final {
-    using session_type = server_websocket_connection<stream_type>;
+    using session_type = websocket_session_connection<stream_type>;
 
     const resolved_route& resolved_;
     const websocket_route_endpoint& websocket_endpoint_;
@@ -458,7 +458,7 @@ struct websocket_upgrade_session_operation final {
                 websocket_endpoint_.lifecycle(),
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
                 inbound_, pending_frames_,
-                make_server_websocket_connection_options(
+                make_websocket_session_connection_options(
                     options_, committed->compression(), websocket_endpoint_.deflate(),
                     websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)),
                 committed->release_subprotocol());
@@ -472,7 +472,7 @@ struct websocket_upgrade_session_operation final {
 
     [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
         return finish_websocket_session(session_value, std::move(failure),
-            options_.connection_failure_, services_.get_conn_info().remote().address());
+            options_.connection_failure_, services_.remote_address());
     }
 };
 

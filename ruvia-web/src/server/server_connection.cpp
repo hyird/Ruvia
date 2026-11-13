@@ -62,8 +62,10 @@ server_connection::server_connection(const detail::server_connection_fields& fie
       finish_(finish_value),
       abort_(abort_value),
       id_(fields.id_),
-      local_(fields.local_address_, fields.local_port_),
-      remote_(fields.remote_address_, fields.remote_port_),
+      local_(fields.lifecycle_ != nullptr ? fields.lifecycle_->local_endpoint()
+                                          : ip_endpoint(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_)),
+      remote_(fields.lifecycle_ != nullptr ? fields.lifecycle_->remote_endpoint()
+                                           : ip_endpoint(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_)),
       stop_token_(stop_token_value),
       state_(fields.state_) {
     if (fields.tls_.has_value()) {
@@ -103,7 +105,7 @@ task<void> server_connection::finish(operation_options operation) & {
         operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 
-void server_connection::abort() noexcept {
+void server_connection::abort() & noexcept {
     if (!worker_.is_current()) {
         std::terminate();
     }
@@ -135,12 +137,13 @@ task<void> worker_connections::serve_connection(
         fields.local_port_ = local.port();
     }
     connection_scanner::entry scanner_entry;
+    scanner_entry.bind_lifecycle(fields.lifecycle_);
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
     inbound_buffer_resource connection_buffers(
         *options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
     std::optional<tls_tunnel_output> tls_output;
     if constexpr (requires { stream.next_layer(); }) {
-        tls_output.emplace(*stream.native_handle(), socket, worker_, *process_resource());
+        tls_output.emplace(*stream.native_handle(), socket, worker_, *process_resource(), fields.lifecycle_);
         tls_output->start();
     }
     std::exception_ptr failure;
@@ -151,6 +154,9 @@ task<void> worker_connections::serve_connection(
             co_await options_.connection_(session.connection());
         } catch (...) {
             failure = std::current_exception();
+            if (fields.lifecycle_ != nullptr) {
+                fields.lifecycle_->note_exception(failure);
+            }
         }
         if (failure != nullptr) {
             session.abort();
@@ -162,6 +168,9 @@ task<void> worker_connections::serve_connection(
                 co_await session.finish();
             } catch (...) {
                 failure = std::current_exception();
+                if (fields.lifecycle_ != nullptr) {
+                    fields.lifecycle_->note_exception(failure);
+                }
             }
         }
     }
@@ -176,8 +185,8 @@ task<void> worker_connections::serve_connection(
     }
 }
 
-template task<void> worker_connections::serve_connection<tcp_socket_type>(
-    tcp_socket_type&, tcp_socket_type&, server_connection_fields);
+template task<void> worker_connections::serve_connection<inbound_socket_stream>(
+    inbound_socket_stream&, tcp_socket_type&, server_connection_fields);
 template task<void> worker_connections::serve_connection<server_tls_stream>(
     server_tls_stream&, tcp_socket_type&, server_connection_fields);
 

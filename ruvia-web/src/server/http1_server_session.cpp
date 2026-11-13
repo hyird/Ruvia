@@ -227,7 +227,8 @@ struct http1_tunnel_upgrade_commit final {
     [[nodiscard]] transport_type make_transport() const {
         if constexpr (requires { dispatch_.stream_.next_layer(); }) {
             tls_output_.emplace(*dispatch_.stream_.native_handle(), dispatch_.stream_.lowest_layer(),
-                dispatch_.base_route_services_.worker(), *process_resource());
+                dispatch_.base_route_services_.worker(), *process_resource(),
+                dispatch_.base_route_services_.connection_lifecycle_value());
             tls_output_->start();
         }
         return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
@@ -544,6 +545,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
     // head) is allocated from the worker heap, and the request state lives in
     // the frame of serve_requests.
     connection_scanner::entry scanner_entry;
+    scanner_entry.bind_lifecycle(base_route_services.connection_lifecycle_value());
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
     const auto admission_policy = http_request_admission_policy::server(options_);
     const response_file_io file_output{
@@ -565,13 +567,13 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         .request_sequence_ = request_sequence,
         .admission_policy_ = admission_policy,
         .file_output_ = file_output,
-        .remote_address_ = base_route_services.get_conn_info().remote().address(),
+        .remote_address_ = base_route_services.remote_address(),
     };
     // Connection-resident landing pad for the first bytes of a request that
     // arrives while the connection holds no work set (see the idle wait below).
     std::array<char, idle_resident_read_bytes> idle_read_buffer;
 
-    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>) {
+    if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
         enable_plain_tcp_sync_write(socket);
     }
     for (;;) {
@@ -616,7 +618,7 @@ task<http_connection_close> worker_connections::run_stream(http_server_session_c
         static_assert(idle_resident_read_bytes <= initial_read_buffer_bytes);
         work_set->read_buffer_.assign(std::string_view(idle_read_buffer.data(), idle_bytes));
         if (idle_bytes == idle_read_buffer.size()) {
-            if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>) {
+            if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
                 if (stream.non_blocking()) {
                     const auto read_space = work_set->read_buffer_.prepare_read();
                     if (!read_space.empty()) {
@@ -684,7 +686,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     const auto& admission_policy = session.admission_policy_;
     const auto& file_output = session.file_output_;
     const auto remote_address = session.remote_address_;
-    constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, tcp_socket_type>;
+    constexpr bool plain_tcp = std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>;
     const auto* redirect = plain_tcp ? listener_value.redirect() : nullptr;
     auto& read_buffer = work_set.read_buffer_;
     auto& parsed_value = work_set.parsed_;
@@ -746,6 +748,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     co_return http1_serve_handoff::cleartext_http2;
                 }
                 if (preface_probe == http2_cleartext_preface_probe::drop_connection) {
+                    base_route_services.set_connection_close_reason(connection_close_reason::protocol_error);
                     co_return http_connection_close::abort;
                 }
                 if (preface_probe == http2_cleartext_preface_probe::need_more_preface) {
@@ -777,6 +780,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 scanner_entry.set_phase(connection_scanner::phase::idle);
             }
             if (const auto* request_head = ready_head) {
+                base_route_services.note_connection_request();
                 // Reset phase so request_header_timeout stops counting against dispatch
                 // time. Body readers will set reading_payload on their own; upgraded
                 // sessions enter long_lived; a response stream's sink times its own
@@ -953,6 +957,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             }
 
             if (const auto* failure = parsed_value.failure()) {
+                base_route_services.set_connection_close_reason(connection_close_reason::protocol_error);
                 if constexpr (plain_tcp) {
                     if (redirect == nullptr &&
                         ruvia::should_drop_invalid_cleartext_http1_input(buffer_view, failure->source())) {
@@ -1174,12 +1179,12 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
     }
 }
 
-template task<http_connection_close> worker_connections::run_stream<tcp_socket_type>(
-    http_server_session_config&, tcp_socket_type&, tcp_socket_type&, context_services);
+template task<http_connection_close> worker_connections::run_stream<inbound_socket_stream>(
+    http_server_session_config&, inbound_socket_stream&, tcp_socket_type&, context_services);
 template task<http_connection_close> worker_connections::run_stream<server_tls_stream>(
     http_server_session_config&, server_tls_stream&, tcp_socket_type&, context_services);
-template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<tcp_socket_type>(
-    http1_connection_session<tcp_socket_type>&, connection_work_set&);
+template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<inbound_socket_stream>(
+    http1_connection_session<inbound_socket_stream>&, connection_work_set&);
 template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<server_tls_stream>(
     http1_connection_session<server_tls_stream>&, connection_work_set&);
 
@@ -1193,8 +1198,8 @@ task<http_connection_close> worker_connections::run_http2(stream_type& stream, t
         stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
 }
 
-template task<http_connection_close> worker_connections::run_http2<tcp_socket_type>(
-    tcp_socket_type&, tcp_socket_type&, context_services);
+template task<http_connection_close> worker_connections::run_http2<inbound_socket_stream>(
+    inbound_socket_stream&, tcp_socket_type&, context_services);
 template task<http_connection_close> worker_connections::run_http2<server_tls_stream>(
     server_tls_stream&, tcp_socket_type&, context_services);
 #endif

@@ -34,6 +34,8 @@
 namespace ruvia {
 
 class context;
+class context_response_editor;
+class request_stream;
 class response_stream_writer;
 class http_client_request;
 class http_client_connect_request;
@@ -50,7 +52,7 @@ class http_capsule_stream_state;
 class http_client_result_budget_domain;
 class http_client_result_budget_lease;
 class http_client_state;
-class http_client_websocket_state;
+class http_client_websocket_transport;
 }  // namespace detail
 
 // Immutable metadata retained by its http_client_response. Field views borrow
@@ -141,8 +143,9 @@ private:
 //
 // Every body operation takes its own operation_options, timed from when it
 // starts; a non-positive timeout throws std::invalid_argument at the call. Its
-// expiry or stop request ends only that wait with http_client_error (timeout /
-// cancelled): buffered bytes and the read lane remain, so reading may resume.
+// expiry or stop request ends only that wait with http_client_error
+// (std::errc::timed_out / operation_canceled): buffered bytes and the read lane
+// remain, so reading may resume.
 // The request's own deadlines and host cancellation keep bounding the exchange.
 class http_client_response_body final {
 public:
@@ -172,7 +175,7 @@ public:
 
     // 以自然背压转发当前上游正文；调用者必须先对 output 执行 commit()，
     // 只有 body 结果才启动转发，completed 时不得消费/生产转发正文。
-    // operation 约束整个转发；中断抛出 timeout / cancelled，已提交的下游
+    // operation 约束整个转发；中断抛出 errc::timed_out / operation_canceled，已提交的下游
     // 输出按流式提交契约随该异常中止，上游正文游标停在最后一块成功写出处。
     [[nodiscard]] task<void> pipe_to(response_stream_writer& output, operation_options operation = {}) &;
     task<void> pipe_to(response_stream_writer&, operation_options = {}) && = delete;
@@ -262,19 +265,26 @@ public:
         requires detail::is_model_json_value<value_type>
     task<value_type> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // Forwards status, end-to-end fields, unread body and trailers. The cold
-    // operation expires with either this response or the destination context.
-    // operation bounds the whole forward, as pipe_to(response_stream_writer&).
+    // operation expires with either this response or the destination. Hop-by-hop
+    // fields, those the Connection field names, and Content-Length are not
+    // forwarded (RFC 9110 §7.6.1). operation bounds the whole forward, as
+    // pipe_to(response_stream_writer&). Both destinations forward identically.
     [[nodiscard]] task<void> pipe_to(context& output, operation_options operation = {}) &;
     task<void> pipe_to(context&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> pipe_to(request_stream& output, operation_options operation = {}) &;
+    task<void> pipe_to(request_stream&, operation_options = {}) && = delete;
 
 private:
+    // The one forwarding chain of both pipe_to() destinations.
+    [[nodiscard]] task<void> pipe_to_destination(context_response_editor draft, response_stream_writer& writer,
+        ::ruvia::operation_scope& destination, operation_options operation);
     template <typename value_type>
     static task<value_type> decode_json(task<http_client_response_bytes> input) {
         auto owned = co_await std::move(input);
         co_return from_json<value_type>(owned.text());
     }
     friend class detail::http_client_pool;
-    friend class detail::http_client_websocket_state;
+    friend class detail::http_client_websocket_transport;
     friend class http_client_exchange;
     friend class http_client_tunnel;
     friend class http_capsule_stream;
@@ -300,7 +310,7 @@ private:
 // idempotent after successful completion, including normal transport retirement.
 // Each read/text/write/finish takes its own operation_options, timed from when
 // it starts. A read's expiry or stop request ends only that read with
-// http_client_error (timeout / cancelled) and keeps received bytes; a write's
+// http_client_error (errc::timed_out / operation_canceled) and keeps received bytes; a write's
 // or finish's aborts the tunnel, since partly sent bytes cannot be withdrawn,
 // and an already-stopped token fails before anything is queued.
 class http_client_tunnel final {
@@ -370,7 +380,7 @@ public:
 
 private:
     friend class detail::http_client_pool;
-    friend class detail::http_client_websocket_state;
+    friend class detail::http_client_websocket_transport;
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
@@ -453,7 +463,7 @@ public:
     // Transfers the response once, when the operation is started. Promise
     // metadata remains available through this push until it is destroyed.
     // An operation timeout or stop request ends only this wait for the head
-    // with http_client_error (timeout / cancelled); a later response() retries.
+    // with http_client_error (errc::timed_out / operation_canceled); a later response() retries.
     [[nodiscard]] task<http_client_response> response(operation_options operation = {}) &;
     task<http_client_response> response(operation_options = {}) && = delete;
 
@@ -473,7 +483,7 @@ private:
 // from the peer: response() remains consumable, while the failed upload is
 // reported independently and its connection is not reused.
 // A write()/end() timeout or stop request in its operation_options aborts the
-// exchange with http_client_error (timeout / cancelled), since a partly sent
+// exchange with http_client_error (errc::timed_out / operation_canceled), since a partly sent
 // chunk cannot be withdrawn; an already-stopped token fails before queuing.
 class http_client_request_body_writer final {
 public:
@@ -501,7 +511,7 @@ public:
     // incomplete and response() remains consumable. HTTP/1 closes the
     // connection after the response; HTTP/2 and HTTP/3 end only the sending
     // direction (RFC 9113 section 8.1, RFC 9114 section 4.1). A running write()
-    // or end() completes with cancelled; idempotent, no-op once complete().
+    // or end() completes with errc::operation_canceled; idempotent, no-op once complete().
     void abandon() & noexcept;
     void abandon() && = delete;
 
@@ -529,7 +539,7 @@ public:
     }
     http_client_request_body_writer& body() && = delete;
     // Waits for the final head. An operation timeout or stop request ends only
-    // this wait with http_client_error (timeout / cancelled); a later
+    // this wait with http_client_error (errc::timed_out / operation_canceled); a later
     // response() retries, and the upload lane is unaffected.
     [[nodiscard]] task<http_client_response> response(operation_options operation = {}) &;
     task<http_client_response> response(operation_options = {}) && = delete;
@@ -584,10 +594,14 @@ private:
     friend class http_client_request;
     friend class http_client_connect_request;
     friend class http_client_websocket_request;
-    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request, const http_client_request_options& options) const;
-    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& options) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options) const;
-    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options) const;
+    [[nodiscard]] task<http_client_response> dispatch(const http_client_request_view& request, const http_client_request_options& options,
+        const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_exchange> dispatch_upload(const http_client_request_view& head, http_client_upload_config upload, const http_client_request_options& options,
+        const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options,
+        const std::shared_ptr<http_client_informational_callback>& informational) const;
+    [[nodiscard]] task<http_client_tunnel_result> dispatch_udp(const http_client_udp_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& options,
+        const std::shared_ptr<http_client_informational_callback>& informational) const;
     friend class detail::http_client_registry;
     friend class detail::http_client_state;
     friend class context;
@@ -620,15 +634,8 @@ public:
     http_client_request& query(std::string_view name, std::string_view value);
     http_client_request& body(std::string_view bytes);
     http_client_request& body(std::span<const std::byte> bytes);
+    // Replaces every per-request option, including the informational callback.
     http_client_request& configure(http_client_request_options options);
-    http_client_request& decode_content(bool enabled);
-    http_client_request& field_source(http_request_field_source source);
-    http_client_request& fresh_connection(bool enabled = true);
-    http_client_request& timeouts(http_client_phase_timeouts timeouts);
-    // 按线序 await；字段借用只持续到回调完成。回调应响应 stop，
-    // 不得等待本次 exchange 或依赖其释放池容量的操作；异常使该 exchange 失败。
-    // HTTP/2/3 只背压本响应，不阻塞其他流；总截止期不因回调挂起而暂停。
-    http_client_request& on_informational(http_client_informational_callback callback);
     // 在跨源跳转前 await，可异步 upsert 目的 origin；false 保留原响应。
     // token 合并宿主、调用方取消与总截止期；回调须协作取消，返回后才释放借用 origin。
     http_client_request& redirect_policy(move_only_function<task<bool>(http_origin_view, stop_token)> policy);
@@ -663,7 +670,10 @@ private:
     std::pmr::vector<http_header> headers_;
     std::pmr::string body_;
     std::size_t max_redirects_{5};
+    // informational_ is moved out into informational_callback_, which every
+    // redirect hop's exchange shares.
     http_client_request_options request_options_;
+    std::shared_ptr<http_client_informational_callback> informational_callback_;
     move_only_function<task<bool>(http_origin_view, stop_token)> redirect_policy_;
     bool has_body_{false};
     bool consumed_{false};
@@ -691,6 +701,7 @@ private:
     std::pmr::string target_;
     std::pmr::vector<http_header> headers_;
     http_client_request_options request_options_;
+    std::shared_ptr<http_client_informational_callback> informational_callback_;
     bool udp_;
     bool consumed_{false};
 };
@@ -747,4 +758,4 @@ private:
 
 }  // namespace ruvia
 
-#include "ruvia/web/http_client_websocket.h"
+#include "ruvia/web/http_client_websocket_request.h"

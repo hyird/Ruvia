@@ -13,61 +13,15 @@
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
 #include "websocket/http_websocket_connection.h"
+#include "websocket/websocket_facade.h"
 
 namespace ruvia::detail {
-
-template <typename connection_type>
-[[nodiscard]] task<std::optional<websocket_message>> websocket_read_thunk(void* target, operation_options options) {
-    return static_cast<connection_type*>(target)->read(std::move(options));
-}
-
-template <typename connection_type>
-task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress,
-    websocket_write_extent extent, operation_options options) {
-    return static_cast<connection_type*>(target)->write(opcode, payload_value, compress, extent, std::move(options));
-}
-
-template <typename connection_type>
-task<void> websocket_close_thunk(void* target, ::ruvia::websocket_close_options options, operation_options operation) {
-    return static_cast<connection_type*>(target)->close(options, std::move(operation));
-}
-
-template <typename connection_type>
-void websocket_abort_thunk(void* target) noexcept {
-    static_cast<connection_type*>(target)->abort();
-}
-
-template <typename connection_type>
-[[nodiscard]] std::optional<std::uint16_t> websocket_peer_close_code_thunk(void* target) noexcept {
-    return static_cast<connection_type*>(target)->peer_close_code();
-}
-
-template <typename connection_type>
-[[nodiscard]] std::string_view websocket_peer_close_reason_thunk(void* target) noexcept {
-    return static_cast<connection_type*>(target)->peer_close_reason();
-}
-
-template <typename connection_type>
-[[nodiscard]] const websocket_connection& websocket_protocol_thunk(void* target) noexcept {
-    return static_cast<connection_type*>(target)->protocol();
-}
-
-template <typename connection_type>
-[[nodiscard]] websocket make_websocket_facade(
-    connection_type& connection, std::pmr::memory_resource& resource) noexcept {
-    return websocket(resource, connection.worker(), &connection, connection.subprotocol(),
-        &websocket_read_thunk<connection_type>, &websocket_write_thunk<connection_type>,
-        &websocket_close_thunk<connection_type>, &websocket_abort_thunk<connection_type>,
-        &websocket_peer_close_code_thunk<connection_type>,
-        &websocket_peer_close_reason_thunk<connection_type>,
-        &websocket_protocol_thunk<connection_type>);
-}
 
 // The terminal handler borrows an established connection, but does not close it:
 // onion middleware post-processing still belongs to the same websocket request
 // and must be able to turn its own failure into the session's 1011 outcome.
 template <typename stream_type>
-task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& connection,
+task<void> invoke_websocket_handler(websocket_session_connection<stream_type>& connection,
     connection_scanner::entry& scanner_entry, const route_stream_handler& handler,
     context& context_value) {
     auto websocket_value = make_websocket_facade(connection, *process_resource());
@@ -89,7 +43,7 @@ task<void> invoke_websocket_handler(server_websocket_connection<stream_type>& co
 // each: a peer that resets instead of answering the Close, or a close-handshake
 // timeout that aborted the transport, ends the connection normally.
 template <typename stream_type>
-task<void> finish_websocket_session(server_websocket_connection<stream_type>& connection,
+task<void> finish_websocket_session(websocket_session_connection<stream_type>& connection,
     std::exception_ptr exception, const connection_failure_sink& connection_failure,
     std::string_view remote_address) {
     connection_failure.invoke(remote_address, exception);

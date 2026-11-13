@@ -82,6 +82,9 @@ inline task<http1_session_request_completion> complete_failed_http_route(
     const http1_server_request_parse_state& parsed_value, const route_table& routes_value,
     request_memory& request_memory_value, const context_services& exception_services,
     http_response& response) {
+    if (auto* lifecycle = exception_services.connection_lifecycle_value()) {
+        lifecycle->note_exception(exception);
+    }
     response = co_await routes_value.handle_exception(
         parsed_value.request(), request_memory_value, exception, exception_services);
     scanner_entry.touch();

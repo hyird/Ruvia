@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstring>
 #include <memory_resource>
@@ -9,9 +10,30 @@
 #include <asio/error.hpp>
 #include <asio/ip/address.hpp>
 
+#include "ruvia/http/ip_address.h"
+
 #include "ratelimit/rate_limit_key.h"
 
 namespace ruvia::detail {
+
+[[nodiscard]] inline ip_address to_ip_address(const asio::ip::address& address) noexcept {
+    if (address.is_v4()) {
+        return ip_address::ipv4(address.to_v4().to_bytes());
+    }
+    const auto v6 = address.to_v6();
+    return ip_address::ipv6(v6.to_bytes(), static_cast<std::uint32_t>(v6.scope_id()));
+}
+
+[[nodiscard]] inline asio::ip::address to_asio_address(const ip_address& address) noexcept {
+    if (address.family() == ip_address_family::ipv4) {
+        asio::ip::address_v4::bytes_type bytes{};
+        std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
+        return asio::ip::address_v4(bytes);
+    }
+    asio::ip::address_v6::bytes_type bytes{};
+    std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
+    return asio::ip::address_v6(bytes, address.scope_id());
+}
 
 // The peer address a connection's services name, shared by TCP and QUIC
 // sessions: dotted IPv4, also for an IPv4-mapped IPv6 peer, otherwise the

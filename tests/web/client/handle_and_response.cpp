@@ -181,7 +181,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
             .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "server.example"}});
     const bool expect_success = version == TLS1_1_VERSION && !select_h2 && matching_san &&
                                 protocol != ruvia::http_client_versions{.http1_ = false};
-    std::optional<ruvia::http_client_error::code_type> failure_code;
+    std::optional<std::error_code> failure_code;
     std::exception_ptr unexpected;
     bool exchanged = false;
     const auto run = [&]() -> ruvia::task<void> {
@@ -213,7 +213,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol
         EXPECT_EQ(peer.tls_version_, TLS1_1_VERSION);
         EXPECT_TRUE(peer.request_.starts_with("GET /legacy HTTP/1.1\r\n"));
     } else {
-        EXPECT_EQ(failure_code, ruvia::http_client_error::code_type::tls_failed);
+        EXPECT_EQ(failure_code, ruvia::make_error_code(ruvia::http_client_errc::tls_failed));
         EXPECT_TRUE(peer.request_.empty());
         if (version == TLS1_1_VERSION && select_h2 &&
             protocol == ruvia::http_client_versions{} && matching_san) {
@@ -451,7 +451,7 @@ public:
                                 .send();
             (void)co_await response.bytes();
         } catch (const ruvia::http_client_error& error) {
-            if (error.code() == ruvia::http_client_error::code_type::cancelled && !independent.stop_requested()) {
+            if (error.code() == std::make_error_code(std::errc::operation_canceled) && !independent.stop_requested()) {
                 ++host_cancelled_requests;
             }
         }
@@ -519,7 +519,7 @@ public:
         try {
             co_await response.pipe_to(c, {.stop_token_ = stop.token()});
         } catch (const ruvia::http_client_error& error) {
-            cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+            cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         if (!cancelled || response.stream().complete()) {
             throw std::runtime_error("stopped response pipe did not fail before forwarding");
@@ -822,10 +822,6 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     auto connected = co_await std::move(connecting);
                     auto session = std::move(connected);
                     EXPECT_EQ(session.subprotocol(), "echo.v1");
-                    EXPECT_TRUE(session.protocol_version() ==
-                                (protocol == ruvia::http_client_versions{.http2_ = false}
-                                        ? ruvia::http_protocol_version::http11
-                                        : ruvia::http_protocol_version::http2));
                     // Accepted WebSockets are not ordinary finite HTTP responses.
                     // The HTTP exchange deadline must not become their lifetime.
                     EXPECT_TRUE(co_await ruvia::sleep_for(session.worker(), std::chrono::milliseconds(1250)) ==
@@ -854,8 +850,8 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         bool timed_out = false;
                         try {
                             (void)co_await timed.read({.timeout_ = std::chrono::milliseconds(20)});
-                        } catch (const ruvia::http_client_error& error) {
-                            timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+                        } catch (const std::system_error& error) {
+                            timed_out = error.code() == std::errc::timed_out;
                         }
                         EXPECT_TRUE(timed_out);
                         // A read deadline ends only that read: the session keeps
@@ -873,22 +869,17 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         bool rejected = false;
                         try {
                             co_await limited.text(std::pmr::string(33, 'm', ruvia::process_resource()));
-                        } catch (const ruvia::http_client_error& error) {
-                            rejected = error.code() == ruvia::http_client_error::code_type::message_too_large;
+                        } catch (const std::invalid_argument&) {
+                            rejected = true;
                         }
                         EXPECT_TRUE(rejected);
-                        EXPECT_TRUE(!limited.connected());
+                        EXPECT_TRUE(limited.connected());
                         limited.abort();
                     }
                     {
                         auto limited = co_await websocket_client.client().websocket("/fluent/websocket?oversize=1").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
-                        bool rejected = false;
-                        try {
-                            (void)co_await limited.read();
-                        } catch (const ruvia::http_client_error& error) {
-                            rejected = error.code() == ruvia::http_client_error::code_type::protocol_error;
-                        }
-                        EXPECT_TRUE(rejected);
+                        EXPECT_FALSE((co_await limited.read()).has_value());
+                        EXPECT_TRUE(limited.termination() == ruvia::websocket_termination::message_too_large);
                         limited.abort();
                     }
                     auto active = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
@@ -897,10 +888,9 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     bool cancelled = false;
                     const auto receive = [&]() -> ruvia::task<void> {
                         try {
-                            (void)co_await active.read();
-                        } catch (const ruvia::http_client_error& error) {
-                            cancelled = error.code() == ruvia::http_client_error::code_type::closing ||
-                                        error.code() == ruvia::http_client_error::code_type::cancelled;
+                            cancelled = !(co_await active.read()).has_value();
+                        } catch (const std::system_error&) {
+                            cancelled = true;
                         }
                     };
                     readers.spawn(receive());
@@ -1016,14 +1006,14 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
             try {
                 (void)co_await client.client("untrusted").get("/fluent/inspect").send();
             } catch (const ruvia::http_client_error& error) {
-                tls_rejected = error.code() == ruvia::http_client_error::code_type::tls_failed;
+                tls_rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::tls_failed);
             }
             EXPECT_TRUE(tls_rejected);
             bool unknown_rejected = false;
             try {
                 (void)client.client("unknown");
             } catch (const ruvia::http_client_error& error) {
-                unknown_rejected = error.code() == ruvia::http_client_error::code_type::not_configured;
+                unknown_rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::not_configured);
             }
             EXPECT_TRUE(unknown_rejected);
         } catch (...) {
@@ -1042,7 +1032,7 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
                 try {
                     (void)co_await second.bytes(11);
                 } catch (const ruvia::http_client_error& error) {
-                    exhausted = error.code() == ruvia::http_client_error::code_type::result_budget_exceeded;
+                    exhausted = error.code() == ruvia::make_error_code(ruvia::http_client_errc::result_budget_exceeded);
                 }
                 EXPECT_TRUE(exhausted);
             } catch (...) {
@@ -1075,7 +1065,7 @@ void fluent_client_tests::verify_request_host_cancellation(server& server) {
                 try {
                     (void)co_await owner.client().with_options({.stop_token_ = stop.token()}).get("/fluent/host-cancel").send();
                 } catch (const ruvia::http_client_error& error) {
-                    cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                    cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
             };
             ruvia::task_scope tasks(owner.worker());

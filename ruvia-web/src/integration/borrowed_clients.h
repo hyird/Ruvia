@@ -30,11 +30,8 @@ public:
 
     [[nodiscard]] bool empty() const noexcept;
 
-    void bind_http_client(const worker_handle& worker, const http_client& clients);
-    // Null when no http_client was bound.
-    [[nodiscard]] const http_client* http_clients() const noexcept {
-        return http_clients_;
-    }
+    void bind_http_client(const worker_handle& worker, std::string_view alias, const http_client& client);
+    [[nodiscard]] const http_client* http_clients(std::string_view alias) const noexcept;
 
 #ifdef RUVIA_ENABLE_DATABASE
     void bind_database(const worker_handle& worker, std::string_view alias, const db_client& client);
@@ -53,7 +50,7 @@ private:
         const client_type* client_;
     };
 
-    const http_client* http_clients_{nullptr};
+    std::pmr::vector<alias_entry<http_client>> http_clients_;
 #ifdef RUVIA_ENABLE_DATABASE
     std::pmr::vector<alias_entry<db_client>> databases_;
 #endif

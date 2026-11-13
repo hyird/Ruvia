@@ -40,6 +40,7 @@
 #include "server/inbound_transport_error.h"
 #include "util/steady_clock.h"
 #include "websocket/http_websocket_liveness.h"
+#include "websocket/websocket_state.h"
 
 namespace ruvia::detail {
 
@@ -47,12 +48,12 @@ namespace ruvia::detail {
 // Frame reassembly, serialization, heartbeat and close policy are shared;
 // stream transports provide executor/read_more/write_bytes/abort operations.
 template <typename stream_type>
-class server_websocket_connection final {
+class websocket_session_connection final {
 public:
     static constexpr bool native_stream = requires(stream_type& stream) { stream.get_executor(); };
     using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
 
-    server_websocket_connection(stream_argument_type stream, const worker_handle& worker_value,
+    websocket_session_connection(stream_argument_type stream, const worker_handle& worker_value,
         connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
         protocol_byte_limit message_limit, std::pmr::memory_resource& resource, std::string_view initial_bytes,
         websocket_connection_options protocol_options, std::pmr::string&& subprotocol_value)
@@ -75,33 +76,34 @@ public:
             close_stream();
             throw;
         }
-        scanner_entry_.register_periodic_check(periodic_check_, this, &server_websocket_connection::heartbeat_tick_thunk);
+        scanner_entry_.register_periodic_check(periodic_check_, this, &websocket_session_connection::heartbeat_tick_thunk);
     }
 
-    server_websocket_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
+    websocket_session_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
         protocol_byte_limit, std::pmr::memory_resource&, std::string_view, websocket_connection_options,
         std::pmr::string&&) = delete;
 
     static void close_stream(stream_type& stream) noexcept {
         if constexpr (!native_stream) {
             stream.abort();
-        } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
-            ruvia::close_socket(stream.lowest_layer());
         } else {
-            ruvia::close_socket(stream);
+            ruvia::close_socket(stream.lowest_layer());
         }
     }
-    ~server_websocket_connection() {
+    ~websocket_session_connection() {
+        if (facade_) {
+            facade_->operation_scope_.close();
+        }
         if (cancellation_target_) {
             cancellation_target_->detach(*this);
         }
     }
 
-    server_websocket_connection(const server_websocket_connection&) = delete;
-    server_websocket_connection& operator=(const server_websocket_connection&) = delete;
+    websocket_session_connection(const websocket_session_connection&) = delete;
+    websocket_session_connection& operator=(const websocket_session_connection&) = delete;
 
     static void heartbeat_tick_thunk(void* target, std::int64_t now) noexcept {
-        static_cast<server_websocket_connection*>(target)->heartbeat_tick(now);
+        static_cast<websocket_session_connection*>(target)->heartbeat_tick(now);
     }
 
     // A cancelled or timed-out read ends only its own wait: buffered input,
@@ -164,6 +166,12 @@ public:
             std::terminate();
         }
     }
+    void bind_facade(const std::shared_ptr<websocket_state>& facade) noexcept {
+        facade_ = facade;
+    }
+    [[nodiscard]] stream_type& transport() & noexcept {
+        return stream_;
+    }
     task<void> detach_and_drain_writes();
     // The failure of a heartbeat write. Those writes run detached
     // from any caller, so the session reports it once detach_and_drain_writes()
@@ -198,14 +206,14 @@ private:
     // never leaves this connection.
     struct operation_interruption final {};
 
-    using cancellation_target_type = worker_cancellation_target<server_websocket_connection>;
+    using cancellation_target_type = worker_cancellation_target<websocket_session_connection>;
 
     // One operation's deadline and stop token. Both deliver on this worker
     // and only flag the interruption; the operation unwinds at its next wait.
     class operation_interrupt_registration final {
     public:
         operation_interrupt_registration(
-            server_websocket_connection& connection, operation_lane lane, const operation_options& options) {
+            websocket_session_connection& connection, operation_lane lane, const operation_options& options) {
             if (options.timeout_.has_value()) {
                 (void)connection.worker_->schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()),
                     [&connection, lane](worker_timer_outcome outcome) noexcept {
@@ -232,7 +240,7 @@ private:
 
     class write_guard_type final {
     public:
-        explicit write_guard_type(server_websocket_connection& connection,
+        explicit write_guard_type(websocket_session_connection& connection,
             write_claim_type claim = write_claim_type::acquire, bool restart_pong = true)
             : connection_(connection),
               restart_pong_(restart_pong) {
@@ -258,12 +266,12 @@ private:
         write_guard_type& operator=(const write_guard_type&) = delete;
 
     private:
-        server_websocket_connection& connection_;
+        websocket_session_connection& connection_;
         bool restart_pong_{true};
     };
     class write_operation_lease_type final {
     public:
-        explicit write_operation_lease_type(server_websocket_connection& connection)
+        explicit write_operation_lease_type(websocket_session_connection& connection)
             : connection_(&connection) {
             if (connection_->write_active_) {
                 connection_ = nullptr;
@@ -289,7 +297,7 @@ private:
         }
 
     private:
-        server_websocket_connection* connection_;
+        websocket_session_connection* connection_;
     };
 
     // Submits an application payload by reference. Its owner is the caller of
@@ -300,7 +308,7 @@ private:
     // could still copy or send.
     class borrowed_frame_guard_type final {
     public:
-        borrowed_frame_guard_type(server_websocket_connection& connection, websocket_opcode opcode,
+        borrowed_frame_guard_type(websocket_session_connection& connection, websocket_opcode opcode,
             std::string_view payload, bool compress, websocket_write_extent extent)
             : connection_(&connection) {
             const websocket_frame_options options{
@@ -347,12 +355,12 @@ private:
         }
 
     private:
-        server_websocket_connection* connection_;
+        websocket_session_connection* connection_;
     };
 
     class read_guard_type final {
     public:
-        explicit read_guard_type(server_websocket_connection& connection)
+        explicit read_guard_type(websocket_session_connection& connection)
             : connection_(&connection) {
             if (connection_->read_phase_ != read_phase_type::idle) {
                 connection_ = nullptr;
@@ -387,7 +395,7 @@ private:
         }
 
     private:
-        server_websocket_connection* connection_;
+        websocket_session_connection* connection_;
     };
 
     void finish_write(bool restart_pong = true) noexcept;
@@ -442,6 +450,7 @@ private:
         return read_phase_ != read_phase_type::idle || write_active_ || write_lane_.write_in_progress();
     }
 
+    std::shared_ptr<websocket_state> facade_;
     stream_argument_type stream_;
     const worker_handle* worker_;
     connection_scanner::entry& scanner_entry_;
@@ -476,17 +485,17 @@ private:
 };
 
 template <typename stream_type>
-bool server_websocket_connection<stream_type>::pong_observable() const noexcept {
+bool websocket_session_connection<stream_type>::pong_observable() const noexcept {
     return !write_lane_.write_in_progress() && read_phase_ == read_phase_type::active;
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::resume_pong_window_on_read_start() noexcept {
+void websocket_session_connection<stream_type>::resume_pong_window_on_read_start() noexcept {
     resume_websocket_pong_deadline(lifecycle_options_, liveness_state_, pong_observable());
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::finish_write(bool restart_pong) noexcept {
+void websocket_session_connection<stream_type>::finish_write(bool restart_pong) noexcept {
     write_lane_.release();
     if (restart_pong && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
         restart_websocket_pong_window(liveness_state_, steady_now_ms());
@@ -495,7 +504,7 @@ void server_websocket_connection<stream_type>::finish_write(bool restart_pong) n
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
+void websocket_session_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
     const bool observable = pong_observable();
     if (!observable) {
         restart_websocket_pong_window(liveness_state_, now);
@@ -506,7 +515,10 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
             return;
         case websocket_liveness_decision::abort_transport:
             // A heartbeat or close timeout closes the connection.
-            abort_transport(websocket_termination::timeout);
+            abort_transport(protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof
+                                ? protocol_.termination()
+                                : websocket_termination::timeout,
+                true);
             return;
         case websocket_liveness_decision::send_ping:
             break;
@@ -529,7 +541,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
+task<void> websocket_session_connection<stream_type>::write_heartbeat_ping() {
     write_guard_type write_guard(*this, write_claim_type::adopt);
     try {
         const auto* sending = std::get_if<websocket_sending_ping>(&liveness_state_);
@@ -556,7 +568,7 @@ task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
+void websocket_session_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
     abort_transport(websocket_termination::aborted);
     if (background_failure_ == nullptr) {
         background_failure_ = std::move(failure);
@@ -564,14 +576,14 @@ void server_websocket_connection<stream_type>::fail_background(std::exception_pt
 }
 
 template <typename stream_type>
-task<std::optional<websocket_message>> server_websocket_connection<stream_type>::read(operation_options options) {
+task<std::optional<websocket_message>> websocket_session_connection<stream_type>::read(operation_options options) {
     require_current_worker();
     return read_owned(read_guard_type(*this), std::move(options));
 }
 
 template <typename stream_type>
-const std::shared_ptr<typename server_websocket_connection<stream_type>::cancellation_target_type>&
-server_websocket_connection<stream_type>::cancellation_target() {
+const std::shared_ptr<typename websocket_session_connection<stream_type>::cancellation_target_type>&
+websocket_session_connection<stream_type>::cancellation_target() {
     if (!cancellation_target_) {
         cancellation_target_ = make_worker_cancellation_target(*this, *worker_);
     }
@@ -579,7 +591,7 @@ server_websocket_connection<stream_type>::cancellation_target() {
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::interrupt(operation_lane lane, operation_interrupt reason) noexcept {
+void websocket_session_connection<stream_type>::interrupt(operation_lane lane, operation_interrupt reason) noexcept {
     if (lane == operation_lane::read) {
         if (read_phase_ != read_phase_type::active || read_interrupt_.has_value()) {
             return;
@@ -600,7 +612,7 @@ void server_websocket_connection<stream_type>::interrupt(operation_lane lane, op
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::throw_interrupted(operation_interrupt reason, const char* operation_name) {
+void websocket_session_connection<stream_type>::throw_interrupted(operation_interrupt reason, const char* operation_name) {
     if (reason == operation_interrupt::timed_out) {
         throw std::system_error(std::make_error_code(std::errc::timed_out), operation_name);
     }
@@ -608,7 +620,7 @@ void server_websocket_connection<stream_type>::throw_interrupted(operation_inter
 }
 
 template <typename stream_type>
-task<std::optional<websocket_message>> server_websocket_connection<stream_type>::read_owned(
+task<std::optional<websocket_message>> websocket_session_connection<stream_type>::read_owned(
     read_guard_type read_guard_value, operation_options options) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
@@ -640,7 +652,9 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                             if (const auto* close_event = event->close()) {
                                 record_peer_close(*close_event);
                             }
-                            liveness_state_ = websocket_liveness_idle{};
+                            liveness_state_ = event->close() != nullptr
+                                                  ? websocket_liveness_state_type(websocket_awaiting_peer_close{steady_now_ms()})
+                                                  : websocket_liveness_state_type(websocket_liveness_idle{});
                             write_guard.note_write();
                             co_await flush_protocol_output_now();
                         }
@@ -680,6 +694,9 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 if (event->close() != nullptr || event->protocol_error() != nullptr || event->transport_end() != nullptr) {
                     // The poll's exclusive lane already flushed the protocol's
                     // Close/end-transport plan before this read completes.
+                    if (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof) {
+                        continue;
+                    }
                     co_return std::nullopt;
                 }
                 throw std::logic_error("unexpected WebSocket protocol event");
@@ -695,14 +712,14 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
 }
 
 template <typename stream_type>
-task<bool> server_websocket_connection<stream_type>::read_more() {
+task<bool> websocket_session_connection<stream_type>::read_more() {
     throw_if_read_interrupted();
     if constexpr (!native_stream) {
         try {
             co_return co_await stream_.read_more(
                 buffer_, [this] { throw_if_read_interrupted(); }, read_cancellation_.slot());
         } catch (const inbound_transport_error&) {
-            if (!session_ended()) {
+            if (protocol_.liveness_mode() != websocket_liveness_mode::inactive) {
                 abort_transport(websocket_termination::io_error, true);
                 throw;
             }
@@ -755,7 +772,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
         }
         if (ec) {
             // This side already ended the session and closed the stream.
-            if (session_ended()) {
+            if (protocol_.liveness_mode() == websocket_liveness_mode::inactive) {
                 co_return false;
             }
             if (read_interrupt_.has_value() && ec == asio::error::operation_aborted) {
@@ -773,14 +790,14 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value,
+task<void> websocket_session_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value,
     bool compress, websocket_write_extent extent, operation_options options) {
     require_current_worker();
     return write_owned(opcode, payload_value, write_operation_lease_type(*this), compress, extent, std::move(options));
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcode opcode,
+task<void> websocket_session_connection<stream_type>::write_owned(websocket_opcode opcode,
     std::string_view payload_value, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent,
     operation_options options) {
     require_current_worker();
@@ -818,14 +835,14 @@ task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcod
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::close(
+task<void> websocket_session_connection<stream_type>::close(
     ::ruvia::websocket_close_options options, operation_options operation) {
     require_current_worker();
     return close_owned(options, std::move(operation), write_operation_lease_type(*this));
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::close_owned(
+task<void> websocket_session_connection<stream_type>::close_owned(
     ::ruvia::websocket_close_options options, operation_options operation, write_operation_lease_type write_lease) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
@@ -877,7 +894,8 @@ task<void> server_websocket_connection<stream_type>::close_owned(
             // suppresses application messages in this phase while still
             // validating frames and handling control traffic.
             const bool awaiting_peer_close = protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close;
-            while (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close) {
+            while (protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_close ||
+                   protocol_.liveness_mode() == websocket_liveness_mode::awaiting_peer_eof) {
                 if (read_phase_ != read_phase_type::idle) {
                     co_await reader_done_signal_.wait();
                 } else {
@@ -897,14 +915,17 @@ task<void> server_websocket_connection<stream_type>::close_owned(
     }
     if (handshake_timed_out) {
         // The peer never answered: an inbound connection end, not a handler fault.
-        throw inbound_transport_error(
-            asio::error::make_error_code(asio::error::timed_out), "websocket close handshake timed out");
+        throw std::system_error(
+            std::make_error_code(std::errc::timed_out), "websocket close handshake timed out");
     }
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
+task<void> websocket_session_connection<stream_type>::detach_and_drain_writes() {
     require_current_worker();
+    if (facade_ && !facade_->owner_) {
+        facade_->operation_scope_.expire();
+    }
     periodic_check_.reset();
     // Teardown first cancels the transport operation that owns a suspended
     // write, then joins that write before the connection storage disappears.
@@ -922,15 +943,21 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
         }
     }
     co_await background_tasks_.join();
+    if (facade_ && !facade_->owner_) {
+        auto facade = std::exchange(facade_, nullptr);
+        co_await facade->operation_scope_.close_and_join();
+    } else {
+        facade_.reset();
+    }
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::notify_write_idle() noexcept {
+void websocket_session_connection<stream_type>::notify_write_idle() noexcept {
     write_lane_.notify();
 }
 
 template <typename stream_type>
-bool server_websocket_connection<stream_type>::accept_submitted_frame(websocket_frame_submit_status status) {
+bool websocket_session_connection<stream_type>::accept_submitted_frame(websocket_frame_submit_status status) {
     switch (status) {
         case websocket_frame_submit_status::accepted:
             return true;
@@ -951,7 +978,7 @@ bool server_websocket_connection<stream_type>::accept_submitted_frame(websocket_
 }
 
 template <typename stream_type>
-auto server_websocket_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
+auto websocket_session_connection<stream_type>::write_bytes(const websocket_output_plan& plan) {
     if constexpr (!native_stream) {
         return write_adapted(plan);
     } else {
@@ -968,7 +995,7 @@ auto server_websocket_connection<stream_type>::write_bytes(const websocket_outpu
 }
 
 template <typename stream_type>
-task<std::error_code> server_websocket_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
+task<std::error_code> websocket_session_connection<stream_type>::write_adapted(const websocket_output_plan& plan) {
     // The websocket protocol's transport disposition maps onto the stream end
     // at this one boundary; the multiplexed transports only speak http_stream_end.
     const auto end = plan.disposition() == websocket_transport_disposition::end_transport ? http_stream_end::end
@@ -983,9 +1010,9 @@ task<std::error_code> server_websocket_connection<stream_type>::write_adapted(co
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::flush_protocol_output_now() {
+task<void> websocket_session_connection<stream_type>::flush_protocol_output_now() {
     struct flush_abort_guard final {
-        server_websocket_connection* connection_;
+        websocket_session_connection* connection_;
         websocket_termination cause_{websocket_termination::aborted};
         ~flush_abort_guard() noexcept {
             if (connection_ != nullptr) {
@@ -1015,6 +1042,9 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
             }
             if (ec) {
                 guard.cause_ = websocket_termination::io_error;
+                if (protocol_.termination() == websocket_termination::timeout) {
+                    throw std::system_error(std::make_error_code(std::errc::timed_out), "websocket write timed out");
+                }
                 throw inbound_transport_error(ec, "failed to write websocket bytes");
             }
         }
@@ -1031,7 +1061,7 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::abort_transport(websocket_termination cause, bool force_transport) noexcept {
+void websocket_session_connection<stream_type>::abort_transport(websocket_termination cause, bool force_transport) noexcept {
     liveness_state_ = websocket_liveness_idle{};
     const auto disposition = protocol_.abort(cause);
     if (force_transport || disposition == websocket_abort_disposition::abort_transport) {
@@ -1041,14 +1071,8 @@ void server_websocket_connection<stream_type>::abort_transport(websocket_termina
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::close_stream() noexcept {
-    if constexpr (!native_stream) {
-        stream_.abort();
-    } else if constexpr (requires(stream_type& value) { value.next_layer(); }) {
-        ruvia::close_socket(stream_.lowest_layer());
-    } else {
-        ruvia::close_socket(stream_);
-    }
+void websocket_session_connection<stream_type>::close_stream() noexcept {
+    close_stream(stream_);
 }
 
 }  // namespace ruvia::detail

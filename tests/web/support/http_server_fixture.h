@@ -70,7 +70,7 @@ private:
         void finish_case() {
             wait_until([&] {
                 rethrow_failure();
-                return app().http_stats().active_connections_ == 0;
+                return app().stats().active_connections_ == 0;
             },
                 std::chrono::seconds(5));
         }

@@ -1,9 +1,12 @@
 #include "server/http_server_tls_identity.h"
 
+#include <algorithm>
 #include <cstddef>
+#include <limits>
 #include <memory>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,6 +16,7 @@
 
 #include <asio/ssl/verify_mode.hpp>
 #include <openssl/err.h>
+#include <openssl/ocsp.h>
 #include <openssl/ssl.h>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -34,14 +38,50 @@ struct tls_identity_pem final {
     std::string_view private_key_;
 };
 
+void validate_ocsp_response(std::span<const std::byte> bytes) {
+    if (bytes.empty()) {
+        return;
+    }
+    if (bytes.size() > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        throw std::invalid_argument("TLS OCSP response is too large");
+    }
+    ERR_clear_error();
+    const auto* cursor = reinterpret_cast<const unsigned char*>(bytes.data());
+    const auto* const end = cursor + bytes.size();
+    const std::unique_ptr<OCSP_RESPONSE, decltype(&OCSP_RESPONSE_free)> response(
+        d2i_OCSP_RESPONSE(nullptr, &cursor, static_cast<long>(bytes.size())), OCSP_RESPONSE_free);
+    if (!response) {
+        const auto error = ERR_peek_last_error();
+        ERR_clear_error();
+        if (ERR_GET_REASON(error) == ERR_R_MALLOC_FAILURE) {
+            throw std::bad_alloc();
+        }
+        throw std::invalid_argument("TLS OCSP response must be a DER OCSPResponse");
+    }
+    const auto size = i2d_OCSP_RESPONSE(response.get(), nullptr);
+    if (cursor != end || size <= 0 || static_cast<std::size_t>(size) != bytes.size()) {
+        throw std::invalid_argument("TLS OCSP response must be a DER OCSPResponse");
+    }
+    // d2i also accepts BER; require the canonical DER encoding we advertise.
+    std::pmr::vector<std::byte> canonical(bytes.size(), process_resource());
+    auto* output = reinterpret_cast<unsigned char*>(canonical.data());
+    if (i2d_OCSP_RESPONSE(response.get(), &output) != size ||
+        !std::equal(bytes.begin(), bytes.end(), canonical.begin())) {
+        throw std::invalid_argument("TLS OCSP response must be a DER OCSPResponse");
+    }
+}
+
 // One identity's validated source and the password its key needs.
 struct tls_identity_source final {
     std::variant<tls_identity_files, tls_identity_pem> location_;
     std::string_view private_key_password_;
+    std::span<const std::byte> ocsp_response_;
 };
 
 [[nodiscard]] tls_identity_source make_tls_identity_source(
-    const tls_identity_config& identity, std::pmr::memory_resource* resource) {
+    const tls_identity_config& identity, std::pmr::memory_resource* resource,
+    std::span<const std::byte> ocsp_response = {}) {
+    validate_ocsp_response(ocsp_response);
     const bool files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
     const bool pem = !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty();
     if (files && pem) {
@@ -50,14 +90,16 @@ struct tls_identity_source final {
     if (!pem) {
         // Both names are required: an empty one throws.
         return {.location_ = make_tls_identity_files(identity, resource),
-            .private_key_password_ = identity.private_key_password_};
+            .private_key_password_ = identity.private_key_password_,
+            .ocsp_response_ = ocsp_response};
     }
     if (identity.certificate_chain_pem_.empty() || identity.private_key_pem_.empty()) {
         throw std::invalid_argument("in-memory TLS identity requires both certificate chain and private key PEM");
     }
     return {.location_ = tls_identity_pem{.certificate_chain_ = identity.certificate_chain_pem_,
                 .private_key_ = identity.private_key_pem_},
-        .private_key_password_ = identity.private_key_password_};
+        .private_key_password_ = identity.private_key_password_,
+        .ocsp_response_ = ocsp_response};
 }
 
 [[nodiscard]] tls_certificate load_tls_identity(const tls_identity_source& source) {
@@ -66,6 +108,11 @@ struct tls_identity_source final {
     }
     const auto& pem = std::get<tls_identity_pem>(source.location_);
     return tls_certificate::load_pem(pem.certificate_chain_, pem.private_key_, source.private_key_password_);
+}
+
+[[nodiscard]] http_server_tls_identities::identity load_fixed_tls_identity(
+    const tls_identity_source& source, std::pmr::memory_resource* resource) {
+    return {load_tls_identity(source), source.ocsp_response_, resource};
 }
 
 // RFC 6066 §3 HostName: an ASCII DNS name, without the trailing dot.
@@ -135,7 +182,8 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         const auto& identity = config.identity_;
         if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() ||
             !identity.certificate_chain_pem_.empty() || !identity.private_key_pem_.empty() ||
-            !identity.private_key_password_.empty() || !config.sni_.empty() || !config.local_addresses_.empty()) {
+            !identity.private_key_password_.empty() || !config.ocsp_response_.empty() ||
+            !config.sni_.empty() || !config.local_addresses_.empty()) {
             throw std::invalid_argument("TLS certificate library cannot be combined with fixed identities");
         }
         if (!config.select_certificate_ && config.default_certificate_ == 0) {
@@ -149,7 +197,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
     if (config.select_certificate_ || config.default_certificate_ != 0) {
         throw std::invalid_argument("TLS certificate selection requires a certificate library");
     }
-    primary_.emplace(make_tls_identity_source(config.identity_, resource));
+    primary_.emplace(make_tls_identity_source(config.identity_, resource, config.ocsp_response_));
     names_.reserve(config.sni_.size());
     for (const auto& sni : config.sni_) {
         if (sni.host_.empty()) {
@@ -173,7 +221,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         names_.push_back(named_source{
             .name_ = std::move(name),
             .wildcard_ = wildcard,
-            .source_ = make_tls_identity_source(sni.identity_, resource),
+            .source_ = make_tls_identity_source(sni.identity_, resource, sni.ocsp_response_),
         });
     }
     addresses_.reserve(config.local_addresses_.size());
@@ -186,7 +234,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         }
         addresses_.push_back(addressed_source{
             .address_ = address,
-            .source_ = make_tls_identity_source(local.identity_, resource),
+            .source_ = make_tls_identity_source(local.identity_, resource, local.ocsp_response_),
         });
     }
 }
@@ -201,16 +249,16 @@ std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::p
         return identities;
     }
     auto identities = std::allocate_shared<http_server_tls_identities>(
-        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_tls_identity(*primary_), resource);
+        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_fixed_tls_identity(*primary_, resource), resource);
     for (const auto& named : names_) {
         auto& target = named.wildcard_ ? identities->wildcard_names_ : identities->exact_names_;
-        target.emplace_back(named.name_, load_tls_identity(named.source_), resource);
+        target.emplace_back(named.name_, load_fixed_tls_identity(named.source_, resource), resource);
     }
     identities->local_addresses_.reserve(addresses_.size());
     for (const auto& addressed : addresses_) {
         identities->local_addresses_.push_back(http_server_tls_identities::addressed_identity{
             .address_ = addressed.address_,
-            .certificate_ = load_tls_identity(addressed.source_),
+            .value_ = load_fixed_tls_identity(addressed.source_, resource),
         });
     }
     return identities;
@@ -231,12 +279,12 @@ tls_certificate load_server_tls_certificate(const tls_identity_config& identity)
     return load_tls_identity(make_tls_identity_source(identity, process_resource()));
 }
 
-const tls_certificate& http_server_tls_identities::select(
+const http_server_tls_identities::identity& http_server_tls_identities::select(
     std::string_view server_name, const asio::ip::address* local_address) const noexcept {
     if (!server_name.empty()) {
         for (const auto& named : exact_names_) {
             if (http_ascii_equals_ignore_case(named.name_, server_name)) {
-                return named.certificate_;
+                return named.value_;
             }
         }
         // RFC 6125 §6.4.3: "*" stands for exactly one non-empty label.
@@ -244,7 +292,7 @@ const tls_certificate& http_server_tls_identities::select(
             const auto parent = server_name.substr(dot + 1);
             for (const auto& named : wildcard_names_) {
                 if (http_ascii_equals_ignore_case(named.name_, parent)) {
-                    return named.certificate_;
+                    return named.value_;
                 }
             }
         }
@@ -253,7 +301,7 @@ const tls_certificate& http_server_tls_identities::select(
         const auto address = canonical_local_address(*local_address);
         for (const auto& addressed : local_addresses_) {
             if (addressed.address_ == address) {
-                return addressed.certificate_;
+                return addressed.value_;
             }
         }
     }

@@ -11,6 +11,8 @@
 #include <type_traits>
 #include <utility>
 
+#include "server/inbound_socket_stream.h"
+
 #if defined(__linux__)
 #include <sys/ioctl.h>
 #include <sys/socket.h>
@@ -90,8 +92,8 @@ inline void enable_plain_tcp_sync_write(asio::ip::tcp::socket& socket) noexcept 
 // Try one non-blocking plain TCP write before suspending. Returns true when
 // the write completed or hit a hard error (outcome in ec/bytes_written), and
 // false when the remainder must go through async_write.
-template <typename const_buffer_sequence_type>
-[[nodiscard]] inline bool try_plain_tcp_sync_write(asio::ip::tcp::socket& socket,
+template <typename socket_type, typename const_buffer_sequence_type>
+[[nodiscard]] inline bool try_plain_tcp_sync_write(socket_type& socket,
     const const_buffer_sequence_type& buffers, std::size_t total_bytes,
     asio::socket_base::message_flags flags, std::error_code& ec,
     std::size_t& bytes_written) noexcept {
@@ -173,7 +175,7 @@ public:
     connection_gather_write& operator=(const connection_gather_write&) = delete;
     connection_gather_write* operator&() = delete;
     [[nodiscard]] bool await_ready() noexcept {
-        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             const std::array<asio::const_buffer, 2> buffers{asio::buffer(head_), asio::buffer(body_)};
             const bool settled = try_plain_tcp_sync_write(
                 *stream_, buffers, head_.size() + body_.size(), 0, written_.error_, written_.bytes_);
@@ -316,9 +318,9 @@ public:
         const http1_response_write_start& start, connection_scanner::entry& progress) {
         const auto response_head_bytes = start.head_bytes_;
 #if defined(_WIN32)
-        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (transmit_) {
-                const auto written = co_await write_http_response_file(stream, head.view(),
+                const auto written = co_await write_http_response_file(stream.lowest_layer(), head.view(),
                     borrowed_native_file(*transmit_file_->opened_handle()), *transmit_file_, progress);
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                     written.error_, written.head_written_ ? response_head_bytes : 0);
@@ -368,7 +370,7 @@ private:
     // The single range a kernel transfer may send from the response's handle.
     [[nodiscard]] static std::optional<http_response_file_view> transmit_candidate(
         [[maybe_unused]] const http_response& response) noexcept {
-        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (!response.has_multipart_file_body()) {
                 const auto file = response.file_body();
                 if (file && file->length() > transmit_file_min_bytes && file->opened_handle() != nullptr) {

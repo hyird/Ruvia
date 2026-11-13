@@ -39,6 +39,7 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/detail/http/request/request_fields_access.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
@@ -140,7 +141,7 @@ private:
 // intentionally lives outside http_request and context_request.
 class conn_info final {
 public:
-    class endpoint final {
+    class client_endpoint final {
     public:
         [[nodiscard]] constexpr std::string_view address() const noexcept {
             return address_;
@@ -157,7 +158,7 @@ public:
         friend class tls_client_hello_record;
         friend class server_connection;
 
-        explicit constexpr endpoint(std::string_view address, std::uint16_t port = 0) noexcept
+        explicit constexpr client_endpoint(std::string_view address, std::uint16_t port = 0) noexcept
             : address_(address),
               port_(port) {}
 
@@ -169,17 +170,17 @@ public:
     // Every request and observation on one connection shares this ID; retired
     // IDs are never reused. Never zero for a served connection; zero for a
     // test_app request, which has no transport connection.
-    [[nodiscard]] constexpr std::uint64_t id() const noexcept {
+    [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return id_;
     }
 
     // The peer at the other end of this socket. Behind a reverse proxy that is
     // the proxy, not the caller -- use client() for the caller.
-    [[nodiscard]] constexpr endpoint remote() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
         return remote_;
     }
 
-    [[nodiscard]] constexpr endpoint local() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
         return local_;
     }
     // Who the request is from. Equal to remote() unless the peer is a configured
@@ -190,7 +191,7 @@ public:
     //
     // This, not remote(), is what rate limiting keys on and what an access log
     // should record.
-    [[nodiscard]] constexpr endpoint client() const noexcept {
+    [[nodiscard]] constexpr client_endpoint client() const noexcept {
         return client_;
     }
 
@@ -222,25 +223,27 @@ public:
 private:
     friend class detail::context_services;
 
-    constexpr conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept
+    conn_info(std::uint64_t id, std::string_view remote_address, plain_connection_transport transport) noexcept
         : id_(id),
-          remote_(remote_address),
+          remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
+          remote_text_(remote_address),
           client_(remote_address),
           transport_(transport),
           scheme_(http_scheme::http) {}
 
-    constexpr conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept
+    conn_info(std::uint64_t id, std::string_view remote_address, tls_connection_transport transport) noexcept
         : id_(id),
-          remote_(remote_address),
+          remote_(ip_address::parse(remote_address).value_or(ip_address{}), 0),
+          remote_text_(remote_address),
           client_(remote_address),
           transport_(transport),
           scheme_(http_scheme::https) {}
 
-    [[nodiscard]] static constexpr conn_info plain(std::uint64_t id, std::string_view remote_address) noexcept {
+    [[nodiscard]] static conn_info plain(std::uint64_t id, std::string_view remote_address) noexcept {
         return conn_info(id, remote_address, plain_connection_transport{});
     }
 
-    [[nodiscard]] static constexpr conn_info tls(std::uint64_t id, std::string_view remote_address,
+    [[nodiscard]] static conn_info tls(std::uint64_t id, std::string_view remote_address,
         std::optional<std::string_view> client_certificate_subject, std::string_view alpn,
         std::string_view server_name) noexcept {
         return conn_info(id, remote_address, tls_connection_transport(client_certificate_subject, alpn, server_name));
@@ -252,7 +255,7 @@ private:
     constexpr void apply_forwarded(
         std::string_view client_address, std::string_view forwarded_scheme) noexcept {
         if (!client_address.empty()) {
-            client_ = endpoint(client_address);
+            client_ = client_endpoint(client_address);
             via_trusted_proxy_ = true;
         }
         if (forwarded_scheme == "http") {
@@ -265,19 +268,20 @@ private:
     }
 
     constexpr void set_remote_port(std::uint16_t port) noexcept {
-        remote_ = endpoint(remote_.address(), port);
+        remote_ = ip_endpoint(remote_.address(), port);
         if (!via_trusted_proxy_) {
-            client_ = remote_;
+            client_ = client_endpoint(remote_text_, port);
         }
     }
-    constexpr void set_local(std::string_view address, std::uint16_t port) noexcept {
-        local_ = endpoint(address, port);
+    void set_local(std::string_view address, std::uint16_t port) noexcept {
+        local_ = ip_endpoint(ip_address::parse(address).value_or(ip_address{}), port);
     }
 
     std::uint64_t id_;
-    endpoint remote_;
-    endpoint client_;
-    endpoint local_{std::string_view{}};
+    ip_endpoint remote_;
+    std::string_view remote_text_;
+    client_endpoint client_;
+    ip_endpoint local_{};
     std::variant<plain_connection_transport, tls_connection_transport> transport_;
     http_scheme scheme_;
     bool via_trusted_proxy_{false};

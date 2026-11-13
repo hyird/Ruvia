@@ -356,13 +356,13 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 
 | 类名 | 核心方法 |
 | --- | --- |
-| `ruvia::http_tunnel` | `read(operation = {})`（返回 `std::optional<std::pmr::string>`）、`write(bytes, operation = {})`、`finish(operation = {})`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
+| `ruvia::http_tunnel` | `read(operation = {})`（返回 `std::optional<std::span<const std::byte>>`）、`write(bytes, operation = {})`、`finish(operation = {})`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
 | `ruvia::http_capsule_stream` | `read(operation = {})`（返回 `std::optional<http_capsule>`）、`write(type, payload, operation = {})`、`finish(operation = {})`、`abort()` |
 | `ruvia::http_datagram_stream` | `read(operation = {})`（返回 `std::optional<http_datagram>`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
 | `ruvia::http_udp_tunnel` | `read(operation = {})`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
 
 - **逐次读取中断**：`read()` 的 `operation`（`operation_options`）超时或停止只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`）；未消费输入与半个 Capsule 保留，可继续读取。
-- **客户端适配器**：由 `http_client_tunnel` 转成的 Capsule / Datagram / UDP 门面语义相同，中断改抛 `http_client_error`（`timeout` / `cancelled`）。
+- **客户端适配器**：由 `http_client_tunnel` 转成的 Capsule / Datagram / UDP 门面语义相同，中断抛 `http_client_error : std::system_error`（标准 `errc::timed_out` / `operation_canceled`）。
 - **逐次输出中断**：`write()`、`send()`、`finish()` 的超时或停止中止隧道（部分写出无法撤回）并抛同样的异常；令牌在启动前已停止则不发出任何字节、不中止隧道。
 - **时限叠加**：一次 Capsule / Datagram 调用内的多次传输读写共用该调用的截止期；服务器写超时与隧道排空时限继续生效；非正超时抛 `std::invalid_argument`。
 
@@ -411,17 +411,17 @@ co_return c.text(body.text());
 | `.upload(config)` | 返回流式交换；通过 `exchange.body().write()` / `end(trailers)` 上传，通过 `exchange.response()` 获取响应 |
 | `response.ok()`、`status()`、`protocol_version()` | 查询 2xx 成功状态、HTTP 状态和实际协议版本 |
 | `response.framing()` / `content_length()` | 查询协议计划的正文分帧与已解析长度元数据；HEAD/304 可携带长度，HTTP/2、HTTP/3 的流分帧也可同时有长度，不等于解码后的字节数 |
-| `response.connection_info()` | 借用物理连接 ID、对端 IP/端口、复用标志及连接/TLS 阶段耗时；隧道结果、WebSocket 同样提供连接信息 |
+| `response.connection_info()` | 借用物理连接 ID、对端 IP/端口、复用标志及连接/TLS 阶段耗时；隧道结果同样提供连接信息 |
 | `response.text(max_bytes)`、`bytes(max_bytes)` | 收集尚未消费的正文；返回拥有型 `http_client_response_bytes`，以 `.text()` / `.bytes()` 借用内容 |
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
-| `response.pipe_to(c)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
+| `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
 | `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
-| `client.websocket(path).connect()` | 返回拥有型 WebSocket 连接；读写、关闭、逐次中断与访问器的名称和限定同服务端 `websocket`（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
+| `client.websocket(path).connect()` | 返回拥有型 `websocket`；与服务端共用同一个类型、消息写入器和会话状态机（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
 
 `text()`、`bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
 
@@ -431,28 +431,32 @@ co_return c.text(body.text());
 
 | 入口 | 超时或取消时 |
 | --- | --- |
-| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `text(max)` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error(timeout / cancelled)`；已缓冲正文与读通道保留，可继续读取 |
+| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `text(max)` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error`（标准 `errc::timed_out` / `operation_canceled`）；已缓冲正文与读通道保留，可继续读取 |
 | `exchange.response()`、`push.response()` | 只结束本次等待响应头；随后可再次调用 `response()` |
-| 上传 `write()` / `end()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回），抛 `timeout / cancelled` |
-| `stream().pipe_to(writer)`、`pipe_to(c)` | 约束整次转发；中断抛 `timeout / cancelled`，已提交下游随异常中止 |
+| 上传 `write()` / `end()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回），抛标准 `errc::timed_out` / `operation_canceled` |
+| `stream().pipe_to(writer)`、`pipe_to(c)` | 约束整次转发；中断抛标准 `errc::timed_out` / `operation_canceled`，已提交下游随异常中止 |
 
 - **启动前已停止**：令牌在操作启动前已停止时抛 `cancelled`，不写出任何字节，交换、隧道与读通道保持可用。
 
 WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。返回消息借用连接的接收存储，视图在下一次 `read()` 或 `close()` 前有效。连接不能跨 worker 使用。
 
-- **结束与失败**：`read()` 在任一方完成关闭握手、或本端 `close()` 已发出 Close 后会话以任何方式结束时返回 `nullopt`；其余失败中止会话并抛 `http_client_error`，读取中断为 `cancelled` / `timeout`。
-- **选项继承**：逐次 `operation_options` 继承所属句柄的选项，超时只能收紧，提供的令牌替换继承的用户取消。
-- **消息转发**：`send(websocket_message&&)` 在返回冷操作前复制负载，不占读通道。
-- **分片发送**：`begin_text()` / `begin_binary()` 返回 `http_client_websocket_message_writer`，契约同服务端写入器；它持有会话状态，须在所属 worker 使用与销毁。
-- **访问器**：会话状态访问器与服务端同为 `noexcept`，跨 worker 使用终止进程，已移出的连接返回空值、`none`、`0` 与 `false`；传输元数据 `protocol_version()`、`connection_info()`、`worker()` 对已移出或跨 worker 的调用抛 `std::logic_error`。
+- **结束与失败**：握手后遵守 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api) 的统一契约。关闭、EOF、协议拒绝、心跳失活与主动中止以 `nullopt` 和 `termination()` 表达；单次操作超时或取消抛 `std::system_error`（`errc::timed_out` / `operation_canceled`）。
+- **选项继承**：逐次 `operation_options` 继承所属句柄的选项，超时只能收紧，提供的令牌替换继承的用户取消；握手期限不变成连接总寿命。
+- **消息转发**：`send(websocket_message&&)` 借用接收存储并立即占用读通道，直到操作完成或销毁；调用方自建的借用消息须保持源存储有效。
+- **分片发送**：两端均返回 `websocket_message_writer`，遵守相同的数据通道租约与未完成消息析构中止规则。
+- **所有权与移动**：客户端连接拥有隧道，析构中止并结构化收束在途 I/O；移动保留写入器与冷/运行操作。服务端连接仍借用请求生命周期，移出请求也不会延长会话能力。
+- **访问器**：会话状态访问器均为 `noexcept`，跨 worker 使用终止进程；已移出的连接返回空值、`none`、`0` 与 `false`。`worker()` 对已移出连接抛 `std::logic_error`；HTTP 连接元数据不属于统一 WebSocket 会话入口。
 
-出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。
+WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态。配置非法抛 `std::invalid_argument`；已消费构造器或并发占用同一读写通道等调用错误抛 `std::logic_error`。
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
+- **统一中断与重试**：`http_client_error` 继承 `std::system_error`；协议/连接池错误比较 `http_client_errc`，超时与取消比较 `std::errc::timed_out` / `operation_canceled`。`request_written() == false` 保证尚未向 transport 提交本请求字节；`true` 表示可能已交付。HTTP/2 REFUSED_STREAM / GOAWAY 与 HTTP/3 request_unprocessed 只保证未处理，不清除写出进度；协议层安全重试使用独立的未处理状态。没有该协议保证时，非幂等请求不得自动重试。中断保留该状态及连接快照。
+- **回调所有权**：请求回调由 `configure(options)` 移入；需要跨 worker 复制的 `address_validator_` 显式使用 `shared_ptr<const http_client_address_validator>`。不再提供与配置字段重叠的 setter。
+- **隧道借用**：`http_tunnel::read()` 返回 `optional<span<const byte>>`，仅 `nullopt` 表示 EOF；非空视图有效至下一次 read 开始，留存内容须由调用方复制。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
 - **Upgrade 协议选择**：`upgrade()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
-- **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `cancelled` 区分原因。
+- **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 
 句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样只返回句柄（取句柄规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_handle)）；句柄的 `with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
@@ -486,11 +490,11 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 | 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
 | 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
 | SSRF 策略 | `address_validator_(numeric_ip, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
-| 原样编码流 | origin 的 `decode_content_ = false`，或请求 `.decode_content(false)`：保留 `Content-Encoding` / `Content-Length`，不等待完整正文便交付首块；默认仍自动解码 |
-| 转发字段 | `.field_source(http_request_field_source::forwarded)` 使用协议层接收/转发语义，不套用自生成字段的发送方限制；分帧与歧义校验不放松 |
-| 即时 1xx | `.on_informational(task<void>(http_status_code, span<const http_header>, stop_token))` 按线序等待每个中间响应；字段借用到回调完成，不必等待最终响应头 |
-| 每请求阶段超时 | `.timeouts(http_client_phase_timeouts)` 分别覆盖 `connect_`、`read_`、`write_`、`acquire_`；默认继承，`http_client_timeout_override::after(duration)` 替换，`disabled()` 只禁用该阶段 |
-| 独立探测连接 | `.fresh_connection()` 使用不借用、也不归还业务复用池的物理连接，支持 HTTP/1、HTTP/2、HTTP/3 |
+| 原样编码流 | origin 的 `decode_content_ = false`，或请求 `.configure({.decode_content_ = false})`：保留 `Content-Encoding` / `Content-Length`，不等待完整正文便交付首块；默认仍自动解码 |
+| 转发字段 | `.configure({.field_source_ = http_request_field_source::forwarded})` 使用协议层接收/转发语义，不套用自生成字段的发送方限制；分帧与歧义校验不放松 |
+| 即时 1xx | `configure` 的 `informational_`（`move_only_function<task<void>(http_status_code, span<const http_header>, stop_token)>`） 按线序等待每个中间响应；字段借用到回调完成，不必等待最终响应头 |
+| 每请求阶段超时 | `configure` 的 `timeouts_` 分别覆盖 `connect_`、`read_`、`write_`、`acquire_`；默认继承，`http_client_timeout_override::after(duration)` 替换，`disabled()` 只禁用该阶段 |
+| 独立探测连接 | `.configure({.fresh_connection_ = true})` 使用不借用、也不归还业务复用池的物理连接，支持 HTTP/1、HTTP/2、HTTP/3 |
 | 统一请求配置 | `.configure(http_client_request_options)` 设置上述请求策略；CONNECT 构造器也提供该入口 |
 | DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析 alias 拨号名。`dns_refresh_interval_` 每周期只重新解析仍有存活连接的拨号域名（含请求级 `dial_host_`，IP 字面量不查询，无连接不发查询），受 worker 级并发上限约束；答案不再包含连接所用地址时退役该连接。`stats().dns_refreshes_` 计数后台查询 |
 | 定向断连 | handle 的 `close_connection(id)` 按实际物理连接 ID 关闭，旧 ID 不会命中新连接；共享多路复用连接上的流一并终止 |

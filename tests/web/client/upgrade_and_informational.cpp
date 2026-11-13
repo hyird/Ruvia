@@ -133,12 +133,12 @@ TEST(Ruvia, http1_client_generic_upgrade_preserves_early_binary_bytes_and_caller
                     .header("Upgrade", protocol)
                     .header("Sec-WebSocket-Protocol", "caller-owned")
                     .header("Sec-WebSocket-Key", "caller-owned-key");
-                request.on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header>,
-                                             ruvia::stop_token) -> ruvia::task<void> {
+                request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header>,
+                                                         ruvia::stop_token) -> ruvia::task<void> {
                     EXPECT_EQ(status.value(), 103);
                     ++informational_count;
                     co_return;
-                });
+                }});
                 auto opened = co_await request.upgrade();
                 EXPECT_EQ(opened.response(), nullptr);
                 if (opened.tunnel() == nullptr) {
@@ -206,7 +206,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejects_invalid_switch_agreement) {
                         result.tunnel()->abort();
                     }
                 } catch (const ruvia::http_client_error& error) {
-                    rejected = error.code() == ruvia::http_client_error::code_type::protocol_error;
+                    rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_error);
                 }
                 EXPECT_TRUE(rejected);
             });
@@ -225,8 +225,8 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
             bool returned = false;
             std::exception_ptr failure;
             auto request = client.client().get("/hints");
-            request.on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header> headers,
-                                         ruvia::stop_token stop) -> ruvia::task<void> {
+            request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> headers,
+                                                     ruvia::stop_token stop) -> ruvia::task<void> {
                 EXPECT_FALSE(stop.stop_requested());
                 statuses.push_back(status.value());
                 EXPECT_EQ(headers.size(), std::size_t{1});
@@ -236,7 +236,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
                 if (!headers.empty()) {
                     EXPECT_EQ(headers.front().value(), expected);
                 }
-            });
+            }});
             const auto send = [&]() -> ruvia::task<void> {
                 try {
                     auto response = co_await request.send();
@@ -274,11 +274,11 @@ TEST(Ruvia, http1_client_informational_callback_failure_terminates_exchange) {
         "HTTP/1.1 103 Early Hints\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
         [](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
             auto request = client.client().get("/callback-failure");
-            request.on_informational([](ruvia::http_status_code, std::span<const ruvia::http_header>,
-                                         ruvia::stop_token) -> ruvia::task<void> {
+            request.configure({.informational_ = [](ruvia::http_status_code, std::span<const ruvia::http_header>,
+                                                     ruvia::stop_token) -> ruvia::task<void> {
                 throw std::runtime_error("informational callback failed");
                 co_return;
-            });
+            }});
             bool failed = false;
             try {
                 auto response = co_await request.send();
@@ -339,14 +339,14 @@ TEST(Ruvia, http1_client_informational_callback_observes_deadline_and_explicit_s
                 bool callback_entered = false;
                 bool completed = false;
                 std::exception_ptr failure;
-                std::optional<ruvia::http_client_error::code_type> code;
-                request.on_informational([&](ruvia::http_status_code, std::span<const ruvia::http_header>,
-                                             ruvia::stop_token token) -> ruvia::task<void> {
+                std::optional<std::error_code> code;
+                request.configure({.informational_ = [&](ruvia::http_status_code, std::span<const ruvia::http_header>,
+                                                         ruvia::stop_token token) -> ruvia::task<void> {
                     callback_entered = true;
                     entered.notify();
                     const auto result = co_await ruvia::sleep_for(worker, std::chrono::seconds(2), token);
                     callback_stopped = result == ruvia::timer_sleep_result::stop_requested && token.stop_requested();
-                });
+                }});
                 const auto send = [&]() -> ruvia::task<void> {
                     try {
                         auto response = co_await request.send();
@@ -373,8 +373,8 @@ TEST(Ruvia, http1_client_informational_callback_observes_deadline_and_explicit_s
                 }
                 EXPECT_TRUE(callback_entered);
                 EXPECT_TRUE(callback_stopped);
-                EXPECT_EQ(code, deadline ? ruvia::http_client_error::code_type::timeout
-                                         : ruvia::http_client_error::code_type::cancelled);
+                EXPECT_EQ(code, deadline ? std::make_error_code(std::errc::timed_out)
+                                         : std::make_error_code(std::errc::operation_canceled));
             });
     }
 }
@@ -442,7 +442,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
         std::exception_ptr failure;
         bool saw_callback = false;
         bool completed = false;
-        std::optional<ruvia::http_client_error::code_type> error_code;
+        std::optional<std::error_code> error_code;
         const auto run = [&]() -> ruvia::task<void> {
             const auto url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
             ruvia::http_client client(attachment.loop(),
@@ -453,8 +453,8 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
             std::string content(content_bytes, 'b');
             request.body(content);
             std::string().swap(content);
-            request.on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header>,
-                                         ruvia::stop_token token) -> ruvia::task<void> {
+            request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header>,
+                                                     ruvia::stop_token token) -> ruvia::task<void> {
                 EXPECT_EQ(status.value(), 103);
                 EXPECT_LT(received_body, content_bytes);
                 EXPECT_LT(handle.stats().plaintext_bytes_sent_, content_bytes);
@@ -466,7 +466,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
                 } else {
                     drain_gate.cancel();
                 }
-            });
+            }});
             const auto send = [&]() -> ruvia::task<void> {
                 try {
                     auto response = co_await request.send();
@@ -514,7 +514,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
         }
         EXPECT_TRUE(saw_callback);
         if (expected == outcome::cancel) {
-            EXPECT_EQ(error_code, ruvia::http_client_error::code_type::cancelled);
+            EXPECT_EQ(error_code, std::make_error_code(std::errc::operation_canceled));
         } else {
             EXPECT_FALSE(error_code.has_value());
         }

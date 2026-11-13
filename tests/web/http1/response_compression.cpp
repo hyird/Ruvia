@@ -403,7 +403,7 @@ TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) 
 TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io, compressing_server());
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -433,7 +433,7 @@ TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
     ASSERT_NE(body, nullptr);
     EXPECT_EQ(*body, small_body);
     server.finish();
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
 }
 
 TEST(Ruvia, http1_compression_failure_preserves_identity_or_returns_typed_error) {

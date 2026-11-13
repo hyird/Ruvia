@@ -81,7 +81,7 @@ prepare_http1_request_head(
     if (connect_udp) {
         const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));
         if (!authority) {
-            throw http_client_error(http_client_error::code_type::invalid_request, "invalid CONNECT-UDP authority");
+            throw http_client_error(make_error_code(http_client_errc::invalid_request), "invalid CONNECT-UDP authority");
         }
         const http_origin_options options{.host_ = authority->host(), .port_ = authority->port()};
         origin = pool.config().scheme_ == http_scheme::https ? http_origin_view::https(options)
@@ -154,7 +154,7 @@ prepare_http1_request_head(
 }
 
 [[noreturn]] void throw_body_timeout() {
-    throw http_client_error(http_client_error::code_type::timeout, "HTTP/1 response body decoding timed out");
+    throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/1 response body decoding timed out");
 }
 
 // The parser validates the exact offered protocols and Connection options;
@@ -173,7 +173,7 @@ void publish_body_progress(http_client_response_state& state_value,
     if (const auto* body = decoded.output()) {
         if (!state_value.append_received_body(body->bytes(), max_response_bytes)) {
             throw http_client_error(
-                http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
+                make_error_code(http_client_errc::response_too_large), "HTTP response exceeds configured byte limit");
         }
     } else if (const auto* trailers = decoded.trailers()) {
         const auto fields = trailers->fields();
@@ -182,16 +182,17 @@ void publish_body_progress(http_client_response_state& state_value,
             state_value.trailers_.emplace_back(field.name(), field.value(), state_value.resource_);
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
-        throw http_client_error(http_client_error::code_type::protocol_error,
+        throw http_client_error(make_error_code(http_client_errc::protocol_error),
             http1_client_response_body_error_message(failure->error()));
     } else if (decoded.decoder_failure() != nullptr) {
-        throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/1 response body decoder failed");
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/1 response body decoder failed");
     }
 }
 
 }  // namespace
 
 task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout) {
+    response_->request_written_ = true;
     const auto written =
         co_await connection_.transport_.write(parts, timeout.constrained_by(response_->effective_write_timeout_));
     if (!written.ok()) {
@@ -251,7 +252,7 @@ task<client_transport_result> http1_client_exchange::read_append(
 task<void> http1_client_exchange::run(
     const http_client_request_storage& request, const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     if (!request.is_upgrade() && !request.tunnel_protocol().empty() && !request.udp_tunnel() && request.websocket() == nullptr) {
-        throw http_client_error(http_client_error::code_type::protocol_unavailable, "Extended CONNECT requires HTTP/2");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "Extended CONNECT requires HTTP/2");
     }
     response_ = &state_value;
     auto& connection = connection_;
@@ -282,7 +283,7 @@ task<void> http1_client_exchange::run(
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
-        throw http_client_error(http_client_error::code_type::invalid_request,
+        throw http_client_error(make_error_code(http_client_errc::invalid_request),
             failure != nullptr
                 ? http1_client_request_prepare_error_message(*failure)
                 : std::string_view("HTTP request head is too large"));
@@ -364,7 +365,7 @@ task<void> http1_client_exchange::run(
     // early-response close. Preserve its callback/protocol failure as well.
     // Timeout, cancellation, TLS and local write failures still fail both lanes.
     const bool receive_decides_write = immediate_content && writer_failure &&
-                                       http_client_failure_code(writer_failure) == http_client_error::code_type::io_error;
+                                       http_client_failure_code(writer_failure) == make_error_code(http_client_errc::io_error);
     if (writer_failure && !receive_decides_write) {
         std::rethrow_exception(writer_failure);
     }
@@ -382,20 +383,20 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     while (!head) {
         connection_.throw_if_aborted();
         if (timeout.expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP response head timed out");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP response head timed out");
         }
         auto parse_result = parser.parse(read_buffer.view());
         if (parse_result.failure()) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
+            throw http_client_error(make_error_code(http_client_errc::protocol_error),
                 http1_client_response_parse_error_message(*parse_result.failure()));
         }
         if (parse_result.need_more()) {
             if (read_buffer.size() >= max_http_header_bytes) {
-                throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP response head is too large");
             }
             if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout, !inactivity_bound_)).ok()) {
                 throw http_client_error(
-                    http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
+                    make_error_code(http_client_errc::io_error), "upstream closed before the HTTP response head");
             }
             restart_inactivity();
             continue;
@@ -422,7 +423,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             websocket->key_, websocket->negotiation_, *head);
         const auto* selected = std::get_if<websocket_client_negotiation_result_view>(&negotiated);
         if (selected == nullptr) {
-            throw http_client_error(http_client_error::code_type::handshake_rejected,
+            throw http_client_error(make_error_code(http_client_errc::handshake_rejected),
                 "invalid HTTP/1 WebSocket handshake response", head->head().status());
         }
         websocket->selected_subprotocol_ = selected->selected_subprotocol_;
@@ -448,7 +449,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     stop_inactivity();
     const bool tunnel_opened = opens_tunnel(request, *head);
     if (!tunnel_opened && (plan.connect_tunnel() != nullptr || plan.protocol_upgrade() != nullptr)) {
-        throw http_client_error(http_client_error::code_type::protocol_error,
+        throw http_client_error(make_error_code(http_client_errc::protocol_error),
             "HTTP tunnel and protocol upgrade responses require a dedicated API");
     }
     const http_client_final_head final_head{.status_ = head->head().received_status(),
@@ -533,7 +534,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         // unauthenticated: an attacker could cut a close-delimited body short
         // (RFC 9112 §9.8). Every other framing still needed bytes here too.
         if (read.error_ == asio::ssl::error::stream_truncated) {
-            throw http_client_error(http_client_error::code_type::io_error,
+            throw http_client_error(make_error_code(http_client_errc::io_error),
                 "upstream closed the TLS connection without close_notify");
         }
         eof = !read.ok();
@@ -577,7 +578,7 @@ task<void> http1_client_exchange::wait_for_body_space(
             throw_body_timeout();
         }
         if (state_value.abandoned_) {
-            throw http_client_error(http_client_error::code_type::cancelled, "HTTP response body was abandoned");
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP response body was abandoned");
         }
     }
 }
@@ -629,8 +630,8 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
             restart_inactivity();
             connection_.throw_if_aborted();
             if (error) {
-                throw http_client_error(secure && is_tls_error(error) ? http_client_error::code_type::tls_failed
-                                                                      : http_client_error::code_type::io_error,
+                throw http_client_error(secure && is_tls_error(error) ? make_error_code(http_client_errc::tls_failed)
+                                                                      : make_error_code(http_client_errc::io_error),
                     error_code_text(error));
             }
             if (ending == http_stream_end::end) {
@@ -690,7 +691,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                 connection.throw_if_aborted();
             }
             if (state_value.abandoned_) {
-                throw http_client_error(http_client_error::code_type::cancelled, "CONNECT tunnel abandoned");
+                throw http_client_error(std::make_error_code(std::errc::operation_canceled), "CONNECT tunnel abandoned");
             }
             if (!connection.connected_ || writer_failure) {
                 break;
@@ -717,7 +718,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                 // without close_notify leaves the tunnel end unauthenticated
                 // (RFC 8446 section 6.1), so it is a failure, not an orderly end.
                 if (read.error_ == asio::ssl::error::stream_truncated) {
-                    throw http_client_error(http_client_error::code_type::io_error,
+                    throw http_client_error(make_error_code(http_client_errc::io_error),
                         "upstream closed the TLS connection without close_notify");
                 }
                 state_value.tunnel_->receive_ended_ = true;
@@ -761,7 +762,7 @@ task<void> http1_client_exchange::write_immediate(std::span<const asio::const_bu
         failure = std::current_exception();
         // A plain write failure can race a valid final response in the other
         // TCP direction; let its framing decide. Other failures stop the reader.
-        if (http_client_failure_code(failure) != http_client_error::code_type::io_error) {
+        if (http_client_failure_code(failure) != make_error_code(http_client_errc::io_error)) {
             connection_.close();
         }
     }
@@ -789,7 +790,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             }
             connection_.throw_if_aborted();
             if (timeout.expired()) {
-                throw http_client_error(http_client_error::code_type::timeout, "HTTP upload timed out");
+                throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP upload timed out");
             }
             if (!upload.content_released_ || (!upload.output_.chunk_ready_ && !upload.output_.end_requested_)) {
                 co_await upload.output_.data_.wait();
@@ -800,7 +801,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             if (upload.output_.chunk_ready_) {
                 const auto chunk = writer.plan_chunk(std::span<const char>(upload.output_.chunk_.data(), upload.output_.chunk_.size()));
                 if (chunk.index() != 0) {
-                    throw http_client_error(http_client_error::code_type::invalid_request, "HTTP upload content length mismatch");
+                    throw http_client_error(make_error_code(http_client_errc::invalid_request), "HTTP upload content length mismatch");
                 }
                 const auto& planned = std::get<0>(chunk);
                 // The write lane has its own deadline, so the concurrent
@@ -836,7 +837,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             const auto ending = writer.plan_finish(finish_buffer, trailers.view());
             if (ending.index() != 0) {
                 throw http_client_error(
-                    http_client_error::code_type::invalid_request, "HTTP upload trailer or final length rejected");
+                    make_error_code(http_client_errc::invalid_request), "HTTP upload trailer or final length rejected");
             }
             struct completion_guard final {
                 http_client_upload_state& upload_;
@@ -871,7 +872,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
         // request errors and explicit abandonment still terminate both lanes.
         const bool preserve_response = !state_value.abandoned_ &&
                                        connection_.transport_.abort_reason() == client_abort_reason::none &&
-                                       http_client_failure_code(upload_failure) == http_client_error::code_type::io_error;
+                                       http_client_failure_code(upload_failure) == make_error_code(http_client_errc::io_error);
         if (preserve_response) {
             upload.failure_ = upload_failure;
             if (!state_value.complete_ && !upload.output_.stopped_) {

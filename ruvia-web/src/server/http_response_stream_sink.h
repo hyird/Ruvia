@@ -693,7 +693,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
                                                : reported_failure->exception();
                 if (monitor_failure != prior_failure) {
                     d.options_.connection_failure_.invoke(
-                        d.base_route_services_.get_conn_info().remote().address(), monitor_failure);
+                        d.base_route_services_.remote_address(), monitor_failure);
                 }
             } else {
                 escaped_failure = monitor_failure;
@@ -713,8 +713,11 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     auto& result_value = *dispatched;
 
     if (const auto* failed = result_value.failed_after_commit()) {
+        if (auto* lifecycle = d.base_route_services_.connection_lifecycle_value()) {
+            lifecycle->note_exception(failed->exception());
+        }
         d.options_.connection_failure_.invoke(
-            d.base_route_services_.get_conn_info().remote().address(), failed->exception());
+            d.base_route_services_.remote_address(), failed->exception());
         co_return http1_session_request_completion::make_truncated_stream(
             response_sink.connection_plan(), failed->status());
     }
@@ -729,6 +732,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     }
 
     if (auto* recovered = result_value.recovered_failure()) {
+        d.base_route_services_.set_connection_close_reason(connection_close_reason::handler_error);
         d.response_ = std::move(*recovered).take_response();
         d.scanner_entry_.touch();
         co_return close_with_framework_response(d.response_, stream_plan.request_connection_plan());

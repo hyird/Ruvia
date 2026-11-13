@@ -61,7 +61,10 @@ public:
         return stop_token_;
     }
     // Safe from any thread, at any point in the lifecycle.
-    [[nodiscard]] http_server_stats stats() const noexcept;
+    [[nodiscard]] http_server_stats stats() const;
+    [[nodiscard]] std::shared_ptr<connection_count> listener_connections(const asio::ip::tcp::endpoint& endpoint) const {
+        return connections_.listener_connections(endpoint);
+    }
     [[nodiscard]] web_worker_handle web_worker() const;
     // Owner thread, before admitting this run's first routed listener.
     void adopt_route_rate_limiter(rate_limiter& prepared) noexcept {

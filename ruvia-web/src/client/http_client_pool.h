@@ -49,7 +49,7 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 // connection only after a plain I/O failure (TLS failures, timeouts and
 // cancellation excluded), for an idempotent request (RFC 9110 section 9.2.2)
 // whose content is buffered, before any response head was published.
-[[nodiscard]] bool can_retry_reused_connection_request(std::optional<http_client_error::code_type> failure,
+[[nodiscard]] bool can_retry_reused_connection_request(std::optional<std::error_code> failure,
     const http_client_request_storage& request, const http_client_response_state& response) noexcept;
 
 // One origin client on one worker: request admission and buffering limits,
@@ -148,6 +148,9 @@ public:
     }
     [[nodiscard]] task_scope& tasks() noexcept {
         return background_tasks_;
+    }
+    [[nodiscard]] stop_token pool_stop_token() const noexcept {
+        return dns_stop_.token();
     }
     [[nodiscard]] const std::shared_ptr<http_client_cancellation_target>& cancellation_target() const noexcept {
         return cancellation_target_;

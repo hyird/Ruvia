@@ -82,7 +82,7 @@ public:
     // the Windows acceptor), for datagrams handed between them. Its receive
     // loop and connections run in `tasks`, its listener's scope.
     http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
-        asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks);
+        asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks, connection_count& listener_connections);
     ~http3_endpoint();
     http3_endpoint(const http3_endpoint&) = delete;
     http3_endpoint& operator=(const http3_endpoint&) = delete;
@@ -167,6 +167,7 @@ private:
     asio::ip::udp::endpoint local_endpoint_;
     std::size_t listener_index_;
     task_scope& tasks_;
+    connection_count& listener_connections_;
 #if !defined(_WIN32)
     asio::ip::udp::socket socket_;
     // One received datagram at a time; a UDP payload never exceeds it.

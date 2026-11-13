@@ -90,7 +90,7 @@ void complete_request_stream(context& context_value, std::exception_ptr failure)
     if (answer.unexpected_) {
         context_access::services(context_value)
             .connection_failure()
-            .invoke(context_value.conn().remote().address(), failure);
+            .invoke(context_access::services(context_value).remote_address(), failure);
     }
     context_access::set_response(context_value, std::move(answer.response_));
 }

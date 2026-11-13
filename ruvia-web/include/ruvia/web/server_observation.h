@@ -22,18 +22,18 @@ struct server_observation_access;
 // and every view are valid only for the callback.
 class tls_client_hello_record final {
 public:
-    // conn_info::id() of every request the connection carries.
+    // conn_info::connection_id() of every request the connection carries.
     [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return connection_id_;
     }
 
     // The server address the connection reached. For HTTP/3 it is the address
     // the listener's UDP socket is bound to.
-    [[nodiscard]] constexpr conn_info::endpoint local() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint local() const noexcept {
         return local_;
     }
 
-    [[nodiscard]] constexpr conn_info::endpoint remote() const noexcept {
+    [[nodiscard]] constexpr ip_endpoint remote() const noexcept {
         return remote_;
     }
 
@@ -63,16 +63,16 @@ private:
         std::span<const std::byte> message_;
     };
 
-    explicit constexpr tls_client_hello_record(const fields_type& fields) noexcept
+    explicit tls_client_hello_record(const fields_type& fields) noexcept
         : connection_id_(fields.connection_id_),
-          local_(fields.local_address_, fields.local_port_),
-          remote_(fields.remote_address_, fields.remote_port_),
+          local_(ip_address::parse(fields.local_address_).value_or(ip_address{}), fields.local_port_),
+          remote_(ip_address::parse(fields.remote_address_).value_or(ip_address{}), fields.remote_port_),
           message_(fields.message_),
           quic_(fields.quic_) {}
 
     std::uint64_t connection_id_;
-    conn_info::endpoint local_;
-    conn_info::endpoint remote_;
+    ip_endpoint local_;
+    ip_endpoint remote_;
     std::span<const std::byte> message_;
     bool quic_;
 };
@@ -82,7 +82,7 @@ private:
 // callback.
 class http2_input_record final {
 public:
-    // conn_info::id() of every request the connection carries.
+    // conn_info::connection_id() of every request the connection carries.
     [[nodiscard]] constexpr std::uint64_t connection_id() const noexcept {
         return connection_id_;
     }

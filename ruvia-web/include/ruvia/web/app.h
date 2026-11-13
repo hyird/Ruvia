@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/connection_events.h"
@@ -67,10 +68,12 @@ public:
     // route's controller and route middleware. Arguments are retained at
     // registration; route model validators must be declared on their route.
     template <middleware middleware_type, typename... args_types>
-    application& use(args_types&&... args) {
+    application& use(args_types&&... args) & {
         return use_middleware(
             detail::make_owned_middleware_descriptor<middleware_type>(std::forward<args_types>(args)...));
     }
+    template <middleware middleware_type, typename... args_types>
+    application& use(args_types&&...) && = delete;
 
     // Runs the middleware exactly on requests whose path is under the prefix:
     // whole path segments, compared percent-decoded, with trailing slashes
@@ -83,36 +86,48 @@ public:
     // with the separately named scope. A "/" prefix throws
     // std::invalid_argument: use<T>() is the only app-wide spelling.
     template <middleware middleware_type, typename... args_types>
-    application& use_at(const middleware_scope_options& options, args_types&&... args) {
+    application& use_at(const middleware_scope_options& options, args_types&&... args) & {
         return use_middleware(
             detail::make_scoped_app_middleware<middleware_type>(options, std::forward<args_types>(args)...));
     }
+    template <middleware middleware_type, typename... args_types>
+    application& use_at(const middleware_scope_options&, args_types&&...) && = delete;
 
     // One recipe per type; every worker owns an independent instance. A
     // request or posted job only borrows its own worker's instance.
     template <typename state_type, typename factory_type>
-    application& use_worker_state(factory_type&& factory) {
+    application& use_worker_state(factory_type&& factory) & {
         return use_worker_state_definition(
             detail::worker_state_definition::make<state_type>(std::forward<factory_type>(factory)));
     }
+    template <typename state_type, typename factory_type>
+    application& use_worker_state(factory_type&&) && = delete;
 
     template <typename state_type>
-    application& use_worker_state() {
+    application& use_worker_state() & {
         return use_worker_state_definition(detail::make_default_worker_state<state_type>());
     }
+    template <typename state_type>
+    application& use_worker_state() && = delete;
 
     [[nodiscard]] const ruvia::env& env() const noexcept;
-    application& load_dotenv(dotenv_options options = {});
-    application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {});
-    application& server(server_config config);
+    application& load_dotenv(dotenv_options options = {}) &;
+    application& load_dotenv(dotenv_options options = {}) && = delete;
+    application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) &;
+    application& load_dotenv(const std::filesystem::path& path, dotenv_options options = {}) && = delete;
+    application& server(server_config config) &;
+    application& server(server_config config) && = delete;
     // Loads every TLS certificate, private key and client CA bundle of
     // config.tls_ once, here: unreadable files or a wrong key password throw
     // from listen(). The application keeps only the parsed credentials; this
     // call's copy of each private-key password and in-memory PEM text is
     // cleansed before it returns.
-    application& listen(listen_config config);
-    application& listen(std::span<const listen_config> configs);
-    application& listen(std::initializer_list<listen_config> configs);
+    application& listen(listen_config config) &;
+    application& listen(listen_config config) && = delete;
+    application& listen(std::span<const listen_config> configs) &;
+    application& listen(std::span<const listen_config> configs) && = delete;
+    application& listen(std::initializer_list<listen_config> configs) &;
+    application& listen(std::initializer_list<listen_config> configs) && = delete;
     // Replaces the identities (identity_, sni_ and local_addresses_) of the
     // running HTTPS listener `endpoint` names, for TLS over TCP and its
     // HTTP/3 service alike, as listen() would load them; client_certificates_
@@ -136,7 +151,9 @@ public:
     // effect in the order they publish. config's password and PEM copies are
     // owned immediately and cleansed on completion or destruction of the task.
     [[nodiscard]] task<void> replace_tls_identities(
-        worker_handle caller, const listener_endpoint& endpoint, tls_config config);
+        worker_handle caller, const listener_endpoint& endpoint, tls_config config) &;
+    task<void> replace_tls_identities(
+        worker_handle caller, const listener_endpoint& endpoint, tls_config config) && = delete;
     // Adds config's listeners to the running app, validated and loaded as
     // listen() would (an endpoint a listener already serves throws
     // std::invalid_argument), with any inherited_sockets_. Preparation uses
@@ -149,12 +166,15 @@ public:
     // unless the app is running, or when it starts stopping
     // before every worker accepted, and then they are not kept. config's
     // secrets are owned immediately and cleansed when the task completes or is dropped.
-    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config);
+    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config) &;
+    task<void> add_listener(worker_handle caller, listen_config config) && = delete;
     // 与 add_listener 共用事务；全部 worker 已准备后返回未接入的 owning 句柄。
-    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config);
+    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) &;
+    task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) && = delete;
     // 同一业务配置的多个端点必须同批准备；任一失败均回滚整批，旧监听不变。
     // 调用时拥有化全部配置及继承 socket；返回后可释放输入 span 与借用地址。
-    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs);
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) &;
+    task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) && = delete;
     // Removes the running TCP service `endpoint` names (as for
     // replace_tls_identities()), with its HTTP/3 service. Awaiting completes
     // once every worker stopped admitting it, closed its TCP sockets and its
@@ -167,10 +187,18 @@ public:
     // run()s. Concurrent runtime controls take effect one at a time.
     // close_connections_ 同时关闭目标监听的全部连接；会话由独立退休任务
     // join，不在本调用中等待（允许连接自己的处理器发起强制移除）。
-    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {});
+    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) && = delete;
+    // Waits for the serving or latest removed listener's TCP/TLS and QUIC
+    // connections to reach zero. Cancellation/timeout leave connections alone;
+    // stopping the app cancels the wait with operation_canceled.
+    // Unknown endpoints throw std::invalid_argument; requires a running app.
+    [[nodiscard]] task<void> wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options = {}) &;
+    task<void> wait_connections_closed(worker_handle, const listener_endpoint&, operation_options = {}) && = delete;
     // Closes every protocol stream of the connection; false means the ID is
     // no longer live. Application workers may await this control too.
-    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id);
+    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) &;
+    task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) && = delete;
 #ifndef _WIN32
     // Duplicates (dup()) every worker's socket of the running TCP service
     // `endpoint` names, and of its HTTP/3 service, into http_ or https_ and
@@ -182,10 +210,14 @@ public:
     // rules of add_listener() apply. POSIX only: on Windows the acceptor owns
     // a single exclusive socket per service.
     [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(
-        worker_handle caller, const listener_endpoint& endpoint) const;
+        worker_handle caller, const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(
+        worker_handle caller, const listener_endpoint& endpoint) const&& = delete;
 #endif
-    application& document_root(document_root_config config);
-    application& document_root(std::nullptr_t);
+    application& document_root(document_root_config config) &;
+    application& document_root(document_root_config config) && = delete;
+    application& document_root(std::nullptr_t) &;
+    application& document_root(std::nullptr_t) && = delete;
     // Configures the process-wide ordinary-thread pool every worker's event
     // loop borrows for context::run_blocking(), file reads, large
     // buffered-response compression, document-root refreshes and the DNS
@@ -200,17 +232,23 @@ public:
     // TransmitFile, which needs no pool. run() starts the threads before the
     // first request; after workers stop, running callables are not awaited and
     // may finish on the pool's detached state.
-    application& blocking_pool(blocking_pool_options config);
-    application& blocking_pool(std::nullptr_t);
+    application& blocking_pool(blocking_pool_options config) &;
+    application& blocking_pool(blocking_pool_options config) && = delete;
+    application& blocking_pool(std::nullptr_t) &;
+    application& blocking_pool(std::nullptr_t) && = delete;
 
     // The app-wide fallbacks; registering one a second time throws
     // std::invalid_argument instead of silently replacing the first.
-    application& on_error(http_error_handler handler);
-    application& on_not_found(http_not_found_handler handler);
+    application& on_error(http_error_handler handler) &;
+    application& on_error(http_error_handler handler) && = delete;
+    application& on_not_found(http_not_found_handler handler) &;
+    application& on_not_found(http_not_found_handler handler) && = delete;
     // Clearing retires the old handler after releasing the application
     // configuration lock, as on_access() does.
-    application& on_error(std::nullptr_t);
-    application& on_not_found(std::nullptr_t);
+    application& on_error(std::nullptr_t) &;
+    application& on_error(std::nullptr_t) && = delete;
+    application& on_not_found(std::nullptr_t) &;
+    application& on_not_found(std::nullptr_t) && = delete;
     // Path-prefix-scoped fallbacks, the Hono sub-app scoping analog: the
     // deepest matching registered prefix wins, matching on whole path
     // segments ("/api" scopes "/api" and "/api/x", never "/apix") compared
@@ -219,8 +257,10 @@ public:
     // twice ("/api", "/api/", "/%61pi") throws std::invalid_argument instead
     // of silently choosing by call order, and so does the prefix "/", which
     // would shadow the prefix-less form.
-    application& on_error(scoped_error_handler_options options);
-    application& on_not_found(scoped_not_found_handler_options options);
+    application& on_error(scoped_error_handler_options options) &;
+    application& on_error(scoped_error_handler_options options) && = delete;
+    application& on_not_found(scoped_not_found_handler_options options) &;
+    application& on_not_found(scoped_not_found_handler_options options) && = delete;
     // Peers whose forwarding headers name the real client. Accepts addresses
     // and CIDR blocks ("10.0.0.0/8", "2001:db8::/32", "127.0.0.1"); a malformed
     // entry throws std::invalid_argument at configuration time rather than
@@ -234,8 +274,8 @@ public:
     // caller can prepend. A hop that names no IP address (no RFC 7239 `for`,
     // `unknown`, an obfuscated name) ends the walk without naming a client:
     // client() is then the nearest trusted address after it, or remote().
-    application& trusted_proxies(trusted_proxy_config config);
-    application& trusted_proxies(std::nullptr_t);
+    application& trusted_proxies(trusted_proxy_config config) &;
+    application& trusted_proxies(trusted_proxy_config config) && = delete;
 
     // The rate limit every request passes. A route may add its own with
     // ruvia::rate_limit<max, window_ms>; both then apply, so the stricter is what
@@ -244,88 +284,121 @@ public:
     //
     // Worker-local: each worker counts independently, so a deployment with N
     // workers admits up to N times this rule. Size it accordingly.
-    application& rate_limit(rate_limit_config config);
-    application& rate_limit(std::nullptr_t);
+    application& rate_limit(rate_limit_config config) &;
+    application& rate_limit(rate_limit_config config) && = delete;
+    application& rate_limit(std::nullptr_t) &;
+    application& rate_limit(std::nullptr_t) && = delete;
     // Replacement/clearing retires the old target after releasing the application
     // configuration lock, so its destructor may call stop() or query app state.
     // The same retirement rule applies to on_connection_failure().
-    application& on_access(access_log_callback callback);
+    application& on_access(access_log_callback callback) &;
+    application& on_access(access_log_callback callback) && = delete;
     // Observes connections lost to an exception that escaped their session --
     // the failures on_error cannot answer because the response is already
     // committed or the error handler itself failed. Without a listener these
     // are reported to stderr; they are never silently dropped. A peer reset
     // or close, or I/O this server cancelled (stop, timeouts), is a
     // normal end of connection: it is neither delivered here nor counted.
-    application& on_connection_failure(connection_failure_callback callback);
+    application& on_connection_failure(connection_failure_callback callback) &;
+    application& on_connection_failure(connection_failure_callback callback) && = delete;
     // Observes every ClientHello a TLS listener receives, over TCP and for
     // HTTP/3, before certificate selection; a HelloRetryRequest yields a
     // second record. Without a callback the server installs no observer and
     // builds no record. Replacement and clearing follow on_access().
-    application& on_tls_client_hello(tls_client_hello_callback callback);
-    application& on_tls_client_hello(std::nullptr_t);
+    application& on_tls_client_hello(tls_client_hello_callback callback) &;
+    application& on_tls_client_hello(tls_client_hello_callback callback) && = delete;
+    application& on_tls_client_hello(std::nullptr_t) &;
+    application& on_tls_client_hello(std::nullptr_t) && = delete;
     // Observes the decrypted input of every HTTP/2 connection -- TLS with
     // ALPN h2 and cleartext prior knowledge alike -- once per read, before the
     // server parses it. Without a callback no record is built. Replacement
     // and clearing follow on_access().
-    application& on_http2_input(http2_input_callback callback);
-    application& on_http2_input(std::nullptr_t);
+    application& on_http2_input(http2_input_callback callback) &;
+    application& on_http2_input(http2_input_callback callback) && = delete;
+    application& on_http2_input(std::nullptr_t) &;
+    application& on_http2_input(std::nullptr_t) && = delete;
 #if defined(RUVIA_ENABLE_HTTP2)
     // Typed frame and HPACK facts from the protocol parser, in wire order.
-    application& on_http2_frame(http2_frame_callback callback);
-    application& on_http2_frame(std::nullptr_t);
-    application& on_http2_headers(http2_headers_callback callback);
-    application& on_http2_headers(std::nullptr_t);
+    application& on_http2_frame(http2_frame_callback callback) &;
+    application& on_http2_frame(http2_frame_callback callback) && = delete;
+    application& on_http2_frame(std::nullptr_t) &;
+    application& on_http2_frame(std::nullptr_t) && = delete;
+    application& on_http2_headers(http2_headers_callback callback) &;
+    application& on_http2_headers(http2_headers_callback callback) && = delete;
+    application& on_http2_headers(std::nullptr_t) &;
+    application& on_http2_headers(std::nullptr_t) && = delete;
 #endif
     // Serves every listener_dispatch::connection listener (see
     // server_connection and connection_callback); run() throws
     // std::invalid_argument for such a listener without one. Replacement
     // and clearing follow on_access().
-    application& on_connection(connection_callback callback);
-    application& on_connection(std::nullptr_t);
+    application& on_connection(connection_callback callback) &;
+    application& on_connection(connection_callback callback) && = delete;
+    application& on_connection(std::nullptr_t) &;
+    application& on_connection(std::nullptr_t) && = delete;
     // Admission precedes TLS/HTTP processing. Open may return owned per-
     // connection state; close runs after retirement on the owning worker.
-    application& on_connection_admission(connection_admission_callback callback);
-    application& on_connection_admission(std::nullptr_t);
-    application& on_connection_open(connection_open_callback callback);
-    application& on_connection_open(std::nullptr_t);
-    application& on_connection_close(connection_close_callback callback);
-    application& on_connection_close(std::nullptr_t);
+    application& on_connection_admission(connection_admission_callback callback) &;
+    application& on_connection_admission(connection_admission_callback callback) && = delete;
+    application& on_connection_admission(std::nullptr_t) &;
+    application& on_connection_admission(std::nullptr_t) && = delete;
+    application& on_connection_open(connection_open_callback callback) &;
+    application& on_connection_open(connection_open_callback callback) && = delete;
+    application& on_connection_open(std::nullptr_t) &;
+    application& on_connection_open(std::nullptr_t) && = delete;
+    application& on_connection_close(connection_close_callback callback) &;
+    application& on_connection_close(connection_close_callback callback) && = delete;
+    application& on_connection_close(std::nullptr_t) &;
+    application& on_connection_close(std::nullptr_t) && = delete;
     // Serves every listener_dispatch::request_stream listener (see
     // request_stream and request_stream_callback); run() throws
     // std::invalid_argument for such a listener without one. Replacement
     // and clearing follow on_access().
-    application& on_request_stream(request_stream_callback callback);
-    application& on_request_stream(std::nullptr_t);
+    application& on_request_stream(request_stream_callback callback) &;
+    application& on_request_stream(request_stream_callback callback) && = delete;
+    application& on_request_stream(std::nullptr_t) &;
+    application& on_request_stream(std::nullptr_t) && = delete;
     // Runs on the run() caller after worker capabilities are ready, before
     // TCP admission. All hooks must succeed before serving; failure or a
     // stop request rolls back startup. Ready workers can execute posted jobs.
-    application& on_start(app_hook hook);
+    application& on_start(app_hook hook) &;
+    application& on_start(app_hook hook) && = delete;
     // Runs on the run() caller once every worker was told to stop -- admission
     // closed and its connections closing, with handlers possibly still
     // unwinding -- before runtime join. Also runs when published startup is
     // cancelled or a start hook fails. A hook must not throw: a failure is
     // reported, not rethrown.
-    application& on_stop(app_hook hook);
+    application& on_stop(app_hook hook) &;
+    application& on_stop(app_hook hook) && = delete;
     // Clearing retires the old hooks after releasing the application
     // configuration lock, as on_access() does.
-    application& on_start(std::nullptr_t);
-    application& on_stop(std::nullptr_t);
+    application& on_start(std::nullptr_t) &;
+    application& on_start(std::nullptr_t) && = delete;
+    application& on_stop(std::nullptr_t) &;
+    application& on_stop(std::nullptr_t) && = delete;
 #ifdef RUVIA_ENABLE_DATABASE
-    application& database(db_registration_config config);
-    application& database(std::nullptr_t);
+    application& database(db_registration_config config) &;
+    application& database(db_registration_config config) && = delete;
+    application& database(std::nullptr_t) &;
+    application& database(std::nullptr_t) && = delete;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    application& redis(redis_registration_config config);
-    application& redis(std::nullptr_t);
+    application& redis(redis_registration_config config) &;
+    application& redis(redis_registration_config config) && = delete;
+    application& redis(std::nullptr_t) &;
+    application& redis(std::nullptr_t) && = delete;
 #endif
-    application& client(http_client_config config);
-    application& client(std::nullptr_t);
+    application& client(http_client_config config) &;
+    application& client(http_client_config config) && = delete;
+    application& client(std::nullptr_t) &;
+    application& client(std::nullptr_t) && = delete;
     // Serves until stop(); returns after every worker retired. May run again
     // after it returns. The first preparation, startup, or worker failure is
     // rethrown to the caller, who is responsible for printing it; run() does
     // not report it. Failures it supersedes are reported to stderr, with
     // equivalent worker failures collapsed into one line with their count.
-    void run();
+    void run() &;
+    void run() && = delete;
     // Safe from any thread. A stop() issued while the app is not running is
     // kept for the next run(), which then returns without serving. A stop
     // during startup rolls it back at once. A serving app stops by direct
@@ -336,11 +409,12 @@ public:
     // CONNECTION_CLOSE(H3_NO_ERROR) -- and handlers observe their stop token
     // (context::stop_token()); then worker I/O stops before background
     // operations are joined.
-    void stop();
+    void stop() &;
+    void stop() && = delete;
     // HTTP serving counters summed across every worker. All zero before run()
     // starts them and after it returns. Safe from any thread, including from a
     // stop hook.
-    [[nodiscard]] http_server_stats http_stats() const;
+    [[nodiscard]] http_server_stats stats() const;
     // The blocking pool's counters, or all zero when no pool is configured or
     // the app is not running. Queue depth and the rejected count are what a
     // deployment sizes thread_count/queue_capacity from. Safe from any thread.
@@ -354,8 +428,8 @@ public:
 private:
     friend application& app();
 
-    application& use_middleware(detail::owned_middleware_descriptor descriptor);
-    application& use_worker_state_definition(detail::worker_state_definition definition);
+    application& use_middleware(detail::owned_middleware_descriptor descriptor) &;
+    application& use_worker_state_definition(detail::worker_state_definition definition) &;
 
     application();
     ~application();

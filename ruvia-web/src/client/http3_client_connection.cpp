@@ -44,19 +44,19 @@
 
 namespace ruvia::detail {
 namespace {
-using error_code = http_client_error::code_type;
+using error_code = std::error_code;
 using clock_type = std::chrono::steady_clock;
 void initialize_quic_crypto() {
     static const bool initialized = ngtcp2_crypto_ossl_init() == 0;
     if (!initialized) {
-        throw http_client_error(error_code::tls_failed, "failed to initialize the QUIC TLS backend");
+        throw http_client_error(make_error_code(http_client_errc::tls_failed), "failed to initialize the QUIC TLS backend");
     }
 }
 ngtcp2_cid random_cid() {
     ngtcp2_cid cid{};
     cid.datalen = 18;
     if (!fill_random_bytes(std::span<unsigned char>(cid.data, cid.datalen))) {
-        throw http_client_error(error_code::tls_failed, "QUIC connection ID generation failed");
+        throw http_client_error(make_error_code(http_client_errc::tls_failed), "QUIC connection ID generation failed");
     }
     return cid;
 }
@@ -77,12 +77,12 @@ http3_quic_crypto_callbacks client_crypto_callbacks() noexcept {
 }
 void require_accepted(http3_submit_status status) {
     if (status != http3_submit_status::accepted) {
-        throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
     }
 }
 void require_accepted(http3_finish_status status) {
     if (status != http3_finish_status::accepted) {
-        throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
     }
 }
 [[nodiscard]] bool can_fallback_from_http3(std::exception_ptr failure, bool fallback, stop_token stop,
@@ -91,9 +91,9 @@ void require_accepted(http3_finish_status status) {
         return false;
     }
     const auto code = http_client_failure_code(std::move(failure));
-    return code == error_code::io_error || code == error_code::connect_failed ||
-           code == error_code::resolve_failed || code == error_code::tls_failed ||
-           code == error_code::protocol_unavailable || code == error_code::timeout;
+    return code == make_error_code(http_client_errc::io_error) || code == make_error_code(http_client_errc::connect_failed) ||
+           code == make_error_code(http_client_errc::resolve_failed) || code == make_error_code(http_client_errc::tls_failed) ||
+           code == make_error_code(http_client_errc::protocol_unavailable) || code == std::make_error_code(std::errc::timed_out);
 }
 struct free_ticket final {
     void operator()(SSL_SESSION* value) const noexcept {
@@ -132,7 +132,7 @@ http3_client_tls::http3_client_tls(http_client_pool& pool)
     configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
     if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1 ||
         SSL_CTX_set_max_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
-        throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
+        throw http_client_error(make_error_code(http_client_errc::tls_failed), "QUIC requires TLS 1.3");
     }
     SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
 }
@@ -314,7 +314,7 @@ public:
             item->signal_.notify();
         }
     }
-    void close(error_code code = error_code::io_error, const stream* preserve = nullptr) noexcept {
+    void close(error_code code = make_error_code(http_client_errc::io_error), const stream* preserve = nullptr) noexcept {
         open_ = false;
         expiry_.cancel();
         idle_timer_.cancel();
@@ -332,7 +332,7 @@ public:
             if (item->id_ >= 0 || item->response_.informational_active_) {
                 item->response_.request_informational_stop();
             }
-            if (code != error_code::closing) {
+            if (code != make_error_code(http_client_errc::closing)) {
                 const auto* output = item->response_.output();
                 if ((item->done_ && (!output || output->ended_ || output->stopped_ || item->request_end_flushed_)) || item->retry_) {
                     continue;
@@ -340,7 +340,7 @@ public:
                 if (item->id_ < 0 && connecting_stream_ != item) {
                     continue;
                 }
-                if (draining_ && code == error_code::io_error && !item->response_.head_ready_ &&
+                if (draining_ && code == make_error_code(http_client_errc::io_error) && !item->response_.head_ready_ &&
                     item->response_.output() == nullptr) {
                     item->retry_ = true;
                     continue;
@@ -381,19 +381,19 @@ public:
             throw http_client_error(*item.error_, http_client_error_message(*item.error_));
         }
         if (item.response_.abandoned_) {
-            throw http_client_error(error_code::cancelled, "HTTP/3 response abandoned");
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 response abandoned");
         }
         if (item.timeout_.expired()) {
-            throw http_client_error(error_code::timeout, "HTTP/3 operation timed out");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/3 operation timed out");
         }
         if (retired_) {
-            throw http_client_error(error_code::closing, "HTTP/3 client stopped");
+            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 client stopped");
         }
     }
     void schedule(stream& item) {
         item.timer_.schedule_with_retry(
             pool_.worker(), item.timeout_,
-            [&item]() noexcept { item.owner_.cancel(item, error_code::timeout); },
+            [&item]() noexcept { item.owner_.cancel(item, std::make_error_code(std::errc::timed_out)); },
             [&item](std::exception_ptr failure) noexcept {
                 item.failure_ = std::move(failure);
                 item.signal_.notify();
@@ -410,7 +410,7 @@ public:
         response.data_signal_.notify();
     }
     static void fail_closed_stream(stream& item, std::optional<http3_error_code> error) noexcept {
-        item.error_ = error == http3_error_code::message_error ? error_code::protocol_error : error_code::io_error;
+        item.error_ = error == http3_error_code::message_error ? make_error_code(http_client_errc::protocol_error) : make_error_code(http_client_errc::io_error);
         if (auto* output = item.response_.output()) {
             output->stop();
         }
@@ -606,7 +606,7 @@ public:
             return;
         }
         if (!response.append_received_body(bytes, pool_.config().max_response_bytes_)) {
-            throw http_client_error(error_code::response_too_large, "HTTP/3 response exceeds byte budget");
+            throw http_client_error(make_error_code(http_client_errc::response_too_large), "HTTP/3 response exceeds byte budget");
         }
         if (response.collect_all_ || !credit.valid()) {
             read_progress(item);
@@ -752,7 +752,7 @@ public:
             response->failure_ = failure;
             if (item && &item->response_ == response) {
                 item->failure_ = failure;
-                cancel(*item, error_code::cancelled);
+                cancel(*item, std::make_error_code(std::errc::operation_canceled));
             }
         } else if (item && &item->response_ == response) {
             try {
@@ -760,7 +760,7 @@ public:
             } catch (...) {
                 response->failure_ = std::current_exception();
                 item->failure_ = response->failure_;
-                cancel(*item, error_code::cancelled);
+                cancel(*item, std::make_error_code(std::errc::operation_canceled));
             }
         }
         response->head_signal_.notify();
@@ -773,7 +773,7 @@ public:
         if (early_started_ && !early_rejected_ && quic_->early_data_rejected()) {
             early_rejected_ = true;
             if (quic_->reject_early_data() != http3_quic_status::accepted) {
-                throw http_client_error(error_code::protocol_error, "HTTP/3 early-data reset failed");
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 early-data reset failed");
             }
             for (auto* item : streams_) {
                 if (item->early_) {
@@ -835,7 +835,7 @@ public:
     }
     void check_quic(http3_quic_status status) {
         if (status != http3_quic_status::accepted && status != http3_quic_status::would_block) {
-            throw http_client_error(tls_ && SSL_get_verify_result(tls_.get()) != X509_V_OK ? error_code::tls_failed : error_code::io_error, "QUIC connection failed");
+            throw http_client_error(tls_ && SSL_get_verify_result(tls_.get()) != X509_V_OK ? make_error_code(http_client_errc::tls_failed) : make_error_code(http_client_errc::io_error), "QUIC connection failed");
         }
     }
     void step_quic(http3_quic_status status) {
@@ -930,7 +930,7 @@ public:
                     }
                     const auto remote = http3_udp_endpoint(packet_.path_.path.remote);
                     if (!remote) {
-                        throw http_client_error(error_code::protocol_error, "invalid QUIC output path");
+                        throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid QUIC output path");
                     }
                     auto* output = socket_.get();
                     if (packet_.path_.path.local.addrlen == old_local_.size() &&
@@ -1029,10 +1029,10 @@ public:
             while (open_ && has_active_streams()) {
                 check(item);
                 if (stop.stop_requested()) {
-                    throw http_client_error(error_code::cancelled, "HTTP/3 connection drain wait cancelled");
+                    throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 connection drain wait cancelled");
                 }
                 if (drain_expired || acquire_timeout.expired()) {
-                    throw http_client_error(error_code::timeout, "HTTP/3 connection drain wait timed out");
+                    throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/3 connection drain wait timed out");
                 }
                 co_await changed_.wait();
             }
@@ -1046,7 +1046,7 @@ public:
                 }
             }
         } attempt{*this};
-        close(error_code::io_error, &item);
+        close(make_error_code(http_client_errc::io_error), &item);
         while (io_tasks_) {
             check(item);
             co_await changed_.wait();
@@ -1070,7 +1070,7 @@ public:
         if (const auto deadline = bound.deadline()) {
             (void)pool_.worker().schedule_timer(timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
-                    close(error_code::timeout);
+                    close(std::make_error_code(std::errc::timed_out));
                 }
             });
         }
@@ -1080,8 +1080,8 @@ public:
             throw std::logic_error("HTTP/3 connect requires a selected resolver endpoint");
         }
         if (pool_.config().address_validator_ &&
-            !pool_.config().address_validator_(connect_endpoint_->address().to_string(), connect_endpoint_->port())) {
-            throw http_client_error(error_code::resolve_failed, "HTTP/3 dial address rejected");
+            !(*pool_.config().address_validator_)(connect_endpoint_->address().to_string(), connect_endpoint_->port())) {
+            throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP/3 dial address rejected");
         }
         remote_ = *connect_endpoint_;
         socket_ = make_pmr_object<asio::ip::udp::socket>(process_resource(), pool_.io_context());
@@ -1095,11 +1095,11 @@ public:
         tls_.reset(SSL_new(shared_tls_.context_.native_handle()));
         if (!tls_ || prepare_client_tls_stream(*tls_, route_.server_name_, {}) != client_tls_setup_error::none ||
             ngtcp2_crypto_ossl_configure_client_session(tls_.get()) != 0) {
-            throw http_client_error(error_code::tls_failed, "HTTP/3 TLS setup failed");
+            throw http_client_error(make_error_code(http_client_errc::tls_failed), "HTTP/3 TLS setup failed");
         }
         static constexpr std::array<unsigned char, 3> alpn{2, 'h', '3'};
         if (SSL_set_alpn_protos(tls_.get(), alpn.data(), static_cast<unsigned int>(alpn.size())) != 0) {
-            throw http_client_error(error_code::tls_failed, "HTTP/3 ALPN setup failed");
+            throw http_client_error(make_error_code(http_client_errc::tls_failed), "HTTP/3 ALPN setup failed");
         }
         reference_.get_conn = [](ngtcp2_crypto_conn_ref* ref) { return static_cast<session*>(ref->user_data)->quic_->native_handle(); };
         reference_.user_data = this;
@@ -1115,7 +1115,7 @@ public:
         }
         ngtcp2_crypto_ossl_ctx* crypto = nullptr;
         if (ngtcp2_crypto_ossl_ctx_new(&crypto, tls_.get()) != 0) {
-            throw http_client_error(error_code::tls_failed, "HTTP/3 crypto setup failed");
+            throw http_client_error(make_error_code(http_client_errc::tls_failed), "HTTP/3 crypto setup failed");
         }
         crypto_.reset(crypto);
         const auto& config = pool_.config();
@@ -1171,7 +1171,7 @@ public:
             ticket->params_size_ && ticket->settings_valid_ &&
             SSL_SESSION_get_max_early_data(ticket->session_.get()) != 0) {
             if (SSL_set_quic_tls_early_data_enabled(tls_.get(), 1) != 1) {
-                throw http_client_error(error_code::tls_failed, "cannot enable QUIC early data");
+                throw http_client_error(make_error_code(http_client_errc::tls_failed), "cannot enable QUIC early data");
             }
             early_started_ = quic_->start_early_http3(
                                  std::as_bytes(std::span(ticket->params_.data(), ticket->params_size_)),
@@ -1206,7 +1206,7 @@ public:
             co_await changed_.wait();
         }
         if (quic_->handshake_completed() && tls_selected_alpn(*tls_) != "h3") {
-            throw http_client_error(error_code::protocol_unavailable, "peer did not negotiate HTTP/3");
+            throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "peer did not negotiate HTTP/3");
         }
         if (!early_started_) {
             while (!quic_->http3_started()) {
@@ -1262,7 +1262,7 @@ public:
             const auto sent = quic_->http3().submit_data(item.id_, std::as_bytes(std::span(bytes.data(), bytes.size())));
             if (sent.status_ == http3_data_submit_status::closed ||
                 sent.status_ == http3_data_submit_status::invalid_message) {
-                throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 stream operation rejected");
             }
             // backpressured keeps the unconsumed suffix until acknowledgements
             // free stream output budget.
@@ -1393,7 +1393,7 @@ public:
             }
         } catch (const std::bad_alloc&) {
             failure_ = std::current_exception();
-            cancel(error_code::io_error);
+            cancel(make_error_code(http_client_errc::io_error));
         } catch (...) {
             last_failure_ = std::current_exception();
             // A refused/unreachable endpoint advances immediately rather than
@@ -1457,10 +1457,10 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
         }
     } lease{race, acquired.value()};
     if (race.retired_) {
-        throw http_client_error(error_code::closing, "HTTP/3 client is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 client is retired");
     }
     if (response.abandoned_ || stop.stop_requested()) {
-        throw http_client_error(error_code::cancelled, "HTTP/3 endpoint selection cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 endpoint selection cancelled");
     }
     if (session_ && session_->usable()) {
         co_return;
@@ -1491,7 +1491,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
         (void)race.pool_.worker().schedule_timer(deadline_timer, *deadline,
             [&race](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
-                    race.cancel(error_code::timeout);
+                    race.cancel(std::make_error_code(std::errc::timed_out));
                 }
             });
     }
@@ -1507,7 +1507,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
             if (race.reason_ || response.abandoned_ || stop.stop_requested()) {
                 session_->race_signal_ = nullptr;
                 throw http_client_error(
-                    race.retired_ ? error_code::closing : race.reason_.value_or(error_code::cancelled),
+                    race.retired_ ? make_error_code(http_client_errc::closing) : race.reason_.value_or(std::make_error_code(std::errc::operation_canceled)),
                     "HTTP/3 endpoint selection stopped");
             }
             race.retained_ = session_.get();
@@ -1527,7 +1527,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
             throw http_client_error(*race.reason_, "HTTP/3 resolution stopped");
         }
         if (resolved.error_ || (!resolved.literal_ && resolved.addresses_.empty())) {
-            throw http_client_error(error_code::resolve_failed, "HTTP/3 DNS resolution failed");
+            throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP/3 DNS resolution failed");
         }
         std::optional<client_address_sequence<asio::ip::tcp::resolver::results_type>> sequence;
         std::size_t remaining = 0;
@@ -1544,7 +1544,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
         }
         while (!race.winner_ && !race.reason_ && !race.failure_) {
             if (response.abandoned_) {
-                race.cancel(error_code::cancelled);
+                race.cancel(std::make_error_code(std::errc::operation_canceled));
                 break;
             }
             if (race.launch_ready_ && next) {
@@ -1622,7 +1622,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
             if (race.last_failure_) {
                 std::rethrow_exception(race.last_failure_);
             }
-            throw http_client_error(error_code::connect_failed, "no HTTP/3 endpoint completed its handshake");
+            throw http_client_error(make_error_code(http_client_errc::connect_failed), "no HTTP/3 endpoint completed its handshake");
         }
     } catch (...) {
         failure = std::current_exception();
@@ -1674,7 +1674,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
         if (!session_) {
             session_ = std::move(retained);
         }
-        throw http_client_error(race.retired_ ? error_code::closing : race.reason_.value_or(error_code::cancelled),
+        throw http_client_error(race.retired_ ? make_error_code(http_client_errc::closing) : race.reason_.value_or(std::make_error_code(std::errc::operation_canceled)),
             "HTTP/3 endpoint selection stopped");
     }
     if (failure) {
@@ -1683,8 +1683,10 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
         }
         try {
             std::rethrow_exception(failure);
+        } catch (const http_client_error&) {
+            throw;
         } catch (const std::system_error&) {
-            throw http_client_error(error_code::connect_failed, "HTTP/3 endpoint connection failed");
+            throw http_client_error(make_error_code(http_client_errc::connect_failed), "HTTP/3 endpoint connection failed");
         }
     }
 }
@@ -1724,14 +1726,14 @@ bool http3_client_connection::reclaimable() const noexcept {
     return !session_ || (!session_->open_ && session_->io_tasks_ == 0 && session_->borrowed_operations_ == 0 && session_->streams_.empty());
 }
 void http3_client_connection::close() noexcept {
-    race_->cancel(error_code::io_error);
+    race_->cancel(make_error_code(http_client_errc::io_error));
     if (session_) {
         session_->close();
     }
 }
 void http3_client_connection::retire_addresses() noexcept {
     if (race_->selecting_) {
-        race_->cancel(error_code::io_error);
+        race_->cancel(make_error_code(http_client_errc::io_error));
     }
     if (!session_) {
         return;
@@ -1740,7 +1742,7 @@ void http3_client_connection::retire_addresses() noexcept {
     session_->connect_endpoint_.reset();
     for (auto* item : session_->streams_) {
         if (item->response_.tunnel_) {
-            session_->cancel(*item, error_code::closing);
+            session_->cancel(*item, make_error_code(http_client_errc::closing));
         }
     }
     if (session_->streams_.empty()) {
@@ -1754,11 +1756,11 @@ std::uint64_t http3_client_connection::connection_id() const noexcept {
 void http3_client_connection::shutdown() noexcept {
     race_->retired_ = true;
     (void)race_->selection_.close();
-    race_->cancel(error_code::closing);
+    race_->cancel(make_error_code(http_client_errc::closing));
     if (session_) {
         session_->retired_ = true;
         (void)session_->connect_slots_.close();
-        session_->close(error_code::closing);
+        session_->close(make_error_code(http_client_errc::closing));
     }
 }
 task<void> http3_client_connection::join() {
@@ -1782,7 +1784,7 @@ std::size_t http3_client_connection::available() const noexcept {
 }
 bool http3_client_connection::cancel_by_id(std::uint64_t id) noexcept {
     if (race_->selecting_ && race_->cancellation_id_ == id) {
-        race_->cancel(error_code::cancelled);
+        race_->cancel(std::make_error_code(std::errc::operation_canceled));
         return true;
     }
     if (!session_) {
@@ -1790,12 +1792,12 @@ bool http3_client_connection::cancel_by_id(std::uint64_t id) noexcept {
     }
     if (session_->migration_cancellation_id_ == id) {
         session_->migration_cancelled_ = true;
-        session_->close(error_code::cancelled);
+        session_->close(std::make_error_code(std::errc::operation_canceled));
         return true;
     }
     for (auto* item : session_->streams_) {
         if (item->cancellation_id_ == id) {
-            session_->cancel(*item, error_code::cancelled);
+            session_->cancel(*item, std::make_error_code(std::errc::operation_canceled));
             return true;
         }
     }
@@ -1803,7 +1805,7 @@ bool http3_client_connection::cancel_by_id(std::uint64_t id) noexcept {
 }
 void http3_client_connection::abandon(http_client_response_state& response, bool malformed) noexcept {
     if (race_->selecting_ && race_->cancellation_id_ == response.cancellation_id_) {
-        race_->cancel(error_code::cancelled);
+        race_->cancel(std::make_error_code(std::errc::operation_canceled));
         return;
     }
     if (!session_) {
@@ -1812,7 +1814,7 @@ void http3_client_connection::abandon(http_client_response_state& response, bool
     auto& self = *session_;
     for (auto* item : self.streams_) {
         if (&item->response_ == &response) {
-            self.cancel(*item, error_code::cancelled);
+            self.cancel(*item, std::make_error_code(std::errc::operation_canceled));
             if (malformed && item->id_ >= 0 && self.quic_) {
                 self.quic_->reset_stream(item->id_, http3_error_code::message_error);
             }
@@ -1833,7 +1835,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     http_client_response_state& response) {
     const std::string_view host = route_.host_;
     if (request.is_upgrade()) {
-        throw http_client_error(error_code::protocol_unavailable, "HTTP/1 Upgrade is unavailable over HTTP/3");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/1 Upgrade is unavailable over HTTP/3");
     }
     if (request.options_.fresh_connection_) {
         close();
@@ -1924,7 +1926,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 co_await item.signal_.wait();
             }
             if (!self.quic_->http3().peer_settings()->enable_connect_protocol_) {
-                throw http_client_error(error_code::protocol_unavailable, "peer disabled extended CONNECT");
+                throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "peer disabled extended CONNECT");
             }
         }
         worker_timer_registration admission_timer;
@@ -1940,14 +1942,14 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         for (;;) {
             self.check(item);
             if (admission_expired || acquire_timeout.expired()) {
-                throw http_client_error(error_code::timeout, "HTTP/3 stream admission timed out");
+                throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/3 stream admission timed out");
             }
             if (!self.usable()) {
                 if (attempt == 0) {
                     item.retry_ = true;
                     break;
                 }
-                throw http_client_error(error_code::protocol_unavailable, "HTTP/3 session is draining");
+                throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 session is draining");
             }
             std::size_t active = 0;
             for (const auto* other : self.streams_) {
@@ -1971,6 +1973,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             const auto prepared = self.pool_.policy().prepare_request(request, scratch);
             try {
                 self.submit_request_head(item, request, prepared.headers_);
+                response.request_written_ = true;
                 co_await self.flush_stream(item);
                 if (!request.body().empty()) {
                     (void)co_await self.send_body(item, request.body());
@@ -2034,14 +2037,14 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         if (self.usable()) {
             if ((!may_send_early && !item.rejected_) || attempt != 0 ||
                 (item.id_ >= 0 && request.output() != nullptr)) {
-                throw http_client_error(error_code::protocol_error, "HTTP/3 early request replay exhausted");
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 early request replay exhausted");
             }
             if (!self.early_rejected_ && !item.rejected_ && item.id_ >= 0) {
                 self.quic_->reset_stream(item.id_, http3_error_code::request_cancelled);
             }
         } else {
             if (attempt != 0 || (item.id_ >= 0 && request.output() != nullptr)) {
-                throw http_client_error(error_code::protocol_unavailable, "HTTP/3 request was not processed by the server (GOAWAY)");
+                throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 request was not processed by the server (GOAWAY)");
             }
             // The codec already cancelled an unprocessed stream.
             if (item.id_ >= 0 && self.quic_ && !item.rejected_) {
@@ -2073,21 +2076,21 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             self.capture_connection_info(response, false);
         }
     }
-    throw http_client_error(error_code::protocol_error, "HTTP/3 request attempts exhausted");
+    throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 request attempts exhausted");
 }
 
 task<void> http3_client_connection::migrate(std::string_view local_address, std::uint16_t port,
     const operation_deadline& timeout, stop_token stop) {
     if (stop.stop_requested()) {
-        throw http_client_error(error_code::cancelled, "HTTP/3 migration cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 migration cancelled");
     }
     if (!session_) {
-        throw http_client_error(error_code::protocol_unavailable, "HTTP/3 endpoint selection is in progress");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 endpoint selection is in progress");
     }
     auto& self = *session_;
     session::operation_lease borrowed(self);
     if (!self.usable() || !self.quic_->handshake_completed()) {
-        throw http_client_error(error_code::protocol_unavailable, "migration requires an authenticated active HTTP/3 connection");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "migration requires an authenticated active HTTP/3 connection");
     }
     if (self.migrating_ || self.old_socket_) {
         throw std::logic_error("HTTP/3 path migration is already active");
@@ -2105,10 +2108,10 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     const auto check = [&] {
         if (self.migration_cancelled_ || stop.stop_requested() || timeout.expired() || !self.open_ || self.retired_) {
             // Host shutdown also cancels the merged token; retirement takes precedence.
-            const auto code = self.retired_                                        ? error_code::closing
-                              : self.migration_cancelled_ || stop.stop_requested() ? error_code::cancelled
-                              : timeout.expired()                                  ? error_code::timeout
-                                                                                   : error_code::io_error;
+            const auto code = self.retired_                                        ? make_error_code(http_client_errc::closing)
+                              : self.migration_cancelled_ || stop.stop_requested() ? std::make_error_code(std::errc::operation_canceled)
+                              : timeout.expired()                                  ? std::make_error_code(std::errc::timed_out)
+                                                                                   : make_error_code(http_client_errc::io_error);
             self.close(code);
             throw http_client_error(code, "HTTP/3 migration stopped");
         }
@@ -2119,7 +2122,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     try {
         const asio::ip::udp::endpoint requested(asio::ip::make_address(local_address), port);
         if (requested.protocol() != self.remote_.protocol()) {
-            throw http_client_error(error_code::connect_failed, "HTTP/3 migration address family mismatch");
+            throw http_client_error(make_error_code(http_client_errc::connect_failed), "HTTP/3 migration address family mismatch");
         }
         replacement->open(requested.protocol());
         replacement->bind(requested);
@@ -2128,7 +2131,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     } catch (const http_client_error&) {
         throw;
     } catch (const std::system_error&) {
-        throw http_client_error(error_code::connect_failed, "HTTP/3 migration socket setup failed");
+        throw http_client_error(make_error_code(http_client_errc::connect_failed), "HTTP/3 migration socket setup failed");
     }
     worker_timer_registration timer;
     (void)self.pool_.worker().schedule_timer(timer, *timeout.deadline(),
@@ -2145,7 +2148,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
             break;
         }
         if (result.status_ != http3_quic_status::would_block) {
-            throw http_client_error(error_code::protocol_unavailable, "peer or QUIC state forbids active migration");
+            throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "peer or QUIC state forbids active migration");
         }
         // CID replenishment is protocol backpressure, not a rejected migration.
         // Receive and expiry events drive progress under the same overall deadline.
@@ -2211,13 +2214,13 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
 
 task<bool> http3_client_connection::send_datagram(http_client_response_state& response, std::span<const std::byte> bytes) {
     if (!session_) {
-        throw http_client_error(error_code::closing, "HTTP/3 datagram session is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 datagram session is retired");
     }
     auto& self = *session_;
     session::operation_lease borrowed(self);
     auto* item = self.find(static_cast<std::int64_t>(response.stream_id_));
     if (!item || &item->response_ != &response || response.connection_generation_ != self.generation_ || !response.tunnel_ || !response.tunnel_->accepted_) {
-        throw http_client_error(error_code::closing, "HTTP/3 datagram stream is closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 datagram stream is closed");
     }
     if (bytes.size() > self.quic_->max_datagram_payload_size(item->id_) || !response.http3_native_datagrams_) {
         co_return false;
@@ -2231,12 +2234,12 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
         item = self.find(static_cast<std::int64_t>(response.stream_id_));
         if (!item || &item->response_ != &response || response.connection_generation_ != self.generation_) {
             response.rethrow_response_failure();
-            throw http_client_error(error_code::closing, "HTTP/3 datagram stream retired");
+            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 datagram stream retired");
         }
         self.check(*item);
         if (bound.expired()) {
-            self.cancel(*item, error_code::timeout);
-            throw http_client_error(error_code::timeout, "HTTP/3 datagram output timeout");
+            self.cancel(*item, std::make_error_code(std::errc::timed_out));
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/3 datagram output timeout");
         }
         const auto status = self.quic_->submit_datagram(item->id_, bytes);
         if (status == http3_quic_status::accepted) {
@@ -2244,7 +2247,7 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
             co_return true;
         }
         if (status != http3_quic_status::would_block) {
-            throw http_client_error(error_code::protocol_error, "HTTP/3 datagram submission failed");
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/3 datagram submission failed");
         }
         co_await self.changed_.wait();
     }
@@ -2252,15 +2255,15 @@ task<bool> http3_client_connection::send_datagram(http_client_response_state& re
 
 void http3_client_connection::reprioritize(http_client_response_state& response, http_priority priority) {
     if (!session_) {
-        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 response connection is retired");
     }
     auto& self = *session_;
     if (response.connection_generation_ != self.generation_ || !self.open_ || !self.quic_ || self.quic_->closed()) {
-        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 response connection is retired");
     }
     auto* item = self.find(static_cast<std::int64_t>(response.stream_id_));
     if (item == nullptr || &item->response_ != &response || item->error_ || item->failure_) {
-        throw http_client_error(error_code::closing, "HTTP/3 response connection is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 response connection is retired");
     }
     require_accepted(self.quic_->http3().submit_priority_update(
         item->id_, {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_}));

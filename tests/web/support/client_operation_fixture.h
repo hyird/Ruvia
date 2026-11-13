@@ -83,7 +83,7 @@ public:
 };
 
 template <typename value_type>
-[[nodiscard]] ruvia::task<std::optional<ruvia::http_client_error::code_type>> failure_of(ruvia::task<value_type> operation) {
+[[nodiscard]] ruvia::task<std::optional<std::error_code>> failure_of(ruvia::task<value_type> operation) {
     try {
         (void)co_await std::move(operation);
     } catch (const ruvia::http_client_error& error) {
@@ -97,8 +97,8 @@ template <typename value_type>
     stop.request_stop();
 }
 
-inline constexpr auto timed_out = ruvia::http_client_error::code_type::timeout;
-inline constexpr auto cancelled = ruvia::http_client_error::code_type::cancelled;
+inline const auto timed_out = std::make_error_code(std::errc::timed_out);
+inline const auto cancelled = std::make_error_code(std::errc::operation_canceled);
 
 inline void append(std::pmr::string& target, const std::optional<std::span<const std::byte>>& chunk) {
     if (chunk) {

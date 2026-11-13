@@ -118,7 +118,7 @@ void exercise_client_connect(unsigned mode) {
                 try {
                     auto result_value = co_await client.client().connect("target.test:443").protocol("test-datagram").target("/datagrams").open();
                 } catch (const ruvia::http_client_error& error) {
-                    unavailable = error.code() == ruvia::http_client_error::code_type::protocol_unavailable;
+                    unavailable = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_unavailable);
                 }
                 EXPECT_TRUE(unavailable);
             } else {

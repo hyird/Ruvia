@@ -734,8 +734,8 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
     const auto selector = std::make_shared<const ruvia::tls_certificate_selector>(
         [&](const ruvia::tls_certificate_selection& input) -> std::optional<ruvia::tls_certificate_id> {
             ++calls;
-            if (input.connection_id_ == 0 || input.remote_address_ != "127.0.0.1" ||
-                input.remote_port_ == 0 || !input.local_address_ || !input.local_address_->is_loopback() ||
+            if (input.connection_id_ == 0 || input.remote_address_ != *ruvia::ip_address::parse("127.0.0.1") ||
+                input.remote_port_ == 0 || !input.local_address_ || *input.local_address_ != *ruvia::ip_address::parse("127.0.0.1") ||
                 input.local_port_ == 0 || input.cipher_suites_.empty()) {
                 ++invalid_metadata;
             }
@@ -864,7 +864,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
             .address_ = "127.0.0.1", .https_ = port, .tls_ = {.certificate_store_ = store, .select_certificate_ = selector}, .dispatch_ = ruvia::listener_dispatch::request_stream};
     };
     ruvia::http_server single(loops[0], {.request_stream_ = answer});
-    ruvia::http_server_group group(loops, {.request_stream_ = answer});
+    ruvia::http_server_group group(loops, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     auto group_configuration = configuration(group_port.endpoint().port());
 #if defined(RUVIA_ENABLE_HTTP3)
     group_configuration.http3_ = group_udp.endpoint().port();
@@ -1002,7 +1002,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     auto single_retired = single_retirement.get_future();
     auto group_retired = group_retirement.get_future();
     ruvia::http_server single(caller, {.request_stream_ = answer});
-    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = answer});
+    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     const auto start_single = [&]() -> ruvia::task<void> {
         single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.certificate_store_ = store, .select_certificate_ = retiring_selector([&] {
                                                                                                       try {
@@ -1074,7 +1074,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
         }
     };
     ruvia::http_server single(caller, {.request_stream_ = answer});
-    ruvia::http_server_group group(runtime.loops_, {.request_stream_ = answer});
+    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     const auto start_single = [&]() -> ruvia::task<void> {
         single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.certificate_store_ = store, .default_certificate_ = 1}, .dispatch_ = ruvia::listener_dispatch::request_stream});
         co_await single.start();

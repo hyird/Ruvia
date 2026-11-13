@@ -12,6 +12,8 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/socket.h"
 
+#include "server/connection_lifecycle.h"
+
 namespace ruvia::detail {
 
 const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> tls_tunnel_output::bio_method_ = [] {
@@ -27,10 +29,11 @@ const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> tls_tunnel_output::b
 }();
 
 tls_tunnel_output::tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket,
-    const worker_handle& worker_value, std::pmr::memory_resource& resource)
+    const worker_handle& worker_value, std::pmr::memory_resource& resource, connection_lifecycle* lifecycle)
     : ssl_(ssl),
       socket_(socket),
       worker_(worker_value),
+      lifecycle_(lifecycle),
       bytes_(&resource),
       available_(worker_value),
       flushed_(worker_value),
@@ -111,6 +114,9 @@ long tls_tunnel_output::control_bio(BIO*, int command, long, void*) noexcept {
 }
 void tls_tunnel_output::fail(std::error_code error) noexcept {
     if (!error_) {
+        if (lifecycle_ != nullptr) {
+            lifecycle_->note_error(error);
+        }
         error_ = error;
     }
     close_socket(socket_);
@@ -148,6 +154,9 @@ task<void> tls_tunnel_output::run_writer_inner() {
         const auto result_value = co_await async_asio<std::size_t>([this, count](auto handler) {
             asio::async_write(socket_, asio::buffer(bytes_.data() + head_, count), std::move(handler));
         });
+        if (lifecycle_ != nullptr) {
+            lifecycle_->note_write(result_value.result());
+        }
         if (result_value.error_code()) {
             fail(result_value.error_code());
             co_return;

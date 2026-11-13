@@ -200,17 +200,15 @@ void raw_stream(bool http2, bool configured_raw) {
             bool informed = false;
             auto request = client.client().get("/raw");
             request.header("Content-Type", "unparsed forwarded value")
-                .field_source(ruvia::http_request_field_source::forwarded)
-                .timeouts({.read_ = ruvia::http_client_timeout_override::disabled()})
-                .on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
-                    EXPECT_EQ(status.value(), 103U);
-                    EXPECT_EQ(fields.front().value(), "</style.css>; rel=preload");
-                    EXPECT_EQ(co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20), stop), ruvia::timer_sleep_result::elapsed);
-                    informed = true;
-                });
-            if (!configured_raw) {
-                request.decode_content(false);
-            }
+                .configure({.decode_content_ = configured_raw ? std::optional<bool>{} : std::optional<bool>{false},
+                    .field_source_ = ruvia::http_request_field_source::forwarded,
+                    .timeouts_ = {.read_ = ruvia::http_client_timeout_override::disabled()},
+                    .informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields, ruvia::stop_token stop) -> ruvia::task<void> {
+                        EXPECT_EQ(status.value(), 103U);
+                        EXPECT_EQ(fields.front().value(), "</style.css>; rel=preload");
+                        EXPECT_EQ(co_await ruvia::sleep_for(worker, std::chrono::milliseconds(20), stop), ruvia::timer_sleep_result::elapsed);
+                        informed = true;
+                    }});
             auto response = co_await request.send();
             EXPECT_TRUE(informed);
             EXPECT_EQ(response.framing(), http2 ? ruvia::http_client_response_framing::stream : ruvia::http_client_response_framing::fixed_length);
@@ -263,16 +261,20 @@ void read_timeout(bool http2, bool total_only) {
         std::optional<ruvia::http_client_error> observed_error;
         try {
             auto request = client.client().get("/silent");
-            request.timeouts({.read_ = total_only ? ruvia::http_client_timeout_override::disabled()
-                                                  : ruvia::http_client_timeout_override::after(std::chrono::milliseconds(20))});
+            request.configure({.timeouts_ = {.read_ = total_only ? ruvia::http_client_timeout_override::disabled()
+                                                                 : ruvia::http_client_timeout_override::after(std::chrono::milliseconds(20))}});
             bool timed_out = false;
             try {
                 (void)co_await request.send();
             } catch (const ruvia::http_client_error& error) {
-                timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+                timed_out = error.code() == std::make_error_code(std::errc::timed_out);
                 observed_error.emplace(error);
             }
             EXPECT_TRUE(timed_out);
+            EXPECT_TRUE(observed_error.has_value());
+            if (observed_error) {
+                EXPECT_TRUE(observed_error->request_written());
+            }
         } catch (...) {
             failure = std::current_exception();
         }
@@ -388,12 +390,12 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         const auto first = [&]() -> ruvia::task<void> {
             try {
                 auto request = client.client().get("/first");
-                request.on_informational([&](ruvia::http_status_code, std::span<const ruvia::http_header>, ruvia::stop_token stop) -> ruvia::task<void> {
+                request.configure({.informational_ = [&](ruvia::http_status_code, std::span<const ruvia::http_header>, ruvia::stop_token stop) -> ruvia::task<void> {
                     callback_entered = true;
                     entered.notify();
                     ruvia::stop_group cancellation(stop, release.token());
                     (void)co_await ruvia::sleep_for(worker, std::chrono::hours(1), cancellation.token());
-                });
+                }});
                 auto response = co_await request.send();
                 EXPECT_TRUE(response.ok());
                 first_returned = true;
@@ -545,7 +547,7 @@ TEST(Ruvia, http_client_metadata_values_preserve_allocator_ownership) {
         EXPECT_EQ(assigned_endpoint.ip_, address);
 
         const ruvia::http_client_error error(
-            ruvia::http_client_error::code_type::timeout, "observed timeout", std::nullopt, &source);
+            std::make_error_code(std::errc::timed_out), "observed timeout", std::nullopt, &source);
         saved_error.emplace(error);
     }
     const auto* connection = saved_error->connection_info();

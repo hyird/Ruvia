@@ -515,9 +515,9 @@ router& router::bind_database(std::string_view alias, const db_client& client) &
 }
 #endif
 
-router& router::bind_http_client(const http_client& clients) & {
+router& router::bind_http_client(std::string_view alias, const http_client& clients) & {
     state_->require_editable();
-    state_->clients_.bind_http_client(state_->worker_, clients);
+    state_->clients_.bind_http_client(state_->worker_, alias, clients);
     return *this;
 }
 

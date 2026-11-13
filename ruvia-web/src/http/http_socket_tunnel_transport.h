@@ -163,7 +163,7 @@ public:
         if constexpr (requires { stream_.next_layer(); }) {
             tls_output_->abort();
         } else {
-            close_socket(stream_);
+            close_socket(stream_.lowest_layer());
         }
     }
 

@@ -37,6 +37,7 @@ public:
     operation_scope& operator=(operation_scope&&) = delete;
 
     void close() noexcept;
+    void expire() noexcept;
     [[nodiscard]] task<void> close_and_join() &;
     task<void> close_and_join() && = delete;
     [[nodiscard]] bool active() const noexcept {

@@ -39,7 +39,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
-        const auto server = ruvia::app().http_stats();
+        const auto server = ruvia::app().stats();
         std::pmr::string text(c.arena());
         text.append("connections=").append(std::to_string(server.active_connections_));
         text.append(" refused=").append(std::to_string(server.connections_refused_));

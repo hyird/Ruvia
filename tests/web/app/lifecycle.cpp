@@ -137,7 +137,7 @@ public:
         auto& tunnel_value = context.tunnel();
         state().tunnel_open_ = true;
         while (auto bytes = co_await tunnel_value.read()) {
-            co_await tunnel_value.write(std::string_view(*bytes));
+            co_await tunnel_value.write(*bytes);
         }
         co_await tunnel_value.finish();
     }
@@ -253,7 +253,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
             EXPECT_TRUE(response.empty());
         }
         EXPECT_TRUE(app.workers().empty());
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         asio::ip::tcp::socket stopped(io);
         asio::error_code error;
         stopped.connect(endpoint, error);
@@ -330,7 +330,7 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     busy.connect(endpoint);
     send(busy, "GET /slow HTTP/1.1\r\nHost: localhost\r\n\r\n");
     ruvia::test::wait_until([&] { return state_value.slow_entered_.load(); }, 3s);
-    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 3; }, 3s);
+    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 3; }, 3s);
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
@@ -344,7 +344,7 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     EXPECT_TRUE(std::chrono::steady_clock::now() - stop_started < 3s);
     EXPECT_TRUE(state_value.slow_saw_stop_.load());
     EXPECT_EQ(state_value.stop_hooks_.load(), stop_hooks + 1);
-    EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+    EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
 }
 
 // A request that never ends by itself does not hold the stop: its connection
@@ -512,7 +512,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     asio::ip::tcp::socket newer(io);
     newer.connect(endpoint);
     EXPECT_TRUE(served(newer));
-    ruvia::test::wait_until([&] { return app.http_stats().active_connections_ == 2; }, 3s);
+    ruvia::test::wait_until([&] { return app.stats().active_connections_ == 2; }, 3s);
 
     asio::ip::tcp::socket admitted(io);
     admitted.connect(endpoint);
@@ -521,7 +521,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     EXPECT_TRUE(read_to_end(oldest, evicted));
     EXPECT_TRUE(evicted.empty());
     EXPECT_TRUE(served(newer));
-    EXPECT_EQ(app.http_stats().connections_refused_, std::size_t{0});
+    EXPECT_EQ(app.stats().connections_refused_, std::size_t{0});
 
     // With a request in flight on both, no connection is idle.
     send(newer, "GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n");
@@ -533,7 +533,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     std::pmr::string refused_bytes{ruvia::process_resource()};
     EXPECT_TRUE(read_to_end(refused, refused_bytes));
     EXPECT_TRUE(refused_bytes.empty());
-    EXPECT_EQ(app.http_stats().connections_refused_, std::size_t{1});
+    EXPECT_EQ(app.stats().connections_refused_, std::size_t{1});
 
     app.stop();
     run.join();

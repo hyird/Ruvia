@@ -396,7 +396,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_ipv6_prefix_lengths) {
         }
         EXPECT_TRUE(rejected);
     }
-    app.trusted_proxies(nullptr);
+    app.trusted_proxies({});
 }
 
 // A CIDR without '/' is exactly one IP literal, so trusted proxy configuration
@@ -434,7 +434,7 @@ TEST(Ruvia, app_trusted_proxy_config_accepts_only_strict_ip_literals) {
         }
         EXPECT_TRUE(rejected);
     }
-    app.trusted_proxies(nullptr);
+    app.trusted_proxies({});
 }
 
 // application is a process singleton with sealed controller registration. This functional
@@ -509,7 +509,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_TRUE(app.workers().empty());
         EXPECT_EQ(state_value->live_workers_.load(), 0U);
         EXPECT_EQ(state_value->requests_.load(), 0U);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         // Failure of either service must also retire the other service's
         // listeners, including ones prepared by a different worker.
         asio::ip::tcp::socket socket(io);
@@ -635,7 +635,7 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_EQ(socket.read_some(asio::buffer(premature), error), std::size_t{0});
         EXPECT_TRUE(error == asio::error::would_block || error == asio::error::try_again);
         EXPECT_EQ(state_value->requests_.load(), 0U);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         auto escaped_worker = app.workers().front();
         if (outcome == startup_outcome::stop_from_caller) {
             app.stop();
@@ -648,11 +648,11 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
             // (RFC 9112 §9.6); the peer's close then releases server capacity.
             socket.close();
             const auto close_deadline = std::chrono::steady_clock::now() + 1s;
-            while (app.http_stats().active_connections_ != 0 &&
+            while (app.stats().active_connections_ != 0 &&
                    std::chrono::steady_clock::now() < close_deadline) {
                 std::this_thread::sleep_for(1ms);
             }
-            EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+            EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
             EXPECT_TRUE(forwarded_connection_matches(io, endpoint, "", "127.0.0.1:direct:http"));
             EXPECT_TRUE(forwarded_connection_matches(io, endpoint,
                 "X-Forwarded-For: 198.51.100.7, 127.3.4.5\r\nX-Forwarded-Proto: https, http\r\n",
@@ -750,5 +750,5 @@ TEST(Ruvia, app_startup_barrier_orders_hooks_and_rolls_back) {
         EXPECT_EQ(state_value->second_hooks_, second_hooks);
         EXPECT_EQ(state_value->stop_hooks_, stop_hooks + 2);
     }
-    app.trusted_proxies(nullptr);
+    app.trusted_proxies({});
 }

@@ -27,6 +27,16 @@ struct http_client_config_storage;
 // Syntax of http_client_request_options' route overrides, independently of
 // any alias; throws std::invalid_argument.
 void validate_http_client_route_options(const http_client_request_options& options);
+// The checks of configure(): route overrides and the field source.
+void validate_http_client_request_options(const http_client_request_options& options);
+// Shares a request's informational callback between its exchanges; null when empty.
+[[nodiscard]] std::shared_ptr<http_client_informational_callback> share_http_client_informational(
+    http_client_informational_callback&& callback);
+
+// Every field of `options` except the informational callback, which the
+// exchanges of a request (one per redirect hop) share through
+// http_client_request_storage::informational_ instead.
+[[nodiscard]] http_client_request_options copy_http_client_request_settings(const http_client_request_options& options);
 
 // The effective origin and transport of one request: the alias defaults with
 // the request's route overrides applied. Views borrow the alias configuration
@@ -149,7 +159,9 @@ public:
         return *route_;
     }
     const http_client_route& route() const&& = delete;
+    // informational_ stays empty; the request's callback is informational_.
     http_client_request_options options_;
+    std::shared_ptr<http_client_informational_callback> informational_;
     std::shared_ptr<http_client_pool> pool_owner_;
 
 private:

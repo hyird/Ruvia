@@ -59,7 +59,7 @@ public:
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> id(ruvia::context& context) {
-        co_return context.text(std::to_string(context.conn().id()));
+        co_return context.text(std::to_string(context.conn().connection_id()));
     }
 };
 
@@ -79,8 +79,8 @@ public:
     void add(const ruvia::tls_client_hello_record& hello) {
         const auto message = hello.message();
         std::lock_guard lock(mutex_);
-        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address()), hello.local().port(),
-            std::string(hello.remote().address()), hello.remote().port(), hello.quic(),
+        client_hellos_.push_back({hello.connection_id(), std::string(hello.local().address().to_string()), hello.local().port(),
+            std::string(hello.remote().address().to_string()), hello.remote().port(), hello.quic(),
             std::string(reinterpret_cast<const char*>(message.data()), message.size())});
     }
 
@@ -279,7 +279,7 @@ using namespace server_observation_test;
 // One application with cleartext, HTTPS and HTTP/3 services on two workers.
 // The first run observes: every ClientHello (TLS over TCP, including the
 // second one after a HelloRetryRequest, and QUIC) arrives as the exact bytes
-// the client sent, tagged with the conn_info::id() its requests see, and the
+// the client sent, tagged with the conn_info::connection_id() its requests see, and the
 // HTTP/2 input of each connection (TLS ALPN h2 and cleartext prior knowledge)
 // concatenates to exactly what the client wrote, preface first. The second
 // run, with both observers cleared, serves the same requests and records

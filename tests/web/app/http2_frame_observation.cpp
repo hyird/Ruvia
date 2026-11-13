@@ -39,7 +39,7 @@ public:
     RUVIA_GET("/fingerprint", fingerprint);
     RUVIA_ROUTES_END
     ruvia::task<ruvia::http_response> fingerprint(ruvia::context& context) {
-        co_return context.text(std::to_string(context.conn().id()));
+        co_return context.text(std::to_string(context.conn().connection_id()));
     }
 };
 

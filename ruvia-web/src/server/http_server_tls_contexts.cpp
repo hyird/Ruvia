@@ -18,6 +18,8 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/http/http_ascii.h"
+
+#include "server/peer_address.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_quic_connection.h"
 #endif
@@ -240,6 +242,38 @@ std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::s
     return {reinterpret_cast<const std::byte*>(bytes + prefix), length};
 }
 
+// ClientHello precedes OpenSSL's status_request parsing. Give this SSL its
+// own requested staple so replacement cannot invalidate its selected pair.
+bool present_fixed_identity(SSL& ssl, const http_server_tls_identities::identity& identity) noexcept {
+    if (!identity.certificate_.present(ssl)) {
+        return false;
+    }
+    const unsigned char* extension = nullptr;
+    std::size_t size = 0;
+    if (identity.ocsp_response_.empty() ||
+        SSL_client_hello_get0_ext(&ssl, TLSEXT_TYPE_status_request, &extension, &size) != 1 ||
+        size == 0 || extension[0] != TLSEXT_STATUSTYPE_ocsp) {
+        return true;
+    }
+    auto* response = static_cast<unsigned char*>(OPENSSL_memdup(
+        identity.ocsp_response_.data(), identity.ocsp_response_.size()));
+    if (response == nullptr) {
+        return false;
+    }
+    if (SSL_set_tlsext_status_ocsp_resp(&ssl, response, static_cast<int>(identity.ocsp_response_.size())) != 1) {
+        OPENSSL_free(response);
+        return false;
+    }
+    return true;
+}
+
+int staple_ocsp_response(SSL* ssl, void*) noexcept {
+    const unsigned char* response = nullptr;
+    return SSL_get_tlsext_status_ocsp_resp(ssl, &response) > 0
+               ? SSL_TLSEXT_ERR_OK
+               : SSL_TLSEXT_ERR_NOACK;
+}
+
 // Runs before session lookup, so neither resumption nor missing SNI bypasses a
 // selector rejection. A HelloRetryRequest retains the first selected identity.
 bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
@@ -251,7 +285,7 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
     const auto* local = static_cast<const asio::ip::address*>(SSL_get_ex_data(ssl, local_address_index()));
     try {
         if (!identities.certificate_store_) {
-            if (identities.select(server_name, local).present(*ssl)) {
+            if (present_fixed_identity(*ssl, identities.select(server_name, local))) {
                 return true;
             }
         } else {
@@ -269,10 +303,10 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 const auto cipher_size = SSL_client_hello_get0_ciphers(ssl, &ciphers);
                 const tls_certificate_selection input{
                     .connection_id_ = binding->fields_.connection_id_,
-                    .remote_address_ = binding->fields_.remote_address_,
+                    .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}),
                     .remote_port_ = binding->fields_.remote_port_,
                     .server_name_ = server_name,
-                    .local_address_ = local ? std::optional(*local) : std::nullopt,
+                    .local_address_ = local ? std::optional(to_ip_address(*local)) : std::nullopt,
                     .local_port_ = binding->fields_.local_port_,
                     .quic_ = binding->fields_.quic_,
                     .legacy_version_ = static_cast<std::uint16_t>(SSL_client_hello_get0_legacy_version(ssl)),
@@ -353,6 +387,7 @@ void configure_family(http_server_session_config& session, tls_context_family fa
     // before retiring them.
     SSL_CTX_set_tlsext_servername_callback(native, &acknowledge_server_name);
     SSL_CTX_set_tlsext_servername_arg(native, &session);
+    SSL_CTX_set_tlsext_status_cb(native, &staple_ocsp_response);
 }
 
 }  // namespace

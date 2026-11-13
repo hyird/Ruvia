@@ -17,7 +17,7 @@ namespace ruvia::detail {
 void* http_client_response_memory_domain::receive_resource::do_allocate(
     std::size_t bytes_value, std::size_t alignment) {
     if (!budget_.reserve_in_flight(bytes_value)) {
-        throw http_client_error(http_client_error::code_type::result_budget_exceeded,
+        throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded),
             "HTTP client in-flight response memory budget is exhausted");
     }
     try {

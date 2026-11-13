@@ -204,7 +204,7 @@ template <typename fn_type>
 }
 
 [[nodiscard]] std::size_t refresh_failures() {
-    return ruvia::app().http_stats().document_root_refresh_failures_;
+    return ruvia::app().stats().document_root_refresh_failures_;
 }
 
 }  // namespace document_root_refresh_test

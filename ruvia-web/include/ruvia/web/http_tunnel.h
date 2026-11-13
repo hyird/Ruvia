@@ -88,9 +88,8 @@ private:
 // `operation` bounds a whole call: a timeout or stop ends only that read,
 // keeping a partly received capsule for the next one, and aborts the stream
 // during an output operation. Either throws std::system_error (timed_out or
-// operation_canceled) over an http_tunnel, http_client_error (timeout or
-// cancelled) over an http_client_tunnel; a stop requested before an output
-// operation starts sends nothing.
+// operation_canceled) -- over an http_client_tunnel its http_client_error
+// subclass -- and a stop requested before an output operation starts sends nothing.
 class http_capsule_stream final {
 public:
     http_capsule_stream(const http_capsule_stream&) = delete;
@@ -246,11 +245,10 @@ struct http_tunnel_route_config final {
 };
 
 // An established CONNECT byte stream. The session owns this facade and its
-// allocator. Received chunks own their storage until destruction; it counts
-// against the connection's and the worker's inbound buffer budgets
-// (server_config::max_inbound_buffer_bytes_per_connection_ / _per_worker_), so
-// destroy chunks before the tunnel handler returns. A read that would exceed
-// a budget throws std::bad_alloc.
+// allocator. The tunnel retains the last received chunk until the next read
+// starts; it counts against the connection's and the worker's inbound buffer
+// budgets (server_config::max_inbound_buffer_bytes_per_connection_ /
+// _per_worker_). A read that would exceed a budget throws std::bad_alloc.
 class http_tunnel final {
 public:
     http_tunnel(const http_tunnel&) = delete;
@@ -263,8 +261,10 @@ public:
     // In a write or finish it aborts the tunnel (a partial write cannot be
     // withdrawn) and throws the same; a stop requested before the operation
     // starts sends nothing. A non-positive timeout throws std::invalid_argument.
-    [[nodiscard]] task<std::optional<std::pmr::string>> read(operation_options operation = {}) &;
-    task<std::optional<std::pmr::string>> read(operation_options = {}) && = delete;
+    // The view borrows this tunnel until the next read starts; nullopt is EOF
+    // and an empty chunk is never returned.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
@@ -279,7 +279,8 @@ public:
     // Half-close the send direction; reading remains available until peer EOF.
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
-    void abort() noexcept;
+    void abort() & noexcept;
+    void abort() && = delete;
     // Borrow the established route tunnel for HTTP Datagrams. The route protocol
     // owns negotiation: these throw std::logic_error unless the route declared
     // http_tunnel_route_config::datagrams_. Use only in the negotiated datagram
@@ -308,6 +309,7 @@ private:
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
         bool datagrams, read_datagram_type read_datagram = nullptr,
         write_datagram_type write_datagram = nullptr) noexcept;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_borrowed(operation_options operation);
     [[nodiscard]] task<std::optional<std::pmr::string>> read_raw(operation_options operation);
     [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
     [[nodiscard]] task<void> write_raw(std::pmr::string&& bytes, operation_options operation);
@@ -325,6 +327,8 @@ private:
     abort_type abort_;
     read_datagram_type read_datagram_;
     write_datagram_type write_datagram_;
+    // The chunk the last read() returned.
+    std::optional<std::pmr::string> read_chunk_;
     bool datagrams_;
     bool adapted_{false};
     bool read_active_{false};

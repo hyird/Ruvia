@@ -332,7 +332,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         // The transport is already closed, but a real callback failure still
         // belongs to its configured outlet. Snapshot before invoking user code.
         const auto failure = services.connection_failure();
-        const auto remote = services.get_conn_info().remote().address();
+        const auto remote = services.remote_address();
         failure.invoke(remote, exception);
         co_return result;
     }

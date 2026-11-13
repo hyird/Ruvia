@@ -7,6 +7,8 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/stream.hpp>
 
+#include "server/inbound_socket_stream.h"
+
 namespace ruvia::detail {
 
 // SSL 的读操作也可能发送 KeyUpdate 等控制记录。取消读允许保留已接收的
@@ -17,7 +19,7 @@ public:
     using executor_type = asio::ip::tcp::socket::executor_type;
     using lowest_layer_type = asio::ip::tcp::socket;
 
-    explicit tls_socket_transport(asio::ip::tcp::socket& socket) noexcept
+    explicit tls_socket_transport(inbound_socket_stream& socket) noexcept
         : socket_(socket) {}
 
     [[nodiscard]] executor_type get_executor() noexcept {
@@ -25,11 +27,11 @@ public:
     }
 
     [[nodiscard]] lowest_layer_type& lowest_layer() noexcept {
-        return socket_;
+        return socket_.lowest_layer();
     }
 
     [[nodiscard]] const lowest_layer_type& lowest_layer() const noexcept {
-        return socket_;
+        return socket_.lowest_layer();
     }
 
     template <typename buffers_type, typename handler_type>
@@ -44,7 +46,7 @@ public:
     }
 
 private:
-    asio::ip::tcp::socket& socket_;
+    inbound_socket_stream& socket_;
 };
 
 using server_tls_stream = asio::ssl::stream<tls_socket_transport>;

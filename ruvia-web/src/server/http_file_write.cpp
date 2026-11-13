@@ -8,6 +8,7 @@
 
 #include "ruvia/core/async.h"
 
+#include "server/connection_lifecycle.h"
 #include "server/response_file_source.h"
 
 #if defined(_WIN32)
@@ -61,6 +62,10 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
         // A failed completion still reports the prefix it transferred, which
         // may cover the head: the response is committed once the head left.
         const auto sent = static_cast<std::uint64_t>(transmit_completion.result());
+        if (auto* lifecycle = progress.lifecycle()) {
+            lifecycle->note_write(transmit_completion.result());
+            lifecycle->note_error(transmit_completion.error_code());
+        }
         const auto head_sent = std::min<std::uint64_t>(sent, head.size());
         const auto file_sent = sent - head_sent;
         head.remove_prefix(static_cast<std::size_t>(head_sent));

@@ -12,6 +12,7 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/request_stream.h"
 #include "ruvia/web/streaming.h"
 
 #include "client/client_tls.h"
@@ -67,6 +68,7 @@ http_client_request_storage::http_client_request_storage(
 
 http_client_request_storage::http_client_request_storage(http_client_request_storage&& other) noexcept
     : options_(std::move(other.options_)),
+      informational_(std::move(other.informational_)),
       pool_owner_(std::move(other.pool_owner_)),
       method_(std::move(other.method_)),
       target_(std::move(other.target_)),
@@ -117,6 +119,23 @@ namespace {
 }
 }  // namespace
 
+void validate_http_client_request_options(const http_client_request_options& options) {
+    if (options.field_source_ != http_request_field_source::generated &&
+        options.field_source_ != http_request_field_source::forwarded) {
+        throw std::invalid_argument("invalid HTTP request field source");
+    }
+    validate_http_client_route_options(options);
+}
+
+std::shared_ptr<http_client_informational_callback> share_http_client_informational(
+    http_client_informational_callback&& callback) {
+    if (!callback) {
+        return nullptr;
+    }
+    return std::allocate_shared<http_client_informational_callback>(
+        std::pmr::polymorphic_allocator<http_client_informational_callback>(process_resource()), std::move(callback));
+}
+
 void validate_http_client_route_options(const http_client_request_options& options) {
     if (options.authority_) {
         (void)parse_route_authority(*options.authority_);
@@ -134,6 +153,23 @@ void validate_http_client_route_options(const http_client_request_options& optio
         // The alias scheme is checked with the route.
         validate_http_client_versions(*options.versions_, http_scheme::https);
     }
+}
+
+http_client_request_options copy_http_client_request_settings(const http_client_request_options& options) {
+    // Binding every member keeps this copy exhaustive: a new option fails to compile here.
+    const auto& [decode_content, field_source, fresh_connection, timeouts, informational, authority, dial_host, dial_port,
+        server_name, versions] = options;
+    (void)informational;
+    return {.decode_content_ = decode_content,
+        .field_source_ = field_source,
+        .fresh_connection_ = fresh_connection,
+        .timeouts_ = timeouts,
+        .informational_ = {},
+        .authority_ = authority,
+        .dial_host_ = dial_host,
+        .dial_port_ = dial_port,
+        .server_name_ = server_name,
+        .versions_ = versions};
 }
 
 void http_client_request_storage::resolve_route(const http_client_config_storage& config) {
@@ -264,7 +300,7 @@ bool connection_named_field(std::span<const http_header> fields, std::string_vie
 task<void> pipe_response(http_client_response response, detail::http_client_response_state& state,
     response_stream_writer& output, std::pmr::memory_resource* resource, operation_options operation) {
     if (operation.stop_token_.stop_requested()) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client operation cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client operation cancelled", std::nullopt, &state.connection_info_, state.request_written_);
     }
     const detail::operation_steps steps(std::move(operation));
     stream_commit_result committed{};
@@ -311,7 +347,7 @@ void clear_route_overrides(http_client_request_options& options) noexcept {
 
 // A task frame may bind exactly one scope. This outer frame binds the
 // destination while its child remains bound to the source response.
-task<void> pipe_response_in_context(task<void> source) {
+task<void> pipe_response_in_destination(task<void> source) {
     co_await std::move(source);
 }
 }  // namespace
@@ -416,41 +452,10 @@ http_client_request& http_client_request::configure(http_client_request_options 
     if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
     }
-    if (options.field_source_ != http_request_field_source::generated &&
-        options.field_source_ != http_request_field_source::forwarded) {
-        throw std::invalid_argument("invalid HTTP request field source");
-    }
-    detail::validate_http_client_route_options(options);
+    detail::validate_http_client_request_options(options);
+    informational_callback_ = detail::share_http_client_informational(std::move(options.informational_));
     request_options_ = std::move(options);
     return *this;
-}
-http_client_request& http_client_request::decode_content(bool enabled) {
-    auto options = request_options_;
-    options.decode_content_ = enabled;
-    return configure(std::move(options));
-}
-http_client_request& http_client_request::field_source(http_request_field_source source) {
-    auto options = request_options_;
-    options.field_source_ = source;
-    return configure(std::move(options));
-}
-http_client_request& http_client_request::fresh_connection(bool enabled) {
-    auto options = request_options_;
-    options.fresh_connection_ = enabled;
-    return configure(std::move(options));
-}
-http_client_request& http_client_request::timeouts(http_client_phase_timeouts timeouts) {
-    auto options = request_options_;
-    options.timeouts_ = timeouts;
-    return configure(std::move(options));
-}
-http_client_request& http_client_request::on_informational(http_client_informational_callback callback) {
-    auto options = request_options_;
-    options.informational_ = callback
-                                 ? std::allocate_shared<http_client_informational_callback>(
-                                       std::pmr::polymorphic_allocator<http_client_informational_callback>(process_resource()), std::move(callback))
-                                 : nullptr;
-    return configure(std::move(options));
 }
 http_client_request& http_client_request::redirect_policy(
     move_only_function<task<bool>(http_origin_view, stop_token)> policy) {
@@ -471,7 +476,8 @@ task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_
     }
     const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
     detail::http_client_request_storage request(method_, target_, fields.view(), client_.resource_);
-    request.options_ = request_options_;
+    request.options_ = detail::copy_http_client_request_settings(request_options_);
+    request.informational_ = informational_callback_;
     request.pool_owner_ = client_.pool_owner_;
     request.set_host_stop(client_.host_stop_token_);
     request.set_upgrade();
@@ -514,7 +520,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
     for (std::size_t redirects = 0;; ++redirects) {
         request.client_.registration_.require_active();
         if (total.expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP redirect deadline expired");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP redirect deadline expired", std::nullopt, nullptr, redirects != 0);
         }
         request.client_.options_.timeout_ = total.timeout();
         std::optional<task<http_client_response>> dispatched;
@@ -527,7 +533,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 .headers_ = fields.view(),
                 .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
                                               : http_client_request_content_view::none()};
-            dispatched.emplace(request.client_.dispatch(view, request.request_options_));
+            dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
         }
         if (redirects == request.max_redirects_) {
             std::pmr::string(request.method_.get_allocator()).swap(request.method_);
@@ -545,7 +551,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         for (const auto& field : response.headers()) {
             if (http_ascii_equals_ignore_case(field.name(), "location")) {
                 if (location) {
-                    throw http_client_error(http_client_error::code_type::protocol_error, "repeated redirect Location");
+                    throw http_client_error(make_error_code(http_client_errc::protocol_error), "repeated redirect Location");
                 }
                 location = field.value();
             }
@@ -576,11 +582,11 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 }
                 const auto require_live_policy = [&]() {
                     if (total.expired()) {
-                        throw http_client_error(http_client_error::code_type::timeout,
+                        throw http_client_error(std::make_error_code(std::errc::timed_out),
                             "HTTP redirect policy deadline expired", std::nullopt, &response.connection_info());
                     }
                     if (cancellation.token().stop_requested()) {
-                        throw http_client_error(http_client_error::code_type::cancelled,
+                        throw http_client_error(std::make_error_code(std::errc::operation_canceled),
                             "HTTP redirect policy cancelled", std::nullopt, &response.connection_info());
                     }
                 };
@@ -646,7 +652,7 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
     const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
-    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config, request_options_);
+    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
     consumed_ = true;
     std::pmr::string(method_.get_allocator()).swap(method_);
     std::pmr::string(target_.get_allocator()).swap(target_);
@@ -700,11 +706,8 @@ http_client_connect_request& http_client_connect_request::configure(http_client_
     if (consumed_) {
         throw std::logic_error("CONNECT builder was consumed");
     }
-    if (options.field_source_ != http_request_field_source::generated &&
-        options.field_source_ != http_request_field_source::forwarded) {
-        throw std::invalid_argument("invalid HTTP request field source");
-    }
-    detail::validate_http_client_route_options(options);
+    detail::validate_http_client_request_options(options);
+    informational_callback_ = detail::share_http_client_informational(std::move(options.informational_));
     request_options_ = std::move(options);
     return *this;
 }
@@ -728,9 +731,9 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     }
     const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
     auto dispatched = udp_
-                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_)
+                          ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_)
                           : client_.dispatch_connect(
-                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_);
+                                {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
     consumed_ = true;
     std::pmr::string(authority_.get_allocator()).swap(authority_);
     std::pmr::string(protocol_.get_allocator()).swap(protocol_);
@@ -740,14 +743,23 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
 }
 
 task<void> http_client_response::pipe_to(context& output, operation_options operation) & {
+    return pipe_to_destination(output.draft(), output.stream(), output.operation_scope_, std::move(operation));
+}
+
+task<void> http_client_response::pipe_to(request_stream& output, operation_options operation) & {
+    return pipe_to_destination(output.draft(), output.response(), output.operation_scope_, std::move(operation));
+}
+
+task<void> http_client_response::pipe_to_destination(context_response_editor draft, response_stream_writer& writer,
+    ::ruvia::operation_scope& destination, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }
     state_->require_owner_worker("HTTP response requires its owner worker");
-    if (!state_->body_operation_scope_.active() || !output.operation_scope_.active()) {
+    if (!state_->body_operation_scope_.active() || !destination.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }
-    output.draft().status(status());
+    draft.status(status());
     const auto fields = headers();
     for (auto field = fields.begin(); field != fields.end(); ++field) {
         if (!hop_field(field->name()) && !connection_named_field(fields, field->name()) &&
@@ -755,15 +767,13 @@ task<void> http_client_response::pipe_to(context& output, operation_options oper
             const bool repeated = std::any_of(fields.begin(), field, [&](const http_header& previous) {
                 return http_ascii_equals_ignore_case(previous.name(), field->name());
             });
-            output.draft().header(field->name(), field->value(),
+            draft.header(field->name(), field->value(),
                 {.mode_ = repeated ? http_response_header_mode::append : http_response_header_mode::replace});
         }
     }
-    auto& writer = output.stream();
     auto source = make_scoped_operation(state_->body_operation_scope_,
         pipe_response(http_client_response(state_), *state_, writer, state_->resource_, std::move(operation)));
-    return make_scoped_operation(output.operation_scope_,
-        pipe_response_in_context(std::move(source)));
+    return make_scoped_operation(destination, pipe_response_in_destination(std::move(source)));
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
@@ -783,7 +793,7 @@ task<void> http_client_handle::migrate(std::string_view local_address, std::uint
 #else
     (void)local_address;
     (void)port;
-    throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP/3 support is disabled");
+    throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 support is disabled");
 #endif
 }
 }  // namespace ruvia

@@ -146,12 +146,13 @@ public:
         }
         return result_value.capsule_complete_;
     }
-    // Interruptions use the tunnel's error family: std::system_error over a
-    // server tunnel, http_client_error over a client tunnel.
+    // Interruptions are std::system_error (timed_out / operation_canceled);
+    // a client tunnel reports them as its http_client_error subclass.
     [[noreturn]] void throw_interrupted(operation_interrupt_cause cause, const char* operation_name) const {
         if (client_) {
-            throw http_client_error(cause == operation_interrupt_cause::timed_out ? http_client_error::code_type::timeout
-                                                                                  : http_client_error::code_type::cancelled,
+            throw http_client_error(std::make_error_code(cause == operation_interrupt_cause::timed_out
+                                                             ? std::errc::timed_out
+                                                             : std::errc::operation_canceled),
                 operation_name);
         }
         operation_interrupt::throw_cause(cause, operation_name);
@@ -175,9 +176,6 @@ public:
             throw;
         } catch (const std::system_error& error) {
             return steps.interrupted(error);
-        } catch (const http_client_error& error) {
-            return (error.code() == http_client_error::code_type::timeout && steps.interrupted_by(operation_interrupt_cause::timed_out)) ||
-                   (error.code() == http_client_error::code_type::cancelled && steps.interrupted_by(operation_interrupt_cause::cancelled));
         } catch (...) {
             return false;
         }
@@ -395,10 +393,26 @@ void http_tunnel::require_unadapted() const {
         throw std::logic_error("HTTP tunnel is already adapted to a capsule stream");
     }
 }
-task<std::optional<std::pmr::string>> http_tunnel::read(operation_options operation) & {
+task<std::optional<std::span<const std::byte>>> http_tunnel::read(operation_options operation) & {
     require_active();
     require_unadapted();
-    return read_raw(std::move(operation));
+    return ::ruvia::make_scoped_operation(operations_, read_borrowed(std::move(operation)));
+}
+task<std::optional<std::span<const std::byte>>> http_tunnel::read_borrowed(operation_options operation) {
+    auto lease = detail::claim_operation_lane(read_active_, tunnel_lane_in_progress);
+    // The previous view expires as this read starts.
+    read_chunk_.reset();
+    const detail::operation_steps steps(std::move(operation));
+    for (;;) {
+        auto chunk = co_await read_(target_, steps.next("HTTP tunnel read"));
+        if (!chunk) {
+            co_return std::nullopt;
+        }
+        if (!chunk->empty()) {
+            read_chunk_.emplace(std::move(*chunk));
+            co_return as_bytes(std::string_view(*read_chunk_));
+        }
+    }
 }
 task<std::optional<std::pmr::string>> http_tunnel::read_raw(operation_options operation) {
     require_active();
@@ -444,7 +458,7 @@ task<void> http_tunnel::finish(operation_options operation) & {
     return ::ruvia::make_scoped_operation(
         operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
-void http_tunnel::abort() noexcept {
+void http_tunnel::abort() & noexcept {
     abort_input(false);
 }
 void http_tunnel::abort_input(bool malformed) noexcept {

@@ -108,7 +108,7 @@ web_worker_runtime::~web_worker_runtime() {
     runtime_.join();
 }
 
-http_server_stats web_worker_runtime::stats() const noexcept {
+http_server_stats web_worker_runtime::stats() const {
     auto stats = connections_.stats();
     stats.worker_failures_ = worker_failures_.load(std::memory_order_relaxed);
     return stats;

@@ -363,19 +363,19 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       inbound_buffers_(*session_.options().inbound_budget_,
           session_.options().server_.max_inbound_buffer_bytes_per_connection_),
       base_services_(session_.services().with_inbound_buffer_pool(inbound_buffers_)),
-      remote_address_(session_.services().get_conn_info().remote().address()),
+      remote_address_(session_.services().remote_address()),
       connection_(ruvia::http2_connection::server({.resource_ = process_resource(),
           .frame_observer_ = session_.options().http2_frame_
                                  ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
                                        auto& self = *static_cast<http2_sans_io_session_engine*>(target);
                                        self.session_.options().http2_frame_(server_observation_access::http2_frame(
-                                           self.base_services_.get_conn_info().id(), metadata));
+                                           self.base_services_.get_conn_info().connection_id(), metadata));
                                    }
                                  : nullptr,
           .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
               auto& self = *static_cast<http2_sans_io_session_engine*>(target);
               self.session_.options().http2_headers_(server_observation_access::http2_headers(
-                  self.base_services_.get_conn_info().id(), metadata));
+                  self.base_services_.get_conn_info().connection_id(), metadata));
           }
                                                                 : nullptr,
           .observer_context_ = this})),
@@ -389,6 +389,7 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
     base_services_.bind_routes(routes_);
+    session_.scanner_entry().bind_lifecycle(base_services_.connection_lifecycle_value());
     set_inactivity_phase();
     session_.scanner_entry().register_periodic_check(
         scanner_checks_, this,
@@ -536,6 +537,7 @@ void http2_sans_io_session_engine::finish_drain_if_ready() noexcept {
 }
 
 void http2_sans_io_session_engine::peer_input_ended() noexcept {
+    base_services_.set_connection_close_reason(connection_close_reason::peer_eof);
     // RFC 9113 §6.8: "Endpoints SHOULD always send a GOAWAY frame before
     // closing a connection". The session closes either way; a failed
     // allocation only loses this frame.
@@ -607,6 +609,10 @@ void http2_sans_io_session_engine::wake_writer() noexcept {
 void http2_sans_io_session_engine::terminate(std::error_code error) noexcept {
     if (!termination_.terminate(error)) {
         return;
+    }
+    if (auto* lifecycle = base_services_.connection_lifecycle_value();
+        lifecycle != nullptr && (!drain_finished_ || error == std::errc::timed_out)) {
+        lifecycle->note_error(error);
     }
     output_budget_.wake();
     std::error_code ignored;
@@ -995,6 +1001,9 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
         counted = true;
         ruvia::async_start(dispatch_one(stream_id), asio::bind_executor(executor_, [this](std::exception_ptr exception) noexcept {
             if (exception != nullptr) {
+                if (auto* lifecycle = base_services_.connection_lifecycle_value()) {
+                    lifecycle->note_exception(exception);
+                }
                 session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
                 terminate(std::make_error_code(std::errc::operation_canceled));
             }
@@ -1044,6 +1053,7 @@ http2_sans_io_stream_runtime* http2_sans_io_session_engine::resolve_stream_route
 void http2_sans_io_session_engine::on_message_head(http2_request_head_event& message_head) {
     const auto& options = session_.options();
     const auto stream_id = message_head.stream_id();
+    base_services_.note_connection_request();
     ++accepted_request_heads_;
     if (!connection_.draining() && options.server_.max_requests_per_connection_.has_value() &&
         accepted_request_heads_ >= *options.server_.max_requests_per_connection_) {
@@ -1300,11 +1310,14 @@ void http2_sans_io_session_engine::drain_events() {
 http2_feed_result http2_sans_io_session_engine::feed_and_drain(std::string_view bytes_value) {
     // Once per read, outside the retry loop below, which feeds the same bytes again.
     if (const auto observer = session_.options().http2_input_) {
-        observer(server_observation_access::http2_input(base_services_.get_conn_info().id(),
+        observer(server_observation_access::http2_input(base_services_.get_conn_info().connection_id(),
             std::as_bytes(std::span(bytes_value.data(), bytes_value.size()))));
     }
     for (;;) {
         const auto result_value = connection_.feed(bytes_value);
+        if (result_value == http2_feed_result::protocol_failure) {
+            base_services_.set_connection_close_reason(connection_close_reason::protocol_error);
+        }
         drain_events();
         if (result_value != http2_feed_result::events_pending) {
             return result_value;
@@ -1465,10 +1478,10 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
 
 }  // namespace
 
-task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& stream, const route_table& routes_value,
+task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream, const route_table& routes_value,
     http2_sans_io_session_context session_value, std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(
-        stream, stream, routes_value, std::move(session_value), initial_bytes);
+        stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
 
 task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,

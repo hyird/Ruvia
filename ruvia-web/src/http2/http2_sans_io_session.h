@@ -12,6 +12,7 @@
 #include "server/connection_scanner.h"
 #include "server/http_connection_close.h"
 #include "server/http_server_options.h"
+#include "server/inbound_socket_stream.h"
 
 namespace ruvia::detail {
 
@@ -54,7 +55,7 @@ private:
 // from instantiating the complete session coroutine again. The result is
 // notify when the peer ended its input cleanly, linger when the session ended
 // with GOAWAY (a completed drain or a connection error), otherwise abort.
-[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(asio::ip::tcp::socket& stream,
+[[nodiscard]] task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& stream,
     const route_table& routes_value, http2_sans_io_session_context session_value,
     std::string_view initial_bytes = {});
 

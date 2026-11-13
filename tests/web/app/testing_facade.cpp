@@ -474,7 +474,7 @@ private:
 
     ruvia::task<ruvia::http_response> conn_info_handler(ruvia::context& c) const {
         std::pmr::string reply(c.arena());
-        reply.append(c.conn().remote().address());
+        reply.append(c.conn().remote().address().to_string());
         reply.push_back(':');
         reply.append(std::to_string(c.conn().remote().port()));
         reply.push_back('/');

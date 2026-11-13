@@ -41,7 +41,7 @@ const env& application::env() const noexcept {
     return state_->env_;
 }
 
-http_server_stats application::http_stats() const {
+http_server_stats application::stats() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     http_server_stats total;
@@ -55,6 +55,7 @@ http_server_stats application::http_stats() const {
         total.connection_failures_ += stats.connection_failures_;
         total.accept_failures_ += stats.accept_failures_;
         total.worker_failures_ += stats.worker_failures_;
+        detail::append_listener_stats(total, stats);
     }
 #if defined(_WIN32)
     // The acceptor refuses and fails accepts before any worker sees them.
@@ -105,11 +106,11 @@ web_worker_handle application::worker_for(std::string_view key) const {
     return worker_for(ruvia::worker_selection_hash(key));
 }
 
-void application::run() {
+void application::run() & {
     detail::run_app(*this, *state_);
 }
 
-void application::stop() {
+void application::stop() & {
     auto& state_value = *state_;
     {
         std::lock_guard lock(state_value.mutex_);

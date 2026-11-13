@@ -153,10 +153,10 @@ void record_failure(const ruvia::connection_failure_record& record) noexcept {
 
 [[nodiscard]] connection_view describe(const ruvia::server_connection& connection) {
     connection_view view;
-    view.id_ = connection.id();
-    view.local_address_ = connection.local().address();
+    view.id_ = connection.connection_id();
+    view.local_address_ = connection.local().address().to_string();
     view.local_port_ = connection.local().port();
-    view.remote_address_ = connection.remote().address();
+    view.remote_address_ = connection.remote().address().to_string();
     view.remote_port_ = connection.remote().port();
     if (const auto* tls = connection.tls()) {
         view.tls_ = true;
@@ -510,8 +510,8 @@ TEST(Ruvia, raw_connection_abort_cancels_outputs_without_reporting_faults) {
             if (command == 'a' || command == 'c') {
                 ++expected_faults;
             }
-            ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
-            EXPECT_EQ(app.http_stats().connection_failures_, expected_faults) << "TLS: " << tls << ", command: " << command;
+            ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+            EXPECT_EQ(app.stats().connection_failures_, expected_faults) << "TLS: " << tls << ", command: " << command;
         }
     }
     app.stop();
@@ -551,7 +551,7 @@ TEST(Ruvia, connection_idle_timeout_closes_raw_connection) {
     EXPECT_GE(elapsed, 200ms);
     EXPECT_LT(elapsed, 5s);
     ruvia::test::wait_until([] { return observed().size() == 1; }, 10s);
-    EXPECT_EQ(app.http_stats().connection_failures_, 0U);
+    EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();
     const auto views = observed().views();
@@ -582,7 +582,7 @@ TEST(Ruvia, stop_disconnects_raw_connections) {
         socket.connect(endpoint);
         ASSERT_TRUE(handler_entered().try_acquire_for(10s));
     }
-    EXPECT_EQ(app.http_stats().active_connections_, sockets.size());
+    EXPECT_EQ(app.stats().active_connections_, sockets.size());
     app.stop();
     runner.join();
     for (auto& socket : sockets) {
@@ -616,7 +616,7 @@ TEST(Ruvia, raw_handler_failure_reaches_connection_failure_hook) {
     socket.connect(endpoint);
     asio::write(socket, asio::buffer(std::string_view("x")));
     EXPECT_EQ(read_until_closed(socket), "");
-    ruvia::test::wait_until([&app] { return app.http_stats().connection_failures_ == 1; }, 10s);
+    ruvia::test::wait_until([&app] { return app.stats().connection_failures_ == 1; }, 10s);
     app.stop();
     runner.join();
     app.on_connection_failure(nullptr);
@@ -676,8 +676,8 @@ TEST(Ruvia, raw_connection_return_expires_unstarted_read_write_and_finish) {
         second.connect(endpoint);
         EXPECT_EQ(read_until_closed(second), "expired");
     }
-    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
-    EXPECT_EQ(app.http_stats().connection_failures_, 0U);
+    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+    EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();
 }
@@ -916,8 +916,8 @@ TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
         }
         ruvia::test::wait_until([&] { return results->handled_.load() == handled; }, 10s);
     }
-    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
-    EXPECT_EQ(app.http_stats().connection_failures_, 0U);
+    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
+    EXPECT_EQ(app.stats().connection_failures_, 0U);
     app.stop();
     runner.join();
     EXPECT_EQ(results->rejected_.load(), 6U);

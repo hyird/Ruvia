@@ -972,7 +972,7 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
 TEST(Ruvia, http1_websocket_handler_failure_is_reported_and_a_close_reset_is_not) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -1005,7 +1005,7 @@ TEST(Ruvia, http1_websocket_handler_failure_is_reported_and_a_close_reset_is_not
         client.close();
     }
     server.finish();
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before + 1);
 }
 
 // Server permessage-deflate echoes messages of every size. Without context

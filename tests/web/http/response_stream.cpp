@@ -285,7 +285,7 @@ TEST(Ruvia, response_stream_peer_reset_is_not_a_connection_failure) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     stream_lane_observed->endless_write_failed_ = false;
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -304,7 +304,7 @@ TEST(Ruvia, response_stream_peer_reset_is_not_a_connection_failure) {
     }
     server.finish();
     EXPECT_TRUE(stream_lane_observed->endless_write_failed_);
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
 }
 
 // A handler failure after commit is reported even when it carries a code an
@@ -313,7 +313,7 @@ TEST(Ruvia, response_stream_peer_reset_is_not_a_connection_failure) {
 TEST(Ruvia, response_stream_handler_failure_with_a_transport_code_is_a_connection_failure) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
@@ -330,7 +330,7 @@ TEST(Ruvia, response_stream_handler_failure_with_a_transport_code_is_a_connectio
         EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     }
     server.finish();
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before + 1);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before + 1);
 }
 
 // RFC 9110 §15.2: no 1xx may follow the start of the final response. A stream

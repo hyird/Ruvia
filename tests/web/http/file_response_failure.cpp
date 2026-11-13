@@ -227,7 +227,7 @@ TEST(Ruvia, file_failures_before_the_head_get_an_error_response_and_stalled_open
             EXPECT_TRUE(wire.has_value() && wire->starts_with("HTTP/1.1 200 ") &&
                         wire->ends_with(std::pmr::string(4096, 's', ruvia::process_resource())));
         }
-        ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 5s);
+        ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 5s);
     }
     release_pool.store(true);
     app.stop();

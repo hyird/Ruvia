@@ -238,10 +238,13 @@ public:
     sse_writer& operator=(sse_writer&&) = delete;
 
     /// 与 response_stream_writer 相同；completed 时停止事件生产，不伪造取消。
-    [[nodiscard]] task<stream_commit_result> commit(operation_options operation = {});
-    [[nodiscard]] task<void> write(const sse_message& message, operation_options operation = {});
+    [[nodiscard]] task<stream_commit_result> commit(operation_options operation = {}) &;
+    task<stream_commit_result> commit(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(const sse_message& message, operation_options operation = {}) &;
+    task<void> write(const sse_message&, operation_options = {}) && = delete;
 
-    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {});
+    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &;
+    task<timer_sleep_result> sleep(timeout_duration, stop_token = {}) && = delete;
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();
@@ -250,7 +253,8 @@ public:
         return writer().committed();
     }
 
-    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {});
+    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     friend class context;

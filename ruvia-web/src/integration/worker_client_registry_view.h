@@ -90,7 +90,7 @@ public:
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
 
-    [[nodiscard]] const http_client& borrowed_http_clients() const;
+    [[nodiscard]] const http_client& borrowed_http_clients(std::string_view alias) const;
 
     const borrowed_clients* borrowed_{nullptr};
     http_client_registry* http_clients_{nullptr};

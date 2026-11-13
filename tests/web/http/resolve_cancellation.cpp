@@ -46,7 +46,7 @@ ruvia::task<void> hold_executor(ruvia::worker_handle worker, std::shared_ptr<hel
 }
 
 ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop,
-    std::optional<ruvia::http_client_error::code_type>& code) {
+    std::optional<std::error_code>& code) {
     try {
         auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
         (void)co_await response.stream().read_all();
@@ -56,7 +56,7 @@ ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop,
 }
 
 struct observation final {
-    std::optional<ruvia::http_client_error::code_type> code_;
+    std::optional<std::error_code> code_;
     bool retired_before_release_{false};
 };
 
@@ -170,9 +170,9 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
         lookups.join();
         std::move(root).get();
         EXPECT_TRUE(observed.retired_before_release_);
-        const auto expected = kind == stop_kind::timeout        ? ruvia::http_client_error::code_type::timeout
-                              : kind == stop_kind::cancellation ? ruvia::http_client_error::code_type::cancelled
-                                                                : ruvia::http_client_error::code_type::closing;
+        const auto expected = kind == stop_kind::timeout        ? std::make_error_code(std::errc::timed_out)
+                              : kind == stop_kind::cancellation ? std::make_error_code(std::errc::operation_canceled)
+                                                                : ruvia::make_error_code(ruvia::http_client_errc::closing);
         EXPECT_TRUE(observed.code_ == expected);
     }
 }

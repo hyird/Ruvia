@@ -72,6 +72,13 @@ void operation_scope::close() noexcept {
     expire_for_join();
 }
 
+void operation_scope::expire() noexcept {
+    if (expiring_capabilities_ || !active_) {
+        return;
+    }
+    expire_for_join();
+}
+
 task<void> operation_scope::close_and_join() & {
     if (join_started_) {
         if (!join_complete_) {

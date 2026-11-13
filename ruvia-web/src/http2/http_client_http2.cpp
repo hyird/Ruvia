@@ -634,7 +634,7 @@ void http_client_connection::consume_http2_data(
     auto& state_value = *stream->state_;
     try {
         if (!state_value.append_received_body(bytes_value, pool_.config().max_response_bytes_)) {
-            stream->error_ = http_client_error::code_type::response_too_large;
+            stream->error_ = make_error_code(http_client_errc::response_too_large);
             http2_.submit_reset(stream_id);
             stream->signal_.notify();
             return;
@@ -775,7 +775,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
         if (auto* stream = find_http2_stream(tunnel_end->stream_id()); stream != nullptr && !stream->failed()) {
             auto& state_value = *stream->state_;
             if (!state_value.tunnel_ || !state_value.tunnel_->accepted_) {
-                stream->error_ = http_client_error::code_type::protocol_error;
+                stream->error_ = make_error_code(http_client_errc::protocol_error);
             } else {
                 state_value.tunnel_->receive_ended_ = true;
                 state_value.data_signal_.notify();
@@ -827,7 +827,7 @@ void http_client_connection::on_http2_event(http2_event& event) {
             } else if (!state_value.tunnel_ || !state_value.tunnel_->accepted_ || !state_value.tunnel_->receive_ended_ ||
                        !state_value.tunnel_->output_.end_requested_ ||
                        closed->error() != http2_error_code::no_error) {
-                stream->error_ = http_client_error::code_type::protocol_error;
+                stream->error_ = make_error_code(http_client_errc::protocol_error);
                 stream->signal_.notify();
             }
         }
@@ -858,7 +858,7 @@ void http_client_connection::on_http2_failure(
     if (alpn_ != client_alpn::http2) {
         protocol_ = protocol_type::unknown;
     }
-    auto stream_error = http_client_error::code_type::io_error;
+    auto stream_error = make_error_code(http_client_errc::io_error);
     if (const auto reason = transport_.abort_reason(); reason != client_abort_reason::none) {
         stream_error = http_client_abort_error(reason);
     } else if (transport.status_ == client_transport_status::aborted) {
@@ -947,12 +947,12 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
 void http_client_connection::reprioritize(http_client_response_state& state_value, http_priority priority) {
     if (generation_ != state_value.connection_generation_ || !http2_.has_connection() || !http2_.running() ||
         http2_.failed()) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP/2 response connection is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/2 response connection is retired");
     }
     const auto status = http2_.connection().submit_priority_update(static_cast<std::uint32_t>(state_value.stream_id_),
         {.urgency_ = priority.urgency_, .incremental_ = priority.incremental_});
     if (status != http2_submit_status::accepted) {
-        throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 priority update rejected");
+        throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 priority update rejected");
     }
     http2_.wake_writer();
 }
@@ -962,7 +962,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(
     worker_timer_registration deadline_timer;
     if (const auto deadline = timeout.deadline()) {
         if (*deadline <= std::chrono::steady_clock::now()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 session shutdown wait timed out");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/2 session shutdown wait timed out");
         }
         (void)pool_.worker().schedule_timer(deadline_timer, *deadline,
             [this](worker_timer_outcome outcome) noexcept {
@@ -991,10 +991,10 @@ task<void> http_client_connection::wait_for_http2_session_stop(
     cancellation.arm(stop_token_value);
     while (http2_.running() || !http2_streams_.empty()) {
         if (stop_token_value.stop_requested() || response.abandoned_) {
-            throw http_client_error(http_client_error::code_type::cancelled, "HTTP/2 session shutdown wait cancelled");
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/2 session shutdown wait cancelled");
         }
         if (timeout.expired()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP/2 session shutdown wait timed out");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP/2 session shutdown wait timed out");
         }
         co_await http2_.state_signal().wait();
     }
@@ -1004,7 +1004,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
     http_client_response_state& state_value) {
     if (request.is_upgrade()) {
-        throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP Upgrade requires HTTP/1.1");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
     }
     const auto& config = pool_.config();
     auto* const resource = process_resource();
@@ -1074,7 +1074,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 break;
             }
             if (attempt_acquire.expired()) {
-                stream.error_ = http_client_error::code_type::timeout;
+                stream.error_ = std::make_error_code(std::errc::timed_out);
                 break;
             }
             const auto submitted = request.websocket() != nullptr
@@ -1102,6 +1102,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                                              .headers_ = headers,
                                              .field_source_ = request.options_.field_source_});
             if (const auto* accepted = std::get_if<std::uint32_t>(&submitted)) {
+                state_value.request_written_ = true;
                 stream.stream_id_ = *accepted;
                 state_value.stream_id_ = stream.stream_id_;
                 reused_session = http2_session_requests_ != 0;
@@ -1142,7 +1143,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 stream.retryable_ = true;
                 http2_.mark_draining();
             } else {
-                stream.error_ = http_client_error::code_type::invalid_request;
+                stream.error_ = make_error_code(http_client_errc::invalid_request);
             }
             break;
         }
@@ -1174,13 +1175,13 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                 continue;
             }
             throw http_client_error(
-                http_client_error::code_type::protocol_unavailable, "upstream requires HTTP/1.1 for this request");
+                make_error_code(http_client_errc::protocol_unavailable), "upstream requires HTTP/1.1 for this request");
         }
         // No stream ID means no request head or body was submitted to this
         // connection. A transport failure at the stream-capacity wait is safe
         // to retry even for a streaming upload; protocol and cancellation
         // failures must still be reported.
-        if (stream.stream_id_ == 0 && failure == nullptr && error == http_client_error::code_type::io_error &&
+        if (stream.stream_id_ == 0 && failure == nullptr && error == make_error_code(http_client_errc::io_error) &&
             may_retry) {
             continue;
         }
@@ -1197,7 +1198,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             continue;
         }
         if (retryable) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
+            throw http_client_error(make_error_code(http_client_errc::protocol_error),
                 "HTTP/2 request was not processed by the server (GOAWAY or REFUSED_STREAM)");
         }
         if (failure != nullptr) {
@@ -1208,7 +1209,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         }
         co_return true;
     }
-    throw http_client_error(http_client_error::code_type::protocol_error, "HTTP/2 request retry exhausted");
+    throw http_client_error(make_error_code(http_client_errc::protocol_error), "HTTP/2 request retry exhausted");
 }
 
 task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
@@ -1234,8 +1235,8 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     // A complete response may close the stream before its buffered request
     // content was sent; that response stands.
     if (status == http2_client_data_status::rejected && (upload != nullptr || !stream.complete_)) {
-        stream.error_ = upload != nullptr ? http_client_error::code_type::invalid_request
-                                          : http_client_error::code_type::protocol_error;
+        stream.error_ = upload != nullptr ? make_error_code(http_client_errc::invalid_request)
+                                          : make_error_code(http_client_errc::protocol_error);
         http2_.submit_reset(stream.stream_id_);
     }
     co_return status == http2_client_data_status::submitted && !stopped();
@@ -1272,7 +1273,7 @@ task<void> http_client_connection::stream_http2_upload(
                 finished = co_await http2_.finish_request(stream.stream_id_, trailers.view(), stopped);
             }
             if (finished == http2_client_data_status::rejected) {
-                stream.error_ = http_client_error::code_type::invalid_request;
+                stream.error_ = make_error_code(http_client_errc::invalid_request);
                 http2_.submit_reset(stream.stream_id_);
                 co_return false;
             }

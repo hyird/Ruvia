@@ -1095,7 +1095,7 @@ public:
         const auto* tls = context.conn().tls();
         std::pmr::string result(tls != nullptr ? tls->server_name() : std::string_view(), context.arena());
         result.append("|").append(context.req().authority()).append("|");
-        result.append(std::to_string(context.conn().id())).append("|");
+        result.append(std::to_string(context.conn().connection_id())).append("|");
         result.append(context.early_data() ? "early" : "one-rtt");
         co_return context.text(std::move(result));
     }
@@ -1438,7 +1438,7 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         relay.block();
         ruvia::stop_source stop;
         ruvia::operation_options options{.timeout_ = mode == 1 ? 20ms : 5s, .stop_token_ = stop.token()};
-        std::optional<ruvia::http_client_error::code_type> outcome;
+        std::optional<std::error_code> outcome;
         bool complete = false;
         const auto migrate = [&]() -> ruvia::task<void> {
             try {
@@ -1469,9 +1469,9 @@ ruvia::task<void> exercise_blocked_migration(ruvia::event_loop_attachment& attac
         EXPECT_TRUE(complete);
         EXPECT_TRUE(outcome.has_value());
         if (outcome) {
-            EXPECT_EQ(*outcome, mode == 0                ? ruvia::http_client_error::code_type::cancelled
-                                : mode == 3 || mode == 4 ? ruvia::http_client_error::code_type::closing
-                                                         : ruvia::http_client_error::code_type::timeout);
+            EXPECT_EQ(*outcome, mode == 0                ? std::make_error_code(std::errc::operation_canceled)
+                                : mode == 3 || mode == 4 ? ruvia::make_error_code(ruvia::http_client_errc::closing)
+                                                         : std::make_error_code(std::errc::timed_out));
         }
     } catch (...) {
         failure = std::current_exception();
@@ -1512,7 +1512,7 @@ ruvia::task<void> exercise_outbound_migration(ruvia::event_loop loop,
                 try {
                     co_await client.with_options({.timeout_ = 1ms, .stop_token_ = stop.token()}).migrate("127.0.0.1");
                 } catch (const ruvia::http_client_error& error) {
-                    cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                    cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
                 EXPECT_TRUE(cancelled);
             }

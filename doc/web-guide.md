@@ -62,7 +62,7 @@ int main() {
 | `application& on_start(app_hook hook)` / `on_stop(app_hook hook)` | 注册启动后（accept 开始前）与停机后的生命周期钩子（在 `run()` 调用线程上执行） |
 | `void run()` | 启动所有业务 worker 并阻塞，直到调用 `stop()` 或收到停止信号；允许无监听启动，再动态准备监听；全部 worker 退役后返回 |
 | `void stop()` | 线程安全地请求停机，直接断连、不设排空阶段：停止接入（取消待决 accept 与 QUIC 接收）→ 立即关闭全部连接（HTTP/1、HTTP/2、WebSocket、隧道不发送响应、`GOAWAY` 或关闭握手；HTTP/3 立即发送 `CONNECTION_CLOSE(H3_NO_ERROR)`），在途处理器观察到 `c.stop_token()` → 先停 I/O 再 join 后台操作 |
-| `http_server_stats http_stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
+| `http_server_stats stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
 | `std::pmr::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄；结果绑定 `process_resource()` |
 | `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
@@ -174,6 +174,8 @@ ruvia::app().listen({
   - **SNI**：`sni_` 按 SNI 主机名（ASCII 不区分大小写）匹配；`host_` 可写作 `*.example.com`，通配符只能是完整的最左标签并恰好覆盖一个标签（RFC 6125 §6.4.3：匹配 `a.example.com`，不匹配 `example.com` 与 `a.b.example.com`）。
   - **本端地址**：`local_addresses_` 按连接到达的本端地址选择身份，`address_` 须为非未指定的数字 IP（IPv4 映射 IPv6 地址等同其 IPv4 形式），用于客户端以 IP 字面量连接的部署（RFC 6066 禁止在 SNI 中携带 IP）。TCP 与 HTTP/3 都使用实际目的地址，支持通配监听；QUIC 跨 worker 转交保留目的地址与接口，回复使用对应源地址。
   - **兜底**：客户端未发送 server_name 或名称与地址都不匹配时使用主证书完成握手。这是为单证书与通配符证书部署做出的产品选择，不发送 RFC 9325 §3.7 建议的 `unrecognized_name` 告警。
+- **OCSP Stapling**：`tls_.ocsp_response_` 为主身份的 DER `OCSPResponse`；每个 `sni_` 与 `local_addresses_` 项各自设置 `ocsp_response_`，与证书一起选择，绝不借用主身份的响应。仅向请求 `status_request` 的客户端发送；空值不附送，TLS 1.2 使用 CertificateStatus，TLS 1.3（含 HTTP/3）使用叶证书的 CertificateEntry 扩展。
+  - **输入与更新**：加载时拒绝非法 DER、BER 与尾随字节（`std::invalid_argument`），不与 `certificate_store_` 混用。不代为获取、刷新、验证签名或检查有效期；部署方负责提供相应证书的有效响应，使用 `replace_tls_identities()` 连同身份更新，新握手立即采用，已选身份的握手保留原证书与响应。
 - **运行期替换**：`co_await app().replace_tls_identities(caller, {.address_ = "0.0.0.0", .port_ = 8443}, new_tls)` 替换该 HTTPS 端点及其 HTTP/3 服务的固定身份集合，或证书库与选择策略。`ruvia::listener_endpoint` 以 `address_`（默认 `"0.0.0.0"`，按 `listen_config::address_` 同一规则规范化）与 `port_`（该监听配置的 `http_` 或 `https_` 端口）指名一个 TCP 服务，HTTP/3 服务经其 HTTPS 端点指名。
   - **校验在前**：候选凭据的文件读取、PEM 与 CA 加载、TLS 上下文准备卸载至 `caller` 借用的有界 `blocking_pool`，不阻塞事件循环。未知端点、非 HTTPS 端点、非法设置，或 `client_certificates_` 与 `max_outgoing_records_` 与现值不同，抛出 `std::invalid_argument`；文件不可读、PEM 无效或证书私钥不匹配抛出系统错误。失败保留原集合。
   - **异步发布**：每个业务 worker 在自身线程采用新集合，调用协程挂起至全部完成。此后的 ClientHello 使用新集合；既有连接与已越过 ClientHello 的握手保留原身份。每 worker 每协议族的持久 `SSL_CTX`、会话缓存与票据密钥不替换，会话仍只在原 SNI 名称下恢复。
@@ -221,7 +223,7 @@ ruvia::app().listen({
 | `tls_config::certificate_store_` | 共享证书库；不能同时配置固定 `identity_`、`sni_` 或 `local_addresses_` |
 | `tls_config::default_certificate_` | 未配置选择器时使用的证书 ID |
 | `tls_config::select_certificate_` | `shared_ptr<const tls_certificate_selector>`；必须配合证书库，完全接管身份选择 |
-| `tls_certificate_selection` | 连接 ID、真实本端/对端地址端口、SNI、QUIC 标志、legacy version，以及 cipher suites、signature algorithms、supported versions/groups、ALPN 的借用视图 |
+| `tls_certificate_selection` | 连接 ID、真实本端/对端地址（`optional<ip_address>` / `ip_address`）及端口、SNI、QUIC 标志、legacy version，以及 cipher suites、signature algorithms、supported versions/groups、ALPN 的借用视图 |
 | `offers_signature_algorithm(code)` | 按 TLS 签名方案编号检查客户端能力，可用于 RSA / ECDSA 选择 |
 
 - **发布与所有权**：每次变更原子发布不可变快照；握手在调用选择器前取得快照，期间替换或删除所选 ID 不影响该握手。已建立连接保留原证书引用，不重建上下文、会话缓存或票据密钥。
@@ -350,8 +352,8 @@ ruvia::app()
 
 | 记录方法 | 说明 |
 | --- | --- |
-| `tls_client_hello_record::connection_id()` / `http2_input_record::connection_id()` | 所属连接的 `conn_info::id()`，用于与该连接上的请求 `c.conn().id()` 关联 |
-| `tls_client_hello_record::local()` / `remote()` | 连接接入时的真实本端与对端地址端口（`conn_info::endpoint`） |
+| `tls_client_hello_record::connection_id()` / `http2_input_record::connection_id()` | 所属连接的 `conn_info::connection_id()`，用于与该连接上的请求 `c.conn().connection_id()` 关联 |
+| `tls_client_hello_record::local()` / `remote()` | 连接接入时的真实本端与对端地址端口（`ip_endpoint`，地址为拥有字节的 `ip_address`，文本经 `to_string()` 获取） |
 | `tls_client_hello_record::quic()` | HTTP/3（QUIC）连接为 `true`，TCP 上的 TLS 为 `false` |
 | `tls_client_hello_record::message()` | 完整 ClientHello 握手消息：`msg_type`（1）、3 字节长度与正文，已完成记录层或 CRYPTO 帧重组（[RFC 9846 §4.1.2](https://www.rfc-editor.org/rfc/rfc9846.html#section-4.1.2)） |
 | `http2_input_record::bytes()` | 一次读取的已解密 HTTP/2 连接入站字节 |
@@ -360,7 +362,7 @@ ruvia::app()
 
 - **ClientHello 时机**：每个收到的 ClientHello 交付一次，先于 SNI 与证书选择；HelloRetryRequest 之后的第二个 ClientHello 再次交付。TCP TLS 与 HTTP/3 均覆盖。
 - **HTTP/2 输入顺序**：同一连接的记录按线上顺序拼接，即从客户端连接前言（[RFC 9113 §3.4](https://www.rfc-editor.org/rfc/rfc9113.html#section-3.4)）开始的完整入站字节；TLS ALPN `h2` 与明文 prior-knowledge 两条路径一致。分块边界是读取边界，不是帧边界。
-- **连接标识**：`c.conn().id()` 在进程内跨 worker、宿主与重新启动保持唯一，退役 ID 永不复用；同一连接上的全部请求与观察记录共享。已服务连接永不为 0，`test_app` 请求无连接，恒为 0。
+- **连接标识**：`c.conn().connection_id()` 在进程内跨 worker、宿主与重新启动保持唯一，退役 ID 永不复用；同一连接上的全部请求与观察记录共享。已服务连接永不为 0，`test_app` 请求无连接，恒为 0。
 - **结构化 HTTP/2**：要求 `RUVIA_ENABLE_HTTP2`；帧与字段观察直接复用协议解析器，适合提取 Akamai 指纹所需事实，不重建请求字段顺序。字段、序号、规范化 flags 与无效输入的可观察范围见 [Sans-I/O 观察契约](core-and-http.md#421-帧与字段观察)；原始线上字节仍使用 `on_http2_input()`。
 
 #### 1.6.2 准入、生命周期与主动断连（`"ruvia/web/connection_events.h"`）
@@ -371,7 +373,7 @@ ruvia::app()
 | `on_connection_open(fn)` | `connection_open_` | `shared_ptr<void>(const connection_event&)`；建立连接附加状态，先于握手与请求分发 |
 | `on_connection_close(fn)` | `connection_close_` | `void(const connection_event&, const shared_ptr<void>&) noexcept`；ID 退役后、释放附加状态前调用 |
 
-- **事件事实**：`connection_event` 提供 `connection_id()`、`local()`、`remote()`、`quic()`；端点拥有 `asio::ip::address` 与端口，是接入时的真实传输快照，不采用转发头。可复制事件；借用地址的访问器禁止右值宿主。
+- **事件事实**：`connection_event` 提供 `connection_id()`、`local()`、`remote()`、`quic()`；端点统一为拥有 `ip_address` 与端口的 `ip_endpoint`，是接入时的真实传输快照，不采用转发头；不暴露 Asio 地址类型。事件可复制，端点地址按值返回；借用事件端点的访问器禁止右值宿主。
 - **配对与失败**：被准入回调拒绝的连接没有打开/关闭事件；获准连接覆盖握手失败、取消和冷任务销毁。打开回调抛异常时关闭一次、状态为空，并上报原异常。
 - **状态共享**：`context::connection_state()`、`request_stream::connection_state()`、`server_connection::connection_state()` 返回附加对象的共享所有权，供同连接全部请求使用。关闭回调只借用该 `shared_ptr`，需要延长对象寿命时显式复制。
 - **执行边界**：回调在所属 worker 同步执行且不持有控制锁，多 worker 可并发调用；QUIC 迁移不重复准入或打开，关闭仍恰好一次。
@@ -408,8 +410,8 @@ ruvia::app()
 
 | `ruvia::server_connection` 方法 | 说明 |
 | --- | --- |
-| `id()` | 连接标识，与 `conn_info::id()` 及该连接 `on_tls_client_hello` 记录的 `connection_id()` 相同 |
-| `local()` / `remote()` | 本端与对端地址端口（`conn_info::endpoint`） |
+| `connection_id()` | 连接标识，与 `conn_info::connection_id()` 及该连接 `on_tls_client_hello` 记录的 `connection_id()` 相同 |
+| `local()` / `remote()` | 本端与对端地址端口（`ip_endpoint`，地址为拥有字节的 `ip_address`，文本经 `to_string()` 获取） |
 | `tls()` | 明文监听器为 `nullptr`；否则为 `tls_connection_transport`（`alpn()`、`server_name()`、`client_certificate_subject()`） |
 | `stop_token()` | 应用停机时请求停止 |
 | `worker()` | 所属核心 `worker_handle`；可组合 `sleep_for`、`task_scope` 与 `run_blocking`，不会切换连接线程 |
@@ -437,7 +439,7 @@ ruvia::task<void> proxy(ruvia::request_stream& stream) {
             stream.request().known_method() == ruvia::http_known_method::connect ? ruvia::http_status::ok
                                                                                  : ruvia::http_status::switching_protocols);
         while (auto chunk = co_await tunnel->read()) {
-            co_await tunnel->write(std::string_view(*chunk));
+            co_await tunnel->write(*chunk);
         }
         co_await tunnel->finish();
         co_return;
@@ -461,7 +463,7 @@ ruvia::app()
 | `ruvia::request_stream` 方法 | 说明 |
 | --- | --- |
 | `request()` | 请求方法、目标与首部字段（`http_request`）；正文经 `body()` 读取 |
-| `conn()` | 连接元数据，`id()` 与 routes 监听器的 `c.conn().id()` 同一编号 |
+| `conn()` | 连接元数据，`connection_id()` 与 routes 监听器的 `c.conn().connection_id()` 同一编号 |
 | `connection_state()` / `abort_connection()` | 共享连接附加状态与整连接中止，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `body()` | 流式请求正文（`body_reader`），首次读取时发送待发的 `100 Continue`；隧道请求抛 `std::logic_error`（首部之后的字节属于隧道） |
 | `body_state()` | 初始正文分帧快照：`framing_`、可选 `content_length_` 与 `initial_end_stream_`；不必先读一次正文 |
@@ -509,7 +511,7 @@ ruvia::app()
 | `co_await add_listener(config)` | 运行期原子新增；候选准备失败完整回滚 |
 | `co_await prepare_listener(config)` / `prepare_listeners(configs)` | 分阶段准备单项或整批监听；票据契约见“监听准备与激活” |
 | `co_await add_connection_service(config)` | 启动前或运行期异步准备不绑定监听 socket 的 TCP/TLS 服务，供外部 Acceptor 交接 |
-| `adopt(endpoint, native_socket)` | 接管已连接 socket，失败也关闭句柄；首次绑定当前循环，执行相同的 TLS、HTTP、预算、超时与回收主链 |
+| `adopt(endpoint, native_socket, adopt_options = {})` | 接管已连接 socket，失败也关闭句柄；首次绑定当前循环，执行相同的 PROXY、TLS、HTTP、预算、超时与回收主链 |
 | `trusted_proxies(config)` | 启动前原子替换可信代理集合，默认不信任转发头；非法 CIDR 不改变原配置 |
 | `co_await start()` | 一次性准备全部服务后开放准入；失败先关闭并 join 已准备资源，再传播异常；允许先启动空宿主 |
 | `remove_listener(endpoint, options = {})` | 立即停止新准入；是否断开既有会话由 `listener_remove_options` 决定，同端点可以重新添加 |
@@ -549,6 +551,14 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 - **表示策略**：构造参数 `server_config` 的 `compression_` / `cors_` 生效，范围见 [1.2](#压缩cors-与可信代理配置)。
 - **异步准备**：TLS 凭据、CA 与上下文准备需要所属循环显式借用 `blocking_pool`；缺池或拒绝准入时传播失败，不退回 worker 同步执行。纯明文服务不要求池。冷任务返回前拥有配置、敏感输入与继承 socket；丢弃未等待的任务也会释放它们。
 - **Windows Acceptor**：启动、退役与关闭异步等待原生线程完成；退出等待不占阻塞池，因此池已满或已停止也不妨碍清理。
+
+#### PROXY 前缀与已读字节交接
+
+- **强制前缀**：`listen_config::proxy_protocol_ = true` 后，每条 TCP 连接先解析 HAProxy PROXY v1/v2，再做准入、TLS 与 HTTP；不猜测、不回退为普通 HTTP，缺失、非法及超长头直接关连。仅在可信前置代理可访问该端口时启用。
+- **有界接收**：v1 最多 107 字节，v2 整头最多 4096 字节；完成期限取已设 `request_header_timeout_`、`header_completion_timeout_` 的较小值，均关闭时仍以 30 秒为绝对上限，涓流不延期。
+- **唯一远端**：PROXY 源端点贯穿准入、连接事件、`conn_info`、访问日志、限流键与可信代理判定；v2 `LOCAL`、v1 `UNKNOWN` 及无 IP 源的头保留物理对端，socket 本地端点不变。HTTP/3 配置与 PROXY 策略互斥，配置时拒绝。
+- **外部嗅探**：`adopt_options::prefix_` 放回调用方已读的原始字节，调用返回前复制，优先于 socket 剩余字节交给 PROXY、TLS、HTTP/1、HTTP/2 或原始连接回调；`remote_` 可覆盖源端点，服务自身解析到的 PROXY 源仍优先。`http_server_group::adopt()` 的冷任务同样立即拥有输入；`application` 不新增接管入口。
+- **底层组合**：`"ruvia/http/proxy_protocol.h"` 提供无 I/O 的单遍增量 `proxy_protocol_parser`；结果只消费头字节，后续字节交还下一协议，TLV 视图借用解析器。
 
 #### 多循环共享服务
 
@@ -625,7 +635,7 @@ int main() {
 | `use<T>(args...)` / `use_at<T>(options, args...)` | 注册 worker-local 中间件；前缀按完整路径段匹配 |
 | `rate_limit(rate_limit_config)` | 本 router 的按客户端地址限流规则，与 `application::rate_limit()` 同形，含 `capacity_per_worker_`；未命中路由的请求同样计数，路由级 `rate_limit<>` 叠加生效 |
 | `bind_redis(alias, client)` / `bind_database(alias, client)` | 借入调用方拥有的同 worker `redis_client` / `db_client`，按别名供 `c.redis()` / `c.db()` 查找；受构建特性控制 |
-| `bind_http_client(clients)` | 借入一个 `http_client`，`c.client()` / `c.client(alias)` 使用其自身别名集合 |
+| `bind_http_client(alias, client)` | 以 router 自有唯一别名借入同 worker 的 `http_client`；`c.client(alias)` 选择该对象的默认配置，`c.client()` 等价于别名 `"default"` |
 | `bind_worker_state<T>(state)` | 借入调用方拥有的 per-worker 状态，供 `c.worker_state<T>()` 查找；每类型一份 |
 | `on_error(...)` / `on_not_found(...)` | 注册全局或路径作用域的错误处理器 |
 | `freeze()` | 原子编译并构造中间件；失败保留可编辑配置，成功后拒绝注册及再次封存 |
@@ -744,9 +754,9 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `co_await c.req().multipart(operation = {})` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
 | `c.req().validated<T>()` | 获取由校验中间件（`json_body<T>` 等）已完成解析和校验的模型常量引用 |
 | `co_await c.req().json_if<T>(operation = {})` / `co_await c.req().form_if<T>(operation = {})` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
-| `c.conn().remote()` / `c.conn().client()` | 直连对端地址端口（`.address()` / `.port()`）与经过 `trusted_proxies` 解析后的真实客户端地址 |
+| `c.conn().remote()` / `c.conn().client()` | 直连对端 `ip_endpoint`（`.address()` 返回拥有字节的 `ip_address`，`.port()` 返回端口）与经过 `trusted_proxies` 解析后的真实客户端文本地址 |
 | `c.conn().via_trusted_proxy()` / `c.conn().scheme()` / `c.conn().tls()` | 是否经过可信代理、连接有效 scheme（`http` / `https`）及 TLS 传输信息指针（`client_certificate_subject()`、协商的 `alpn()` 与客户端 `server_name()`，未协商或未发送时为空） |
-| `c.conn().id()` | 传输连接标识（`std::uint64_t`），规则见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
+| `c.conn().connection_id()` | 传输连接标识（`std::uint64_t`），规则见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `c.client()` / `c.client(alias)` | 获取当前请求作用域内的出站 HTTP 客户端句柄；与 `c.conn().client()`（客户端地址）不同 |
 | `c.early_data()` | 请求流是否实际携带 QUIC 0-RTT 数据；不会因为处理时握手已完成而清除此来源标记 |
 
@@ -1032,7 +1042,7 @@ Ruvia 提供三种静态文件服务方式：
 3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 重建并发布不可变目录快照。
    - **单一刷新者**：首个登记的 Worker 负责目录扫描、驻留读取与预压缩，其他 Worker 只采用发布快照。
    - **预压缩**：`server_config::compression_` 启用后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成的表示；仅设置预压缩开关不会生成这些表示。
-   - **失败保留**：重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一；原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。
+   - **失败保留**：重建或采用失败时继续服务上一份完整快照，`stats().document_root_refresh_failures_` 计数加一；原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。
    - **等价跳过**：指纹只作预筛选；随后比较完整规范化策略、目录索引及文件元数据，等价时不发布替换快照。
    - **无锁切换**：启动期固定各 Worker 的邮箱；发布者通过无锁原子指针交换移交快照所有权，各 Worker 在请求间隙采用，不获取发布者互斥锁。
    - **请求租约**：请求通过代际租约保活旧快照，正常结束或停机取消时归还；不做请求级快照引用计数。

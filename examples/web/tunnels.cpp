@@ -40,9 +40,8 @@ private:
     ruvia::task<void> bytes(ruvia::context& c) {
         auto& tunnel = c.tunnel();
         while (auto chunk = co_await tunnel.read()) {
-            // The server owns each received chunk; moving it into write can
-            // transfer compatible PMR storage without another payload copy.
-            co_await tunnel.write(std::move(*chunk));
+            // 借用块保持有效至下一次 read；write 在返回任务前拥有化输入。
+            co_await tunnel.write(*chunk);
         }
         co_await tunnel.finish();
     }

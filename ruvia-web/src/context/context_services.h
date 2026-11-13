@@ -410,6 +410,19 @@ public:
     [[nodiscard]] constexpr tls_served_certificate* served_certificate() const noexcept {
         return connection_services_.served_certificate_;
     }
+    [[nodiscard]] connection_lifecycle* connection_lifecycle_value() const noexcept {
+        return connection_services_.lifecycle_;
+    }
+    void note_connection_request() const noexcept {
+        if (auto* lifecycle = connection_services_.lifecycle_) {
+            lifecycle->note_request();
+        }
+    }
+    void set_connection_close_reason(connection_close_reason reason) const noexcept {
+        if (auto* lifecycle = connection_services_.lifecycle_) {
+            lifecycle->set_reason(reason);
+        }
+    }
     [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
         const auto* lifecycle = connection_services_.lifecycle_;
         return lifecycle == nullptr ? std::shared_ptr<void>{} : lifecycle->state();
@@ -423,16 +436,21 @@ public:
         const auto* lifecycle = connection_services_.lifecycle_;
         return lifecycle != nullptr && lifecycle->aborted();
     }
+    [[nodiscard]] std::string_view remote_address() const noexcept {
+        return connection_services_.info_.remote_text_;
+    }
+
     [[nodiscard]] context_services with_connection_lifecycle(connection_lifecycle& lifecycle) const noexcept {
         auto services = *this;
         services.connection_services_.lifecycle_ = &lifecycle;
-        services.connection_services_.info_.set_local(lifecycle.local_address(), lifecycle.local_port());
+        services.connection_services_.info_.local_ = lifecycle.local_endpoint();
+        services.connection_services_.info_.remote_ = lifecycle.remote_endpoint();
         return services;
     }
 
     // Views borrow connection-owned storage and remain valid for every context
     // created while that connection is dispatched. `connection_id` is the
-    // worker's conn_info::id() for the connection, zero without one.
+    // worker's conn_info::connection_id() for the connection, zero without one.
     [[nodiscard]] context_services with_plain_transport(
         std::uint64_t connection_id, std::string_view remote_address, std::uint16_t remote_port) const noexcept {
         auto services = *this;

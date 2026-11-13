@@ -30,7 +30,7 @@ namespace {
 
 }  // namespace
 
-application& application::document_root(document_root_config config) {
+application& application::document_root(document_root_config config) & {
     std::optional<detail::app_document_root_config> retired;
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change document root while app is running", [&config, &retired](detail::app_state& state_value) {
@@ -57,7 +57,7 @@ application& application::document_root(document_root_config config) {
         });
 }
 
-application& application::document_root(std::nullptr_t) {
+application& application::document_root(std::nullptr_t) & {
     std::optional<detail::app_document_root_config> retired;
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change document root while app is running",
@@ -66,7 +66,7 @@ application& application::document_root(std::nullptr_t) {
         });
 }
 
-application& application::use_middleware(detail::owned_middleware_descriptor descriptor) {
+application& application::use_middleware(detail::owned_middleware_descriptor descriptor) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot add app middleware while app is running",
         [&descriptor](detail::app_state& state_value) {
@@ -74,19 +74,19 @@ application& application::use_middleware(detail::owned_middleware_descriptor des
         });
 }
 
-application& application::blocking_pool(blocking_pool_options config) {
+application& application::blocking_pool(blocking_pool_options config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the blocking pool while app is running",
         [&config](detail::app_state& state_value) { state_value.blocking_pool_ = config; });
 }
 
-application& application::blocking_pool(std::nullptr_t) {
+application& application::blocking_pool(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the blocking pool while app is running",
         [](detail::app_state& state_value) { state_value.blocking_pool_.reset(); });
 }
 
-application& application::use_worker_state_definition(detail::worker_state_definition definition) {
+application& application::use_worker_state_definition(detail::worker_state_definition definition) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register worker state while app is running",
         [&definition](detail::app_state& state_value) {
@@ -94,7 +94,7 @@ application& application::use_worker_state_definition(detail::worker_state_defin
         });
 }
 
-application& application::on_error(http_error_handler handler) {
+application& application::on_error(http_error_handler handler) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
         [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
@@ -102,7 +102,7 @@ application& application::on_error(http_error_handler handler) {
         });
 }
 
-application& application::on_not_found(http_not_found_handler handler) {
+application& application::on_not_found(http_not_found_handler handler) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
         [handler = detail::own_callback(std::move(handler))](detail::app_state& state_value) mutable {
@@ -110,7 +110,7 @@ application& application::on_not_found(http_not_found_handler handler) {
         });
 }
 
-application& application::on_error(std::nullptr_t) {
+application& application::on_error(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
         [retired = detail::callback_registration<http_error_handler>()](detail::app_state& state_value) mutable {
@@ -119,7 +119,7 @@ application& application::on_error(std::nullptr_t) {
         });
 }
 
-application& application::on_not_found(std::nullptr_t) {
+application& application::on_not_found(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
         [retired = detail::callback_registration<http_not_found_handler>()](detail::app_state& state_value) mutable {
@@ -127,7 +127,7 @@ application& application::on_not_found(std::nullptr_t) {
         });
 }
 
-application& application::on_error(scoped_error_handler_options options) {
+application& application::on_error(scoped_error_handler_options options) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change error handler while app is running",
         [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {
@@ -135,7 +135,7 @@ application& application::on_error(scoped_error_handler_options options) {
         });
 }
 
-application& application::on_not_found(scoped_not_found_handler_options options) {
+application& application::on_not_found(scoped_not_found_handler_options options) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change not found handler while app is running",
         [prefix = options.prefix_, handler = detail::own_callback(std::move(options.handler_))](detail::app_state& state_value) mutable {

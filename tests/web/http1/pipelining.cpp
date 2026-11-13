@@ -271,7 +271,7 @@ TEST(Ruvia, an_unserializable_pipelined_response_becomes_a_500_after_the_held_on
     // closes without that counting as a connection failure.
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     const auto response = exchange_pipelined(server.endpoint(),
         get("/pipelining/item/before") + get("/pipelining/too-many-fields") + get("/pipelining/item/after"));
     server.finish();
@@ -282,7 +282,7 @@ TEST(Ruvia, an_unserializable_pipelined_response_becomes_a_500_after_the_held_on
     EXPECT_EQ(count_occurrences(output, "HTTP/1.1 "), std::size_t{2});
     EXPECT_TRUE(output.find("unsendable") == std::pmr::string::npos);
     EXPECT_TRUE(output.find("item-after") == std::pmr::string::npos);
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
 }
 
 TEST(Ruvia, a_stream_route_that_consumed_its_request_body_keeps_the_connection) {

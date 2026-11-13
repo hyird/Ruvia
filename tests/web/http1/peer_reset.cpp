@@ -131,7 +131,7 @@ void send_and_reset(asio::io_context& io, const asio::ip::tcp::endpoint& endpoin
 }
 
 void wait_until_idle(ruvia::application& app) {
-    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
+    ruvia::test::wait_until([&app] { return app.stats().active_connections_ == 0; }, 10s);
 }
 
 // Reads until the server closes the connection.
@@ -161,27 +161,27 @@ TEST(Ruvia, a_peer_reset_during_a_handlers_transport_write_is_a_normal_connectio
         send_and_reset(io, endpoint, "GET /peer-reset/inform HTTP/1.1\r\nHost: localhost\r\n\r\n");
         peer_closed.store(true);
         wait_until_idle(app);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
 
         peer_closed.store(false);
         send_and_reset(io, endpoint,
             "POST /peer-reset/body HTTP/1.1\r\nHost: localhost\r\nContent-Length: 4\r\nExpect: 100-continue\r\n\r\n");
         peer_closed.store(true);
         wait_until_idle(app);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
 
         send_and_read_to_close(io, endpoint, "GET /peer-reset/idle-stream HTTP/1.1\r\nHost: localhost\r\n\r\n");
         wait_until_idle(app);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
 
         send_and_read_to_close(io, endpoint, "GET /peer-reset/head-only HTTP/1.1\r\nHost: localhost\r\n\r\n");
         wait_until_idle(app);
-        EXPECT_EQ(app.http_stats().active_connections_, std::size_t{0});
+        EXPECT_EQ(app.stats().active_connections_, std::size_t{0});
         EXPECT_TRUE(head_write_failed.load());
         EXPECT_TRUE(head_write_aborted.load());
 
         EXPECT_EQ(error_handler_calls.load(), std::size_t{0});
-        EXPECT_EQ(app.http_stats().connection_failures_, std::size_t{0});
+        EXPECT_EQ(app.stats().connection_failures_, std::size_t{0});
         // The failed write ended each handler; none ran to its end.
         EXPECT_EQ(handlers_finished.load(), std::size_t{0});
     }

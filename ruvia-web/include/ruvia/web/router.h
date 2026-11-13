@@ -135,10 +135,9 @@ public:
     router& bind_database(std::string_view alias, const db_client& client) &;
     router& bind_database(std::string_view, const db_client&&) & = delete;
 #endif
-    // Lookups use the client's own aliases: client() its sole or "default"
-    // configuration, client(alias) that alias.
-    router& bind_http_client(const http_client& clients) &;
-    router& bind_http_client(const http_client&&) & = delete;
+    // alias names this client's default configuration in this router.
+    router& bind_http_client(std::string_view alias, const http_client& client) &;
+    router& bind_http_client(std::string_view, const http_client&&) & = delete;
     // One instance per type; the router never destroys it.
     template <typename state_type>
     router& bind_worker_state(state_type& state) & {

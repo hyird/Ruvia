@@ -69,7 +69,7 @@ void decode_http_client_response_body(http_client_response_state& state_value,
     try {
         const auto& parsed_coding = *state_value.content_coding_;
         if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
-            throw http_client_error(http_client_error::code_type::protocol_error,
+            throw http_client_error(make_error_code(http_client_errc::protocol_error),
                 "invalid HTTP response Content-Encoding");
         }
         // Encoded bytes are never exposed, so the unread part of buffered_ and
@@ -83,7 +83,7 @@ void decode_http_client_response_body(http_client_response_state& state_value,
             encoded = state_value.pending_;
         } else {
             if (state_value.pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_bytes) {
-                throw http_client_error(http_client_error::code_type::response_too_large,
+                throw http_client_error(make_error_code(http_client_errc::response_too_large),
                     "HTTP response exceeds configured byte limit");
             }
             joined.reserve(buffered_bytes + state_value.pending_.size());
@@ -113,10 +113,10 @@ void decode_http_client_response_body(http_client_response_state& state_value,
         }
         const auto* failure = std::get_if<http_content_decode_error>(&decoded);
         if (failure != nullptr && *failure == http_content_decode_error::decoded_size_exceeded) {
-            throw http_client_error(http_client_error::code_type::response_too_large,
+            throw http_client_error(make_error_code(http_client_errc::response_too_large),
                 "HTTP response exceeds configured byte limit");
         }
-        throw http_client_error(http_client_error::code_type::protocol_error,
+        throw http_client_error(make_error_code(http_client_errc::protocol_error),
             "invalid HTTP response Content-Encoding");
     } catch (...) {
         // Encoded bytes were never exposed: the head selected collection before
@@ -128,7 +128,7 @@ void decode_http_client_response_body(http_client_response_state& state_value,
 }
 
 [[noreturn]] void throw_body_decoding_timeout() {
-    throw http_client_error(http_client_error::code_type::timeout, "HTTP response body decoding timed out");
+    throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP response body decoding timed out");
 }
 
 }  // namespace
@@ -137,12 +137,12 @@ void accept_extended_connect_websocket_response(http_client_websocket_handshake&
     http_status_code status, std::span<const http_header> headers, bool stream_ended,
     std::string_view error_message) {
     if (!status.is_successful() || stream_ended) {
-        throw http_client_error(http_client_error::code_type::handshake_rejected, error_message, status);
+        throw http_client_error(make_error_code(http_client_errc::handshake_rejected), error_message, status);
     }
     const auto negotiated = websocket.negotiation_.validate_fields(headers);
     const auto* selected = std::get_if<websocket_client_negotiation_result_view>(&negotiated);
     if (selected == nullptr) {
-        throw http_client_error(http_client_error::code_type::handshake_rejected, error_message, status);
+        throw http_client_error(make_error_code(http_client_errc::handshake_rejected), error_message, status);
     }
     websocket.selected_subprotocol_.assign(selected->selected_subprotocol_);
     websocket.compression_ = selected->compression_;
@@ -193,7 +193,7 @@ void publish_http_client_final_head(
             validate_http_connect_udp_response(
                 state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_)
                 .has_value()) {
-            throw http_client_error(http_client_error::code_type::protocol_error, "invalid CONNECT-UDP response head");
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid CONNECT-UDP response head");
         }
         tunnel->accepted_ = head.opens_tunnel_;
         if (!tunnel->accepted_) {

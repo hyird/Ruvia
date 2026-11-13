@@ -57,11 +57,10 @@ using request_stream_websocket_accept = callback_ref<task<websocket_accept_resul
 using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
-// One HTTP request a listener_dispatch::request_stream listener received --
-// over HTTP/1.1, HTTP/2 or HTTP/3 -- handed to application::on_request_stream
-// in place of the application's routes. The server owns it and it is valid
-// only while the callback task runs; every member must be used on the worker
-// running that task.
+// One HTTP request a listener_dispatch::request_stream listener received over
+// HTTP/1.1, HTTP/2 or HTTP/3, handed to its host's request callback instead of
+// application routes. The host owns it only while the callback task runs;
+// every member runs on that callback's worker.
 //
 // The server still frames and validates the request, answers a target this
 // connection cannot carry with 421, an unsupported Expect with 417 and a
@@ -92,7 +91,7 @@ public:
     [[nodiscard]] const http_request& request() const& noexcept RUVIA_LIFETIMEBOUND;
     const http_request& request() const&& = delete;
 
-    // conn_info::id() names the connection, as on routes listeners.
+    // conn_info::connection_id() names the connection, as on routes listeners.
     [[nodiscard]] const conn_info& conn() const& noexcept RUVIA_LIFETIMEBOUND;
     const conn_info& conn() const&& = delete;
 
@@ -239,6 +238,8 @@ public:
 
 private:
     friend struct detail::request_stream_access;
+    // http_client_response::pipe_to() binds its forward to operation_scope_.
+    friend class http_client_response;
     friend class router;
     friend class detail::router_state;
 
@@ -267,10 +268,9 @@ private:
     bool routed_{false};
 };
 
-// application-owned handler of every listener_dispatch::request_stream
-// listener, invoked on the worker that received the request; workers call the
-// same target concurrently, so it must be thread-safe. The request ends when
-// the returned task completes.
+// Host-owned handler of every listener_dispatch::request_stream listener.
+// application may share one target across workers; http_server_group builds
+// a target per worker. The request ends when its returned task completes.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using request_stream_callback = move_only_function<task<void>(request_stream&)>;
 

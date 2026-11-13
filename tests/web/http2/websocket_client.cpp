@@ -193,9 +193,9 @@ void exercise_client(bool reset_peer, bool secure = false) {
                 }
                 co_await client_handle.close({});
             }
-        } catch (const ruvia::http_client_error& error) {
-            reset_observed = error.code() == ruvia::http_client_error::code_type::protocol_error;
-            if (!reset_peer || !reset_observed) {
+        } catch (const std::system_error&) {
+            reset_observed = true;
+            if (!reset_peer) {
                 failure = std::current_exception();
             }
         } catch (...) {
@@ -352,12 +352,10 @@ void exercise_closing_peer(closing_peer behavior) {
             auto websocket = co_await client.client().websocket("/").connect();
             auto& client_handle = websocket;
             co_await client_handle.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "complete"});
-            close_completed = true;
-        } catch (const ruvia::http_client_error& error) {
-            protocol_error = error.code() == ruvia::http_client_error::code_type::protocol_error;
-            if (!protocol_error) {
-                failure = std::current_exception();
-            }
+            close_completed = client_handle.termination() == ruvia::websocket_termination::local_close;
+            protocol_error = client_handle.termination() == ruvia::websocket_termination::eof;
+        } catch (const std::system_error&) {
+            protocol_error = true;
         } catch (...) {
             failure = std::current_exception();
         }
@@ -492,7 +490,7 @@ void exercise_handshake_end(handshake_end mode) {
     });
     bool connected = false;
     bool closed_by_peer = false;
-    std::optional<ruvia::http_client_error::code_type> connect_error;
+    std::optional<std::error_code> connect_error;
     const auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
@@ -531,7 +529,7 @@ void exercise_handshake_end(handshake_end mode) {
         EXPECT_TRUE(!connect_error.has_value());
     } else {
         EXPECT_TRUE(!connected);
-        EXPECT_TRUE(connect_error == ruvia::http_client_error::code_type::handshake_rejected);
+        EXPECT_TRUE(connect_error == ruvia::make_error_code(ruvia::http_client_errc::handshake_rejected));
     }
     EXPECT_TRUE(reached_eof);
 }

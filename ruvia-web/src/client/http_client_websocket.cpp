@@ -1,932 +1,175 @@
-#include "ruvia/web/http_client_websocket.h"
-
 #include <algorithm>
 #include <exception>
 #include <stdexcept>
 #include <utility>
 
 #include "ruvia/core/bytes.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
-#include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/websocket_connection.h"
+#include "ruvia/web/http_client_websocket_request.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_state.h"
 #include "http/inline_http_header_views.h"
 #include "tls/tls_random.h"
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
-#include "websocket/http_websocket_liveness.h"
+#include "websocket/http_websocket_connection.h"
+#include "websocket/websocket_facade.h"
 
 namespace ruvia::detail {
 
-// The termination an abort for `reason` records unless an earlier cause was.
-[[nodiscard]] constexpr websocket_termination websocket_abort_termination(http_client_error::code_type reason) noexcept {
-    if (reason == http_client_error::code_type::timeout) {
-        return websocket_termination::timeout;
-    }
-    if (reason == http_client_error::code_type::io_error || reason == http_client_error::code_type::tls_failed) {
-        return websocket_termination::io_error;
-    }
-    return websocket_termination::aborted;
-}
-
-class http_client_websocket_state final {
+// Only adapts tunnel I/O. All WebSocket framing, lanes, control traffic,
+// interruption and close policy live in websocket_session_connection.
+class http_client_websocket_transport final {
 public:
-    http_client_websocket_state(http_client_tunnel tunnel, const worker_handle& worker,
-        const http_client_websocket_handshake& handshake, websocket_client_deflate_offer deflate,
-        operation_options options,
-        websocket_lifecycle_options lifecycle, std::size_t message_limit,
-        std::optional<timeout_duration> read_timeout)
-        : worker_(worker),
-          tunnel_(std::move(tunnel)),
-          transport_state_(*tunnel_.response_.state_),
-          input_(transport_state_.resource_),
-          protocol_(input_, {.message_limit_ = protocol_byte_limit::limited(message_limit),
-                                .compression_ = handshake.compression_,
-                                .role_ = websocket_connection_role::client,
-                                .mask_key_generator_ = &mask_key,
-                                .deflater_ = deflate.deflater_}),
-          subprotocol_(handshake.selected_subprotocol_, transport_state_.resource_),
-          options_(std::move(options)),
-          lifecycle_(normalize_websocket_lifecycle_options(lifecycle)),
-          read_timeout_(read_timeout),
-          write_lane_(worker),
-          read_signal_(worker),
-          heartbeat_signal_(worker),
-          cancellation_(make_worker_cancellation_target(*this, worker)) {}
+    http_client_websocket_transport(http_client_tunnel tunnel, connection_scanner::entry& activity)
+        : tunnel_(std::move(tunnel)),
+          response_(*tunnel_.response_.state_),
+          activity_(activity) {}
 
-    ~http_client_websocket_state() {
-        cancellation_->detach(*this);
-    }
-
-    void require_current() const {
-        if (!worker_.is_current()) {
-            throw std::logic_error("WebSocket requires its origin worker");
+    template <typename check_type>
+    task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot) {
+        struct cancellation_reset final {
+            asio::cancellation_slot slot_;
+            ~cancellation_reset() {
+                if (slot_.is_connected()) {
+                    slot_.clear();
+                }
+            }
+        } reset{slot};
+        if (slot.is_connected()) {
+            slot.assign([this](asio::cancellation_type) { response_.data_signal_.notify(); });
         }
-    }
-
-    void check() const {
-        if (failure_) {
-            throw http_client_error(*failure_, "WebSocket operation terminated");
+        while (response_.offset_ == response_.buffered_.size() && response_.pending_.empty() &&
+               !response_.receive_complete() && !response_.failure_ && !response_.pool_closed_ && !response_.abandoned_) {
+            check();
+            co_await response_.data_signal_.wait();
         }
-        if (ended_) {
-            throw http_client_error(http_client_error::code_type::closing, "WebSocket is closed");
+        check();
+        try {
+            const auto chunk = co_await tunnel_.read();
+            if (!chunk) {
+                co_return false;
+            }
+            bytes.append(as_chars(*chunk));
+            co_return true;
+        } catch (const http_client_error& error) {
+            throw inbound_transport_error(transport_error(error), "WebSocket tunnel read");
         }
     }
-
-    void abort(http_client_error::code_type reason = http_client_error::code_type::cancelled) noexcept {
-        if (!worker_.is_current()) {
-            std::terminate();
+    task<std::error_code> write_bytes(std::string_view bytes, http_stream_end end) {
+        try {
+            while (!bytes.empty()) {
+                const auto chunk = bytes.substr(0, 16384);
+                co_await tunnel_.write(chunk);
+                activity_.note_write_progress();
+                bytes.remove_prefix(chunk.size());
+            }
+            if (end == http_stream_end::end) {
+                co_await tunnel_.finish();
+            }
+            co_return std::error_code{};
+        } catch (const http_client_error& error) {
+            co_return transport_error(error);
         }
-        if (!failure_ && !ended_) {
-            failure_ = reason;
-        }
-        (void)protocol_.abort(websocket_abort_termination(reason));
-        heartbeat_timer_.cancel();
+    }
+    void abort() noexcept {
         tunnel_.abort();
-        heartbeat_signal_.notify();
-        write_lane_.notify();
-        transport_state_.data_signal_.notify();
+        response_.data_signal_.notify();
+    }
+    http_client_response_state& response() noexcept {
+        return response_;
     }
 
-    void cancel_operation_by_id(std::uint64_t id) noexcept {
-        if (id == 0) {
-            return;
+private:
+    static std::error_code transport_error(const http_client_error& error) noexcept {
+        if (error.code() == std::errc::timed_out) {
+            return std::make_error_code(std::errc::timed_out);
         }
-        if (id == read_id_) {
-            interrupt(operation_lane::read, http_client_error::code_type::cancelled);
-        } else if (id == write_id_) {
-            interrupt(operation_lane::write, http_client_error::code_type::cancelled);
+        if (error.code() == std::errc::operation_canceled) {
+            return std::make_error_code(std::errc::operation_canceled);
         }
+        return std::make_error_code(std::errc::io_error);
     }
+    http_client_tunnel tunnel_;
+    http_client_response_state& response_;
+    connection_scanner::entry& activity_;
+};
 
-    std::pmr::memory_resource* resource() noexcept {
-        return transport_state_.resource_;
+class client_websocket_session final : public std::enable_shared_from_this<client_websocket_session> {
+public:
+    client_websocket_session(http_client_pool& pool, http_client_tunnel tunnel,
+        const http_client_websocket_handshake& handshake, websocket_client_deflate_offer deflate,
+        websocket_lifecycle_options lifecycle, std::size_t message_limit)
+        : worker_(pool.worker()),
+          retire_signal_(worker_),
+          scanner_(worker_, scanner_options(lifecycle)),
+          connection_(http_client_websocket_transport(std::move(tunnel), entry_), worker_, entry_, normalize_websocket_lifecycle_options(lifecycle),
+              protocol_byte_limit::limited(message_limit), *process_resource(), {},
+              {.compression_ = handshake.compression_, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_key, .deflater_ = deflate.deflater_},
+              std::pmr::string(handshake.selected_subprotocol_, process_resource())),
+          scanner_guard_(scanner_, entry_, {&connection_, &abort_transport, &abort_transport}) {
+        entry_.enter_long_lived();
+        scanner_.start();
     }
-
-    std::string_view subprotocol() const noexcept {
-        return subprotocol_;
+    static void retire(void* target) noexcept {
+        auto& self = *static_cast<client_websocket_session*>(target);
+        self.retiring_ = true;
+        self.retire_signal_.notify();
     }
-
-    http_protocol_version protocol_version() const {
-        return tunnel_.protocol_version();
-    }
-    const http_client_connection_info& connection_info() const noexcept {
-        return transport_state_.connection_info_;
-    }
-    bool connected() const noexcept {
-        return !failure_ && !ended_ && !transport_state_.pool_closed_ &&
-               !transport_state_.failure_ && !transport_state_.tunnel_->output_.stopped_ &&
-               protocol_.liveness_mode() == websocket_liveness_mode::open;
-    }
-    std::optional<std::uint16_t> peer_close_code() const noexcept {
-        return peer_close_.code();
-    }
-    std::string_view peer_close_reason() const noexcept {
-        return peer_close_.reason();
-    }
-    const worker_handle& worker() const noexcept {
-        return worker_;
-    }
-    const websocket_connection& protocol() const noexcept {
-        return protocol_;
-    }
-
-    static task<void> heartbeat(std::shared_ptr<http_client_websocket_state> state) {
-        try {
-            state->refresh_heartbeat();
-            while (state->heartbeat_open()) {
-                if (std::exchange(state->heartbeat_due_, false)) {
-                    co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
-                    if (state->heartbeat_decision() == websocket_liveness_decision::send_ping) {
-                        write_guard lane(*state);
-                        const auto challenge = ++state->heartbeat_sequence_;
-                        state->liveness_ = websocket_sending_ping{challenge};
-                        const auto payload = websocket_heartbeat_payload(challenge);
-                        if (state->protocol_.submit_frame(websocket_opcode::ping,
-                                std::string_view(payload.data(), payload.size())) != websocket_frame_submit_status::accepted) {
-                            throw http_client_error(http_client_error::code_type::protocol_error, "WebSocket heartbeat rejected");
-                        }
-                        co_await state->flush();
-                        if (std::holds_alternative<websocket_sending_ping>(state->liveness_)) {
-                            state->liveness_ = websocket_awaiting_pong{steady_now_ms(), challenge};
-                        }
-                        lane.commit();
-                    }
-                }
-                state->refresh_heartbeat();
-                if (state->heartbeat_open()) {
-                    co_await state->heartbeat_signal_.wait();
-                }
-            }
-        } catch (...) {
-            state->abort(http_client_error::code_type::closing);
+    static task<void> run(std::shared_ptr<client_websocket_session> self, stop_token pool_stop) {
+        auto stop_registration = pool_stop.register_callback([self = self.get()] {
+            self->retire_signal_.notify();
+        });
+        auto& response = self->connection_.transport().response();
+        while (!self->retiring_ && !response.pool_closed_ && !pool_stop.stop_requested()) {
+            co_await self->retire_signal_.wait();
         }
-        state->heartbeat_timer_.cancel();
-    }
-
-    // The open fragmented message, which owns the data lane until its final
-    // fragment; the sequence tells its writer apart from a later one.
-    [[nodiscard]] std::uint64_t begin_fragmented_message() {
-        require_current();
-        if (fragmented_message_active_) {
-            throw std::logic_error("a fragmented WebSocket message is already open");
-        }
-        fragmented_message_active_ = true;
-        return ++fragmented_message_sequence_;
-    }
-    [[nodiscard]] bool fragmented_message_active() const noexcept {
-        return fragmented_message_active_;
-    }
-    [[nodiscard]] bool fragmented_message_open(std::uint64_t id) const noexcept {
-        return fragmented_message_active_ && fragmented_message_sequence_ == id;
-    }
-    void end_fragmented_message() noexcept {
-        fragmented_message_active_ = false;
-    }
-
-    static task<void> write(std::shared_ptr<http_client_websocket_state> state,
-        websocket_opcode opcode, std::pmr::string payload, websocket_send_options options,
-        operation_options operation_options_value, websocket_write_extent extent) {
-        state->require_current();
-        auto active = claim_operation_lane(state->write_active_, "concurrent WebSocket output operations are not supported");
-        operation_guard operation(*state, operation_lane::write, std::move(operation_options_value));
-        try {
-            co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
-            write_guard lane(*state);
-            const auto submitted = state->protocol_.submit_frame(opcode, payload,
-                {.final_ = extent != websocket_write_extent::fragment, .compress_ = options.compress_});
-            std::pmr::string(payload.get_allocator()).swap(payload);
-            switch (submitted) {
-                case websocket_frame_submit_status::accepted:
-                    break;
-                case websocket_frame_submit_status::message_too_large:
-                    throw http_client_error(http_client_error::code_type::message_too_large, "WebSocket message exceeds configured limit");
-                case websocket_frame_submit_status::not_open:
-                    throw http_client_error(http_client_error::code_type::closing, "WebSocket is closing");
-                default:
-                    throw http_client_error(http_client_error::code_type::protocol_error, "invalid WebSocket message");
-            }
-            co_await state->flush();
-            lane.commit();
-        } catch (...) {
-            state->abort();
-            if (state->failure_ == http_client_error::code_type::timeout) {
-                state->check();
-            }
-            throw;
-        }
-        if (extent == websocket_write_extent::final_fragment) {
-            state->end_fragmented_message();
-        }
-    }
-
-    static task<std::optional<websocket_message>> read(std::shared_ptr<http_client_websocket_state> state,
-        operation_options options) {
-        state->require_current();
-        read_lane_lease active(*state);
-        if (state->ended_ && !state->failure_) {
-            co_return std::nullopt;
-        }
-        operation_guard operation(*state, operation_lane::read, std::move(options));
-        std::optional<http_client_error::code_type> interrupted;
-        try {
-            state->resume_pong_deadline();
-            for (;;) {
-                const auto event = co_await state->next_event();
-                if (const auto* message = event.message()) {
-                    co_return *message;
-                }
-                if (event.close() || event.transport_end()) {
-                    co_await state->finish_close();
-                    co_return std::nullopt;
-                }
-            }
-        } catch (const read_interruption&) {
-            interrupted = state->read_interrupt_;
-        } catch (const http_client_error&) {
-            state->abort();
-            // Once close() has sent its Close, whatever ends the handshake is
-            // this read's end; termination() tells how.
-            if (!state->local_close_sent_) {
-                if (state->failure_ == http_client_error::code_type::timeout) {
-                    state->check();
-                }
-                throw;
-            }
-        } catch (...) {
-            state->abort();
-            throw;
-        }
-        if (!interrupted) {
-            co_return std::nullopt;
-        }
-        throw http_client_error(*interrupted, "WebSocket read interrupted");
-    }
-
-    static task<void> close(std::shared_ptr<http_client_websocket_state> state,
-        websocket_close_code code, std::pmr::string reason, operation_options options) {
-        state->require_current();
-        auto write_active = claim_operation_lane(state->write_active_, "WebSocket close cannot overlap an output operation");
-        if (state->ended_ && !state->failure_) {
-            co_return;
-        }
-        // A pending read observes the peer Close itself; otherwise close reads,
-        // and holds the read lane while it does.
-        std::optional<read_lane_lease> reading;
-        if (!state->read_active_) {
-            reading.emplace(*state);
-        }
-        operation_guard operation(*state, operation_lane::write, std::move(options));
-        worker_timer_registration close_timer;
-        if (const auto bound = state->lifecycle_.close_handshake_timeout_) {
-            (void)state->worker_.schedule_timer(close_timer, deadline_after(bound->value()),
-                [state = state.get()](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        state->abort(http_client_error::code_type::timeout);
-                    }
-                });
-        }
-        try {
-            {
-                co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
-                write_guard lane(*state);
-                if (state->protocol_.submit_close(code, reason) != websocket_close_submit_status::accepted) {
-                    throw http_client_error(http_client_error::code_type::invalid_request, "invalid WebSocket close");
-                }
-                state->local_close_sent_ = true;
-                std::pmr::string(reason.get_allocator()).swap(reason);
-                co_await state->flush();
-                lane.commit();
-            }
-            // RFC 6455 section 7.1.1: a pending read observes the peer Close
-            // and completes the handshake; once it ends early, close() reads.
-            while (!state->ended_) {
-                if (!reading) {
-                    if (state->read_active_) {
-                        co_await state->read_signal_.wait();
-                        continue;
-                    }
-                    reading.emplace(*state);
-                }
-                const auto event = co_await state->next_event();
-                if (event.close() || event.transport_end()) {
-                    close_timer.cancel();
-                    co_await state->finish_close();
-                }
-            }
-        } catch (...) {
-            state->abort();
-            if (state->failure_ == http_client_error::code_type::timeout) {
-                state->check();
-            }
-            throw;
+        stop_registration.reset();
+        self->scanner_.stop();
+        co_await self->connection_.detach_and_drain_writes();
+        if (const auto failure = self->connection_.take_background_failure()) {
+            report_unhandled_failure("WebSocket client session", failure);
         }
     }
 
 private:
-    enum class operation_lane : std::uint8_t {
-        read,
-        write,
-    };
-
-    // Unwinds an interrupted read to read(); it never leaves this state.
-    struct read_interruption final {};
-
-    // A read deadline or stop request ends only that read; an output one
-    // aborts the session.
-    void interrupt(operation_lane lane, http_client_error::code_type reason) noexcept {
-        if (lane == operation_lane::write) {
-            abort(reason);
-            return;
-        }
-        if (!read_active_ || read_interrupt_) {
-            return;
-        }
-        read_interrupt_ = reason;
-        write_lane_.notify();
-        transport_state_.data_signal_.notify();
+    static connection_scanner_options scanner_options(const websocket_lifecycle_options& lifecycle) {
+        auto interval = std::chrono::milliseconds(1000);
+        const auto tighten = [&](const std::optional<timeout_duration>& timeout) {
+            if (timeout) {
+                interval = std::min(interval, std::max(std::chrono::milliseconds(1), timeout->value() / 2));
+            }
+        };
+        tighten(lifecycle.heartbeat_.ping_interval_);
+        tighten(lifecycle.heartbeat_.pong_timeout_);
+        tighten(lifecycle.close_handshake_timeout_);
+        return {.scan_interval_ = interval};
     }
-
-    void throw_if_read_interrupted() const {
-        if (read_interrupt_) {
-            throw read_interruption{};
-        }
-    }
-
-    class operation_guard final {
-    public:
-        operation_guard(http_client_websocket_state& state, operation_lane lane, operation_options options)
-            : state_(state),
-              lane_(lane),
-              cancellation_(state.cancellation_, lane == operation_lane::read ? state.read_id_ : state.write_id_) {
-            const auto effective = override_operation_options(state.options_, std::move(options));
-            if (effective.stop_token_.stop_requested()) {
-                throw http_client_error(http_client_error::code_type::cancelled, "WebSocket operation cancelled");
-            }
-            const auto timeout = operation_deadline(effective.timeout_);
-            if (const auto deadline = timeout.deadline()) {
-                (void)state.worker_.schedule_timer(timer_, *deadline, [&state, lane](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        state.interrupt(lane, http_client_error::code_type::timeout);
-                    }
-                });
-            }
-            cancellation_.arm(effective.stop_token_);
-            state.check();
-        }
-        ~operation_guard() {
-            if (lane_ == operation_lane::read) {
-                state_.read_interrupt_.reset();
-            }
-        }
-        operation_guard(const operation_guard&) = delete;
-        operation_guard& operator=(const operation_guard&) = delete;
-
-    private:
-        http_client_websocket_state& state_;
-        operation_lane lane_;
-        worker_timer_registration timer_;
-        worker_cancellation_registration<worker_cancellation_target<http_client_websocket_state>> cancellation_;
-    };
-
-    // Holds the read lane; releasing it wakes a close() waiting for a pending read.
-    class read_lane_lease final {
-    public:
-        explicit read_lane_lease(http_client_websocket_state& state)
-            : state_(state) {
-            if (state_.read_active_) {
-                throw std::logic_error("concurrent WebSocket reads are not supported");
-            }
-            state_.read_active_ = true;
-        }
-        ~read_lane_lease() {
-            state_.read_active_ = false;
-            state_.read_signal_.notify();
-        }
-        read_lane_lease(const read_lane_lease&) = delete;
-        read_lane_lease& operator=(const read_lane_lease&) = delete;
-
-    private:
-        http_client_websocket_state& state_;
-    };
-
-    class write_guard final {
-    public:
-        explicit write_guard(http_client_websocket_state& state)
-            : state_(state) {
-            state_.check();
-            state_.write_lane_.begin();
-        }
-        ~write_guard() {
-            if (!committed_) {
-                state_.abort();
-            }
-            state_.finish_write();
-        }
-        write_guard(const write_guard&) = delete;
-        write_guard& operator=(const write_guard&) = delete;
-
-        void commit() noexcept {
-            committed_ = true;
-        }
-
-    private:
-        http_client_websocket_state& state_;
-        bool committed_{false};
-    };
-
     static bool mask_key(void*, websocket_mask_key_type& key) noexcept {
         return fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), key.size()));
     }
-
-    [[nodiscard]] http_client_output_queue& output() noexcept {
-        return transport_state_.tunnel_->output_;
+    static void abort_transport(void* target) noexcept {
+        static_cast<websocket_session_connection<http_client_websocket_transport>*>(target)->abort();
     }
-
-    [[nodiscard]] bool heartbeat_open() noexcept {
-        return !failure_ && !ended_ && !output().stopped_ && !transport_state_.pool_closed_ &&
-               protocol_.liveness_mode() == websocket_liveness_mode::open;
-    }
-
-    [[nodiscard]] websocket_liveness_decision heartbeat_decision() noexcept {
-        return evaluate_websocket_liveness(lifecycle_, protocol_.liveness_mode(), liveness_,
-            write_lane_.write_in_progress(), read_active_ && !write_lane_.write_in_progress(),
-            last_active_ms_, steady_now_ms());
-    }
-
-    void refresh_heartbeat() {
-        heartbeat_timer_.cancel();
-        if (!lifecycle_.heartbeat_.ping_interval_ || !heartbeat_open() ||
-            (!read_active_ && !write_lane_.write_in_progress() &&
-                std::holds_alternative<websocket_awaiting_pong>(liveness_))) {
-            return;
-        }
-        const auto delay = websocket_heartbeat_delay(lifecycle_, liveness_,
-            write_lane_.write_in_progress(), last_active_ms_, steady_now_ms());
-        (void)worker_.schedule_timer(heartbeat_timer_, deadline_after(delay),
-            [this](worker_timer_outcome outcome) noexcept {
-                if (outcome != worker_timer_outcome::expired) {
-                    return;
-                }
-                try {
-                    const auto decision = heartbeat_decision();
-                    if (decision == websocket_liveness_decision::abort_transport) {
-                        abort(http_client_error::code_type::timeout);
-                        return;
-                    }
-                    heartbeat_due_ = decision == websocket_liveness_decision::send_ping;
-                    heartbeat_signal_.notify();
-                    // A blocked Ping/application write cannot run the background
-                    // coroutine; its timer still enforces the independent stall bound.
-                    if (!heartbeat_due_) {
-                        refresh_heartbeat();
-                    }
-                } catch (...) {
-                    abort(http_client_error::code_type::closing);
-                }
-            });
-    }
-
-    void touch_activity() {
-        last_active_ms_ = steady_now_ms();
-        refresh_heartbeat();
-    }
-
-    void resume_pong_deadline() {
-        resume_websocket_pong_deadline(lifecycle_, liveness_, read_active_ && !write_lane_.write_in_progress());
-        refresh_heartbeat();
-    }
-
-    void finish_write() noexcept {
-        write_lane_.finish();
-        try {
-            refresh_heartbeat();
-        } catch (...) {
-            abort(http_client_error::code_type::closing);
-        }
-    }
-
-    task<void> flush() {
-        refresh_heartbeat();
-        for (;;) {
-            check();
-            const auto plan = protocol_.output_plan();
-            if (!plan.bytes().empty()) {
-                constexpr std::size_t chunk_bytes = 16384;
-                const auto bytes = plan.bytes().substr(0, chunk_bytes);
-                try {
-                    co_await tunnel_.write(bytes);
-                } catch (const http_client_error& error) {
-                    record_transport_failure(error);
-                    throw;
-                }
-                touch_activity();
-                if (protocol_.consume_output(bytes.size()) == websocket_output_consume_status::out_of_range) {
-                    std::terminate();
-                }
-                continue;
-            }
-            if (plan.disposition() == websocket_transport_disposition::end_transport) {
-                try {
-                    co_await tunnel_.finish();
-                } catch (const http_client_error& error) {
-                    record_transport_failure(error);
-                    throw;
-                }
-                protocol_.commit_transport_end();
-                ended_ = true;
-                heartbeat_timer_.cancel();
-                heartbeat_signal_.notify();
-                output().data_.notify();
-                write_lane_.notify();
-            }
-            co_return;
-        }
-    }
-
-    task<websocket_event> next_event() {
-        for (;;) {
-            std::optional<websocket_event> event;
-            {
-                co_await write_lane_.wait_for_idle(true, [this] {
-                    check();
-                    throw_if_read_interrupted();
-                });
-                write_guard lane(*this);
-                event = protocol_.next_event();
-                if (event && event->close()) {
-                    peer_close_.record(*event->close());
-                }
-                if (event && event->pong() && websocket_heartbeat_pong_matches(liveness_, event->pong()->payload())) {
-                    liveness_ = websocket_liveness_idle{};
-                    touch_activity();
-                }
-                if (event && (event->ping() || event->close() || event->transport_end() || event->protocol_error())) {
-                    worker_timer_registration close_timer;
-                    if (event->close() && lifecycle_.close_handshake_timeout_) {
-                        (void)worker_.schedule_timer(close_timer,
-                            deadline_after(lifecycle_.close_handshake_timeout_->value()),
-                            [this](worker_timer_outcome outcome) noexcept {
-                                if (outcome == worker_timer_outcome::expired) {
-                                    abort(http_client_error::code_type::timeout);
-                                }
-                            });
-                    }
-                    try {
-                        co_await flush();
-                    } catch (const http_client_error& error) {
-                        // A peer may drop its transport after sending malformed
-                        // input. Preserve that protocol error if its Close reply
-                        // cannot be delivered, but never hide cancellation/timeouts.
-                        if (!event->protocol_error() ||
-                            (error.code() != http_client_error::code_type::io_error &&
-                                error.code() != http_client_error::code_type::tls_failed)) {
-                            throw;
-                        }
-                    }
-                }
-                lane.commit();
-            }
-            if (event) {
-                if (event->protocol_error()) {
-                    throw http_client_error(http_client_error::code_type::protocol_error, "invalid WebSocket frame");
-                }
-                if (!event->ping()) {
-                    co_return *event;
-                }
-                continue;
-            }
-            worker_timer_registration read_timer;
-            if (read_timeout_) {
-                (void)worker_.schedule_timer(read_timer, deadline_after(read_timeout_->value()),
-                    [this](worker_timer_outcome outcome) noexcept {
-                        if (outcome == worker_timer_outcome::expired) {
-                            abort(http_client_error::code_type::timeout);
-                        }
-                    });
-            }
-            std::optional<std::span<const std::byte>> bytes;
-            try {
-                co_await await_tunnel_input();
-                bytes = co_await tunnel_.read();
-            } catch (const http_client_error& error) {
-                record_transport_failure(error);
-                throw;
-            }
-            read_timer.cancel();
-            if (!bytes) {
-                protocol_.notify_transport_eof();
-                throw http_client_error(http_client_error::code_type::protocol_error, "WebSocket ended before peer Close");
-            }
-            input_.append(as_chars(*bytes));
-            touch_activity();
-        }
-    }
-
-    // Waits outside the tunnel's read lane, so an interrupted read leaves no
-    // tunnel operation behind; tunnel_.read() then completes without waiting.
-    task<void> await_tunnel_input() {
-        const auto& response = transport_state_;
-        while (response.offset_ == response.buffered_.size() && response.pending_.empty() &&
-               !response.receive_complete() && !response.failure_ && !response.pool_closed_) {
-            check();
-            throw_if_read_interrupted();
-            co_await transport_state_.data_signal_.wait();
-        }
-    }
-
-    task<void> finish_close() {
-        if (ended_) {
-            co_return;
-        }
-        // RFC 6455 section 7.1.1: the server closes first after its Close.
-        // A bounded silence after a completed handshake is a normal retirement.
-        bool expired = false;
-        worker_timer_registration timer;
-        if (const auto timeout = lifecycle_.close_handshake_timeout_) {
-            (void)worker_.schedule_timer(timer, deadline_after(timeout->value()),
-                [this, &expired](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        expired = true;
-                        tunnel_.abort();
-                    }
-                });
-        }
-        std::exception_ptr failure;
-        try {
-            for (;;) {
-                worker_timer_registration read_timer;
-                if (!lifecycle_.close_handshake_timeout_ && read_timeout_) {
-                    (void)worker_.schedule_timer(read_timer, deadline_after(read_timeout_->value()),
-                        [this](worker_timer_outcome outcome) noexcept {
-                            if (outcome == worker_timer_outcome::expired) {
-                                abort(http_client_error::code_type::timeout);
-                            }
-                        });
-                }
-                const auto bytes = co_await tunnel_.read();
-                read_timer.cancel();
-                if (!bytes) {
-                    break;
-                }
-            }
-        } catch (const http_client_error& error) {
-            record_transport_failure(error);
-            failure = std::current_exception();
-        } catch (...) {
-            failure = std::current_exception();
-        }
-        timer.cancel();
-        if (failure_ || (failure && !expired)) {
-            check();
-            std::rethrow_exception(failure);
-        }
-        if (expired) {
-            ended_ = true;
-            heartbeat_signal_.notify();
-            write_lane_.notify();
-            co_return;
-        }
-        protocol_.notify_transport_eof();
-        co_await write_lane_.wait_for_idle(true, [this] { check(); });
-        write_guard lane(*this);
-        co_await flush();
-        lane.commit();
-    }
-
-    // Records why a tunnel operation failed before unwinding aborts the
-    // session, which would otherwise record only a local abort.
-    void record_transport_failure(const http_client_error& error) noexcept {
-        (void)protocol_.abort(websocket_abort_termination(error.code()));
-    }
-
     worker_handle worker_;
-    http_client_tunnel tunnel_;
-    http_client_response_state& transport_state_;
-    http_io_buffer input_;
-    websocket_connection protocol_;
-    std::pmr::string subprotocol_;
-    operation_options options_;
-    websocket_lifecycle_options lifecycle_;
-    std::optional<timeout_duration> read_timeout_;
-    websocket_write_lane write_lane_;
-    worker_signal read_signal_;
-    worker_signal heartbeat_signal_;
-    websocket_peer_close_info peer_close_;
-    std::optional<http_client_error::code_type> failure_;
-    bool ended_{};
-    bool fragmented_message_active_{};
-    std::uint64_t fragmented_message_sequence_{};
-    // close() has sent its Close: a pending read ends with nullopt.
-    bool local_close_sent_{};
-    std::optional<http_client_error::code_type> read_interrupt_;
-    bool read_active_{};
-    bool write_active_{};
-    std::uint64_t read_id_{};
-    std::uint64_t write_id_{};
-    websocket_liveness_state_type liveness_{websocket_liveness_idle{}};
-    std::int64_t last_active_ms_{steady_now_ms()};
-    std::uint64_t heartbeat_sequence_{};
-    bool heartbeat_due_{};
-    std::shared_ptr<worker_cancellation_target<http_client_websocket_state>> cancellation_;
-    worker_timer_registration heartbeat_timer_;
+    worker_signal retire_signal_;
+    connection_scanner scanner_;
+    connection_scanner::entry entry_;
+
+public:
+    websocket_session_connection<http_client_websocket_transport> connection_;
+
+private:
+    connection_scanner::guard scanner_guard_;
+    bool retiring_{false};
 };
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
-namespace {
-detail::http_client_websocket_state& require_websocket(
-    const std::shared_ptr<detail::http_client_websocket_state>& state) {
-    if (!state) {
-        throw std::logic_error("WebSocket owner has moved");
-    }
-    state->require_current();
-    return *state;
-}
-// Session-state accessors read the state without throwing: moved-from owners
-// have none, and other workers violate the session contract.
-const detail::http_client_websocket_state* current_websocket(
-    const std::shared_ptr<detail::http_client_websocket_state>& state) noexcept {
-    if (!state) {
-        return nullptr;
-    }
-    if (!state->worker().is_current()) {
-        std::terminate();
-    }
-    return state.get();
-}
-}  // namespace
-
-http_client_websocket::http_client_websocket(std::shared_ptr<detail::http_client_websocket_state> state) noexcept
-    : state_(std::move(state)) {}
-http_client_websocket::http_client_websocket(http_client_websocket&&) noexcept = default;
-http_client_websocket& http_client_websocket::operator=(http_client_websocket&& other) noexcept {
-    if (this != &other) {
-        abort();
-        state_ = std::move(other.state_);
-    }
-    return *this;
-}
-http_client_websocket::~http_client_websocket() {
-    abort();
-}
-void http_client_websocket::abort() & noexcept {
-    if (state_) {
-        state_->abort();
-    }
-}
-namespace {
-void require_data_lane(const detail::http_client_websocket_state& state, websocket_opcode opcode,
-    detail::websocket_write_extent extent) {
-    if (extent == detail::websocket_write_extent::message && state.fragmented_message_active() &&
-        (opcode == websocket_opcode::text || opcode == websocket_opcode::binary)) {
-        throw std::logic_error("a fragmented WebSocket message is in progress");
-    }
-}
-}  // namespace
-task<void> http_client_websocket::write(websocket_opcode opcode, std::string_view payload,
-    websocket_send_options options, operation_options operation, detail::websocket_write_extent extent) {
-    auto& state = require_websocket(state_);
-    require_data_lane(state, opcode, extent);
-    return detail::http_client_websocket_state::write(
-        state_, opcode, std::pmr::string(payload, state.resource()), options, std::move(operation), extent);
-}
-http_client_websocket_message_writer http_client_websocket::begin_text(websocket_send_options options) & {
-    return begin_message(websocket_opcode::text, options);
-}
-http_client_websocket_message_writer http_client_websocket::begin_binary(websocket_send_options options) & {
-    return begin_message(websocket_opcode::binary, options);
-}
-http_client_websocket_message_writer http_client_websocket::begin_message(websocket_opcode opcode, websocket_send_options options) {
-    auto& state = require_websocket(state_);
-    const auto id = state.begin_fragmented_message();
-    return http_client_websocket_message_writer(state_, id, opcode, options);
-}
-http_client_websocket_message_writer::http_client_websocket_message_writer(
-    std::shared_ptr<detail::http_client_websocket_state> state, std::uint64_t message_id, websocket_opcode opcode,
-    websocket_send_options options) noexcept
-    : state_(std::move(state)),
-      message_id_(message_id),
-      opcode_(opcode),
-      options_(options) {}
-http_client_websocket_message_writer::http_client_websocket_message_writer(http_client_websocket_message_writer&& other) noexcept
-    : state_(std::move(other.state_)),
-      message_id_(other.message_id_),
-      opcode_(other.opcode_),
-      options_(other.options_) {}
-http_client_websocket_message_writer::~http_client_websocket_message_writer() {
-    abort();
-}
-bool http_client_websocket_message_writer::message_open() const noexcept {
-    return state_ != nullptr && state_->fragmented_message_open(message_id_);
-}
-void http_client_websocket_message_writer::abort() & noexcept {
-    if (message_open()) {
-        // The peer cannot tell where an unfinished message ends.
-        state_->end_fragmented_message();
-        state_->abort();
-    }
-    state_.reset();
-}
-task<void> http_client_websocket_message_writer::write(std::string_view chunk, operation_options operation) & {
-    return submit(chunk, false, std::move(operation));
-}
-task<void> http_client_websocket_message_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
-    return submit(as_chars(chunk), false, std::move(operation));
-}
-task<void> http_client_websocket_message_writer::finish(std::string_view last_chunk, operation_options operation) & {
-    return submit(last_chunk, true, std::move(operation));
-}
-task<void> http_client_websocket_message_writer::finish(std::span<const std::byte> last_chunk, operation_options operation) & {
-    return submit(as_chars(last_chunk), true, std::move(operation));
-}
-task<void> http_client_websocket_message_writer::submit(std::string_view chunk, bool final, operation_options operation) {
-    if (!message_open()) {
-        throw std::logic_error("WebSocket message writer is finished");
-    }
-    state_->require_current();
-    return detail::http_client_websocket_state::write(state_, opcode_, std::pmr::string(chunk, state_->resource()),
-        options_, std::move(operation),
-        final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
-}
-task<void> http_client_websocket::write_owned(websocket_opcode opcode, std::pmr::string&& payload,
-    websocket_send_options options, operation_options operation) {
-    auto& state = require_websocket(state_);
-    require_data_lane(state, opcode, detail::websocket_write_extent::message);
-    return detail::http_client_websocket_state::write(state_, opcode, detail::rebind_owned_storage(payload, state.resource()),
-        options, std::move(operation), detail::websocket_write_extent::message);
-}
-task<void> http_client_websocket::text(std::string_view payload, websocket_send_options options, operation_options operation) & {
-    return write(websocket_opcode::text, payload, options, std::move(operation));
-}
-task<void> http_client_websocket::binary(std::string_view payload, websocket_send_options options, operation_options operation) & {
-    return write(websocket_opcode::binary, payload, options, std::move(operation));
-}
-task<void> http_client_websocket::binary(std::span<const std::byte> payload, websocket_send_options options, operation_options operation) & {
-    return write(websocket_opcode::binary, as_chars(payload), options, std::move(operation));
-}
-task<void> http_client_websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
-    return write(message.opcode(), message.payload(), options, std::move(operation));
-}
-task<void> http_client_websocket::ping(std::string_view payload, operation_options operation) & {
-    return write(websocket_opcode::ping, payload, {}, std::move(operation));
-}
-task<void> http_client_websocket::pong(std::string_view payload, operation_options operation) & {
-    return write(websocket_opcode::pong, payload, {}, std::move(operation));
-}
-task<std::optional<websocket_message>> http_client_websocket::read(operation_options operation) & {
-    (void)require_websocket(state_);
-    return detail::http_client_websocket_state::read(state_, std::move(operation));
-}
-task<void> http_client_websocket::close(websocket_close_options options, operation_options operation) & {
-    auto& state = require_websocket(state_);
-    return detail::http_client_websocket_state::close(
-        state_, options.code_, std::pmr::string(options.reason_.view(), state.resource()), std::move(operation));
-}
-std::string_view http_client_websocket::subprotocol() const& noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->subprotocol() : std::string_view{};
-}
-bool http_client_websocket::connected() const noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr && state->connected();
-}
-std::optional<std::uint16_t> http_client_websocket::peer_close_code() const noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->peer_close_code() : std::nullopt;
-}
-std::string_view http_client_websocket::peer_close_reason() const& noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->peer_close_reason() : std::string_view{};
-}
-websocket_termination http_client_websocket::termination() const noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->protocol().termination() : websocket_termination::none;
-}
-std::uint64_t http_client_websocket::bytes_received() const noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->protocol().bytes_received() : 0;
-}
-std::uint64_t http_client_websocket::bytes_sent() const noexcept {
-    const auto* state = current_websocket(state_);
-    return state != nullptr ? state->protocol().bytes_sent() : 0;
-}
-http_protocol_version http_client_websocket::protocol_version() const {
-    return require_websocket(state_).protocol_version();
-}
-const http_client_connection_info& http_client_websocket::connection_info() const& {
-    return require_websocket(state_).connection_info();
-}
-const worker_handle& http_client_websocket::worker() const& {
-    return require_websocket(state_).worker();
-}
 
 http_client_websocket_request::http_client_websocket_request(const http_client_handle& client, std::string_view path)
     : client_(client),
@@ -997,12 +240,12 @@ http_client_websocket_request& http_client_websocket_request::configure(http_cli
     request_options_ = std::move(options);
     return *this;
 }
-task<http_client_websocket> http_client_websocket_request::connect() {
+task<websocket> http_client_websocket_request::connect() {
     require_open();
     consumed_ = true;
     return make_scoped_operation(client_.registration_.scope(), connect_owned(std::move(*this)));
 }
-task<http_client_websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
+task<websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
     request.client_.registration_.require_active();
     auto& pool = *request.client_.pool_;
     auto* resource = process_resource();
@@ -1020,7 +263,8 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
             std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
             websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
         stored.emplace("GET", request.path_, headers.view(), resource);
-        stored->options_ = request.request_options_;
+        stored->options_ = detail::copy_http_client_request_settings(request.request_options_);
+        stored->informational_ = detail::share_http_client_informational(std::move(request.request_options_.informational_));
         stored->pool_owner_ = request.client_.pool_owner_;
         stored->set_host_stop(request.client_.host_stop_token_);
         stored->set_tunnel(pool.config().authority_, "websocket");
@@ -1055,28 +299,30 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
     } catch (...) {
         opening_timer.cancel();
         if (opening_expired) {
-            throw http_client_error(http_client_error::code_type::timeout, "WebSocket opening handshake timed out");
+            throw http_client_error(std::make_error_code(std::errc::timed_out), "WebSocket opening handshake timed out");
         }
         throw;
     }
     opening_timer.cancel();
     user_stop.reset();
     if (opening_expired) {
-        throw http_client_error(http_client_error::code_type::timeout, "WebSocket opening handshake timed out");
+        throw http_client_error(std::make_error_code(std::errc::timed_out), "WebSocket opening handshake timed out");
     }
     auto* tunnel = opened->tunnel();
     if (!tunnel) {
-        throw http_client_error(http_client_error::code_type::handshake_rejected,
+        throw http_client_error(make_error_code(http_client_errc::handshake_rejected),
             "WebSocket handshake rejected", opened->response()->status());
     }
-    auto state = std::allocate_shared<detail::http_client_websocket_state>(
-        std::pmr::polymorphic_allocator<detail::http_client_websocket_state>(process_resource()),
-        std::move(*tunnel), pool.worker(), *handshake, request.deflate_, request.client_.options_,
-        request.lifecycle_, request.max_message_bytes_, request.request_options_.timeouts_.read_.resolve(pool.config().read_timeout_));
-    if (request.lifecycle_.heartbeat_.ping_interval_) {
-        pool.tasks().spawn(detail::http_client_websocket_state::heartbeat(state));
-    }
-    co_return http_client_websocket(std::move(state));
+    auto owner = std::allocate_shared<detail::client_websocket_session>(
+        std::pmr::polymorphic_allocator<detail::client_websocket_session>(resource),
+        pool, std::move(*tunnel), *handshake, request.deflate_, request.lifecycle_, request.max_message_bytes_);
+    auto result = detail::make_websocket_facade(owner->connection_, *resource);
+    pool.tasks().spawn(detail::client_websocket_session::run(owner, pool.pool_stop_token()));
+    result.state_->owner_ = owner;
+    result.state_->retire_ = &detail::client_websocket_session::retire;
+    result.state_->defaults_ = request.client_.options_;
+    result.state_->read_timeout_ = request.request_options_.timeouts_.read_.resolve(pool.config().read_timeout_);
+    co_return result;
 }
 http_client_websocket_request http_client_handle::websocket(std::string_view path) const {
     registration_.require_active();

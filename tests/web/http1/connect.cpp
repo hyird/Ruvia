@@ -58,14 +58,13 @@ class http1_tunnel_routes final {
         while (auto bytes = co_await tunnel_value.read()) {
             {
                 std::lock_guard lock(observed_value.mutex_);
-                observed_value.bytes_.append(*bytes);
+                observed_value.bytes_.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             }
             if (!retained) {
-                retained.emplace(*bytes, ruvia::process_resource());
+                retained.emplace(reinterpret_cast<const char*>(bytes->data()), bytes->size(), ruvia::process_resource());
             }
             if (!observed_value.finish_first_) {
-                auto output = tunnel_value.write(std::string_view(*bytes));
-                bytes->assign("input changed before awaiting output");
+                auto output = tunnel_value.write(*bytes);
                 co_await std::move(output);
             }
             observed_value.retained_stable_ = observed_value.retained_stable_ && retained->find_first_not_of('t') == std::string_view::npos;

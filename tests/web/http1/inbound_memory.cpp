@@ -64,14 +64,12 @@ class inbound_memory_routes final {
         co_return context_value.text(std::pmr::string(std::to_string(received), ruvia::process_resource()));
     }
 
-    // Keeps every chunk until the peer ends, acknowledging each, and reports
-    // whether a read ran out of inbound budget.
+    // Acknowledges each borrowed chunk and reports inbound budget exhaustion.
     ruvia::task<void> tunnel(ruvia::context& context_value) {
         auto& tunnel_value = context_value.tunnel();
-        std::pmr::vector<std::pmr::string> retained{ruvia::process_resource()};
         bool limited = false;
         for (;;) {
-            std::optional<std::pmr::string> chunk;
+            std::optional<std::span<const std::byte>> chunk;
             try {
                 chunk = co_await tunnel_value.read();
             } catch (const std::bad_alloc&) {
@@ -80,10 +78,8 @@ class inbound_memory_routes final {
             if (!chunk) {
                 break;
             }
-            retained.push_back(std::move(*chunk));
             co_await tunnel_value.write("ok\n");
         }
-        retained.clear();
         co_await tunnel_value.write(limited ? "limited\n" : "end\n");
     }
 };

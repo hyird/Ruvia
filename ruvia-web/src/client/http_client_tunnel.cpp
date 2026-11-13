@@ -22,11 +22,11 @@ void require_output(detail::http_client_response_state* state_value, bool finish
     const bool completed_finish = finishing && state_value->tunnel_ && state_value->tunnel_->output_.ended_ && state_value->complete_;
     if (!state_value->tunnel_ || (state_value->pool_ == nullptr && !completed_finish) || (state_value->tunnel_->output_.stopped_ && !completed_finish) || !state_value->tunnel_->accepted_ ||
         state_value->abandoned_ || state_value->failure_ || state_value->pool_closed_) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel is closed");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client tunnel is closed");
     }
     auto& output = state_value->tunnel_->output_;
     if (!finishing && (output.ended_ || output.end_requested_)) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel sending direction is closed");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client tunnel sending direction is closed");
     }
 }
 struct tunnel_output_policy final {
@@ -54,9 +54,9 @@ struct tunnel_output_policy final {
             std::rethrow_exception(state_value.failure_);
         }
         if (state_value.pool_closed_) {
-            throw http_client_error(http_client_error::code_type::closing, "HTTP client tunnel failed");
+            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client tunnel failed");
         }
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client tunnel output stopped");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client tunnel output stopped");
     }
 };
 void abort_tunnel(detail::http_client_response_state* state, bool malformed) noexcept {

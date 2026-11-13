@@ -66,7 +66,7 @@ struct connection_failure_record_access final {
 struct server_observation_access final {
     using tls_client_hello_fields = tls_client_hello_record::fields_type;
 
-    [[nodiscard]] static constexpr tls_client_hello_record tls_client_hello(
+    [[nodiscard]] static tls_client_hello_record tls_client_hello(
         const tls_client_hello_fields& fields) noexcept {
         return tls_client_hello_record(fields);
     }

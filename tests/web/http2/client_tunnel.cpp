@@ -81,10 +81,10 @@ ruvia::task<void> client_tunnel_routes::echo(ruvia::context& c) {
     while (auto bytes = co_await tunnel.read()) {
         {
             std::lock_guard lock(observation_value.mutex_);
-            observation_value.bytes_.append(*bytes);
+            observation_value.bytes_.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
         }
         if (!observation_value.finish_first_) {
-            co_await tunnel.write(std::string_view(*bytes));
+            co_await tunnel.write(*bytes);
         }
     }
     observation_value.eof_ = true;
@@ -135,7 +135,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
                         auto late_write = tunnel.write("late");
                         static_cast<void>(late_write);
                     } catch (const ruvia::http_client_error& error) {
-                        half_closed_write_rejected = error.code() == ruvia::http_client_error::code_type::cancelled;
+                        half_closed_write_rejected = error.code() == std::make_error_code(std::errc::operation_canceled);
                     }
                     EXPECT_TRUE(half_closed_write_rejected);
                     co_await readers.join();

@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <memory>
 #include <memory_resource>
 #include <optional>
@@ -11,6 +10,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -87,8 +88,16 @@ struct http_client_phase_timeouts final {
     http_client_timeout_override acquire_;
 };
 
+// 按线序 await；字段借用只持续到回调完成。回调应响应 stop，不得等待本次
+// exchange 或依赖其释放池容量的操作；异常使该 exchange 失败。HTTP/2/3 只背压
+// 本响应，不阻塞其他流；总截止期不因回调挂起而暂停。重定向的每一跳共用同一回调。
 using http_client_informational_callback = move_only_function<task<void>(http_status_code, std::span<const http_header>, stop_token)>;
 
+// Validates each numeric candidate address (ip text, port) before it is dialed.
+// Every worker serving the alias calls the same shared target, possibly concurrently.
+using http_client_address_validator = move_only_function<bool(std::string_view, std::uint16_t)>;
+
+// Move-only: it owns the request's informational callback.
 struct http_client_request_options final {
     // nullopt 继承 origin 默认；false 为保留编码字段的原样流。
     std::optional<bool> decode_content_;
@@ -96,7 +105,7 @@ struct http_client_request_options final {
     // 独立物理连接，既不借业务连接，也不归还业务复用池。
     bool fresh_connection_{false};
     http_client_phase_timeouts timeouts_;
-    std::shared_ptr<http_client_informational_callback> informational_;
+    http_client_informational_callback informational_;
     // 请求级路由覆盖；未设字段继承 alias，scheme 始终来自 alias 的 base_url_。
     // authority_：逻辑 Host / :authority（host[:port]，无 userinfo）。不同于
     // alias authority 时 Cookie jar 不参与，跨 origin 重定向丢弃全部覆盖；
@@ -252,8 +261,9 @@ struct http_client_config final {
     // 请求可经 http_client_request_options 逐请求覆盖。
     std::optional<borrowed_text> dial_host_;
     std::optional<port_number> dial_port_;
-    // 接收已经解析的数值地址；拒绝的候选绝不交给 connect。
-    std::function<bool(std::string_view, std::uint16_t)> address_validator_;
+    // 接收已经解析的数值地址；拒绝的候选绝不交给 connect。配置可复制并由
+    // 多个 worker 共享，故共享同一目标。
+    std::shared_ptr<const http_client_address_validator> address_validator_;
     // Each period looks up again only the DNS dial targets that still have a
     // live connection (the alias's and request dial_host_ overrides), within
     // http_client_worker_config::max_concurrent_dns_refreshes_, and retires
@@ -323,53 +333,60 @@ struct http_client_config final {
     std::pmr::vector<http_header_view> cookies_{process_resource()};
 };
 
-class http_client_error final : public std::runtime_error {
-public:
-    enum class code_type : std::uint8_t {
-        not_configured,
-        invalid_request,
-        timeout,
-        cancelled,
-        resolve_failed,
-        connect_failed,
-        tls_failed,
-        protocol_unavailable,
-        io_error,
-        protocol_error,
-        response_too_large,
-        queue_full,
-        closing,
-        result_budget_exceeded,
-        handshake_rejected,
-        message_too_large,
-    };
+// Protocol and connection-pool failures of the HTTP client. An operation's
+// timeout or cancellation is not among them: the client reports it as
+// std::errc::timed_out / std::errc::operation_canceled (generic_category),
+// exactly like server operations, so one std::system_error handler covers both.
+enum class http_client_errc : std::uint8_t {
+    not_configured = 1,
+    invalid_request,
+    resolve_failed,
+    connect_failed,
+    tls_failed,
+    protocol_unavailable,
+    io_error,
+    protocol_error,
+    response_too_large,
+    queue_full,
+    closing,
+    result_budget_exceeded,
+    handshake_rejected,
+    message_too_large,
+};
 
-    http_client_error(code_type code, std::string_view message, std::optional<http_status_code> status = std::nullopt,
-        const http_client_connection_info* connection = nullptr)
-        : std::runtime_error(std::string(message)),
-          code_(code),
-          status_(status) {
+[[nodiscard]] const std::error_category& http_client_category() noexcept;
+
+[[nodiscard]] inline std::error_code make_error_code(http_client_errc value) noexcept {
+    return {static_cast<int>(value), http_client_category()};
+}
+
+// code() is an http_client_errc, or std::errc::timed_out /
+// std::errc::operation_canceled for an interrupted operation.
+class http_client_error final : public std::system_error {
+public:
+    http_client_error(std::error_code code, std::string_view message, std::optional<http_status_code> status = std::nullopt,
+        const http_client_connection_info* connection = nullptr, bool request_written = true)
+        : std::system_error(code, std::string(message)),
+          status_(status),
+          request_written_(request_written) {
         capture_connection(connection);
     }
     http_client_error(const http_client_error& other)
-        : std::runtime_error(other),
-          code_(other.code_),
-          status_(other.status_) {
+        : std::system_error(other),
+          status_(other.status_),
+          request_written_(other.request_written_) {
         capture_connection(other.connection_info());
     }
     http_client_error(http_client_error&&) noexcept = default;
     http_client_error& operator=(const http_client_error& other) {
-        std::runtime_error::operator=(other);
-        code_ = other.code_;
+        std::system_error::operator=(other);
         status_ = other.status_;
+        request_written_ = other.request_written_;
         capture_connection(other.connection_info());
         return *this;
     }
     http_client_error& operator=(http_client_error&&) = default;
 
-    [[nodiscard]] code_type code() const noexcept {
-        return code_;
-    }
     [[nodiscard]] std::optional<http_status_code> status() const noexcept {
         return status_;
     }
@@ -378,6 +395,13 @@ public:
         return connection_ ? &*connection_ : nullptr;
     }
     const http_client_connection_info* connection_info() const&& = delete;
+    /// false 保证本请求尚未向 transport 提交任何字节（排队、拨号、TLS 阶段）。
+    /// true 表示可能已有字节到达对端，超时与取消同样保留该保守状态。
+    /// HTTP/2 REFUSED_STREAM / GOAWAY 与 HTTP/3 request_unprocessed 只保证
+    /// 请求未被处理，不抹去已有写出进度；协议层的安全重试独立遵循此声明。
+    [[nodiscard]] bool request_written() const noexcept {
+        return request_written_;
+    }
 
 private:
     void capture_connection(const http_client_connection_info* connection) {
@@ -391,9 +415,9 @@ private:
         // 错误可比 response 存活更久，文本提升到 process_resource。
         *connection_ = *connection;
     }
-    code_type code_;
     std::optional<http_status_code> status_;
     std::optional<http_client_connection_info> connection_;
+    bool request_written_;
 };
 
 struct http_client_stats final {
@@ -430,3 +454,6 @@ struct http_client_stats final {
 };
 
 }  // namespace ruvia
+
+template <>
+struct std::is_error_code_enum<ruvia::http_client_errc> : std::true_type {};

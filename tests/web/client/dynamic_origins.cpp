@@ -136,7 +136,7 @@ private:
         (void)co_await std::move(operation);
         ADD_FAILURE() << "retired origin admitted an HTTP request";
     } catch (const http_client_error& error) {
-        EXPECT_EQ(error.code(), http_client_error::code_type::closing);
+        EXPECT_EQ(error.code(), make_error_code(http_client_errc::closing));
     }
 }
 
@@ -177,7 +177,7 @@ TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_al
                 (void)co_await std::move(cold_upload);
                 ADD_FAILURE() << "retired origin admitted a cold upload";
             } catch (const ruvia::http_client_error& error) {
-                EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::closing);
+                EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
 
             auto removed = client.client();
@@ -188,7 +188,7 @@ TEST(Ruvia, http_client_dynamic_origins_own_inputs_and_atomically_replace_one_al
                 (void)client.client("default");
                 ADD_FAILURE() << "removed alias remained visible";
             } catch (const ruvia::http_client_error& error) {
-                EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::not_configured);
+                EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::not_configured));
             }
             EXPECT_EQ(removed.port(), 8002);
             EXPECT_EQ(client.client().port(), 8003);
@@ -412,7 +412,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
                 (void)co_await std::move(upload);
                 ADD_FAILURE() << "cold upload entered a replaced origin";
             } catch (const ruvia::http_client_error& error) {
-                EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::closing);
+                EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
             auto tunnel = client.client().connect("127.0.0.1:8002").open();
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8003"});
@@ -420,7 +420,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
                 (void)co_await std::move(tunnel);
                 ADD_FAILURE() << "cold tunnel entered a replaced origin";
             } catch (const ruvia::http_client_error& error) {
-                EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::closing);
+                EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::closing));
             }
             auto send = client.client().get("/cold-send").send();
             EXPECT_TRUE(client.remove("default"));
@@ -450,7 +450,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
             auto marker = std::make_shared<ruvia::test::dynamic_origin_tests::observed_configuration>(retired, destroyed);
             observed = marker;
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8001",
-                .address_validator_ = [marker](std::string_view, std::uint16_t) { return marker != nullptr; }});
+                .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](std::string_view, std::uint16_t) { return marker != nullptr; })});
         }
         std::optional<ruvia::http_client_handle> old(client.client());
         std::optional<ruvia::task<ruvia::http_client_exchange>> cold(old->post("/cold").upload());
@@ -594,9 +594,9 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
                                                    .stop_token_ = stop.token()});
                 ADD_FAILURE() << "cancelled TLS preparation published an origin";
             } catch (const http_client_error& error) {
-                const auto expected = mode == cancellation_case::owner_close ? http_client_error::code_type::closing
-                                      : mode == cancellation_case::timeout   ? http_client_error::code_type::timeout
-                                                                             : http_client_error::code_type::cancelled;
+                const auto expected = mode == cancellation_case::owner_close ? make_error_code(http_client_errc::closing)
+                                      : mode == cancellation_case::timeout   ? std::make_error_code(std::errc::timed_out)
+                                                                             : std::make_error_code(std::errc::operation_canceled);
                 EXPECT_EQ(error.code(), expected);
             } catch (...) {
                 failure = std::current_exception();
@@ -669,8 +669,8 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
                 ADD_FAILURE() << "cancelled redirect policy sent a follow-up request";
             } catch (const http_client_error& error) {
                 EXPECT_EQ(error.code(), mode == cancellation_case::timeout
-                                            ? http_client_error::code_type::timeout
-                                            : http_client_error::code_type::cancelled);
+                                            ? std::make_error_code(std::errc::timed_out)
+                                            : std::make_error_code(std::errc::operation_canceled));
                 EXPECT_NE(error.connection_info(), nullptr);
                 EXPECT_TRUE(exited);
             } catch (...) {

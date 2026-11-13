@@ -16,6 +16,7 @@
 
 #include "http/http_socket_tunnel_transport.h"
 #include "http/http_stream_end.h"
+#include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
 #include "util/operation_interrupt.h"
@@ -35,6 +36,7 @@ public:
         const server_connection_fields& fields)
         : transport_(stream, tls_output, &entry),
           entry_(entry),
+          lifecycle_(fields.lifecycle_),
           worker_(worker_value),
           read_buffer_(&inbound),
           facade_(fields, stop_token_value, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
@@ -49,6 +51,9 @@ public:
     }
     void abort() noexcept {
         aborted_ = true;
+        if (lifecycle_ != nullptr) {
+            lifecycle_->set_reason(connection_close_reason::aborted);
+        }
         transport_.abort();
     }
     // Expires the facade once the handler returned. An operation the handler
@@ -90,6 +95,9 @@ private:
         if (!(co_await owner.transport_.read_more(
                 owner.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); }, owner.read_cancellation_.slot()))) {
             owner.receive_ended_ = true;
+            if (owner.lifecycle_ != nullptr) {
+                owner.lifecycle_->set_reason(connection_close_reason::peer_eof);
+            }
             co_return std::nullopt;
         }
         owner.entry_.touch();
@@ -113,6 +121,7 @@ private:
 
     http_socket_tunnel_transport<stream_type> transport_;
     connection_scanner::entry& entry_;
+    connection_lifecycle* lifecycle_;
     const worker_handle& worker_;
     std::pmr::string read_buffer_;
     asio::cancellation_signal read_cancellation_;

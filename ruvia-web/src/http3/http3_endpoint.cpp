@@ -52,7 +52,7 @@ void initialize_quic_crypto() {
 }  // namespace
 
 http3_endpoint::http3_endpoint(const http3_worker_services& services, http_server_session_config& session,
-    asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks)
+    asio::ip::udp::endpoint endpoint, std::size_t listener_index, task_scope& tasks, connection_count& listener_connections)
 #if !defined(_WIN32)
     : activated_(services.worker_),
       services_(services),
@@ -63,6 +63,7 @@ http3_endpoint::http3_endpoint(const http3_worker_services& services, http_serve
       configured_endpoint_(endpoint),
       listener_index_(listener_index),
       tasks_(tasks),
+      listener_connections_(listener_connections),
 #if !defined(_WIN32)
       socket_(services.io_),
       receive_buffer_(process_resource()),
@@ -287,8 +288,8 @@ void http3_endpoint::receive(
     if (decoded == NGTCP2_ERR_VERSION_NEGOTIATION) {
         if (bytes.size() >= min_initial_datagram_bytes && endpoint->admitting_) {
             if (const auto admission = services_.options_.connection_admission_) {
-                const connection_event event(services_.connection_ids_.next(), {local.address(), local.port()},
-                    {remote.address(), remote.port()}, true);
+                const connection_event event(services_.connection_ids_.next(), {to_ip_address(local.address()), local.port()},
+                    {to_ip_address(remote.address()), remote.port()}, true);
                 if (!admission(event)) {
                     services_.refused_.fetch_add(1, std::memory_order_relaxed);
                     return;
@@ -313,8 +314,8 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         return;
     }
     const auto connection_id = services_.connection_ids_.next();
-    connection_event event(connection_id, {local.address(), local.port()},
-        {remote.address(), remote.port()}, true);
+    connection_event event(connection_id, {to_ip_address(local.address()), local.port()},
+        {to_ip_address(remote.address()), remote.port()}, true);
     if (services_.options_.connection_admission_ &&
         !services_.options_.connection_admission_(event)) {
         services_.refused_.fetch_add(1, std::memory_order_relaxed);
@@ -383,7 +384,7 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         connection_lifecycle lifecycle(services_.registry_, &session_, std::move(event),
             services_.options_.connection_open_, services_.options_.connection_close_, interface_index);
         auto session = make_pmr_object<http3_session>(process_resource(), *this,
-            connection_slot(services_.connection_count_), header, remote, original_dcid, retry_scid, retry_token,
+            connection_slot(listener_connections_), header, remote, original_dcid, retry_scid, retry_token,
             std::move(lifecycle));
         session->receive(bytes, remote, local, interface_index);
         tasks_.spawn(serve(std::move(session)));

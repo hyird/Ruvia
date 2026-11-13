@@ -347,7 +347,7 @@ public:
         worker_signal signal_;
         http_client_response_state* state_;
         http_client_websocket_handshake* websocket_{};
-        std::optional<http_client_error::code_type> error_;
+        std::optional<std::error_code> error_;
         std::exception_ptr failure_;
         std::size_t registry_index_{0};
         std::uint64_t request_id_{0};

@@ -66,7 +66,7 @@ private:
     int* destroyed_;
 };
 
-// Destroying it re-enters the application lock through http_stats() and
+// Destroying it re-enters the application lock through stats() and
 // workers(). It must not call stop(): on a stopped app that leaves a pending
 // stop which the next run() of the shared server fixture would consume.
 class reentrant_hook_target final {
@@ -79,7 +79,7 @@ public:
 
     ~reentrant_hook_target() {
         if (destroyed_ != nullptr) {
-            (void)ruvia::app().http_stats();
+            (void)ruvia::app().stats();
             (void)ruvia::app().workers();
             ++*destroyed_;
         }

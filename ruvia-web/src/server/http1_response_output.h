@@ -18,6 +18,7 @@
 #include "server/http_connection_state.h"
 #include "server/http_response_writer.h"
 #include "server/http_server_options.h"
+#include "server/inbound_socket_stream.h"
 
 namespace ruvia::detail {
 
@@ -79,7 +80,7 @@ public:
     bool start(std::string_view body = {}, bool finish_connection = false) noexcept {
         body_ = body;
         written_ = {};
-        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, asio::ip::tcp::socket>) {
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             const auto flags = finish_connection ? final_plain_tcp_send_flags : 0;
             const auto output = output_->view();
             const bool completed = body.empty()
@@ -92,7 +93,7 @@ public:
                 progress_->note_write_progress();
             }
             if (completed && !written_.error_ && finish_connection) {
-                shutdown_http_connection_send(*stream_);
+                shutdown_http_connection_send(stream_->lowest_layer());
             }
             return completed;
         } else {

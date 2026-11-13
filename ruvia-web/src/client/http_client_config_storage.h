@@ -208,7 +208,7 @@ struct http_client_config_storage final {
     std::pmr::string host_;
     std::pmr::string dial_host_;
     std::uint16_t dial_port_;
-    std::function<bool(std::string_view, std::uint16_t)> address_validator_;
+    std::shared_ptr<const http_client_address_validator> address_validator_;
     std::optional<timeout_duration> dns_refresh_interval_;
     bool decode_content_;
     // False for a scheme-only base_url_: host_, uri_host_ and authority_ stay

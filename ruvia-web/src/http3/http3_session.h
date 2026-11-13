@@ -171,7 +171,7 @@ private:
     const http3_worker_services& services_;
     connection_slot slot_;
     connection_lifecycle connection_lifecycle_;
-    // conn_info::id() of this connection.
+    // conn_info::connection_id() of this connection.
     std::uint64_t connection_id_;
     asio::ip::udp::endpoint local_;
     // The actual destination address of the Initial, including wildcard-bound

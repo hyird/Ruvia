@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory_resource>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -23,6 +24,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/http_client_types.h"
@@ -250,14 +252,17 @@ struct connection_failure_record_access;
 
 // What a listener serves on the connections it accepts.
 enum class listener_dispatch : std::uint8_t {
-    // HTTP: the application's routes, middleware and controllers.
+    // HTTP through the application's routes, middleware and controllers.
+    // Only application has routes; http_server and http_server_group reject
+    // it (their request_stream callback may await router::dispatch()).
     routes,
-    // application::on_request_stream receives each HTTP request -- HTTP/1.1,
-    // HTTP/2 and HTTP/3 alike -- as a request_stream, in place of the
-    // routes, middleware and controllers.
+    // The host's request_stream callback (application::on_request_stream or
+    // http_server_callbacks::request_stream_) receives each HTTP request --
+    // HTTP/1.1, HTTP/2 and HTTP/3 alike -- as a request_stream.
     request_stream,
-    // application::on_connection receives each accepted connection -- on a
-    // TLS listener once its handshake completed -- as a byte stream
+    // The host's connection callback (application::on_connection or
+    // http_server_callbacks::connection_) receives each accepted connection
+    // -- on a TLS listener once its handshake completed -- as a byte stream
     // (server_connection); the server parses no HTTP on it.
     connection,
 };
@@ -328,7 +333,28 @@ struct listen_config final {
     // auto_https_redirect_ the http_ service only redirects.
     // listener_dispatch::connection rejects http3_ and auto_https_redirect_
     // (std::invalid_argument), since neither serves a byte stream.
-    listener_dispatch dispatch_{listener_dispatch::routes};
+    // Unset: application serves routes; http_server and http_server_group
+    // derive it from their callbacks -- request_stream when only
+    // request_stream_ is set, connection when only connection_ is set -- and
+    // reject (std::invalid_argument) a listener whose host sets both or
+    // neither. An explicit value whose callback is absent is rejected too.
+    // Standalone hosts resolve and check it when the listener is loaded:
+    // start() for listen(), the call itself for add_listener(),
+    // prepare_listener(s)() and add_connection_service().
+    std::optional<listener_dispatch> dispatch_{};
+    // Every connection of the TCP services must begin with a PROXY protocol
+    // header (HAProxy PROXY protocol v1 or v2); nothing is guessed, and a
+    // connection without a valid header is closed before TLS or HTTP. The
+    // Header limit: 4096 bytes (v1: 107 bytes). The absolute deadline is the
+    // minimum configured request_header_timeout_ / header_completion_timeout_;
+    // when both are disabled it is 30 s. A PROXY command's
+    // source becomes the connection's remote endpoint for every consumer --
+    // admission, open/close events, conn_info, access logs, rate limiting and
+    // the trusted-proxy check; a LOCAL command, or an address family without
+    // IP endpoints, keeps the real peer. The local endpoint stays the
+    // socket's. Rejected (std::invalid_argument) with http3_, which has no
+    // byte stream to carry it.
+    bool proxy_protocol_{false};
     // Sockets that replace binding the services they name, for example ones
     // another process exported with application::duplicate_listener_sockets()
     // and passed across exec. Each must already serve its service on address_
@@ -367,6 +393,21 @@ struct listener_remove_options final {
     // 按稳定监听身份立即关闭所有既有连接（包括 TLS、多路复用与升级）。
     // 默认只停止新接入；相同端点后来新增的监听不受影响。
     bool close_connections_{false};
+};
+
+// How adopt() takes over a connection something else accepted, and possibly
+// already read from.
+struct adopt_options final {
+    // Bytes already read from the socket, in order, before any byte still in
+    // it. The service consumes them first, exactly as if read from the socket:
+    // a PROXY header on a proxy_protocol_ service, TLS detection and the
+    // ClientHello, or HTTP/1, HTTP/2 or connection-callback input. Copied
+    // before adopt() returns (before its task starts, for the group).
+    std::span<const std::byte> prefix_{};
+    // Replaces the socket's peer as the connection's remote endpoint, for
+    // example after the caller parsed a PROXY header itself. A PROXY header
+    // the service itself parses still takes precedence.
+    std::optional<ip_endpoint> remote_{};
 };
 
 // Runtime behavior belongs to the server's document-root binding, not to the
@@ -529,15 +570,30 @@ private:
     std::exception_ptr exception_;
 };
 
+// Live connections of one serving or removed-but-not-retired listener, named
+// as its listener_endpoint: the normalized address_ text and its http_ or
+// https_ port. A paired HTTP/3 service's QUIC connections count under its
+// HTTPS endpoint.
+struct listener_stats final {
+    std::pmr::string address_{process_resource()};
+    port_number port_{};
+    std::size_t active_connections_{0};
+};
+
 // HTTP serving counters, for health checks and metrics. Cumulative since the
-// worker started and never reset, except active_connections_, which is a gauge.
-// application::http_stats() sums these across every worker; each field is sampled
-// independently, so treat them as a set of gauges rather than one snapshot.
+// worker started and never reset, except active_connections_ and listeners_,
+// which are gauges. Every host's stats() sums these across its workers; each
+// field is sampled independently, so treat them as a set of gauges rather
+// than one snapshot.
 //
 // These make a server observable without installing any callback: on_error sees
 // request failures and on_connection_failure sees lost connections, but neither
 // answers "how many, since when".
 struct http_server_stats final {
+    // One entry per listener in listener order, with the connections it
+    // admitted that are still live. A removed listener stays listed until
+    // its last connection ended.
+    std::pmr::vector<listener_stats> listeners_{process_resource()};
     // Connections held right now, against server_config::max_connections_per_worker_.
     std::size_t active_connections_{0};
     // Connections closed on accept because that budget was full and no idle

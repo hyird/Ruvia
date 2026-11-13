@@ -360,7 +360,7 @@ TEST(Ruvia, http2_response_stream_sleep_ends_when_the_peer_disconnects) {
     ruvia::test::http_server_fixture server(io);
     sleeping_stream_observed->sleep_failed_ = false;
     sleeping_stream_observed->sleep_elapsed_ = false;
-    const auto failures_before = ruvia::app().http_stats().connection_failures_;
+    const auto failures_before = ruvia::app().stats().connection_failures_;
     for (const bool send_goaway : {false, true}) {
         std::pmr::unsynchronized_pool_resource resource;
         asio::ip::tcp::socket client(io);
@@ -384,7 +384,7 @@ TEST(Ruvia, http2_response_stream_sleep_ends_when_the_peer_disconnects) {
     }
     server.finish();
     // The peer going away is a normal end of the connection, not a fault.
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, failures_before);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, failures_before);
 }
 
 TEST(Ruvia, http2_post_sse_reads_the_request_body_before_streaming) {
@@ -406,7 +406,7 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     sleeping_stream_observed->sse_wait_cancelled_ = false;
     sleeping_stream_observed->sse_wait_failed_ = false;
     sleeping_stream_observed->sse_wait_finished_ = false;
-    const auto stats_before = ruvia::app().http_stats();
+    const auto stats_before = ruvia::app().stats();
     std::pmr::unsynchronized_pool_resource resource;
     ruvia::hpack_decoder decoder({.resource_ = &resource});
     asio::ip::tcp::socket client(io);
@@ -490,7 +490,7 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     EXPECT_EQ(body, std::pmr::string("1", ruvia::process_resource()));
     client.close();
     server.finish();
-    const auto stats_after = ruvia::app().http_stats();
+    const auto stats_after = ruvia::app().stats();
     EXPECT_EQ(stats_after.connection_failures_, stats_before.connection_failures_);
     EXPECT_EQ(stats_after.worker_failures_, stats_before.worker_failures_);
 }
@@ -500,7 +500,7 @@ TEST(Ruvia, http2_opt_in_writer_sleep_preserves_reset_error) {
     ruvia::test::http_server_fixture server(io);
     sleeping_stream_observed->sleep_failed_ = false;
     sleeping_stream_observed->sleep_elapsed_ = false;
-    const auto before = ruvia::app().http_stats().connection_failures_;
+    const auto before = ruvia::app().stats().connection_failures_;
     std::pmr::unsynchronized_pool_resource resource;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
@@ -517,7 +517,7 @@ TEST(Ruvia, http2_opt_in_writer_sleep_preserves_reset_error) {
     EXPECT_TRUE(!sleeping_stream_observed->sleep_elapsed_);
     client.close();
     server.finish();
-    EXPECT_EQ(ruvia::app().http_stats().connection_failures_, before);
+    EXPECT_EQ(ruvia::app().stats().connection_failures_, before);
 }
 
 // A request whose HEADERS and complete DATA arrive in one read is still a

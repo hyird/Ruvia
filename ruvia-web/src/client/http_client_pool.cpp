@@ -34,7 +34,7 @@ namespace {
 void throw_if_abandoned(const http_client_response_state& state_value) {
     if (state_value.abandoned_) {
         throw http_client_error(
-            http_client_error::code_type::cancelled, "HTTP request abandoned before transport admission");
+            std::make_error_code(std::errc::operation_canceled), "HTTP request abandoned before transport admission");
     }
 }
 
@@ -65,9 +65,9 @@ std::string_view take_component(std::string_view& text, char delimiter) noexcept
 #endif
 }  // namespace
 
-bool can_retry_reused_connection_request(std::optional<http_client_error::code_type> failure,
+bool can_retry_reused_connection_request(std::optional<std::error_code> failure,
     const http_client_request_storage& request, const http_client_response_state& response) noexcept {
-    return failure == http_client_error::code_type::io_error && request.upload() == nullptr && !request.is_tunnel() &&
+    return failure == make_error_code(http_client_errc::io_error) && request.upload() == nullptr && !request.is_tunnel() &&
            is_http_method_idempotent(request.method()) && !response.head_ready_ && response.informational_.empty() &&
            !response.abandoned_;
 }
@@ -188,8 +188,8 @@ void http_client_pool::validate_addresses(const client_resolve_result& result) c
         return;
     }
     const auto validate = [this](const asio::ip::tcp::endpoint& endpoint) {
-        if (!config_.address_validator_(endpoint.address().to_string(), endpoint.port())) {
-            throw http_client_error(http_client_error::code_type::resolve_failed, "HTTP dial address rejected");
+        if (!(*config_.address_validator_)(endpoint.address().to_string(), endpoint.port())) {
+            throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP dial address rejected");
         }
     };
     if (result.literal_) {
@@ -204,7 +204,7 @@ void http_client_pool::validate_addresses(const client_resolve_result& result) c
 void http_client_pool::install_addresses(client_resolve_result result) {
     validate_addresses(result);
     if (result.error_ || (!result.literal_ && result.addresses_.empty())) {
-        throw http_client_error(http_client_error::code_type::resolve_failed, "HTTP DNS resolution failed");
+        throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP DNS resolution failed");
     }
     const bool had_addresses = dns_addresses_.literal_.has_value() || !dns_addresses_.addresses_.empty();
     const bool changed = dns_addresses_.literal_ != result.literal_ ||
@@ -240,7 +240,7 @@ void http_client_pool::update_dns(std::span<const http_client_endpoint_address> 
     require_accepting();
     require_fixed_dial();
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
     if (addresses.empty()) {
         throw std::invalid_argument("HTTP DNS snapshot must not be empty");
@@ -299,7 +299,7 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
     require_accepting();
     require_fixed_dial();
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
     ++dns_active_;
     struct refresh_lease final {
@@ -321,10 +321,10 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
         result = co_await std::move(std::get<task<client_resolve_result>>(pending));
     }
     if (cancellation.token().stop_requested()) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP DNS refresh cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP DNS refresh cancelled");
     }
     if (timeout.expired()) {
-        throw http_client_error(http_client_error::code_type::timeout, "HTTP DNS refresh timed out");
+        throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP DNS refresh timed out");
     }
     if (revision == dns_revision_) {
         install_addresses(std::move(result));
@@ -629,7 +629,7 @@ void http_client_pool::reprioritize(http_client_response_state& state_value, htt
     (void)state_value;
     (void)priority;
     throw http_client_error(
-        http_client_error::code_type::protocol_unavailable, "priority updates require HTTP/2 or HTTP/3");
+        make_error_code(http_client_errc::protocol_unavailable), "priority updates require HTTP/2 or HTTP/3");
 }
 
 std::optional<http_client_push> http_client_pool::next_push() {
@@ -652,7 +652,7 @@ void http_client_pool::spawn_request(
     state_value.effective_write_timeout_ = request.options_.timeouts_.write_.resolve(config_.write_timeout_);
     state_value.effective_acquire_timeout_ = request.options_.timeouts_.acquire_.resolve(config_.acquire_timeout_);
     state_value.decode_content_ = request.options_.decode_content_.value_or(config_.decode_content_);
-    state_value.informational_callback_ = request.options_.informational_;
+    state_value.informational_callback_ = request.informational_;
     if (state_value.tunnel_) {
         request.bind_tunnel(*state_value.tunnel_);
     }
@@ -704,12 +704,13 @@ task<void> http_client_pool::execute_into(
         co_await execute_request_into(std::move(request), std::move(options), state_value);
     } catch (...) {
         auto failure = std::current_exception();
-        if (state_value->connection_info_.id_ != 0) {
+        {
             try {
                 std::rethrow_exception(failure);
             } catch (const http_client_error& error) {
                 try {
-                    throw http_client_error(error.code(), error.what(), error.status(), &state_value->connection_info_);
+                    throw http_client_error(error.code(), error.what(), error.status(),
+                        state_value->connection_info_.id_ != 0 ? &state_value->connection_info_ : nullptr, state_value->request_written_);
                 } catch (...) {
                     failure = std::current_exception();
                 }
@@ -736,7 +737,7 @@ task<void> http_client_pool::execute_into(
 void http_client_pool::require_accepting() const {
     // join() retires background_tasks_, which then rejects every spawn.
     if (background_joined_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is retired", std::nullopt, nullptr, false);
     }
 }
 
@@ -748,7 +749,7 @@ void http_client_pool::require_fixed_dial() const {
 
 void http_client_pool::require_open() const {
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
 }
 
@@ -1134,14 +1135,14 @@ task<void> http_client_pool::execute_request_into(
     const auto acquire_timeout = timeout.constrained_by(state_value->effective_acquire_timeout_);
     if (requests_buffered_ >= config_.max_buffered_requests_) {
         ++failed_requests_;
-        throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
+        throw http_client_error(make_error_code(http_client_errc::queue_full), "HTTP client request buffer is full");
     }
     ++requests_buffered_;
     request_admission admission{*this};
     try {
         require_open();
         if (request.is_upgrade() && !request.route().versions_.http1_) {
-            throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP Upgrade requires HTTP/1.1");
+            throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
         }
 #ifdef RUVIA_ENABLE_HTTP3
         if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value, admission)) {
@@ -1192,7 +1193,7 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
         !co_await execute_http1(connection_value, request, timeout, acquire_timeout, stop_token_value, state_value,
             connection_value.generation_)) {
         throw http_client_error(
-            http_client_error::code_type::protocol_unavailable, "upstream renegotiated the protocol repeatedly");
+            make_error_code(http_client_errc::protocol_unavailable), "upstream renegotiated the protocol repeatedly");
     }
 #endif
 }
@@ -1207,7 +1208,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
     // not close the exchange currently using it.
     const bool must_buffer = connection_value.http1_operations_ != 0;
     if (must_buffer && requests_buffered_ >= config_.max_buffered_requests_) {
-        throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
+        throw http_client_error(make_error_code(http_client_errc::queue_full), "HTTP client request buffer is full");
     }
     ++connection_value.http1_operations_;
     if (must_buffer) {
@@ -1689,7 +1690,7 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
         }
         state.rethrow_response_failure();
         if (state.pool_closed_ || state.abandoned_) {
-            throw http_client_error(http_client_error::code_type::closing, "HTTP/3 tunnel input closed");
+            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 tunnel input closed");
         }
         if (state.receive_complete()) {
             co_return std::nullopt;
@@ -1705,7 +1706,7 @@ task<bool> http_client_pool::send_http3_datagram(
                                        ? find_http3_connection(state)
                                        : nullptr;
     if (connection_value == nullptr) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP/3 tunnel output closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP/3 tunnel output closed");
     }
     auto lane = claim_operation_lane(state.tunnel_->output_.operation_active_, "HTTP/3 tunnel output is already active");
     const http_client_operation_interruption interruption(state, http_client_operation_lane::output, operation);
@@ -1725,13 +1726,13 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client pool is closed");
     }
     const auto timeout = operation_deadline(config_.connect_timeout_).constrained_by(options.timeout_);
     stop_group cancellation(host_stop, options.stop_token_);
     options.stop_token_ = cancellation.token();
     if (options.stop_token_.stop_requested()) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP/3 migration cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP/3 migration cancelled");
     }
     // Connections may be created or reclaimed while one migrates: each is
     // found again by position and serial.
@@ -1750,14 +1751,14 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
         }
     }
     if (!migrated) {
-        throw http_client_error(http_client_error::code_type::protocol_unavailable, "no active HTTP/3 connection to migrate");
+        throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "no active HTTP/3 connection to migrate");
     }
 #else
     (void)local_address;
     (void)port;
     (void)options;
     (void)host_stop;
-    throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP/3 is disabled");
+    throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 is disabled");
     co_return;
 #endif
 }

@@ -266,7 +266,7 @@ TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
             EXPECT_TRUE(push.has_value());
             if (push) {
                 EXPECT_THROW((void)push->response({.timeout_ = std::chrono::milliseconds(0)}), std::invalid_argument);
-                const auto failure_of = [](ruvia::task<ruvia::http_client_response> wait) -> ruvia::task<std::optional<ruvia::http_client_error::code_type>> {
+                const auto failure_of = [](ruvia::task<ruvia::http_client_response> wait) -> ruvia::task<std::optional<std::error_code>> {
                     try {
                         (void)co_await std::move(wait);
                     } catch (const ruvia::http_client_error& error) {
@@ -275,11 +275,11 @@ TEST(Ruvia, http2_push_response_wait_honours_its_operation) {
                     co_return std::nullopt;
                 };
                 EXPECT_TRUE((co_await failure_of(push->response({.timeout_ = std::chrono::milliseconds(50)}))) ==
-                            ruvia::http_client_error::code_type::timeout);
+                            std::make_error_code(std::errc::timed_out));
                 ruvia::stop_source stop;
                 stop.request_stop();
                 EXPECT_TRUE((co_await failure_of(push->response({.stop_token_ = stop.token()}))) ==
-                            ruvia::http_client_error::code_type::cancelled);
+                            std::make_error_code(std::errc::operation_canceled));
                 auto response = co_await push->response();
                 EXPECT_TRUE((co_await collect_text(response)) == "late-asset");
             }

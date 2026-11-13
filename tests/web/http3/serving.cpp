@@ -49,7 +49,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_websocket.h"
+#include "ruvia/web/http_client_websocket_request.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 
@@ -649,7 +649,7 @@ ruvia::task<void> run_cancelled_slow_request(ruvia::http_client_handle client,
             .get("/slow")
             .send();
     } catch (const ruvia::http_client_error& err) {
-        cancelled = err.code() == ruvia::http_client_error::code_type::cancelled;
+        cancelled = err.code() == std::make_error_code(std::errc::operation_canceled);
     }
     EXPECT_TRUE(cancelled);
 }
@@ -699,8 +699,8 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
     bool released = false;
     bool completed = false;
     auto request = client.get("/connection-hints");
-    request.on_informational([&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields,
-                                 ruvia::stop_token stop) -> ruvia::task<void> {
+    request.configure({.informational_ = [&](ruvia::http_status_code status, std::span<const ruvia::http_header> fields,
+                                             ruvia::stop_token stop) -> ruvia::task<void> {
         EXPECT_EQ(status.value(), 103);
         EXPECT_TRUE(std::ranges::any_of(fields, [](const ruvia::http_header& field) {
             return field.name() == "x-hint" && field.value() == "connection-controls";
@@ -709,7 +709,7 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
         while (!released && !stop.stop_requested()) {
             (void)co_await ruvia::sleep_for(loop.handle(), 1ms, stop);
         }
-    });
+    }});
     auto first = [&]() -> ruvia::task<void> {
         auto response = co_await request.send();
         const auto text = co_await response.text();
@@ -754,11 +754,11 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
     config.request_timeout_ = 5s;
     config.tls_.ca_file_ = ca_file;
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
-    config.address_validator_ = [&](std::string_view ip, std::uint16_t dial_port) {
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&](std::string_view ip, std::uint16_t dial_port) {
         ++validations;
         EXPECT_EQ(dial_port, port);
         return allowed && (ip == "127.0.0.1" || ip == "127.0.0.2");
-    };
+    });
     ruvia::http_client owner(loop, config);
     auto client = owner.client();
     std::exception_ptr failure;
@@ -787,7 +787,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         std::uint64_t last_fresh = 0;
         for (int attempt = 0; attempt != 2; ++attempt) {
             stage = "fresh-head";
-            auto fresh = co_await client.get("/hello").fresh_connection().send();
+            auto fresh = co_await client.get("/hello").configure({.fresh_connection_ = true}).send();
             EXPECT_FALSE(fresh.connection_info().reused_);
             EXPECT_NE(fresh.connection_info().id_, first_info.id_);
             EXPECT_NE(fresh.connection_info().id_, last_fresh);
@@ -818,7 +818,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
                 stage = "upload-open";
                 auto upload = co_await client.post("/upload-trailer")
                                   .header("trailer", "x-upload-checksum")
-                                  .fresh_connection(attempt % 2 == 0)
+                                  .configure({.fresh_connection_ = attempt % 2 == 0})
                                   .upload({.expectation_ = ruvia::http_client_request_expectation::continue_value});
                 stage = "upload-write";
                 co_await upload.body().write("last");
@@ -853,10 +853,10 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         bool timed_out = false;
         try {
             auto request = client.get("/connection-silent");
-            request.timeouts({.read_ = ruvia::http_client_timeout_override::after(10ms)});
+            request.configure({.timeouts_ = {.read_ = ruvia::http_client_timeout_override::after(10ms)}});
             (void)co_await request.send();
         } catch (const ruvia::http_client_error& error) {
-            timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+            timed_out = error.code() == std::make_error_code(std::errc::timed_out);
             const auto* information = error.connection_info();
             EXPECT_NE(information, nullptr);
             if (information) {
@@ -924,9 +924,9 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         allowed = false;
         bool rejected = false;
         try {
-            (void)co_await client.get("/hello").fresh_connection().send();
+            (void)co_await client.get("/hello").configure({.fresh_connection_ = true}).send();
         } catch (const ruvia::http_client_error& error) {
-            rejected = error.code() == ruvia::http_client_error::code_type::resolve_failed;
+            rejected = error.code() == ruvia::make_error_code(ruvia::http_client_errc::resolve_failed);
         }
         EXPECT_TRUE(rejected);
         EXPECT_GT(validations, 0U);

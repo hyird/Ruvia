@@ -116,7 +116,7 @@ void http_client_registry::require_mutable() const {
         throw std::logic_error("HTTP client origins must be changed on their bound worker");
     }
     if (closing_ || !worker_.accepting()) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client registry is closing");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client registry is closing", std::nullopt, nullptr, false);
     }
 }
 
@@ -131,10 +131,10 @@ task<void> http_client_registry::upsert(const http_client_config& config, operat
 void http_client_registry::require_prepared(stop_token stop, const operation_deadline& timeout) const {
     require_mutable();
     if (stop.stop_requested()) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP origin update cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP origin update cancelled", std::nullopt, nullptr, false);
     }
     if (timeout.expired()) {
-        throw http_client_error(http_client_error::code_type::timeout, "HTTP origin update deadline expired");
+        throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP origin update deadline expired", std::nullopt, nullptr, false);
     }
 }
 
@@ -251,11 +251,11 @@ http_client_handle http_client_registry::get(::ruvia::operation_scope& scope, st
 
 http_client_handle http_client_registry::get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop) const {
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "http client registry is closing");
+        throw http_client_error(make_error_code(http_client_errc::closing), "http client registry is closing", std::nullopt, nullptr, false);
     }
     const auto found = aliases_.find(alias);
     if (found == aliases_.end()) {
-        throw http_client_error(http_client_error::code_type::not_configured, "named HTTP client is not configured");
+        throw http_client_error(make_error_code(http_client_errc::not_configured), "named HTTP client is not configured", std::nullopt, nullptr, false);
     }
     http_client_handle result(*found->second.pool_, process_resource(), scope);
     result.pool_owner_ = found->second.pool_;
@@ -266,7 +266,7 @@ http_client_handle http_client_registry::get(std::string_view alias, ::ruvia::op
 
 std::shared_ptr<http_client_pool> http_client_registry::find_origin(http_scheme scheme, std::string_view authority) const {
     if (closing_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client registry is closing");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client registry is closing", std::nullopt, nullptr, false);
     }
     const alias_binding* found = nullptr;
     // Aliases sharing one origin retain registration precedence, independent
@@ -338,7 +338,7 @@ http_client_state::http_client_state(event_loop loop, std::span<const http_clien
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
-    throw http_client_error(http_client_error::code_type::closing, "HTTP client is closing");
+    throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client is closing", std::nullopt, nullptr, false);
 }
 
 http_client_handle http_client_state::client() {

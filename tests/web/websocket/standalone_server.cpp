@@ -30,7 +30,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
-#include "ruvia/web/http_client_websocket.h"
+#include "ruvia/web/http_client_websocket_request.h"
 #include "ruvia/web/http_server.h"
 
 #include "tcp_port_reservation.h"
@@ -73,6 +73,7 @@ struct observation final {
     unsigned cancelled_{};
     std::string_view scenario_{"startup"};
     std::optional<ruvia::task<std::optional<ruvia::websocket_message>>> expired_read_;
+    std::optional<ruvia::websocket> expired_session_;
     std::optional<ruvia::task<ruvia::websocket_accept_result>> expired_accept_;
     std::map<std::string, ruvia::websocket_rejection, std::less<>> rejections_;
     std::map<std::string, session_record, std::less<>> sessions_;
@@ -101,7 +102,7 @@ struct request_retirement final {
     }
 };
 
-ruvia::task<void> expect_server_read_interrupted(
+ruvia::task<void> expect_read_interrupted(
     ruvia::task<std::optional<ruvia::websocket_message>> read, std::errc expected, bool& interrupted) {
     try {
         (void)co_await std::move(read);
@@ -114,18 +115,22 @@ ruvia::task<void> read_to_end(ruvia::websocket& websocket, bool& ended) {
     ended = !(co_await websocket.read()).has_value();
 }
 
+ruvia::task<void> read_operation_to_end(ruvia::task<std::optional<ruvia::websocket_message>> operation, bool& ended) {
+    ended = !(co_await std::move(operation)).has_value();
+}
+
 // Reads interrupted by their own deadline or stop request keep the session;
 // close(4001) then completes the handshake under a pending read.
 ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ruvia::worker_handle& worker) {
     const auto start = co_await websocket.read();
     EXPECT_TRUE(start && start->payload() == "start");
     bool timed_out = false;
-    co_await expect_server_read_interrupted(websocket.read({.timeout_ = 20ms}), std::errc::timed_out, timed_out);
+    co_await expect_read_interrupted(websocket.read({.timeout_ = 20ms}), std::errc::timed_out, timed_out);
     bool cancelled = false;
     {
         ruvia::stop_source stop;
         ruvia::task_scope reads(worker);
-        reads.spawn(expect_server_read_interrupted(
+        reads.spawn(expect_read_interrupted(
             websocket.read({.stop_token_ = stop.token()}), std::errc::operation_canceled, cancelled));
         stop.request_stop();
         co_await reads.join();
@@ -181,6 +186,21 @@ ruvia::task<void> send_fragmented(ruvia::websocket& websocket) {
     }
 }
 
+// The identical business coroutine runs at both real ends, irrespective of role.
+ruvia::task<void> exchange_fragmented(ruvia::websocket& websocket) {
+    co_await send_fragmented(websocket);
+    std::string expected;
+    for (std::size_t i = 0; i < fragment_count; ++i) {
+        expected += fragment_payload(i);
+    }
+    for (unsigned i = 0; i != 2; ++i) {
+        const auto message = co_await websocket.read();
+        EXPECT_TRUE(message && message->payload() == expected);
+    }
+    co_await websocket.close();
+    EXPECT_EQ(websocket.peer_close_code(), 1000);
+}
+
 // Reassembles one message from fragment frames, counting frames and the Ping.
 ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::size_t& data_frames, std::size_t& pings) {
     std::string payload;
@@ -210,14 +230,6 @@ ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::si
     EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) ==
                 ruvia::websocket_inflate_result::ok);
     co_return std::string(inflated);
-}
-
-ruvia::task<void> expect_client_read_cancelled(ruvia::task<std::optional<ruvia::websocket_message>> read, bool& cancelled) {
-    try {
-        (void)co_await std::move(read);
-    } catch (const ruvia::http_client_error& error) {
-        cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
-    }
 }
 
 ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
@@ -294,6 +306,15 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         co_return;
     }
     if (path == "/close") {
+        co_return;
+    }
+    if (path == "/moved") {
+        observed.expired_session_.emplace(std::move(*websocket));
+        co_return;
+    }
+    if (path == "/shared") {
+        co_await exchange_fragmented(*websocket);
+        observed.record(path, *websocket);
         co_return;
     }
     if (path == "/fragments") {
@@ -735,9 +756,28 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         EXPECT_TRUE(observed.session("/limit").termination_ == ruvia::websocket_termination::message_too_large);
     }
     {
+        observed.scenario_ = "/shared";
+        auto websocket = co_await client.client().websocket("/shared").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
+        co_await exchange_fragmented(websocket);
+    }
+    co_await await_retirement(server, observed);
+    {
+        observed.scenario_ = "/moved";
+        auto websocket = co_await client.client().websocket("/moved").subprotocol("standalone.v1").connect();
+        EXPECT_FALSE((co_await websocket.read()).has_value());
+        co_await await_retirement(server, observed);
+        bool expired = false;
+        try {
+            (void)co_await observed.expired_session_->read();
+        } catch (const std::logic_error&) {
+            expired = true;
+        }
+        EXPECT_TRUE(expired);
+        observed.expired_session_.reset();
+    }
+    {
         observed.scenario_ = "/exchange";
         auto websocket = co_await client.client().websocket("/exchange").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
-        EXPECT_EQ(websocket.protocol_version(), destination.version_);
         EXPECT_EQ(websocket.subprotocol(), "standalone.v1");
         co_await websocket.text(std::string(4096, 'z'));
         auto message = co_await websocket.read();
@@ -798,9 +838,10 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         for (const bool compress : {false, true}) {
             const auto sent_before = websocket.bytes_sent();
             auto message = websocket.begin_binary({.compress_ = compress});
+            auto moved = std::move(websocket);
             bool data_lane_held = false;
             try {
-                co_await websocket.binary(std::as_bytes(std::span(std::string_view("overlap"))));
+                co_await moved.binary(std::as_bytes(std::span(std::string_view("overlap"))));
             } catch (const std::logic_error&) {
                 data_lane_held = true;
             }
@@ -808,13 +849,14 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
             for (std::size_t index = 0; index + 1 < fragment_count; ++index) {
                 co_await message.write(fragment_payload(index));
                 if (index == 0) {
-                    co_await websocket.ping("between");
+                    co_await moved.ping("between");
                 }
-                EXPECT_GT(websocket.bytes_sent(), sent_before);
+                EXPECT_GT(moved.bytes_sent(), sent_before);
             }
             co_await message.finish(fragment_payload(fragment_count - 1));
-            const auto reply = co_await websocket.read();
+            const auto reply = co_await moved.read();
             EXPECT_TRUE(reply && reply->payload() == std::to_string(fragment_count * fragment_payload(0).size()) + ":binary");
+            websocket = std::move(moved);
         }
         {
             // An unfinished message cannot be completed later, so dropping it ends the session.
@@ -826,22 +868,26 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     {
         observed.scenario_ = "/graceful";
-        auto websocket = co_await client.client().websocket("/graceful").subprotocol("standalone.v1").connect();
+        auto original = co_await client.client().websocket("/graceful").subprotocol("standalone.v1").connect();
+        auto cold_read = original.read({.timeout_ = 20ms});
+        auto websocket = std::move(original);
         // The server stays silent until "start", so these client reads can
         // only end by their own deadline or stop request.
         bool timed_out = false;
         try {
-            (void)co_await websocket.read({.timeout_ = 20ms});
-        } catch (const ruvia::http_client_error& error) {
-            timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+            (void)co_await std::move(cold_read);
+        } catch (const std::system_error& error) {
+            timed_out = error.code() == std::errc::timed_out;
         }
         bool cancelled = false;
         {
             ruvia::stop_source stop;
             ruvia::task_scope reads(websocket.worker());
-            reads.spawn(expect_client_read_cancelled(websocket.read({.stop_token_ = stop.token()}), cancelled));
+            reads.spawn(expect_read_interrupted(websocket.read({.stop_token_ = stop.token()}), std::errc::operation_canceled, cancelled));
+            auto moved = std::move(websocket);
             stop.request_stop();
             co_await reads.join();
+            websocket = std::move(moved);
         }
         EXPECT_TRUE(timed_out);
         EXPECT_TRUE(cancelled);
@@ -894,7 +940,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
             auto websocket = co_await client.client().websocket(path).connect();
         } catch (const ruvia::http_client_error& error) {
             rejected = true;
-            EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::handshake_rejected);
+            EXPECT_EQ(error.code(), ruvia::make_error_code(ruvia::http_client_errc::handshake_rejected));
             EXPECT_EQ(error.status(), path == std::string_view("/missing-subprotocol") ? ruvia::http_status::bad_request : ruvia::http_status::forbidden);
         }
         EXPECT_TRUE(rejected);
@@ -1004,6 +1050,26 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         co_await peer.write(masked_frame(8, std::string_view("\x03\xf3", 2)));
     }
     co_await await_retirement(server, observed);
+    {
+        observed.scenario_ = "/cancel";
+        std::optional<ruvia::websocket> websocket;
+        websocket.emplace(co_await client.client().websocket("/cancel").subprotocol("standalone.v1").connect());
+        auto cold = websocket->read();
+        bool ended = false;
+        ruvia::task_scope reads(client.worker());
+        reads.spawn(read_operation_to_end(websocket->read(), ended));
+        websocket.reset();
+        co_await reads.join();
+        EXPECT_TRUE(ended);
+        bool expired = false;
+        try {
+            (void)co_await std::move(cold);
+        } catch (const std::logic_error&) {
+            expired = true;
+        }
+        EXPECT_TRUE(expired);
+        co_await await_retirement(server, observed);
+    }
     for (const auto path : {"/heartbeat", "/close"}) {
         observed.scenario_ = path;
         wire_peer peer(io);
@@ -1018,8 +1084,6 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         try {
             retired = !(co_await peer.read_frame()).has_value();
         } catch (const std::system_error&) {
-            retired = true;
-        } catch (const ruvia::http_client_error&) {
             retired = true;
         }
         EXPECT_TRUE(retired);
@@ -1134,7 +1198,7 @@ void exercise_protocol(ruvia::http_client_versions protocol) {
                     } catch (const std::exception& error) {
                         std::string detail = std::string(observed.scenario_) + ": " + error.what();
                         if (const auto* client_error = dynamic_cast<const ruvia::http_client_error*>(&error)) {
-                            detail += " [client code=" + std::to_string(static_cast<unsigned>(client_error->code()));
+                            detail += " [client code=" + std::to_string(client_error->code().value());
                             if (const auto status = client_error->status()) {
                                 detail += ", status=" + std::to_string(status->value());
                             }

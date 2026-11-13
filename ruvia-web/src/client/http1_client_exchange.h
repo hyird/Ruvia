@@ -77,7 +77,7 @@ private:
 
     http_client_pool& pool_;
     http_client_connection& connection_;
-    const http_client_response_state* response_{};
+    http_client_response_state* response_{};
     // Armed while request content may still be sent before the final response
     // head (read_timeout_), and through an accepted tunnel (its idle_timeout_).
     std::optional<timeout_duration> inactivity_bound_;

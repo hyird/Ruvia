@@ -114,7 +114,7 @@ template <typename value_type>
         const auto failure = detail::response_file_failure::read_not_completed(result.status());
         detail::context_access::services(context_value)
             .connection_failure()
-            .invoke(context_value.conn().remote().address(), failure.fault());
+            .invoke(detail::context_access::services(context_value).remote_address(), failure.fault());
         std::rethrow_exception(failure.response_error());
     }
     return std::move(result).take_value();

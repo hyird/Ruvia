@@ -51,14 +51,14 @@
 
 namespace ruvia {
 
-application& application::load_dotenv(dotenv_options options) {
+application& application::load_dotenv(dotenv_options options) & {
     return detail::mutate_stopped_app(
         *this, *state_, "cannot load dotenv while app is running", [&](detail::app_state& state_value) {
             state_value.env_.load_dotenv(options);
         });
 }
 
-application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) {
+application& application::load_dotenv(const std::filesystem::path& path, dotenv_options options) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot load dotenv while app is running",
         [&](detail::app_state& state_value) { state_value.env_.load_dotenv(path, options); });
 }
@@ -129,7 +129,7 @@ private:
 // order, as an RFC 7301 §3.1 ProtocolNameList without its length prefix.
 [[nodiscard]] std::optional<std::string> connection_dispatch_alpn(const listen_config& config) {
     const auto& protocols = config.tls_.alpn_;
-    switch (config.dispatch_) {
+    switch (config.dispatch_.value_or(listener_dispatch::routes)) {
         case listener_dispatch::routes:
         case listener_dispatch::request_stream:
             if (!protocols.empty()) {
@@ -185,6 +185,9 @@ void append_listen_config(
     if (!config.https_.has_value() && has_tls_configuration(config.tls_)) {
         throw std::invalid_argument("TLS config requires an HTTPS listen port");
     }
+    if (config.proxy_protocol_ && config.http3_) {
+        throw std::invalid_argument("PROXY protocol is not supported on HTTP/3 listeners");
+    }
     const auto connection_alpn = connection_dispatch_alpn(config);
     std::optional<detail::http_server_listener_definition::http3_service> http3;
     if (config.http3_.has_value()) {
@@ -239,6 +242,7 @@ void append_listen_config(
             replacement.back().connection_.emplace(std::string_view{}, replacement.get_allocator().resource());
         }
         replacement.back().ipv6_only_ = config.ipv6_only_;
+        replacement.back().proxy_protocol_ = config.proxy_protocol_;
     }
     if (config.https_.has_value()) {
         const auto endpoint = asio::ip::tcp::endpoint(address, config.https_->value());
@@ -258,6 +262,7 @@ void append_listen_config(
         }
         replacement.emplace_back(endpoint, std::move(tls), std::move(http3));
         replacement.back().ipv6_only_ = config.ipv6_only_;
+        replacement.back().proxy_protocol_ = config.proxy_protocol_;
         replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
         if (connection_alpn.has_value()) {
             replacement.back().connection_.emplace(*connection_alpn, replacement.get_allocator().resource());
@@ -770,11 +775,11 @@ bool detail::owned_listen_configs::needs_tls_preparation() const noexcept {
     return std::ranges::any_of(configs_, [](const auto& config) { return config.https_.has_value(); });
 }
 
-application& application::listen(listen_config config) {
+application& application::listen(listen_config config) & {
     return listen(std::span<const listen_config>(&config, 1));
 }
 
-application& application::listen(std::span<const listen_config> configs) {
+application& application::listen(std::span<const listen_config> configs) & {
     const tls_secret_span_cleanser secret_cleanser(configs);
     try {
         std::lock_guard lock(state_->mutex_);
@@ -791,7 +796,7 @@ application& application::listen(std::span<const listen_config> configs) {
     return *this;
 }
 
-application& application::listen(std::initializer_list<listen_config> configs) {
+application& application::listen(std::initializer_list<listen_config> configs) & {
     return listen(std::span<const listen_config>(configs.begin(), configs.size()));
 }
 
@@ -840,7 +845,7 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
 }  // namespace
 
 task<void> application::replace_tls_identities(
-    worker_handle caller, const listener_endpoint& endpoint, tls_config config) {
+    worker_handle caller, const listener_endpoint& endpoint, tls_config config) & {
     owned_tls_config input(std::move(config));
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return replace_app_tls_identities(state_, std::move(caller), target, std::move(input));
@@ -873,8 +878,39 @@ task<bool> close_app_connection(
 }
 }  // namespace
 
-task<bool> application::close_connection(worker_handle caller, std::uint64_t connection_id) {
+task<bool> application::close_connection(worker_handle caller, std::uint64_t connection_id) & {
     return close_app_connection(state_, std::move(caller), connection_id);
+}
+
+namespace {
+task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_handle caller,
+    asio::ip::tcp::endpoint target, operation_options options) {
+    detail::operation_steps steps(options);
+    active_app_control active(state, "connections can be awaited only while the app is running");
+    auto& runtime = active.runtime();
+    std::vector<std::shared_ptr<detail::connection_count>> counts;
+    std::vector<stop_token> stops;
+    {
+        const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
+        std::lock_guard lock(state->mutex_);
+        (void)running_runtime(*state, "connections can be awaited only while the app is running");
+        counts.reserve(runtime.workers_.size());
+        stops.reserve(runtime.workers_.size());
+        for (const auto& worker : runtime.workers_) {
+            counts.push_back(worker.runtime_->listener_connections(target));
+            stops.push_back(worker.runtime_->cancellation());
+        }
+    }
+    stop_group stopping(stops);
+    for (const auto& count : counts) {
+        co_await detail::connection_count::wait(count, caller, steps.next("wait_connections_closed"), stopping.token());
+    }
+}
+}  // namespace
+
+task<void> application::wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options) & {
+    const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
+    return wait_app_connections(state_, std::move(caller), target, std::move(options));
 }
 
 namespace {
@@ -1107,19 +1143,19 @@ task<void> add_app_listener(
 }
 }  // namespace
 
-task<prepared_listener> application::prepare_listener(worker_handle caller, listen_config config) {
+task<prepared_listener> application::prepare_listener(worker_handle caller, listen_config config) & {
     detail::owned_listen_configs input(std::move(config));
     auto transaction = detail::prepared_listener_access::make(caller);
     return detail::prepared_listener_access::launch(transaction,
         add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
-task<prepared_listener> application::prepare_listeners(worker_handle caller, std::span<const listen_config> configs) {
+task<prepared_listener> application::prepare_listeners(worker_handle caller, std::span<const listen_config> configs) & {
     detail::owned_listen_configs input(configs);
     auto transaction = detail::prepared_listener_access::make(caller);
     return detail::prepared_listener_access::launch(transaction,
         add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
-task<void> application::add_listener(worker_handle caller, listen_config config) {
+task<void> application::add_listener(worker_handle caller, listen_config config) & {
     return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
 }
 
@@ -1181,7 +1217,7 @@ task<void> remove_app_listener(
 }
 }  // namespace
 
-task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options) {
+task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options) & {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return remove_app_listener(state_, std::move(caller), target, options);
 }
@@ -1241,19 +1277,19 @@ task<listener_sockets> duplicate_app_listener_sockets(
 }  // namespace
 
 task<listener_sockets> application::duplicate_listener_sockets(
-    worker_handle caller, const listener_endpoint& endpoint) const {
+    worker_handle caller, const listener_endpoint& endpoint) const& {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return duplicate_app_listener_sockets(state_, std::move(caller), target);
 }
 #endif
 
-application& application::server(server_config config) {
+application& application::server(server_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change server config while app is running",
         [&config](detail::app_state& state_value) { state_value.options_.set_server(config); });
 }
 
-application& application::on_start(app_hook hook) {
+application& application::on_start(app_hook hook) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
         [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
@@ -1264,7 +1300,7 @@ application& application::on_start(app_hook hook) {
         });
 }
 
-application& application::on_start(std::nullptr_t) {
+application& application::on_start(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
         [retired = std::pmr::vector<detail::callback_registration<app_hook>>(process_resource())](detail::app_state& state_value) mutable {
@@ -1273,7 +1309,7 @@ application& application::on_start(std::nullptr_t) {
         });
 }
 
-application& application::on_stop(app_hook hook) {
+application& application::on_stop(app_hook hook) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
         [hook = detail::own_callback(std::move(hook))](detail::app_state& state_value) mutable {
@@ -1284,7 +1320,7 @@ application& application::on_stop(app_hook hook) {
         });
 }
 
-application& application::on_stop(std::nullptr_t) {
+application& application::on_stop(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
         [retired = std::pmr::vector<detail::callback_registration<app_hook>>(process_resource())](detail::app_state& state_value) mutable {
@@ -1292,19 +1328,19 @@ application& application::on_stop(std::nullptr_t) {
         });
 }
 
-application& application::rate_limit(rate_limit_config config) {
+application& application::rate_limit(rate_limit_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
         [config](detail::app_state& state_value) { state_value.options_.set_rate_limit(config); });
 }
 
-application& application::rate_limit(std::nullptr_t) {
+application& application::rate_limit(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change the default rate limit per worker while app is running",
         [](detail::app_state& state_value) { state_value.options_.clear_rate_limit(); });
 }
 
-application& application::trusted_proxies(trusted_proxy_config config) {
+application& application::trusted_proxies(trusted_proxy_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot change trusted proxies while app is running",
         [config = std::move(config)](detail::app_state& state_value) {
@@ -1312,13 +1348,7 @@ application& application::trusted_proxies(trusted_proxy_config config) {
         });
 }
 
-application& application::trusted_proxies(std::nullptr_t) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change trusted proxies while app is running",
-        [](detail::app_state& state_value) { state_value.options_.clear_trusted_proxies(); });
-}
-
-application& application::on_access(access_log_callback callback_value) {
+application& application::on_access(access_log_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register access-log hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1328,7 +1358,7 @@ application& application::on_access(access_log_callback callback_value) {
         });
 }
 
-application& application::on_connection_failure(connection_failure_callback callback_value) {
+application& application::on_connection_failure(connection_failure_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection-failure hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1338,7 +1368,7 @@ application& application::on_connection_failure(connection_failure_callback call
         });
 }
 
-application& application::on_tls_client_hello(tls_client_hello_callback callback_value) {
+application& application::on_tls_client_hello(tls_client_hello_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register TLS ClientHello hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1348,11 +1378,11 @@ application& application::on_tls_client_hello(tls_client_hello_callback callback
         });
 }
 
-application& application::on_tls_client_hello(std::nullptr_t) {
+application& application::on_tls_client_hello(std::nullptr_t) & {
     return on_tls_client_hello(tls_client_hello_callback{});
 }
 
-application& application::on_http2_input(http2_input_callback callback_value) {
+application& application::on_http2_input(http2_input_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register HTTP/2 input hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1361,12 +1391,12 @@ application& application::on_http2_input(http2_input_callback callback_value) {
         });
 }
 
-application& application::on_http2_input(std::nullptr_t) {
+application& application::on_http2_input(std::nullptr_t) & {
     return on_http2_input(http2_input_callback{});
 }
 
 #if defined(RUVIA_ENABLE_HTTP2)
-application& application::on_http2_frame(http2_frame_callback callback_value) {
+application& application::on_http2_frame(http2_frame_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register HTTP/2 frame hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1375,11 +1405,11 @@ application& application::on_http2_frame(http2_frame_callback callback_value) {
         });
 }
 
-application& application::on_http2_frame(std::nullptr_t) {
+application& application::on_http2_frame(std::nullptr_t) & {
     return on_http2_frame(http2_frame_callback{});
 }
 
-application& application::on_http2_headers(http2_headers_callback callback_value) {
+application& application::on_http2_headers(http2_headers_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register HTTP/2 headers hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1388,12 +1418,12 @@ application& application::on_http2_headers(http2_headers_callback callback_value
         });
 }
 
-application& application::on_http2_headers(std::nullptr_t) {
+application& application::on_http2_headers(std::nullptr_t) & {
     return on_http2_headers(http2_headers_callback{});
 }
 #endif
 
-application& application::on_connection(connection_callback callback_value) {
+application& application::on_connection(connection_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection handler while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1402,11 +1432,11 @@ application& application::on_connection(connection_callback callback_value) {
         });
 }
 
-application& application::on_connection(std::nullptr_t) {
+application& application::on_connection(std::nullptr_t) & {
     return on_connection(connection_callback{});
 }
 
-application& application::on_connection_admission(connection_admission_callback callback_value) {
+application& application::on_connection_admission(connection_admission_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection admission hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1415,11 +1445,11 @@ application& application::on_connection_admission(connection_admission_callback 
         });
 }
 
-application& application::on_connection_admission(std::nullptr_t) {
+application& application::on_connection_admission(std::nullptr_t) & {
     return on_connection_admission(connection_admission_callback{});
 }
 
-application& application::on_connection_open(connection_open_callback callback_value) {
+application& application::on_connection_open(connection_open_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection open hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1428,11 +1458,11 @@ application& application::on_connection_open(connection_open_callback callback_v
         });
 }
 
-application& application::on_connection_open(std::nullptr_t) {
+application& application::on_connection_open(std::nullptr_t) & {
     return on_connection_open(connection_open_callback{});
 }
 
-application& application::on_connection_close(connection_close_callback callback_value) {
+application& application::on_connection_close(connection_close_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register connection close hook while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1441,11 +1471,11 @@ application& application::on_connection_close(connection_close_callback callback
         });
 }
 
-application& application::on_connection_close(std::nullptr_t) {
+application& application::on_connection_close(std::nullptr_t) & {
     return on_connection_close(connection_close_callback{});
 }
 
-application& application::on_request_stream(request_stream_callback callback_value) {
+application& application::on_request_stream(request_stream_callback callback_value) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register request stream handler while app is running",
         [callback_value = detail::own_callback(std::move(callback_value))](detail::app_state& state_value) mutable {
@@ -1454,12 +1484,12 @@ application& application::on_request_stream(request_stream_callback callback_val
         });
 }
 
-application& application::on_request_stream(std::nullptr_t) {
+application& application::on_request_stream(std::nullptr_t) & {
     return on_request_stream(request_stream_callback{});
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-application& application::database(db_registration_config config) {
+application& application::database(db_registration_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure database while app is running", [&](detail::app_state& state_value) {
             auto* resource = process_resource();
@@ -1477,7 +1507,7 @@ application& application::database(db_registration_config config) {
         });
 }
 
-application& application::database(std::nullptr_t) {
+application& application::database(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure database while app is running",
         [](detail::app_state& state_value) { state_value.databases_.clear(); });
@@ -1485,7 +1515,7 @@ application& application::database(std::nullptr_t) {
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-application& application::redis(redis_registration_config config) {
+application& application::redis(redis_registration_config config) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
         [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(
@@ -1493,13 +1523,13 @@ application& application::redis(redis_registration_config config) {
         });
 }
 
-application& application::redis(std::nullptr_t) {
+application& application::redis(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_, "cannot configure redis while app is running",
         [](detail::app_state& state_value) { state_value.redis_.clear(); });
 }
 #endif
 
-application& application::client(http_client_config config) {
+application& application::client(http_client_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running", [&](detail::app_state& state_value) {
             detail::upsert_named_capability_definition(state_value.http_clients_, config.alias_.view(), config,
@@ -1507,7 +1537,7 @@ application& application::client(http_client_config config) {
         });
 }
 
-application& application::client(std::nullptr_t) {
+application& application::client(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure HTTP client while app is running",
         [](detail::app_state& state_value) { state_value.http_clients_.clear(); });

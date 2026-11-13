@@ -135,7 +135,9 @@ inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& op
     std::int64_t last_active_ms, std::int64_t now) noexcept {
     if (liveness_mode != websocket_liveness_mode::open) {
         const auto* close = std::get_if<websocket_awaiting_peer_close>(&state_value);
-        return liveness_mode == websocket_liveness_mode::awaiting_peer_close && close != nullptr &&
+        return (liveness_mode == websocket_liveness_mode::awaiting_peer_close ||
+                   liveness_mode == websocket_liveness_mode::awaiting_peer_eof) &&
+                       close != nullptr &&
                        options.close_handshake_timeout_.has_value() &&
                        now - close->started_at_ms_ >= options.close_handshake_timeout_->value().count()
                    ? websocket_liveness_decision::abort_transport

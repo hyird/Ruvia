@@ -112,6 +112,7 @@ struct http_server_listener_definition final {
 
     asio::ip::tcp::endpoint endpoint_;
     std::optional<bool> ipv6_only_;
+    bool proxy_protocol_{false};
     // listen_config::inherited_sockets_ of this listener, shared by its
     // clones; null when it binds. The run that prepares the listener claims
     // them; the stored definition drops them once a run took them.
@@ -174,6 +175,7 @@ public:
 
     http_server_listener_definition::transport_type transport_;
     std::optional<bool> ipv6_only_;
+    bool proxy_protocol_{false};
     std::optional<http_server_listener_definition::http3_service> http3_;
     // Stable for the session's lifetime: the TLS contexts' ALPN selection
     // borrows connection_->alpn_.

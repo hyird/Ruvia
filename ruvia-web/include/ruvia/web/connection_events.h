@@ -4,38 +4,16 @@
 #include <memory>
 #include <utility>
 
-#include <asio/ip/address.hpp>
-
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/web/detail/callback_ref.h"
 
 namespace ruvia {
 
-// Transport addresses, never values supplied by forwarding headers. Values own
-// their address bytes, so copying an event does not retain connection storage.
-class connection_endpoint final {
-public:
-    connection_endpoint() noexcept = default;
-    connection_endpoint(asio::ip::address address, std::uint16_t port) noexcept
-        : address_(std::move(address)),
-          port_(port) {}
-    [[nodiscard]] const asio::ip::address& address() const& noexcept RUVIA_LIFETIMEBOUND {
-        return address_;
-    }
-    const asio::ip::address& address() const&& = delete;
-    [[nodiscard]] std::uint16_t port() const noexcept {
-        return port_;
-    }
-
-private:
-    asio::ip::address address_;
-    std::uint16_t port_{};
-};
-
 class connection_event final {
 public:
-    connection_event(std::uint64_t id, connection_endpoint local, connection_endpoint remote, bool quic) noexcept
+    connection_event(std::uint64_t id, ip_endpoint local, ip_endpoint remote, bool quic) noexcept
         : id_(id),
           local_(std::move(local)),
           remote_(std::move(remote)),
@@ -43,29 +21,50 @@ public:
     [[nodiscard]] std::uint64_t connection_id() const noexcept {
         return id_;
     }
-    [[nodiscard]] const connection_endpoint& local() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const ip_endpoint& local() const& noexcept RUVIA_LIFETIMEBOUND {
         return local_;
     }
-    const connection_endpoint& local() const&& = delete;
-    [[nodiscard]] const connection_endpoint& remote() const& noexcept RUVIA_LIFETIMEBOUND {
+    const ip_endpoint& local() const&& = delete;
+    [[nodiscard]] const ip_endpoint& remote() const& noexcept RUVIA_LIFETIMEBOUND {
         return remote_;
     }
-    const connection_endpoint& remote() const&& = delete;
+    const ip_endpoint& remote() const&& = delete;
     [[nodiscard]] bool quic() const noexcept {
         return quic_;
     }
 
 private:
     std::uint64_t id_;
-    connection_endpoint local_;
-    connection_endpoint remote_;
+    ip_endpoint local_;
+    ip_endpoint remote_;
     bool quic_;
+};
+
+enum class connection_close_reason : std::uint8_t {
+    normal,
+    peer_eof,
+    timeout,
+    cancelled,
+    aborted,
+    protocol_error,
+    transport_error,
+    handler_error,
+};
+
+struct connection_close_info final {
+    connection_close_reason reason_{connection_close_reason::normal};
+    // Transport bytes actually received/sent, including TLS ciphertext and
+    // QUIC retransmissions; replayed prefixes never count twice.
+    std::uint64_t bytes_in_{};
+    std::uint64_t bytes_out_{};
+    // New HTTP request heads, once per request; raw connections remain zero.
+    std::uint64_t requests_{};
 };
 
 namespace detail {
 using connection_admission_callback_ref = callback_ref<bool(const connection_event&) noexcept>;
 using connection_open_callback_ref = callback_ref<std::shared_ptr<void>(const connection_event&)>;
-using connection_close_callback_ref = callback_ref<void(const connection_event&, const std::shared_ptr<void>&) noexcept>;
+using connection_close_callback_ref = callback_ref<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
 }  // namespace detail
 
 // Synchronous worker callbacks; targets must support concurrent workers. False
@@ -81,6 +80,6 @@ using connection_close_callback_ref = callback_ref<void(const connection_event&,
 // still runs once with empty state, and the failure reaches the failure sink.
 using connection_admission_callback = move_only_function<bool(const connection_event&) noexcept>;
 using connection_open_callback = move_only_function<std::shared_ptr<void>(const connection_event&)>;
-using connection_close_callback = move_only_function<void(const connection_event&, const std::shared_ptr<void>&) noexcept>;
+using connection_close_callback = move_only_function<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
 
 }  // namespace ruvia

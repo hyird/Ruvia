@@ -166,7 +166,7 @@ ruvia_link_controllers(my_service user_controllers)
 | [websocket_client.cpp](../examples/web/websocket_client.cpp) | `ruvia_example_websocket_client` | 默认 | 出站 WebSocket 会话 |
 | [tunnels.cpp](../examples/web/tunnels.cpp) | `ruvia_example_tunnels` | 默认 | HTTP/1.1 & HTTP/2 `CONNECT` 字节流隧道与 RFC 9298 `CONNECT-UDP` 数据报隧道 |
 | [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、请求 Arena 与连接限制、协商压缩、CORS、TLS / mTLS / SNI 与 HTTP 自动跳转 HTTPS |
-| [ops.cpp](../examples/web/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`http_stats()`、生命周期与日志钩子 |
+| [ops.cpp](../examples/web/ops.cpp) | `ruvia_example_ops` | 默认 | `security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`stats()`、生命周期与日志钩子 |
 | [workers_blocking.cpp](../examples/web/workers_blocking.cpp) | `ruvia_example_workers_blocking` | 默认 | Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递 `worker.post(...)` 与 `c.run_blocking(...)` 阻塞池卸载 |
 | [testing.cpp](../examples/web/testing.cpp) | `ruvia_example_testing` | 默认 | 使用 `test_app`、`test_request`、`dispatch_response` 在内存内无 Socket 测试完整路由与中间件管线 |
 | [auth_jwt.cpp](../examples/web/auth_jwt.cpp) | `ruvia_example_auth_jwt` | `RUVIA_ENABLE_JWT` | HMAC-SHA256/384/512 JWT 签发 `jwt_sign`、Bearer 提取 `jwt_bearer_token`、校验 `jwt_verify` 与鉴权中间件 |

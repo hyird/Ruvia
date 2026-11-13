@@ -168,19 +168,20 @@ template <typename entry_type>
 }  // namespace
 
 borrowed_clients::borrowed_clients()
-#if defined(RUVIA_ENABLE_DATABASE) && defined(RUVIA_ENABLE_REDIS)
-    : databases_(process_resource()),
+    : http_clients_(process_resource())
+#ifdef RUVIA_ENABLE_DATABASE
+      ,
+      databases_(process_resource())
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+      ,
       redis_(process_resource())
-#elif defined(RUVIA_ENABLE_DATABASE)
-    : databases_(process_resource())
-#elif defined(RUVIA_ENABLE_REDIS)
-    : redis_(process_resource())
 #endif
 {
 }
 
 bool borrowed_clients::empty() const noexcept {
-    return http_clients_ == nullptr
+    return http_clients_.empty()
 #ifdef RUVIA_ENABLE_DATABASE
            && databases_.empty()
 #endif
@@ -190,12 +191,13 @@ bool borrowed_clients::empty() const noexcept {
         ;
 }
 
-void borrowed_clients::bind_http_client(const worker_handle& worker, const http_client& clients) {
-    require_borrowed_client_worker(worker, clients.worker());
-    if (http_clients_ != nullptr) {
-        throw std::invalid_argument("a router borrows at most one http_client");
-    }
-    http_clients_ = &clients;
+void borrowed_clients::bind_http_client(const worker_handle& worker, std::string_view alias, const http_client& client) {
+    require_borrowed_client_worker(worker, client.worker());
+    bind_borrowed_alias(http_clients_, alias, client);
+}
+
+const http_client* borrowed_clients::http_clients(std::string_view alias) const noexcept {
+    return find_borrowed_alias(http_clients_, alias);
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
@@ -292,11 +294,11 @@ redis_handle worker_client_registry_view::redis(std::string_view alias, ::ruvia:
 http_client_handle worker_client_registry_view::client(
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
-        return borrowed_http_clients().client().with_options({.stop_token_ = stop_token_value});
+        return client(default_capability_alias, operation_scope, stop_token_value);
     }
     if (!attached()) {
         throw http_client_error(
-            http_client_error::code_type::not_configured, "http client is not configured");
+            make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return http_clients_->get(operation_scope, stop_token_value);
 }
@@ -304,20 +306,20 @@ http_client_handle worker_client_registry_view::client(
 http_client_handle worker_client_registry_view::client(std::string_view alias,
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
     if (borrowed_ != nullptr) {
-        return borrowed_http_clients().client(alias).with_options({.stop_token_ = stop_token_value});
+        return borrowed_http_clients(alias).client().with_options({.stop_token_ = stop_token_value});
     }
     if (!attached()) {
         throw http_client_error(
-            http_client_error::code_type::not_configured, "http client is not configured");
+            make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return http_clients_->get(alias, operation_scope, stop_token_value);
 }
 
-const http_client& worker_client_registry_view::borrowed_http_clients() const {
-    const auto* clients = borrowed_->http_clients();
+const http_client& worker_client_registry_view::borrowed_http_clients(std::string_view alias) const {
+    const auto* clients = borrowed_->http_clients(alias);
     if (clients == nullptr) {
         throw http_client_error(
-            http_client_error::code_type::not_configured, "http client is not configured");
+            make_error_code(http_client_errc::not_configured), "http client is not configured");
     }
     return *clients;
 }

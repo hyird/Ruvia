@@ -8,6 +8,7 @@
 #include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/socket.h"
 
+#include "server/connection_lifecycle.h"
 #include "util/steady_clock.h"
 
 namespace ruvia::detail {
@@ -284,6 +285,9 @@ bool connection_scanner::evict_oldest_reusable() noexcept {
         // Closed at once rather than asked to close: the new connection takes
         // the slot now. The close request keeps the entry out of the list
         // while its owner unwinds.
+        if (current->lifecycle_ != nullptr) {
+            current->lifecycle_->set_reason(connection_close_reason::aborted);
+        }
         impl_type::record_close_request(*current, impl_->cached_now_ms_);
         current->transport_.close();
         return true;
@@ -356,6 +360,9 @@ void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcep
 }
 void connection_scanner::impl_type::close_all() noexcept {
     for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
+        if (current->lifecycle_ != nullptr) {
+            current->lifecycle_->set_reason(connection_close_reason::cancelled);
+        }
         current->transport_.close();
     }
 }
@@ -450,6 +457,9 @@ bool connection_scanner::impl_type::active_since(const entry& entry_value, std::
                entry_value.phase_ != phase::awaiting_stream);
 }
 void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
+    if (entry_value.lifecycle_ != nullptr) {
+        entry_value.lifecycle_->set_reason(connection_close_reason::timeout);
+    }
     if (!entry_value.close_requested_) {
         const auto now = cached_now_ms_;
         if (entry_value.reading_request_head_) {

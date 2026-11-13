@@ -50,7 +50,7 @@ namespace {
 void require_writable(detail::http_client_response_state& state_value) {
     state_value.require_owner_worker("HTTP exchange must run on its owner worker");
     if (!state_value.upload_ || state_value.upload_->output_.stopped_ || state_value.upload_->output_.ended_ || state_value.upload_->output_.end_requested_) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP request upload is no longer writable");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP request upload is no longer writable");
     }
 }
 struct upload_output_policy final {
@@ -60,7 +60,7 @@ struct upload_output_policy final {
     static void require_write(detail::http_client_response_state& state_value) {
         auto& queue = output(state_value);
         if (queue.stopped_ || queue.end_requested_) {
-            throw http_client_error(http_client_error::code_type::cancelled, "HTTP request upload stopped");
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP request upload stopped");
         }
     }
     static bool begin_finish(detail::http_client_response_state& state_value, detail::http_client_upload_end_input& input) {
@@ -75,7 +75,7 @@ struct upload_output_policy final {
         if (state_value.failure_) {
             std::rethrow_exception(state_value.failure_);
         }
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP request upload stopped");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP request upload stopped");
     }
 };
 }  // namespace

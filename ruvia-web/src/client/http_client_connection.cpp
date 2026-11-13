@@ -404,14 +404,14 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
         }
     } connect_lease_value{connect_scheduler_, connect_slot};
     if (response.abandoned_) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP response was abandoned");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP response was abandoned");
     }
     end_idle();
     if (address_retired_ && protocol_ != protocol_type::http2) {
         close();
     }
     if (retired_) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
+        throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client connection is retired");
     }
     if (connected_) {
 #ifdef RUVIA_ENABLE_HTTP2
@@ -434,7 +434,7 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
         }
     }
     if (stop_token_value.stop_requested()) {
-        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client connect cancelled");
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client connect cancelled");
     }
 #ifdef RUVIA_ENABLE_HTTP2
     // A previous HTTP/2 generation may still be draining or unwinding its
@@ -448,7 +448,7 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
         }
         co_await wait_for_http2_session_stop(acquire_timeout, stop_token_value, response);
         if (retired_) {
-            throw http_client_error(http_client_error::code_type::closing, "HTTP client connection is retired");
+            throw http_client_error(make_error_code(http_client_errc::closing), "HTTP client connection is retired");
         }
     }
 #endif
@@ -496,7 +496,7 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
         const auto alpn = transport_.alpn();
         if (alpn_ == client_alpn::http2 && alpn != "h2") {
             throw http_client_error(
-                http_client_error::code_type::protocol_unavailable, "upstream did not negotiate HTTP/2");
+                make_error_code(http_client_errc::protocol_unavailable), "upstream did not negotiate HTTP/2");
         }
         protocol_ = alpn == "h2" ? protocol_type::http2 : protocol_type::http1;
     } else {
@@ -524,7 +524,7 @@ task<bool> http_client_connection::ensure_connected(const operation_deadline& op
         case http2_client_session_start_status::transport_failed:
             throw_http_client_transport_error(started.transport_, "upstream closed during HTTP/2 preface");
         case http2_client_session_start_status::protocol_failed:
-            throw http_client_error(http_client_error::code_type::protocol_error, "invalid HTTP/2 connection preface");
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid HTTP/2 connection preface");
     }
     std::terminate();
 #else

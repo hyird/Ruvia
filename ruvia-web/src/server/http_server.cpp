@@ -101,6 +101,17 @@ struct socket_owner final {
     }
 };
 
+struct owned_adopt_options final {
+    std::pmr::vector<std::byte> prefix_{process_resource()};
+    std::optional<ip_endpoint> remote_;
+    explicit owned_adopt_options(adopt_options options)
+        : prefix_(options.prefix_.begin(), options.prefix_.end(), process_resource()),
+          remote_(options.remote_) {}
+    adopt_options view() const noexcept {
+        return {.prefix_ = prefix_, .remote_ = remote_};
+    }
+};
+
 using definitions = std::pmr::vector<http_server_listener_definition>;
 using sessions = std::vector<prepared_http_server_session>;
 struct listener_candidate final {
@@ -114,6 +125,14 @@ listener_candidate load_candidate(const std::vector<std::shared_ptr<owned_listen
     listener_candidate result;
     const auto options = standalone_options(config, *callbacks, count);
     for (const auto& input : inputs) {
+        for (auto& config : input->configs_) {
+            if (!config.dispatch_) {
+                if (static_cast<bool>(callbacks->connection_) == static_cast<bool>(callbacks->request_stream_)) {
+                    throw std::invalid_argument("standalone listener requires an unambiguous callback or explicit dispatch");
+                }
+                config.dispatch_ = callbacks->connection_ ? listener_dispatch::connection : listener_dispatch::request_stream;
+            }
+        }
         auto loaded = input->load();
         for (const auto& definition : loaded) {
             if (!definition.connection_ && !definition.request_stream_ &&
@@ -290,7 +309,7 @@ public:
     task<void> replace(owned_endpoint endpoint, std::shared_ptr<owned_listen_configs> replacement) {
         return replace_owned(shared_from_this(), std::move(endpoint), std::move(replacement));
     }
-    void adopt(const listener_endpoint& endpoint, native_socket socket) {
+    void adopt(const listener_endpoint& endpoint, native_socket socket, adopt_options options) {
         std::size_t index;
         try {
             require_current();
@@ -300,12 +319,15 @@ public:
             close_native_socket(socket);
             throw;
         }
-        connections_.adopt_connection(index, socket);
+        connections_.adopt_connection(index, socket, options);
     }
     bool close_connection(std::uint64_t id) {
         require_current();
         require_running();
         return connections_.close_connection(id);
+    }
+    task<void> wait_connections(owned_endpoint endpoint, operation_options options) {
+        return wait_connections_owned(shared_from_this(), std::move(endpoint), std::move(options));
     }
     void remove(const listener_endpoint& endpoint, std::shared_ptr<void> receipt = {}, listener_remove_options options = {}) {
         require_current();
@@ -372,7 +394,7 @@ public:
     task<void> shutdown() {
         return shutdown_serialized(shared_from_this());
     }
-    http_server_stats stats() const noexcept {
+    http_server_stats stats() const {
         auto result = connections_.stats();
         result.worker_failures_ = fatal_count_.load(std::memory_order_relaxed);
         return result;
@@ -711,6 +733,13 @@ private:
             std::rethrow_exception(failure);
         }
     }
+    static task<void> wait_connections_owned(std::shared_ptr<http_server_state> self, owned_endpoint endpoint, operation_options options) {
+        self->require_current();
+        self->require_running();
+        activity active(*self);
+        co_await connection_count::wait(self->connections_.listener_connections(service_endpoint(endpoint.view())),
+            self->worker_, std::move(options), self->token_);
+    }
     static task<void> replace_owned(std::shared_ptr<http_server_state> self, owned_endpoint endpoint,
         std::shared_ptr<owned_listen_configs> replacement) {
         self->require_current();
@@ -908,7 +937,11 @@ private:
 
 class http_server_group_state final : public std::enable_shared_from_this<http_server_group_state> {
 public:
-    http_server_group_state(std::span<const event_loop> loops, http_server_callbacks callbacks, server_config config) {
+    http_server_group_state(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config)
+        : callbacks_factory_(std::move(callbacks)) {
+        if (!callbacks_factory_) {
+            throw std::invalid_argument("HTTP server group requires a callback factory");
+        }
         if (loops.empty()) {
             throw std::invalid_argument("HTTP server group requires at least one event loop");
         }
@@ -922,17 +955,15 @@ public:
                 }
             }
         }
-        auto shared_callbacks = std::allocate_shared<http_server_callbacks>(
-            std::pmr::polymorphic_allocator<http_server_callbacks>(process_resource()), std::move(callbacks));
 #if defined(RUVIA_ENABLE_HTTP3)
         directory_ = std::allocate_shared<http3_worker_directory>(std::pmr::polymorphic_allocator<http3_worker_directory>(process_resource()), loops.size());
 #endif
         workers_.reserve(loops.size());
         for (std::size_t index = 0; index != loops.size(); ++index) {
             auto worker = std::allocate_shared<http_server_state>(std::pmr::polymorphic_allocator<http_server_state>(process_resource()),
-                loops[index], shared_callbacks, config, index, loops.size()
+                loops[index], std::allocate_shared<http_server_callbacks>(std::pmr::polymorphic_allocator<http_server_callbacks>(process_resource())), config, index, loops.size()
 #if defined(RUVIA_ENABLE_HTTP3)
-                                                                   ,
+                                                                                                                                                                          ,
                 directory_
 #endif
             );
@@ -1015,13 +1046,16 @@ public:
     task<bool> close_connection(worker_handle caller, std::uint64_t id) {
         return close_connection_owned(shared_from_this(), std::move(caller), id);
     }
+    task<void> wait_connections(worker_handle caller, owned_endpoint endpoint, operation_options options) {
+        return wait_connections_owned(shared_from_this(), std::move(caller), std::move(endpoint), std::move(options));
+    }
 #ifndef _WIN32
     task<listener_sockets> duplicate(worker_handle caller, owned_endpoint endpoint) {
         return duplicate_owned(shared_from_this(), std::move(caller), std::move(endpoint));
     }
 #endif
-    task<void> adopt(worker_handle caller, std::size_t index, owned_endpoint endpoint, socket_owner socket) {
-        return adopt_owned(shared_from_this(), std::move(caller), index, std::move(endpoint), std::move(socket));
+    task<void> adopt(worker_handle caller, std::size_t index, owned_endpoint endpoint, socket_owner socket, owned_adopt_options options) {
+        return adopt_owned(shared_from_this(), std::move(caller), index, std::move(endpoint), std::move(socket), std::move(options));
     }
     task<void> shutdown(worker_handle caller) {
         return shutdown_owned(shared_from_this(), std::move(caller));
@@ -1046,7 +1080,7 @@ public:
         acceptor_->request_stop();
 #endif
     }
-    http_server_stats stats() const noexcept {
+    http_server_stats stats() const {
         http_server_stats result;
         for (const auto& worker : workers_) {
             const auto value = worker->stats();
@@ -1055,6 +1089,7 @@ public:
             result.connection_failures_ += value.connection_failures_;
             result.accept_failures_ += value.accept_failures_;
             result.worker_failures_ += value.worker_failures_;
+            append_listener_stats(result, value);
         }
         return result;
     }
@@ -1066,6 +1101,61 @@ public:
     }
 
 private:
+    task<void> build_callbacks(worker_handle caller) {
+        if (!callbacks_factory_) {
+            co_return;
+        }
+        std::exception_ptr failure;
+        try {
+            for (const auto& worker : workers_) {
+                co_await control(caller, worker, [this](http_server_state& state) {
+                    auto callbacks = callbacks_factory_(state.worker_);
+                    *state.callbacks_ = std::move(callbacks);
+                    const auto configured = standalone_options(state.options_.server_, *state.callbacks_, workers_.size());
+                    state.options_.connection_ = configured.connection_;
+                    state.options_.request_stream_ = configured.request_stream_;
+                    state.options_.access_log_.callback_ = configured.access_log_.callback_;
+                    state.options_.connection_failure_.callback_ = configured.connection_failure_.callback_;
+                    state.options_.tls_client_hello_ = configured.tls_client_hello_;
+                    state.options_.http2_input_ = configured.http2_input_;
+#if defined(RUVIA_ENABLE_HTTP2)
+                    state.options_.http2_frame_ = configured.http2_frame_;
+                    state.options_.http2_headers_ = configured.http2_headers_;
+#endif
+                    state.options_.connection_admission_ = configured.connection_admission_;
+                    state.options_.connection_open_ = configured.connection_open_;
+                    state.options_.connection_close_ = configured.connection_close_;
+                    if (&state != workers_.front().get()) {
+                        const auto& first = *workers_.front()->callbacks_;
+                        const auto& current = *state.callbacks_;
+                        if (static_cast<bool>(first.connection_) != static_cast<bool>(current.connection_) ||
+                            static_cast<bool>(first.request_stream_) != static_cast<bool>(current.request_stream_) ||
+                            static_cast<bool>(first.access_) != static_cast<bool>(current.access_) ||
+                            static_cast<bool>(first.connection_failure_) != static_cast<bool>(current.connection_failure_) ||
+                            static_cast<bool>(first.tls_client_hello_) != static_cast<bool>(current.tls_client_hello_) ||
+                            static_cast<bool>(first.http2_input_) != static_cast<bool>(current.http2_input_) ||
+#if defined(RUVIA_ENABLE_HTTP2)
+                            static_cast<bool>(first.http2_frame_) != static_cast<bool>(current.http2_frame_) ||
+                            static_cast<bool>(first.http2_headers_) != static_cast<bool>(current.http2_headers_) ||
+#endif
+                            static_cast<bool>(first.connection_admission_) != static_cast<bool>(current.connection_admission_) ||
+                            static_cast<bool>(first.connection_open_) != static_cast<bool>(current.connection_open_) ||
+                            static_cast<bool>(first.connection_close_) != static_cast<bool>(current.connection_close_)) {
+                            throw std::invalid_argument("HTTP server group callbacks must have identical presence");
+                        }
+                    }
+                });
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        callbacks_factory_ = {};
+        if (failure) {
+            close();
+            co_await join_closed(caller);
+            std::rethrow_exception(failure);
+        }
+    }
     // Every closure owns its receipt, including the spawned coroutine callback.
     // A failed post is joined as well, before any borrowed command state dies.
     template <typename function_type>
@@ -1219,6 +1309,7 @@ private:
         }
         std::exception_ptr failure;
         try {
+            co_await self->build_callbacks(caller);
             auto existing = std::make_shared<listener_candidate>();
             co_await control(caller, self->workers_.front(), [existing](http_server_state& state) {
                 for (const auto& entry : state.services_) {
@@ -1281,6 +1372,7 @@ private:
         if (!external) {
             self->require_running();
         }
+        co_await self->build_callbacks(caller);
         const auto& source = self->workers_.front();
         const bool blocking = input->needs_tls_preparation();
         auto prepared = co_await prepare_work(caller, blocking, [input = std::move(input), external, config = source->options_.server_, callbacks = source->callbacks_, count = self->workers_.size(), origin = source->key_origin_, running = self->started_] {
@@ -1468,15 +1560,32 @@ private:
     }
 #endif
     static task<void> adopt_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller,
-        std::size_t index, owned_endpoint endpoint, socket_owner socket) {
+        std::size_t index, owned_endpoint endpoint, socket_owner socket, owned_adopt_options options) {
         auto lease = co_await self->gate_.acquire(caller);
         self->require_running();
         if (index >= self->workers_.size()) {
             throw std::out_of_range("HTTP server group worker index");
         }
-        co_await control(caller, self->workers_[index], [&socket, &endpoint](http_server_state& state) {
-            state.adopt(endpoint.view(), std::exchange(socket.socket_, invalid_native_socket));
+        co_await control(caller, self->workers_[index], [&socket, &endpoint, &options](http_server_state& state) {
+            state.adopt(endpoint.view(), std::exchange(socket.socket_, invalid_native_socket), options.view());
         });
+    }
+    static task<void> wait_connections_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller,
+        owned_endpoint endpoint, operation_options options) {
+        operation_steps steps(options);
+        std::vector<std::shared_ptr<connection_count>> counts;
+        {
+            auto lease = co_await self->gate_.acquire(caller);
+            self->require_running();
+            const auto target = service_endpoint(endpoint.view());
+            counts.reserve(self->workers_.size());
+            for (const auto& worker : self->workers_) {
+                counts.push_back(worker->connections_.listener_connections(target));
+            }
+        }
+        for (const auto& count : counts) {
+            co_await connection_count::wait(count, caller, steps.next("wait_connections_closed"), self->workers_.front()->token_);
+        }
     }
     static task<void> shutdown_owned(std::shared_ptr<http_server_group_state> self, worker_handle caller) {
         self->close();
@@ -1552,6 +1661,7 @@ private:
         }
     }
     std::vector<std::shared_ptr<http_server_state>> workers_;
+    http_server_callbacks_factory callbacks_factory_;
 #if defined(RUVIA_ENABLE_HTTP3)
     std::shared_ptr<http3_worker_directory> directory_;
 #endif
@@ -1620,9 +1730,10 @@ http_server::http_server(event_loop loop, http_server_callbacks callbacks, serve
 http_server::~http_server() {
     state_->request_close();
 }
-void http_server::listen(listen_config config) & {
+http_server& http_server::listen(listen_config config) & {
     const auto state = state_;
     state->stage(detail::own_listen(std::move(config)));
+    return *this;
 }
 task<prepared_listener> http_server::prepare_listener(listen_config config) & {
     const auto state = state_;
@@ -1639,8 +1750,8 @@ task<void> http_server::add_connection_service(listen_config config) & {
     const auto state = state_;
     return state->add(detail::own_listen(std::move(config)), true);
 }
-void http_server::adopt(const listener_endpoint& service, native_socket socket) & {
-    state_->adopt(service, socket);
+void http_server::adopt(const listener_endpoint& service, native_socket socket, adopt_options options) & {
+    state_->adopt(service, socket, options);
 }
 bool http_server::close_connection(std::uint64_t id) & {
     return state_->close_connection(id);
@@ -1656,6 +1767,9 @@ task<void> http_server::start() & {
 void http_server::remove_listener(const listener_endpoint& endpoint, listener_remove_options options) & {
     state_->remove(endpoint, {}, options);
 }
+task<void> http_server::wait_connections_closed(const listener_endpoint& endpoint, operation_options options) & {
+    return state_->wait_connections(detail::owned_endpoint(endpoint), std::move(options));
+}
 task<void> http_server::replace_tls_identities(const listener_endpoint& endpoint, tls_config config) & {
     const auto state = state_;
     auto replacement = detail::own_listen(listen_config{.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
@@ -1666,30 +1780,31 @@ listener_sockets http_server::duplicate_listener_sockets(const listener_endpoint
     return state_->duplicate(endpoint);
 }
 #endif
-void http_server::close() noexcept {
+void http_server::close() & noexcept {
     state_->request_close();
 }
 task<void> http_server::shutdown() & {
     const auto state = state_;
     return state->shutdown();
 }
-http_server_stats http_server::stats() const noexcept {
+http_server_stats http_server::stats() const {
     return state_->stats();
 }
 const worker_handle& http_server::worker() const& noexcept {
     return state_->worker();
 }
 
-http_server_group::http_server_group(std::span<const event_loop> loops, http_server_callbacks callbacks, server_config config)
+http_server_group::http_server_group(std::span<const event_loop> loops, http_server_callbacks_factory callbacks, server_config config)
     : state_(std::allocate_shared<detail::http_server_group_state>(std::pmr::polymorphic_allocator<detail::http_server_group_state>(process_resource()), loops, std::move(callbacks), config)) {
     state_->bind_stop();
 }
 http_server_group::~http_server_group() {
     state_->close();
 }
-void http_server_group::listen(listen_config config) & {
+http_server_group& http_server_group::listen(listen_config config) & {
     const auto state = state_;
     state->stage(detail::own_listen(std::move(config)));
+    return *this;
 }
 task<prepared_listener> http_server_group::prepare_listener(worker_handle caller, listen_config config) & {
     const auto state = state_;
@@ -1718,6 +1833,9 @@ task<void> http_server_group::remove_listener(worker_handle caller, const listen
     const auto state = state_;
     return state->remove(std::move(caller), detail::owned_endpoint(endpoint), options);
 }
+task<void> http_server_group::wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options) & {
+    return state_->wait_connections(std::move(caller), detail::owned_endpoint(endpoint), std::move(options));
+}
 task<void> http_server_group::replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config) & {
     const auto state = state_;
     auto replacement = detail::own_listen(listen_config{.address_ = endpoint.address_, .https_ = endpoint.port_, .tls_ = std::move(config), .dispatch_ = listener_dispatch::connection});
@@ -1729,23 +1847,23 @@ task<listener_sockets> http_server_group::duplicate_listener_sockets(worker_hand
     return state->duplicate(std::move(caller), detail::owned_endpoint(endpoint));
 }
 #endif
-task<void> http_server_group::adopt(worker_handle caller, std::size_t index, const listener_endpoint& endpoint, native_socket socket) & {
+task<void> http_server_group::adopt(worker_handle caller, std::size_t index, const listener_endpoint& endpoint, native_socket socket, adopt_options options) & {
     const auto state = state_;
     detail::socket_owner owner(socket);
-    return state->adopt(std::move(caller), index, detail::owned_endpoint(endpoint), std::move(owner));
+    return state->adopt(std::move(caller), index, detail::owned_endpoint(endpoint), std::move(owner), detail::owned_adopt_options(options));
 }
 task<bool> http_server_group::close_connection(worker_handle caller, std::uint64_t id) & {
     const auto state = state_;
     return state->close_connection(std::move(caller), id);
 }
-void http_server_group::close() noexcept {
+void http_server_group::close() & noexcept {
     state_->close();
 }
 task<void> http_server_group::shutdown(worker_handle caller) & {
     const auto state = state_;
     return state->shutdown(std::move(caller));
 }
-http_server_stats http_server_group::stats() const noexcept {
+http_server_stats http_server_group::stats() const {
     return state_->stats();
 }
 std::size_t http_server_group::worker_count() const noexcept {

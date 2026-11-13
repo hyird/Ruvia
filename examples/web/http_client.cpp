@@ -41,7 +41,7 @@ struct upstream_failure final {
 // code should enqueue the record to a bounded logger instead of blocking here.
 upstream_failure report_upstream_failure(const ruvia::http_client_error& error) {
     std::cerr << "upstream request failed: " << error.what() << '\n';
-    if (error.code() == ruvia::http_client_error::code_type::timeout) {
+    if (error.code() == std::make_error_code(std::errc::timed_out)) {
         return {.status_ = ruvia::http_status::gateway_timeout, .message_ = "upstream timeout"};
     }
     return {.status_ = ruvia::http_status::bad_gateway, .message_ = "upstream unavailable"};

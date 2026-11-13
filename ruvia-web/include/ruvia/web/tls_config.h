@@ -11,12 +11,11 @@
 #include <string_view>
 #include <vector>
 
-#include <asio/ip/address.hpp>
-
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/http/ip_address.h"
 
 namespace ruvia {
 
@@ -47,10 +46,10 @@ using tls_certificate_id = std::uint64_t;
 // object, file access or borrowed application identity is needed.
 struct tls_certificate_selection final {
     std::uint64_t connection_id_{};
-    std::string_view remote_address_;
+    ip_address remote_address_;
     std::uint16_t remote_port_{};
     std::string_view server_name_;
-    std::optional<asio::ip::address> local_address_;
+    std::optional<ip_address> local_address_;
     std::uint16_t local_port_{};
     bool quic_{};
     std::uint16_t legacy_version_{};
@@ -173,6 +172,8 @@ struct tls_client_certificate_config final {
 struct tls_sni_config final {
     std::pmr::string host_{process_resource()};
     tls_identity_config identity_{};
+    // This identity's stapled OCSP response; see tls_config::ocsp_response_.
+    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
 };
 
 // An additional identity served on connections that arrived at address_, a
@@ -186,6 +187,8 @@ struct tls_sni_config final {
 struct tls_local_address_config final {
     std::pmr::string address_{process_resource()};
     tls_identity_config identity_{};
+    // This identity's stapled OCSP response; see tls_config::ocsp_response_.
+    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
 };
 
 // One HTTPS listener's identities. The listener negotiates TLS 1.1, 1.2 or 1.3;
@@ -212,6 +215,17 @@ struct tls_local_address_config final {
 // from both checks.
 struct tls_config final {
     tls_identity_config identity_{};
+    // The DER OCSPResponse (RFC 6960 §4.2.1) stapled for identity_ (RFC 6066
+    // §8 status_request; in TLS 1.3 the leaf's CertificateEntry extension,
+    // RFC 8446 §4.4.2.1), sent only to a client that requests OCSP status and
+    // only with the identity it belongs to; each sni_ and local_addresses_
+    // entry carries its own. Empty staples nothing. Invalid DER (including
+    // trailing bytes or BER) throws std::invalid_argument when identities
+    // load. The bytes are served as given; the caller owns certificate
+    // association, signature and freshness checks. No fetching or refresh:
+    // replace_tls_identities() installs a renewed response with its identity.
+    // Not available with certificate_store_.
+    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
     tls_client_certificate_config client_certificates_{};
     std::pmr::vector<tls_sni_config> sni_{process_resource()};
     std::pmr::vector<tls_local_address_config> local_addresses_{process_resource()};

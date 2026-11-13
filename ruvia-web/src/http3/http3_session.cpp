@@ -327,8 +327,8 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
       services_(endpoint.services()),
       slot_(std::move(slot)),
       connection_lifecycle_(std::move(lifecycle)),
-      connection_id_(connection_lifecycle_.id()),
-      local_(connection_lifecycle_.local_endpoint().address(), connection_lifecycle_.local_endpoint().port()),
+      connection_id_(connection_lifecycle_.connection_id()),
+      local_(to_asio_address(connection_lifecycle_.local_endpoint().address()), connection_lifecycle_.local_endpoint().port()),
       tls_local_address_(local_.address()),
       remote_(remote),
       path_remote_(remote),
@@ -433,6 +433,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         this, [](void* target) noexcept { static_cast<http3_session*>(target)->close_now(); },
         [](void* target) noexcept { static_cast<http3_session*>(target)->request_drain(); });
     connection_lifecycle_.bind_transport(transport);
+    scanner_entry_.bind_lifecycle(&connection_lifecycle_);
     scanner_guard_.emplace(services_.scanner_, scanner_entry_, transport);
     scanner_entry_.register_periodic_check(
         scanner_checks_, this,
@@ -578,6 +579,7 @@ void http3_session::on_datagram(const http3_datagram_event& event) {
 
 void http3_session::receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote,
     const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept {
+    connection_lifecycle_.note_read(datagram.size());
     if (lifecycle_ != lifecycle_type::open || connection_->closed()) {
         // The closing period absorbs late packets (RFC 9000 §10.2).
         return;
@@ -587,7 +589,16 @@ void http3_session::receive(std::span<const std::byte> datagram, const asio::ip:
     path_local_ = local;
     path_interface_index_ = interface_index;
     try {
-        (void)connection_->receive_datagram(path(path_remote_), NGTCP2_ECN_NOT_ECT, datagram, now());
+        const auto result = connection_->receive_datagram(path(path_remote_), NGTCP2_ECN_NOT_ECT, datagram, now());
+        if (result.status_ == http3_quic_status::transport_error || result.status_ == http3_quic_status::application_error ||
+            (result.transport_error_code_.has_value() && *result.transport_error_code_ != 0) ||
+            (result.application_error_code_.has_value() && *result.application_error_code_ != http3_error_code::no_error)) {
+            connection_lifecycle_.set_reason(connection_close_reason::protocol_error);
+        } else if (result.status_ == http3_quic_status::closed) {
+            connection_lifecycle_.set_reason(connection_->stateless_reset_received()
+                                                 ? connection_close_reason::transport_error
+                                                 : connection_close_reason::peer_eof);
+        }
     } catch (...) {
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
         connection_->close(http3_error_code::internal_error);
@@ -704,6 +715,7 @@ void http3_session::on_request_head(http3_request_head_event& event) {
     }
     const auto& server = services_.options_.server_;
     ++accepted_request_heads_;
+    connection_lifecycle_.note_request();
     if (!drain_begun_ && server.max_requests_per_connection_.has_value() &&
         accepted_request_heads_ >= *server.max_requests_per_connection_) {
         begin_drain();
@@ -1258,6 +1270,7 @@ task<void> http3_session::run() {
         }
     } catch (...) {
         failure = std::current_exception();
+        connection_lifecycle_.note_exception(failure);
     }
     lifecycle_ = lifecycle_type::ended;
     terminate(std::make_error_code(std::errc::connection_aborted));
@@ -1288,6 +1301,7 @@ task<void> http3_session::flush() {
             continue;
         }
         if (result.status_ == http3_quic_status::transport_error || result.status_ == http3_quic_status::application_error) {
+            connection_lifecycle_.set_reason(connection_close_reason::protocol_error);
             // The next call writes the CONNECTION_CLOSE.
             continue;
         }
@@ -1314,7 +1328,9 @@ task<void> http3_session::send_datagram() {
 #if defined(_WIN32)
     // The acceptor sends it from the listener's socket; a datagram past its
     // bounded queue is lost, as UDP may lose any, and QUIC recovery resends.
-    (void)endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
+    if (!endpoint_.send(*destination, datagram_.bytes_, *source, interface_index)) {
+        connection_lifecycle_.note_write(datagram_.bytes_.size());
+    }
     co_return;
 #else
     auto error = endpoint_.send(*destination, datagram_.bytes_, *source, interface_index);
@@ -1330,6 +1346,9 @@ task<void> http3_session::send_datagram() {
         if (!error) {
             scanner_entry_.note_write_progress();
         }
+    }
+    if (!error) {
+        connection_lifecycle_.note_write(datagram_.bytes_.size());
     }
     // Other send errors (an ICMP-reported unreachable peer) lose the datagram
     // too; QUIC recovery and the idle timeout handle the peer.
@@ -1362,6 +1381,7 @@ void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
     armed_expiry_ = UINT64_MAX;
     if (outcome != worker_timer_outcome::expired) {
         // Only a stopping worker cancels with notification.
+        connection_lifecycle_.set_reason(connection_close_reason::cancelled);
         close_now();
         return;
     }
@@ -1374,7 +1394,12 @@ void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
         return;
     }
     try {
-        (void)connection_->handle_expiry(now());
+        const auto result = connection_->handle_expiry(now());
+        if (result.status_ == http3_quic_status::closed) {
+            connection_lifecycle_.set_reason(connection_close_reason::timeout);
+        } else if (result.status_ == http3_quic_status::transport_error || result.status_ == http3_quic_status::application_error) {
+            connection_lifecycle_.set_reason(connection_close_reason::protocol_error);
+        }
     } catch (...) {
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
         connection_->close(http3_error_code::internal_error);
@@ -1423,7 +1448,9 @@ void http3_session::close_now() noexcept {
                 if (destination && source) {
                     const auto interface_index = static_cast<std::uint32_t>(
                         reinterpret_cast<std::uintptr_t>(close_packet.path_.path.user_data));
-                    (void)endpoint_.send(*destination, close_packet.bytes_, *source, interface_index);
+                    if (!endpoint_.send(*destination, close_packet.bytes_, *source, interface_index)) {
+                        connection_lifecycle_.note_write(close_packet.bytes_.size());
+                    }
                 }
             }
         } catch (...) {

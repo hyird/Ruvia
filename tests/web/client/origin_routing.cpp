@@ -378,10 +378,12 @@ TEST(Ruvia, http_client_request_dial_overrides_reach_another_listener) {
         ruvia::http_client_request_options options = route("visitor.example:8080");
         options.dial_host_.emplace("127.0.0.1");
         options.dial_port_ = other_peer.port();
-        (void)co_await get(client, "/other", options, false);
+        (void)co_await get(client, "/other", std::move(options), false);
         // The alias connection is not the overridden route's.
+        options = route("visitor.example:8080");
+        options.dial_host_.emplace("127.0.0.1");
         options.dial_port_ = alias_peer.port();
-        (void)co_await get(client, "/back", options, true);
+        (void)co_await get(client, "/back", std::move(options), true);
     });
     ASSERT_EQ(other_peer.connections_.size(), 1U);
     EXPECT_EQ(other_peer.connections_[0].authorities_, (std::deque<std::string>{"visitor.example:8080"}));
@@ -539,10 +541,10 @@ TEST(Ruvia, http_client_origin_less_alias_follows_alt_svc_per_route) {
     peer.alt_svc_ = "h3=\":" + std::to_string(alternative_port) + "\"";
     std::vector<std::uint16_t> validated_ports;
     ruvia::http_client_config config{.base_url_ = "https://"};
-    config.address_validator_ = [&validated_ports](std::string_view, std::uint16_t port) {
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([&validated_ports](std::string_view, std::uint16_t port) {
         validated_ports.push_back(port);
         return true;
-    };
+    });
     config.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = true};
     config.connect_timeout_ = 300ms;
     config.request_timeout_ = 5s;
@@ -605,12 +607,17 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
         // max_open_ is reached by two active connections: a third request
         // waits for admission until its acquisition bound.
         auto waiting = handle.get("/late");
-        waiting.timeouts({.acquire_ = ruvia::http_client_timeout_override::after(50ms)});
+        waiting.configure({.timeouts_ = {.acquire_ = ruvia::http_client_timeout_override::after(50ms)}});
         try {
             (void)co_await waiting.send();
             ADD_FAILURE() << "admission beyond max_open_ succeeded";
-        } catch (const ruvia::http_client_error& error) {
-            EXPECT_EQ(error.code(), ruvia::http_client_error::code_type::timeout);
+        } catch (const std::system_error& error) {
+            EXPECT_EQ(error.code(), std::errc::timed_out);
+            const auto* client_error = dynamic_cast<const ruvia::http_client_error*>(&error);
+            EXPECT_NE(client_error, nullptr);
+            if (client_error) {
+                EXPECT_FALSE(client_error->request_written());
+            }
         }
         peer.release();
         co_await held.join();
@@ -703,13 +710,13 @@ TEST(Ruvia, http_client_upgrade_tunnels_follow_their_own_idle_timeout) {
                 co_await tunnel->write(std::string_view("tick"));
                 EXPECT_TRUE((co_await tunnel->text()) == std::optional<std::string_view>("tick"));
             }
-            std::optional<ruvia::http_client_error::code_type> failure;
+            std::optional<std::error_code> failure;
             try {
                 (void)co_await tunnel->read();
             } catch (const ruvia::http_client_error& error) {
                 failure = error.code();
             }
-            EXPECT_EQ(failure, ruvia::http_client_error::code_type::timeout);
+            EXPECT_EQ(failure, std::make_error_code(std::errc::timed_out));
         }
     });
 }
@@ -816,7 +823,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
     peer.redirect_location_ = "http://" + other_authority + "/landing";
     ruvia::http_client_config config{.base_url_ = "http://"};
     config.request_timeout_ = 5s;
-    config.address_validator_ = [](std::string_view ip, std::uint16_t) { return ip == "127.0.0.1"; };
+    config.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](std::string_view ip, std::uint16_t) { return ip == "127.0.0.1"; });
     run_client(io, attachment, {&peer, &other_peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
         const auto handle = client.client();
         const auto to = [](std::string_view value) {
@@ -824,7 +831,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
             options.authority_.emplace(value);
             return options;
         };
-        const auto fails_with = [&](ruvia::http_client_request request) -> ruvia::task<std::optional<ruvia::http_client_error::code_type>> {
+        const auto fails_with = [&](ruvia::http_client_request request) -> ruvia::task<std::optional<std::error_code>> {
             try {
                 (void)co_await request.send();
             } catch (const ruvia::http_client_error& error) {
@@ -844,7 +851,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_
         EXPECT_EQ(direct.text(), "/direct");
         // Every dial address passes the validator.
         const auto rejected_dial = co_await fails_with(std::move(handle.get("/").configure(to("127.0.0.2:" + std::to_string(peer.port())))));
-        EXPECT_EQ(rejected_dial, ruvia::http_client_error::code_type::resolve_failed);
+        EXPECT_EQ(rejected_dial, ruvia::make_error_code(ruvia::http_client_errc::resolve_failed));
         // Without a policy a cross-origin redirect is not followed.
         auto unfollowed = co_await handle.get("/redirect").configure(to(authority)).send();
         EXPECT_EQ(unfollowed.status().value(), 302);
@@ -868,7 +875,7 @@ TEST(Ruvia, http_client_alias_without_a_fixed_origin_requires_an_address_validat
     auto attachment = ruvia::attach_event_loop(io);
     EXPECT_THROW(ruvia::http_client(attachment.loop(), {.base_url_ = "http://"}), std::invalid_argument);
     ruvia::http_client_config cookies{.base_url_ = "https://"};
-    cookies.address_validator_ = [](std::string_view, std::uint16_t) { return true; };
+    cookies.address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([](std::string_view, std::uint16_t) { return true; });
     cookies.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
     EXPECT_THROW(ruvia::http_client(attachment.loop(), cookies), std::invalid_argument);
 }

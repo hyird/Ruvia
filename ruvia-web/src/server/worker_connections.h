@@ -6,6 +6,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -147,8 +148,9 @@ public:
 #endif
     // Takes an already accepted native socket, including ownership on failure.
     // It first binds that socket to this worker's execution context.
-    void adopt_connection(std::size_t index, native_socket socket);
-    [[nodiscard]] http_server_stats stats() const noexcept;
+    void adopt_connection(std::size_t index, native_socket socket, adopt_options options = {});
+    [[nodiscard]] http_server_stats stats() const;
+    [[nodiscard]] std::shared_ptr<connection_count> listener_connections(const asio::ip::tcp::endpoint& endpoint) const;
     // Owning worker only; false for an unknown or retired connection ID.
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
 #if defined(_WIN32)
@@ -236,13 +238,17 @@ private:
 #endif
     void report_accept_failure(std::exception_ptr failure, bool fatal) noexcept;
     task<void> rotate_tls_ticket_keys();
-    void accept_socket(std::size_t index, tcp_socket_type socket);
+    void accept_socket(std::size_t index, tcp_socket_type socket, adopt_options options = {});
+    task<void> prepare_connection(std::size_t index, tcp_socket_type socket,
+        std::pmr::vector<std::byte> prefix, std::optional<ip_endpoint> remote);
+    void admit_socket(std::size_t index, tcp_socket_type socket, std::optional<ip_endpoint> remote,
+        std::pmr::vector<std::byte> prefix, std::size_t bytes_read = 0);
     // `remote` is the peer accept_socket() read before the socket moved into
     // the lease; absent when the socket no longer knew its peer.
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::pmr::vector<std::byte> prefix);
     task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::pmr::vector<std::byte> prefix);
     void report_session_failure(
         tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
@@ -277,6 +283,18 @@ private:
     connection_scanner scanner_;
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
+    struct listener_gauge final {
+        listener_gauge(const asio::ip::tcp::endpoint& endpoint, connection_count& total)
+            : endpoint_(endpoint),
+              count_(&total) {}
+        asio::ip::tcp::endpoint endpoint_;
+        connection_count count_;
+        std::atomic<bool> serving_{false};
+        std::atomic<bool> published_{false};
+    };
+    void prepare_listener_gauge(std::size_t index, const asio::ip::tcp::endpoint& endpoint);
+    mutable std::mutex gauges_mutex_;
+    std::pmr::vector<std::shared_ptr<listener_gauge>> gauges_{process_resource()};
     connection_id_sequence connection_ids_;
     connection_registry registry_;
     std::atomic<std::size_t> refused_{};

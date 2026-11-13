@@ -37,6 +37,7 @@ enum class response_mode { ordinary,
     streaming,
     disconnected,
     refused,
+    refused_always,
     connection_lost,
     connection_lost_upload,
     goaway_upload };
@@ -187,7 +188,7 @@ private:
                     throw std::runtime_error("invalid client request fields");
                 }
                 ++requests_;
-                if (requests_ == 1 && mode_ == response_mode::refused) {
+                if ((requests_ == 1 && mode_ == response_mode::refused) || mode_ == response_mode::refused_always) {
                     // RFC 9113 section 8.7: the request was not processed.
                     if (method != "GET" || path != "/next") {
                         throw std::runtime_error("unexpected refused request");
@@ -491,7 +492,19 @@ void exercise(response_mode mode) {
                                                          .request_timeout_ = std::chrono::seconds(2),
                                                          .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
-            if (mode == response_mode::refused || mode == response_mode::connection_lost) {
+            if (mode == response_mode::refused_always) {
+                bool rejected = false;
+                try {
+                    (void)co_await client.client().get("/next").send();
+                } catch (const ruvia::http_client_error& error) {
+                    rejected = true;
+                    EXPECT_EQ(error.code(), ruvia::http_client_errc::protocol_error);
+                    EXPECT_TRUE(error.request_written());
+                    EXPECT_NE(error.connection_info(), nullptr);
+                }
+                EXPECT_TRUE(rejected);
+                EXPECT_EQ(peer.requests_, 2U);
+            } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {
                 // These cases start with the request below.
             } else if (mode == response_mode::connection_lost_upload || mode == response_mode::goaway_upload) {
                 auto exchange = co_await client.client().post("/upload").upload({.content_length_ = 7});
@@ -517,14 +530,14 @@ void exercise(response_mode mode) {
                 try {
                     (void)co_await retained->stream().read_all();
                 } catch (const ruvia::http_client_error& error) {
-                    cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                    cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
                 EXPECT_TRUE(cancelled);
                 bool completion_cancelled = false;
                 try {
                     (void)retained->stream().complete();
                 } catch (const ruvia::http_client_error& error) {
-                    completion_cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                    completion_cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                 }
                 EXPECT_TRUE(completion_cancelled);
             } else if (mode == response_mode::buffered) {
@@ -561,7 +574,7 @@ void exercise(response_mode mode) {
                     // response EOF that the application has already observed.
                     ruvia::worker_signal started(worker);
                     auto waiting = started.wait();
-                    std::optional<ruvia::http_client_error::code_type> write_error;
+                    std::optional<std::error_code> write_error;
                     ruvia::task_scope writers(worker);
                     const auto write = [&]() -> ruvia::task<void> {
                         started.notify();
@@ -575,7 +588,7 @@ void exercise(response_mode mode) {
                     co_await std::move(waiting);
                     peer.stop();
                     co_await writers.join();
-                    EXPECT_TRUE(write_error == ruvia::http_client_error::code_type::io_error);
+                    EXPECT_TRUE(write_error == ruvia::make_error_code(ruvia::http_client_errc::io_error));
                     co_await client.shutdown();
                     EXPECT_TRUE(!(co_await response.stream().text()).has_value());
                     EXPECT_TRUE(response.stream().complete());
@@ -588,13 +601,13 @@ void exercise(response_mode mode) {
                     try {
                         co_await exchange.body().write("payload");
                     } catch (const ruvia::http_client_error& error) {
-                        cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                        cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
                     }
                     EXPECT_TRUE(cancelled);
                 }
             }
             if (mode != response_mode::disconnected && mode != response_mode::connection_lost_upload &&
-                mode != response_mode::goaway_upload) {
+                mode != response_mode::goaway_upload && mode != response_mode::refused_always) {
                 auto next = co_await client.client().get("/next").send();
                 const auto bytes = co_await next.stream().read_all();
                 const auto body = bytes.bytes();
@@ -691,4 +704,8 @@ TEST(Ruvia, http2_client_retries_unsubmitted_streaming_upload_after_goaway) {
 
 TEST(Ruvia, http2_abandoned_unsubmitted_upload_retires_while_older_stream_drains) {
     http2_client_upload_test::exercise_abandon_during_drain();
+}
+
+TEST(Ruvia, http2_client_refused_request_preserves_possible_delivery) {
+    http2_client_upload_test::exercise(http2_client_upload_test::response_mode::refused_always);
 }

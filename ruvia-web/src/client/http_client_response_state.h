@@ -392,7 +392,7 @@ public:
         for (const auto& field : fields_value) {
             if (!budget.add(field.name().size()) || !budget.add(field.value().size()) ||
                 !budget.add(http_field_line_overhead)) {
-                throw http_client_error(http_client_error::code_type::protocol_error, "informational response metadata exceeds byte limit");
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "informational response metadata exceeds byte limit");
             }
             if constexpr (!transferring) {
                 head.headers_.emplace_back(field.name(), field.value(), resource_);
@@ -430,6 +430,7 @@ public:
     http_client_response_framing framing_{http_client_response_framing::none};
     std::optional<std::uint64_t> content_length_;
     http_client_connection_info connection_info_;
+    bool request_written_{false};
     std::optional<timeout_duration> effective_connect_timeout_;
     std::optional<timeout_duration> effective_read_timeout_;
     std::optional<timeout_duration> effective_write_timeout_;

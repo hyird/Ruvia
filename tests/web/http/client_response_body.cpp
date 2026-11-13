@@ -788,7 +788,7 @@ TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_
         peer.start();
         auto operation = [&]() -> ruvia::task<void> {
             auto response = co_await client.client().get("/truncated").send();
-            std::optional<ruvia::http_client_error::code_type> response_error;
+            std::optional<std::error_code> response_error;
             try {
                 (void)co_await response.stream().read_all();
             } catch (const ruvia::http_client_error& error) {
@@ -805,14 +805,14 @@ TEST(Ruvia, client_response_body_completion_preserves_truncation_after_buffered_
                 received.append(*chunk);
             }
             EXPECT_EQ(received, prefix);
-            std::optional<ruvia::http_client_error::code_type> completion_error;
+            std::optional<std::error_code> completion_error;
             try {
                 (void)response.stream().complete();
             } catch (const ruvia::http_client_error& error) {
                 completion_error = error.code();
             }
             EXPECT_TRUE(completion_error == response_error);
-            std::optional<ruvia::http_client_error::code_type> read_error;
+            std::optional<std::error_code> read_error;
             try {
                 (void)co_await response.stream().read();
             } catch (const ruvia::http_client_error& error) {
@@ -1251,7 +1251,7 @@ TEST(Ruvia, http_client_strips_decoded_content_encoding_and_rejects_overdeep_kno
             auto response = co_await client.client().get("/overdeep").send();
             (void)co_await response.stream().read_all();
         } catch (const ruvia::http_client_error& error) {
-            rejected_overdeep = error.code() == ruvia::http_client_error::code_type::protocol_error;
+            rejected_overdeep = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_error);
         }
         EXPECT_TRUE(rejected_overdeep);
         co_await peer.wait();
@@ -1340,7 +1340,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
             try {
                 (void)co_await std::move(cold);
             } catch (const ruvia::http_client_error& error) {
-                timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
+                timed_out = error.code() == std::make_error_code(std::errc::timed_out);
             }
             const auto elapsed = std::chrono::steady_clock::now() - start;
             EXPECT_TRUE(timed_out);
@@ -1382,7 +1382,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
             try {
                 (void)co_await derived.get(stop_base ? "/stop-base" : "/stop-derived").send();
             } catch (const ruvia::http_client_error& error) {
-                cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+                cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
             }
             EXPECT_TRUE(cancelled);
             try {
@@ -1410,7 +1410,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
             try {
                 (void)co_await client.client().get("/event-loop-stop").send();
             } catch (const ruvia::http_client_error& error) {
-                cancelled = error.code() == ruvia::http_client_error::code_type::closing;
+                cancelled = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing);
             }
             EXPECT_TRUE(cancelled);
             try {
@@ -1438,7 +1438,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
             try {
                 (void)co_await std::move(cold);
             } catch (const ruvia::http_client_error& error) {
-                closing = error.code() == ruvia::http_client_error::code_type::closing;
+                closing = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing);
             }
             EXPECT_TRUE(closing);
             co_await client.shutdown();
@@ -1781,13 +1781,13 @@ TEST(Ruvia, http_client_sends_heads_beyond_the_retained_buffer_and_rejects_overs
 
         const std::pmr::string oversized_value(ruvia::max_http_header_bytes + 2048, 'o', ruvia::process_resource());
         const std::array oversized_headers{ruvia::http_header_view{"X-Oversized", oversized_value}};
-        std::optional<ruvia::http_client_error::code_type> rejected;
+        std::optional<std::error_code> rejected;
         try {
             (void)co_await client.client().get("/oversized").headers(oversized_headers).send();
         } catch (const ruvia::http_client_error& error) {
             rejected = error.code();
         }
-        EXPECT_TRUE(rejected == ruvia::http_client_error::code_type::invalid_request);
+        EXPECT_TRUE(rejected == ruvia::make_error_code(ruvia::http_client_errc::invalid_request));
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
@@ -1811,13 +1811,13 @@ TEST(Ruvia, http_client_rejects_connection_options_naming_request_origin_metadat
 
         for (const std::string_view nominated : {"Forwarded", "X-Forwarded-For", "X-Forwarded-Proto", "X-Forwarded-Host"}) {
             const std::array headers{ruvia::http_header_view{"Connection", nominated}};
-            std::optional<ruvia::http_client_error::code_type> rejected;
+            std::optional<std::error_code> rejected;
             try {
                 (void)co_await client.client().get("/origin").headers(headers).send();
             } catch (const ruvia::http_client_error& error) {
                 rejected = error.code();
             }
-            EXPECT_TRUE(rejected == ruvia::http_client_error::code_type::invalid_request);
+            EXPECT_TRUE(rejected == ruvia::make_error_code(ruvia::http_client_errc::invalid_request));
         }
         co_await client.shutdown();
     };
@@ -1849,9 +1849,9 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
             try {
                 (void)co_await response->stream().read_all();
             } catch (const ruvia::http_client_error& error) {
-                running_read_failed = error.code() == ruvia::http_client_error::code_type::closing ||
-                                      error.code() == ruvia::http_client_error::code_type::cancelled ||
-                                      error.code() == ruvia::http_client_error::code_type::io_error;
+                running_read_failed = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing) ||
+                                      error.code() == std::make_error_code(std::errc::operation_canceled) ||
+                                      error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
             }
             EXPECT_TRUE(running_read_failed);
             co_await client.shutdown();
@@ -1860,12 +1860,12 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
         try {
             (void)co_await response->stream().read_all();
         } catch (const ruvia::http_client_error& error) {
-            retained_response_failed = error.code() == ruvia::http_client_error::code_type::closing ||
-                                       error.code() == ruvia::http_client_error::code_type::cancelled ||
-                                       error.code() == ruvia::http_client_error::code_type::io_error;
+            retained_response_failed = error.code() == ruvia::make_error_code(ruvia::http_client_errc::closing) ||
+                                       error.code() == std::make_error_code(std::errc::operation_canceled) ||
+                                       error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
         }
         EXPECT_TRUE(retained_response_failed);
-        std::optional<ruvia::http_client_error::code_type> read_error;
+        std::optional<std::error_code> read_error;
         try {
             while (co_await response->stream().read()) {
             }
@@ -1873,7 +1873,7 @@ TEST(Ruvia, client_shutdown_keeps_incomplete_response_error_observable) {
             read_error = error.code();
         }
         EXPECT_TRUE(read_error.has_value());
-        std::optional<ruvia::http_client_error::code_type> completion_error;
+        std::optional<std::error_code> completion_error;
         try {
             (void)response->stream().complete();
         } catch (const ruvia::http_client_error& error) {
@@ -1982,7 +1982,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
     config.acquire_timeout_ = std::chrono::seconds(20);
     config.request_timeout_ = std::chrono::seconds(20);
     ruvia::http_client client(worker.attachment_.loop(), config);
-    std::optional<ruvia::http_client_error::code_type> code;
+    std::optional<std::error_code> code;
     std::pmr::string message{ruvia::process_resource()};
     auto operation = [&]() -> ruvia::task<void> {
         try {
@@ -1994,7 +1994,7 @@ TEST(Ruvia, http_client_connect_failure_message_is_utf8) {
         co_await client.shutdown();
     };
     run_operation(worker, io, operation);
-    EXPECT_TRUE(code == ruvia::http_client_error::code_type::connect_failed);
+    EXPECT_TRUE(code == ruvia::make_error_code(ruvia::http_client_errc::connect_failed));
     EXPECT_TRUE(!message.empty());
     // The OS describes the refusal in the user's language; the text must be
     // UTF-8 whatever the system code page is, so it can travel in a JSON or
@@ -2320,7 +2320,7 @@ TEST(Ruvia, http_client_upload_exchange_preserves_early_final_response_and_stops
         try {
             co_await exchange_value.body().write("rejected");
         } catch (const ruvia::http_client_error& error) {
-            cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+            cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(cancelled);
         auto bytes_value = co_await response.stream().read_all(16);
@@ -2560,7 +2560,7 @@ TEST(Ruvia, http1_tls_close_delimited_response_requires_close_notify) {
                 const auto bytes_value = co_await response.stream().read_all();
                 body.emplace(reinterpret_cast<const char*>(bytes_value.bytes().data()), bytes_value.size(), ruvia::process_resource());
             } catch (const ruvia::http_client_error& error) {
-                truncated = error.code() == ruvia::http_client_error::code_type::io_error;
+                truncated = error.code() == ruvia::make_error_code(ruvia::http_client_errc::io_error);
             }
             if (close_notify) {
                 EXPECT_TRUE(body == std::optional<std::pmr::string>(std::pmr::string("partial", ruvia::process_resource())));
@@ -2632,7 +2632,7 @@ TEST(Ruvia, http_client_tls_matches_dns_names_only_against_dns_id_subject_alt_na
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
-            std::optional<ruvia::http_client_error::code_type> failure;
+            std::optional<std::error_code> failure;
             try {
                 auto response = co_await client.client().get("/identity").send();
                 EXPECT_EQ(response.status().value(), std::uint16_t{200});
@@ -3093,7 +3093,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
             std::error_code ignored;
             acceptor.close(ignored);
         }
-        std::optional<ruvia::http_client_error::code_type> post_failure;
+        std::optional<std::error_code> post_failure;
         if (retry_body.has_value()) {
             try {
                 (void)co_await client.client().request("POST", "/post").send();
@@ -3108,7 +3108,7 @@ TEST(Ruvia, http_client_retries_only_idempotent_requests_after_a_reused_connecti
             std::rethrow_exception(peer_failure);
         }
         EXPECT_TRUE(retry_body == std::optional<std::pmr::string>(std::pmr::string("retried", ruvia::process_resource())));
-        EXPECT_TRUE(post_failure == ruvia::http_client_error::code_type::io_error);
+        EXPECT_TRUE(post_failure == ruvia::make_error_code(ruvia::http_client_errc::io_error));
         const auto stats = client.client().stats();
         EXPECT_EQ(stats.completed_requests_, std::size_t{2});
         EXPECT_EQ(stats.failed_requests_, std::size_t{1});
@@ -3534,7 +3534,7 @@ TEST(Ruvia, http_client_abandoned_upload_cancels_its_retained_incomplete_respons
         try {
             (void)co_await response->stream().read_all();
         } catch (const ruvia::http_client_error& error) {
-            cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+            cancelled = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(cancelled);
         auto next = co_await client.client().get("/next").send();
@@ -3607,7 +3607,7 @@ TEST(Ruvia, http_client_bounds_unfinished_upload_after_response_body_completion)
         try {
             co_await exchange.body().write("late");
         } catch (const ruvia::http_client_error& error) {
-            stopped = error.code() == ruvia::http_client_error::code_type::cancelled;
+            stopped = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
         EXPECT_TRUE(stopped);
         auto next = co_await client.client().get("/after-timeout").send();
@@ -3670,7 +3670,7 @@ TEST(Ruvia, http_client_reports_upload_transport_failure_during_response_body) {
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.status() == ruvia::http_status::ok);
         const std::pmr::string chunk(16 * 1024, 'u', ruvia::process_resource());
-        std::optional<ruvia::http_client_error::code_type> upload_error;
+        std::optional<std::error_code> upload_error;
         for (int i = 0; i < 1024 && !upload_error.has_value(); ++i) {
             try {
                 co_await exchange.body().write(chunk);
@@ -3680,7 +3680,7 @@ TEST(Ruvia, http_client_reports_upload_transport_failure_during_response_body) {
         }
         EXPECT_TRUE(upload_error.has_value());
         if (upload_error.has_value()) {
-            EXPECT_TRUE(*upload_error == ruvia::http_client_error::code_type::io_error);
+            EXPECT_TRUE(*upload_error == ruvia::make_error_code(ruvia::http_client_errc::io_error));
         }
         while (!peer_finished) {
             co_await peer_done.wait();
@@ -3998,7 +3998,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
         try {
             (void)co_await c.client().with_options({.stop_token_ = std::move(token)}).get("/second").send();
         } catch (const ruvia::http_client_error& error) {
-            cancelled_out = error.code() == ruvia::http_client_error::code_type::cancelled;
+            cancelled_out = error.code() == std::make_error_code(std::errc::operation_canceled);
         }
     };
     auto operation = [&]() -> ruvia::task<void> {
@@ -4166,7 +4166,7 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
         try {
             (void)co_await h2_only_client.client().get("/mismatch").send();
         } catch (const ruvia::http_client_error& error) {
-            protocol_unavailable = error.code() == ruvia::http_client_error::code_type::protocol_unavailable;
+            protocol_unavailable = error.code() == ruvia::make_error_code(ruvia::http_client_errc::protocol_unavailable);
         }
         EXPECT_TRUE(protocol_unavailable);
         while (!peer_finished) {
@@ -4265,7 +4265,7 @@ TEST(Ruvia, http1_client_read_timeout_bounds_a_stalled_response_head_and_body) {
         auto operation = [&]() -> ruvia::task<void> {
             const acceptor_closer closer{acceptor};
             const auto started = std::chrono::steady_clock::now();
-            std::optional<ruvia::http_client_error::code_type> code;
+            std::optional<std::error_code> code;
             try {
                 auto response = co_await client.client().get("/stall").send();
                 EXPECT_TRUE(head_sent);
@@ -4273,7 +4273,7 @@ TEST(Ruvia, http1_client_read_timeout_bounds_a_stalled_response_head_and_body) {
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
-            EXPECT_TRUE(code == ruvia::http_client_error::code_type::timeout);
+            EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
             EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
             while (!peer_finished) {
                 co_await peer_done.wait();
@@ -4583,13 +4583,13 @@ TEST(Ruvia, http2_client_read_timeout_resets_the_stalled_stream_and_keeps_the_se
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const auto started = std::chrono::steady_clock::now();
-        std::optional<ruvia::http_client_error::code_type> code;
+        std::optional<std::error_code> code;
         try {
             (void)co_await client.client().get("/stall").send();
         } catch (const ruvia::http_client_error& error) {
             code = error.code();
         }
-        EXPECT_TRUE(code == ruvia::http_client_error::code_type::timeout);
+        EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
         // The peer accepts one connection only.
         auto response = co_await client.client().get("/ok").send();
@@ -4637,13 +4637,13 @@ TEST(Ruvia, http2_client_ping_fails_a_silent_connection) {
     ruvia::http_client client(worker.attachment_.loop(), config);
     auto operation = [&]() -> ruvia::task<void> {
         const auto started = std::chrono::steady_clock::now();
-        std::optional<ruvia::http_client_error::code_type> code;
+        std::optional<std::error_code> code;
         try {
             (void)co_await client.client().get("/silent").send();
         } catch (const ruvia::http_client_error& error) {
             code = error.code();
         }
-        EXPECT_TRUE(code == ruvia::http_client_error::code_type::timeout);
+        EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
         EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(10));
         // The failed session closed its transport.
         co_await peer.wait();
@@ -4999,13 +4999,13 @@ TEST(Ruvia, http2_client_draining_session_bounds_a_new_request_by_acquire_timeou
             requests.spawn(send_and_discard(client, "/hold"));
             co_await origin.reach(1);
             const auto started = std::chrono::steady_clock::now();
-            std::optional<ruvia::http_client_error::code_type> code;
+            std::optional<std::error_code> code;
             try {
                 (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/next").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
-            EXPECT_TRUE(code == ruvia::http_client_error::code_type::timeout);
+            EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
             EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(3));
         });
     };
@@ -5137,13 +5137,13 @@ TEST(Ruvia, http2_client_retries_only_idempotent_requests_after_a_reused_connect
             EXPECT_EQ(response_text(co_await prime.stream().read_all()), "prime");
             auto retried = co_await client.client().get("/retry").send();
             EXPECT_EQ(response_text(co_await retried.stream().read_all()), "retried");
-            std::optional<ruvia::http_client_error::code_type> post_failure;
+            std::optional<std::error_code> post_failure;
             try {
                 (void)co_await client.client().request("POST", "/post").send();
             } catch (const ruvia::http_client_error& error) {
                 post_failure = error.code();
             }
-            EXPECT_TRUE(post_failure == ruvia::http_client_error::code_type::io_error);
+            EXPECT_TRUE(post_failure == ruvia::make_error_code(ruvia::http_client_errc::io_error));
             const auto stats = client.client().stats();
             EXPECT_EQ(stats.completed_requests_, std::size_t{2});
             EXPECT_EQ(stats.failed_requests_, std::size_t{1});
@@ -5190,13 +5190,13 @@ TEST(Ruvia, http2_client_stream_capacity_wait_is_an_acquisition) {
             requests.spawn(send_and_keep(client, "/held", held_body, held_done, done_signal));
             co_await origin.reach(1);
             const auto started = std::chrono::steady_clock::now();
-            std::optional<ruvia::http_client_error::code_type> code;
+            std::optional<std::error_code> code;
             try {
                 (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/blocked").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
-            EXPECT_TRUE(code == ruvia::http_client_error::code_type::timeout);
+            EXPECT_TRUE(code == std::make_error_code(std::errc::timed_out));
             EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(3));
             requests.spawn(send_and_keep(client, "/after", after_body, after_done, done_signal));
             // Parked for capacity before the held stream closes.

@@ -157,13 +157,12 @@ ruvia::task<void> connect_routes::echo(ruvia::context& context_value) {
     while (auto chunk = co_await tunnel.read()) {
         {
             std::lock_guard lock(observation_value.mutex_);
-            observation_value.received_.append(*chunk);
+            observation_value.received_.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
         }
         if (!retained) {
-            retained.emplace(*chunk, ruvia::process_resource());
+            retained.emplace(reinterpret_cast<const char*>(chunk->data()), chunk->size(), ruvia::process_resource());
         }
-        auto output = tunnel.write(std::string_view(*chunk));
-        chunk->assign("changed-input");
+        auto output = tunnel.write(*chunk);
         co_await std::move(output);
         observation_value.stable_ = observation_value.stable_ && retained->find_first_not_of('t') == std::string_view::npos;
     }
