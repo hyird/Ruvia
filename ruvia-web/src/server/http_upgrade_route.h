@@ -326,6 +326,9 @@ struct tunnel_upgrade_session_operation final {
             transport->abort();
             throw;
         }
+        // A synchronous commit leaves no co_await in this instantiation;
+        // co_return keeps the body a coroutine for every transport.
+        co_return;
     }
 
     [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {

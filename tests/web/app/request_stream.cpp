@@ -466,17 +466,17 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
     }
     {
         unsigned previous = 0;
-        std::string worker;
+        std::string previous_worker;
         for (int repeat = 0; repeat != 2; ++repeat) {
             auto response = co_await client.get("/runtime").send();
             const auto count = static_cast<unsigned>(std::stoul(std::string(response.header("x-runtime-count").value_or("0"))));
             const std::string current_worker(response.header("x-worker").value_or(""));
             if (repeat != 0) {
                 EXPECT_EQ(count, previous + 1) << label;
-                EXPECT_EQ(current_worker, worker) << label;
+                EXPECT_EQ(current_worker, previous_worker) << label;
             }
             previous = count;
-            worker = current_worker;
+            previous_worker = current_worker;
             const auto content = co_await response.text();
             EXPECT_EQ(content.text(), "runtime-ready") << label;
         }

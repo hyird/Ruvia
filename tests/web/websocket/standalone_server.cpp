@@ -586,7 +586,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         stream.set_verify_mode(asio::ssl::verify_peer);
         stream.set_verify_callback(asio::ssl::host_name_verification("127.0.0.1"));
         constexpr std::array<unsigned char, 3> alpn{2, 'h', '2'};
-        if (SSL_set_alpn_protos(stream.native_handle(), alpn.data(), alpn.size()) != 0) {
+        if (SSL_set_alpn_protos(stream.native_handle(), alpn.data(), static_cast<unsigned int>(alpn.size())) != 0) {
             throw std::runtime_error("cannot configure malformed HTTP/2 peer ALPN");
         }
         stream.next_layer().connect(destination.endpoint_);
