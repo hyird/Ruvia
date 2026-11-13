@@ -8,6 +8,7 @@
 #include <memory_resource>
 #include <new>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,6 +18,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
+
+#include "memory_resource_fixture.h"
 
 namespace {
 
@@ -52,6 +55,16 @@ public:
 private:
     std::pmr::memory_resource* previous_;
 };
+
+// Published trailer fields as "name=value;" in received order. The text never
+// uses the default resource, which some tests replace with a rejecting one.
+std::pmr::string rendered(std::span<const ruvia::http_header> fields) {
+    std::pmr::string text(std::pmr::new_delete_resource());
+    for (const auto& field : fields) {
+        text.append(field.name()).append("=").append(field.value()).append(";");
+    }
+    return text;
+}
 
 }  // namespace
 
@@ -233,7 +246,7 @@ TEST(Ruvia, chunked_body_decoder_emits_zero_copy_chunks_and_preserves_pipeline) 
             continue;
         }
         if (const auto* complete = result_value.complete()) {
-            EXPECT_EQ(complete->trailers(), std::string_view("X-Trace: abc"));
+            EXPECT_EQ(rendered(complete->trailers()), "x-trace=abc;");
             break;
         }
         EXPECT_TRUE(result_value.need_more() == nullptr);
@@ -290,8 +303,8 @@ TEST(Ruvia, chunked_request_trailer_names_preserve_fragment_and_pipeline_boundar
             const auto last = decoder.decode(std::string_view(wire).substr(first.consumed_bytes()));
             EXPECT_TRUE(last.complete() != nullptr);
             if (const auto* complete = last.complete()) {
-                EXPECT_EQ(complete->trailers(), std::string_view(trailers));
-                EXPECT_EQ(complete->trailers().data(), wire.data() + 3);
+                EXPECT_EQ(rendered(complete->trailers()),
+                    std::pmr::string(length, 'x') + "=first:second;x-next=done;");
                 const auto consumed = first.consumed_bytes() + complete->consumed_bytes();
                 EXPECT_EQ(consumed, message.size());
                 EXPECT_EQ(std::string_view(wire).substr(consumed), std::string_view("NEXT"));
@@ -365,25 +378,38 @@ TEST(Ruvia, chunked_body_decoder_rejects_bad_delimiter_and_trailer) {
 }
 
 // RFC 9110 section 6.5.1 forbids generating these trailers, but RFC 9112
-// section 7.1.2 lets the recipient discard them: the framing stays valid.
-TEST(Ruvia, chunked_body_decoder_completes_with_fields_not_permitted_as_trailers) {
-    for (const std::string_view trailers : {std::string_view("Content-Length: 1"),
-             std::string_view("Accept-Ranges: bytes"), std::string_view("Date: Sun, 06 Nov 1994 08:49:37 GMT"),
-             std::string_view("Cache-Control: no-cache\r\nX-Trace: abc")}) {
-        http1_chunked_body_decoder decoder({.body_limit_ = protocol_byte_limit::limited(1024)});
+// section 7.1.2 lets the recipient discard them: the framing stays valid and
+// each message direction publishes only the fields its sender may generate.
+TEST(Ruvia, chunked_body_decoder_discards_fields_not_permitted_as_trailers) {
+    struct case_type final {
+        std::string_view trailers_;
+        std::string_view request_;
+        std::string_view response_;
+    };
+    for (const auto& [trailers, request, response] : std::array{
+             case_type{"Content-Length: 1", "", ""},
+             case_type{"Accept-Ranges: bytes", "", "accept-ranges=bytes;"},
+             case_type{"Date: Sun, 06 Nov 1994 08:49:37 GMT", "date=Sun, 06 Nov 1994 08:49:37 GMT;", ""},
+             case_type{"Cache-Control: no-cache\r\nX-Trace: abc\r\nETag: \"v\"", "x-trace=abc;etag=\"v\";",
+                 "x-trace=abc;etag=\"v\";"},
+         }) {
         const std::pmr::string wire = "0\r\n" + std::pmr::string(trailers) + "\r\n\r\nNEXT";
-        const auto result_value = decoder.decode(wire);
-        EXPECT_TRUE(result_value.complete() != nullptr);
-        if (const auto* complete = result_value.complete()) {
-            EXPECT_EQ(complete->trailers(), trailers);
-            EXPECT_EQ(complete->consumed_bytes(), wire.size() - 4);
+        for (const auto message : {ruvia::http1_trailer_message::request, ruvia::http1_trailer_message::response}) {
+            http1_chunked_body_decoder decoder({.trailer_message_ = message});
+            const auto result_value = decoder.decode(wire);
+            EXPECT_TRUE(result_value.complete() != nullptr);
+            if (const auto* complete = result_value.complete()) {
+                EXPECT_EQ(rendered(complete->trailers()),
+                    message == ruvia::http1_trailer_message::request ? request : response);
+                EXPECT_EQ(complete->consumed_bytes(), wire.size() - 4);
+            }
         }
     }
 }
 
 // RFC 9112 section 5.2: a server may reject obs-fold (the request default),
-// a user agent replaces it with SP, so the response policy validates the
-// unfolding and publishes the received bytes for its consumer to unfold.
+// a user agent replaces it with SP, so the response policy validates and
+// publishes the unfolding.
 TEST(Ruvia, chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy) {
     constexpr std::string_view folded = "0\r\nX-T: a\r\n \t b\r\n\t\r\n c\r\nX-U: d\r\n\r\nNEXT";
     http1_chunked_body_decoder request;
@@ -397,7 +423,7 @@ TEST(Ruvia, chunked_body_decoder_trailer_obs_fold_follows_the_configured_policy)
     const auto accepted = response.decode(folded);
     EXPECT_TRUE(accepted.complete() != nullptr);
     if (const auto* complete = accepted.complete()) {
-        EXPECT_EQ(complete->trailers(), "X-T: a\r\n \t b\r\n\t\r\n c\r\nX-U: d");
+        EXPECT_EQ(rendered(complete->trailers()), "x-t=a b  c;x-u=d;");
         EXPECT_EQ(complete->consumed_bytes(), folded.size() - 4);
     }
 
@@ -471,24 +497,49 @@ TEST(Ruvia, chunked_body_decoder_validates_config_quota_and_neutral_errors) {
         ruvia::http_status::content_too_large);
 }
 
-TEST(Ruvia, chunked_body_decoder_decodes_without_pmr_allocation) {
-    counting_no_alloc_resource resource;
+// Only a trailer section that keeps a field allocates, and only from the
+// configured resource.
+TEST(Ruvia, chunked_body_decoder_allocates_only_for_published_trailers) {
+    counting_no_alloc_resource no_allocation;
     {
-        scoped_default_resource scoped(&resource);
-        http1_chunked_body_decoder decoder;
-        constexpr std::string_view wire = "1\r\nx\r\n0\r\nX-Trace: ok\r\n\r\n";
-        const auto body = decoder.decode(wire);
-        EXPECT_TRUE(body.body_chunk() != nullptr);
-        if (const auto* chunk = body.body_chunk()) {
-            EXPECT_EQ(chunk->bytes(), std::string_view("x"));
-            const auto terminal = decoder.decode(wire.substr(chunk->consumed_bytes()));
-            EXPECT_TRUE(terminal.complete() != nullptr);
-            if (const auto* complete = terminal.complete()) {
-                EXPECT_EQ(complete->trailers(), std::string_view("X-Trace: ok"));
+        scoped_default_resource scoped(&no_allocation);
+        for (const std::string_view wire :
+            {std::string_view("1\r\nx\r\n0\r\n\r\n"), std::string_view("1\r\nx\r\n0\r\nContent-Length: 1\r\n\r\n")}) {
+            http1_chunked_body_decoder decoder({.resource_ = &no_allocation});
+            const auto body = decoder.decode(wire);
+            EXPECT_TRUE(body.body_chunk() != nullptr);
+            if (const auto* chunk = body.body_chunk()) {
+                EXPECT_EQ(chunk->bytes(), std::string_view("x"));
+                const auto terminal = decoder.decode(wire.substr(chunk->consumed_bytes()));
+                EXPECT_TRUE(terminal.complete() != nullptr);
+                if (const auto* complete = terminal.complete()) {
+                    EXPECT_TRUE(complete->trailers().empty());
+                }
             }
         }
     }
-    EXPECT_EQ(resource.allocations(), std::size_t{0});
+    EXPECT_EQ(no_allocation.allocations(), std::size_t{0});
+
+    ruvia::test::counting_memory_resource owner;
+    {
+        scoped_default_resource scoped(&no_allocation);
+        http1_chunked_body_decoder decoder({.resource_ = &owner});
+        const auto terminal = decoder.decode("0\r\nX-Trace: ok\r\n\r\n");
+        EXPECT_TRUE(terminal.complete() != nullptr);
+        if (const auto* complete = terminal.complete()) {
+            EXPECT_EQ(rendered(complete->trailers()), "x-trace=ok;");
+        }
+        EXPECT_TRUE(owner.allocation_count() != 0);
+        // The next call releases the published fields; a finished decoder
+        // reports completion again without trailers.
+        const auto replay = decoder.decode({});
+        EXPECT_TRUE(replay.complete() != nullptr);
+        if (const auto* complete = replay.complete()) {
+            EXPECT_TRUE(complete->trailers().empty());
+        }
+    }
+    EXPECT_EQ(no_allocation.allocations(), std::size_t{0});
+    EXPECT_EQ(owner.allocation_count(), owner.deallocation_count());
 }
 
 TEST(Ruvia, chunked_body_decoder_caps_each_size_line_at_exact_boundary) {
@@ -652,7 +703,8 @@ TEST(Ruvia, chunked_body_decoder_bounds_trailers_independently_of_input_segmenta
             if (excess == 0) {
                 EXPECT_TRUE(result.complete() != nullptr);
                 if (const auto* complete = result.complete()) {
-                    EXPECT_EQ(complete->trailers(), std::string_view(trailers).substr(0, trailers.size() - 4));
+                    EXPECT_EQ(complete->trailers().size(), std::size_t{1});
+                    EXPECT_EQ(rendered(complete->trailers()), "x-trace=x;");
                 }
                 EXPECT_EQ(consumed, message_end);
                 EXPECT_EQ(std::string_view(wire).substr(consumed), "NEXT");

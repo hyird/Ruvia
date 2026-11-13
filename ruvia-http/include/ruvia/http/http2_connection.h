@@ -298,7 +298,6 @@ public:
     // may tighten or restore the fixed local capacity (128); a larger value
     // returns invalid_message, and a failed connection returns closed.
     [[nodiscard]] http2_submit_status submit_max_concurrent_streams(std::uint32_t limit);
-    [[nodiscard]] http2_received_data_acknowledge_status acknowledge(http2_received_data_credit&& credit);
     // Payload bytes in serialized DATA frames still owned by the core output buffer.
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;
     // Read-only state used by a response writer to decide whether a send-window

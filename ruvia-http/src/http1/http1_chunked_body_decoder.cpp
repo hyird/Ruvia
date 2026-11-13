@@ -7,10 +7,14 @@
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_response_server.h"
+
+#include "parser/field_line_folding.h"
 
 namespace ruvia {
 
@@ -137,6 +141,75 @@ std::optional<http_chunk_size_line> parse_http_chunk_size_line(std::string_view 
     return http_chunk_size_line{.size_ = parsed_value, .overhead_bytes_ = value.size() - significant_digits};
 }
 
+// The HTTP/1 received trailer-block field parser. `block` holds the field
+// lines between the last chunk and the empty line that ends the trailer
+// section. Values are exposed with field-line OWS trimmed.
+// `obs_fold` decides whether a line starting with OWS continues the previous
+// field (RFC 9112 section 5.2). Rejected, such a line is malformed. Accepted,
+// the field is validated and charged as its HTTP unfolding (each obs-fold and
+// adjacent OWS is one SP), and the visitor receives the received value span
+// with its folds in place. Every field is charged to the section budget;
+// syntax errors and the budget fail the whole section. The visitor receives
+// views borrowing `block`.
+template <typename visitor_type>
+[[nodiscard]] bool visit_http1_trailer_block(
+    std::string_view block, http1_trailer_obs_fold obs_fold, visitor_type&& visitor) {
+    auto budget = http_trailer_section_budget();
+    const auto line_at = [block](std::size_t begin, std::size_t end) noexcept {
+        return end == std::string_view::npos ? block.substr(begin) : block.substr(begin, end - begin);
+    };
+    std::size_t cursor_value = 0;
+    while (cursor_value < block.size()) {
+        auto line_end = block.find("\r\n", cursor_value);
+        const auto line = line_at(cursor_value, line_end);
+        // Finding the separator also proves that the complete name is a token.
+        const auto colon = http_token_prefix_size(line);
+        if (colon == 0 || colon == line.size() || line[colon] != ':') {
+            return false;
+        }
+        const auto name = line.substr(0, colon);
+        // The unfolded value spans the first to the last non-empty piece, each
+        // fold between them counting as one SP.
+        auto piece = http_trim_ows(line.substr(colon + 1));
+        auto value = piece;
+        std::size_t value_bytes = 0;
+        std::size_t pending_separators = 0;
+        for (;;) {
+            if (!is_valid_http_field_value_bytes(piece)) {
+                return false;
+            }
+            if (!piece.empty()) {
+                if (value_bytes == 0) {
+                    value = piece;
+                } else {
+                    value_bytes += pending_separators;
+                    value = std::string_view(
+                        value.data(), static_cast<std::size_t>(piece.data() - value.data()) + piece.size());
+                }
+                value_bytes += piece.size();
+                pending_separators = 0;
+            }
+            if (obs_fold == http1_trailer_obs_fold::reject || line_end == std::string_view::npos ||
+                line_end + 2 >= block.size() || !is_http_ows_char(block[line_end + 2])) {
+                break;
+            }
+            ++pending_separators;
+            const auto piece_begin = line_end + 2;
+            line_end = block.find("\r\n", piece_begin);
+            piece = http_trim_ows(line_at(piece_begin, line_end));
+        }
+        if (!budget.add_field(name.size(), value_bytes)) {
+            return false;
+        }
+        visitor(name, value);
+        if (line_end == std::string_view::npos) {
+            break;
+        }
+        cursor_value = line_end + 2;
+    }
+    return true;
+}
+
 }  // namespace
 
 http1_chunk_decode_result http1_chunk_decode_result::make_need_more(std::size_t consumed_bytes) noexcept {
@@ -149,7 +222,7 @@ http1_chunk_decode_result http1_chunk_decode_result::make_body_chunk(
 }
 
 http1_chunk_decode_result http1_chunk_decode_result::make_complete(
-    std::size_t consumed_bytes, std::string_view trailers) noexcept {
+    std::size_t consumed_bytes, std::span<const http_header> trailers) noexcept {
     return http1_chunk_decode_result(http1_chunk_decode_complete_view(consumed_bytes, trailers));
 }
 
@@ -160,11 +233,13 @@ http1_chunk_decode_result http1_chunk_decode_result::make_failure(
 
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config)
     : body_limit_(config.body_limit_),
-      obs_fold_(config.obs_fold_) {}
+      obs_fold_(config.obs_fold_),
+      trailer_message_(config.trailer_message_),
+      trailers_(detail::http_pmr_resource_or_default(config.resource_)) {}
 
 http1_chunked_body_decoder::~http1_chunked_body_decoder() = default;
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept = default;
-http1_chunked_body_decoder& http1_chunked_body_decoder::operator=(http1_chunked_body_decoder&&) noexcept = default;
+http1_chunked_body_decoder& http1_chunked_body_decoder::operator=(http1_chunked_body_decoder&&) = default;
 
 http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view available) {
     return decode(available, std::numeric_limits<std::size_t>::max());
@@ -178,6 +253,8 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
     if (const auto* error = std::get_if<http1_chunk_decode_error>(&state_)) {
         return http1_chunk_decode_result::make_failure(0, *error);
     }
+    // Published trailers live until this next call.
+    trailers_.clear();
 
     std::size_t cursor = 0;
     for (;;) {
@@ -277,11 +354,11 @@ http1_chunk_decode_result http1_chunked_body_decoder::decode(
                     return http1_chunk_decode_result::make_need_more(cursor);
                 }
                 const auto trailer_bytes = trailer_end + 4;
-                if (!trailers_valid(trailers.substr(0, trailer_end))) {
+                if (!publish_trailers(trailers.substr(0, trailer_end))) {
                     return fail(cursor, http1_chunk_decode_error::invalid_framing);
                 }
                 state_ = progress::complete;
-                return http1_chunk_decode_result::make_complete(cursor + trailer_bytes, trailers.substr(0, trailer_end));
+                return http1_chunk_decode_result::make_complete(cursor + trailer_bytes, trailers_);
             }
             case progress::complete:
                 return http1_chunk_decode_result::make_complete(cursor);
@@ -299,15 +376,40 @@ bool http1_chunked_body_decoder::consume_delimiter(std::string_view available, s
     return true;
 }
 
-bool http1_chunked_body_decoder::trailers_valid(std::string_view trailers) const noexcept {
-    // Received fields that were not permitted as trailers are discarded by the
-    // consumers, never merged (RFC 9112 section 7.1.2), so framing validity
-    // depends only on field syntax and the section budget.
-    const auto discard_none = [](std::string_view) noexcept { return false; };
-    const auto accept = [](std::string_view, std::string_view) noexcept { return true; };
-    auto budget = http_trailer_section_budget();
-    return detail::visit_http1_trailer_block(trailers, obs_fold_, discard_none, budget, accept) ==
-           detail::http_trailer_block_status::ok;
+bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {
+    // Received fields that were not permitted as trailers are discarded, never
+    // merged (RFC 9112 section 7.1.2), so framing validity depends only on
+    // field syntax and the section budget.
+    const auto discarded = [message = trailer_message_](std::string_view name) noexcept {
+        return message == http1_trailer_message::request ? detail::is_forbidden_http_request_trailer_name(name)
+                                                         : detail::is_forbidden_response_trailer_name(name);
+    };
+    auto* const resource = trailers_.get_allocator().resource();
+    const auto publish = [this, &discarded, resource](std::string_view name, std::string_view value) {
+        if (discarded(name)) {
+            return;
+        }
+        // RFC 9112 section 5.2: each accepted obs-fold becomes SP before the
+        // value is interpreted.
+        if (const auto fold = detail::find_field_line_fold(value); fold != std::string_view::npos) {
+            std::pmr::string unfolded(resource);
+            detail::copy_unfolded_field_lines(value, fold, detail::field_line_folding_policy::http, unfolded);
+            trailers_.push_back(http_header::copy_with_lowercase_name(name, unfolded, resource));
+            return;
+        }
+        trailers_.push_back(http_header::copy_with_lowercase_name(name, value, resource));
+    };
+    bool valid = false;
+    try {
+        valid = visit_http1_trailer_block(trailers, obs_fold_, publish);
+    } catch (...) {
+        trailers_.clear();
+        throw;
+    }
+    if (!valid) {
+        trailers_.clear();
+    }
+    return valid;
 }
 
 http1_chunk_decode_result http1_chunked_body_decoder::fail(

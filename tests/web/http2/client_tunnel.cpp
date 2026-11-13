@@ -372,7 +372,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
                             reset_error = closed->error();
                         }
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)connection.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                     }
                 }
                 if (fed != ruvia::http2_feed_result::events_pending) {
@@ -473,7 +473,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
                         (void)connection.submit_data(
                             end->stream_id(), truncated, ruvia::http2_end_stream::end_stream, 65535);
                     } else if (auto* data = event->tunnel_data()) {
-                        (void)connection.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                     }
                 }
                 if (fed != ruvia::http2_feed_result::events_pending) {

@@ -320,7 +320,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
                         if (auto* data = event->tunnel_data()) {
                             EXPECT_TRUE(data->stream_id() == id);
                             echoed.append(data->bytes());
-                            (void)peer.acknowledge(data->take_credit());
+                            (void)data->take_credit();
                         }
                         if (const auto* end = event->tunnel_end()) {
                             EXPECT_TRUE(end->stream_id() == id);
@@ -455,7 +455,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
                     }
                     if (auto* data = event->tunnel_data()) {
                         echoed.append(data->bytes());
-                        (void)peer.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                     }
                     if (event->tunnel_end()) {
                         ended = true;
@@ -570,7 +570,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
                 while (auto event = peer.next_event()) {
                     if (auto* data = event->tunnel_data()) {
                         tunnel_reply.append(data->bytes());
-                        (void)peer.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                     }
                     if (event->tunnel_end()) {
                         tunnel_ended = true;
@@ -610,7 +610,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
                     }
                     if (auto* bytes = event->message_body_chunk()) {
                         upload_reply.append(bytes->bytes());
-                        (void)peer.acknowledge(bytes->take_credit());
+                        (void)bytes->take_credit();
                     }
                     if (event->message_end()) {
                         upload_ended = true;

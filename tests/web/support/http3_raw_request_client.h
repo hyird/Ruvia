@@ -44,7 +44,22 @@ public:
         socket_.connect(server_);
         socket_.non_blocking(true);
         local_ = socket_.local_endpoint();
-        auto callbacks = http3_test_client_callbacks();
+        // This client owns ngtcp2 itself, so it installs the adapter's crypto
+        // callbacks next to its own stream callbacks.
+        ngtcp2_callbacks callbacks{};
+        callbacks.client_initial = ngtcp2_crypto_client_initial_cb;
+        callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
+        callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
+        callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
+        callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
+        callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
+        callbacks.update_key = ngtcp2_crypto_update_key_cb;
+        callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
+        callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
+        callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
+        callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
+        callbacks.rand = http3_test_fill_random;
+        callbacks.get_new_connection_id2 = http3_test_new_connection_id;
         callbacks.handshake_completed = [](ngtcp2_conn*, void* user_data) noexcept {
             static_cast<http3_raw_request_client*>(user_data)->handshake_completed_ = true;
             return 0;
@@ -278,7 +293,7 @@ private:
         if (stream_id == client.stream_id_) {
             if ((flags & NGTCP2_STREAM_CLOSE2_FLAG_RX_APP_ERROR_CODE_SET) != 0 && receive_error != NGHTTP3_H3_NO_ERROR &&
                 !client.response_.reset_error_) {
-                client.response_.reset_error_ = receive_error;
+                client.response_.reset_error_ = static_cast<http3_error_code>(receive_error);
             }
             client.complete_ = true;
         }
@@ -300,7 +315,7 @@ private:
         void* user_data, void*) noexcept {
         auto& client = self(user_data);
         if (stream_id == client.stream_id_ && !client.response_.reset_error_) {
-            client.response_.reset_error_ = error;
+            client.response_.reset_error_ = static_cast<http3_error_code>(error);
         }
         return client.http3_ == nullptr || nghttp3_conn_shutdown_stream_read(client.http3_, stream_id) == 0
                    ? 0

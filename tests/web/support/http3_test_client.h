@@ -1,6 +1,5 @@
 #pragma once
 
-#include <nghttp3/nghttp3.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 
@@ -63,9 +62,13 @@ struct http3_test_response final {
     std::pmr::vector<int> interim_statuses_{ruvia::process_resource()};
     // A non-H3_NO_ERROR failure reported when the stream closes, including a
     // local protocol failure. Transport actions alone do not close a response.
-    std::optional<std::uint64_t> reset_error_;
+    std::optional<http3_error_code> reset_error_;
     // STOP_SENDING stops the request writer, not the response reader.
-    std::optional<std::uint64_t> stop_sending_error_;
+    std::optional<http3_error_code> stop_sending_error_;
+    // The server did not process the request (RFC 9114 §4.1.1, §5.2): it was
+    // at or above a GOAWAY identifier or rejected before its final head, and
+    // may be retried on another connection.
+    bool unprocessed_{false};
 
     // The first field named `name`, compared ASCII case-insensitively.
     [[nodiscard]] std::optional<std::pmr::string> header(std::string_view name) const {
@@ -110,23 +113,30 @@ inline int http3_test_new_connection_id(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_st
     return cid;
 }
 
-// The ngtcp2 crypto callbacks of a client using ngtcp2_crypto_ossl.
-[[nodiscard]] inline ngtcp2_callbacks http3_test_client_callbacks() noexcept {
-    ngtcp2_callbacks callbacks{};
-    callbacks.client_initial = ngtcp2_crypto_client_initial_cb;
-    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
-    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
-    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
-    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
-    callbacks.recv_retry = ngtcp2_crypto_recv_retry_cb;
-    callbacks.update_key = ngtcp2_crypto_update_key_cb;
-    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
-    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
-    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
-    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
-    callbacks.rand = http3_test_fill_random;
-    callbacks.get_new_connection_id2 = http3_test_new_connection_id;
-    return callbacks;
+// The ngtcp2_crypto_ossl QUIC-TLS adapter callbacks for `role`.
+[[nodiscard]] inline http3_quic_crypto_callbacks http3_test_crypto_callbacks(http3_role role) noexcept {
+    const bool client = role == http3_role::client;
+    return {
+        .client_initial_ = client ? ngtcp2_crypto_client_initial_cb : nullptr,
+        .recv_client_initial_ = client ? nullptr : ngtcp2_crypto_recv_client_initial_cb,
+        .recv_crypto_data_ = ngtcp2_crypto_recv_crypto_data_cb,
+        .encrypt_ = ngtcp2_crypto_encrypt_cb,
+        .decrypt_ = ngtcp2_crypto_decrypt_cb,
+        .hp_mask_ = ngtcp2_crypto_hp_mask_cb,
+        .recv_retry_ = client ? ngtcp2_crypto_recv_retry_cb : nullptr,
+        .update_key_ = ngtcp2_crypto_update_key_cb,
+        .delete_crypto_aead_ctx_ = ngtcp2_crypto_delete_crypto_aead_ctx_cb,
+        .delete_crypto_cipher_ctx_ = ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
+        .get_path_challenge_data_ = ngtcp2_crypto_get_path_challenge_data2_cb,
+        .version_negotiation_ = ngtcp2_crypto_version_negotiation_cb,
+        .rand_ = http3_test_fill_random,
+    };
+}
+
+// Byte-wise equality of a socket address with one side of a QUIC path.
+[[nodiscard]] inline bool http3_test_same_address(std::span<const std::byte> address, const ngtcp2_addr& expected) noexcept {
+    const auto bytes = std::as_bytes(std::span(reinterpret_cast<const char*>(expected.addr), expected.addrlen));
+    return std::ranges::equal(address, bytes);
 }
 
 // The client TLS side of one QUIC connection: TLS 1.3 only, ALPN "h3" only,
@@ -298,11 +308,12 @@ public:
         socket_.connect(server_);
         socket_.non_blocking(true);
         local_ = socket_.local_endpoint();
-        auto callbacks = http3_test_client_callbacks();
-        callbacks.handshake_completed = handshake_complete;
-        callbacks.handshake_confirmed = handshake_confirmed;
+        quic_local_ = local_;
         connection_.emplace(http3_quic_connection::client({
-            .callbacks_ = callbacks,
+            .crypto_callbacks_ = http3_test_crypto_callbacks(http3_role::client),
+            .owner_callbacks_ = {.get_new_connection_id_ = http3_test_new_connection_id,
+                .handshake_completed_ = handshake_complete,
+                .handshake_confirmed_ = handshake_confirmed},
             .source_connection_id_ = http3_test_random_connection_id(16),
             // RFC 9000 §7.2: at least 8 unpredictable bytes.
             .destination_connection_id_ = http3_test_random_connection_id(18),
@@ -345,13 +356,12 @@ public:
     [[nodiscard]] http3_test_resumption capture_resumption() {
         complete_handshake();
         wait_or_throw([this] { return tls_.has_ticket(); }, "HTTP/3 TLS ticket did not arrive");
-        std::array<std::uint8_t, 512> parameters{};
-        const auto size = ngtcp2_conn_encode_0rtt_transport_params2(
-            connection_->native_handle(), parameters.data(), parameters.size());
-        if (size < 0) {
+        std::array<std::byte, 512> parameters{};
+        const auto size = connection_->encode_early_transport_parameters(parameters);
+        if (!size) {
             throw std::runtime_error("HTTP/3 test client cannot remember QUIC parameters");
         }
-        const auto bytes = std::as_bytes(std::span(parameters.data(), static_cast<std::size_t>(size)));
+        const auto bytes = std::span<const std::byte>(parameters.data(), *size);
         return {tls_.ticket(), {bytes.begin(), bytes.end()}, peer_settings()};
     }
 
@@ -412,7 +422,7 @@ public:
             .authority_ = std::optional<borrowed_text>(request_authority),
             .target_ = path,
             .content_ = http_request_content_plan::streaming(length)};
-        if (connection_->http3().submit_request_head(stream_id, head) != http3_status::accepted) {
+        if (connection_->http3().submit_request_head(stream_id, head) != http3_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the streaming request head");
         }
         flush();
@@ -439,10 +449,10 @@ public:
         for (;;) {
             http3_stream_output pending;
             const auto result = connection_->http3().peek_output(max_udp_payload_bytes, pending);
-            if (result.status_ == http3_status::would_block) {
+            if (result.status_ == http3_transport_status::would_block) {
                 return stream_id;
             }
-            if (result.status_ != http3_status::accepted || connection_->closed() ||
+            if (result.status_ != http3_transport_status::accepted || connection_->closed() ||
                 std::chrono::steady_clock::now() >= deadline) {
                 throw std::runtime_error("HTTP/3 early request flight did not drain");
             }
@@ -476,9 +486,8 @@ public:
         auto& codec = connection_->http3();
         while (!bytes.empty()) {
             const auto submitted = codec.submit_data(stream_id, bytes);
-            if (submitted.status_ == http3_status::accepted && submitted.accepted_bytes_ != 0) {
-                bytes = bytes.subspan(submitted.accepted_bytes_);
-            } else if (submitted.status_ == http3_status::would_block) {
+            bytes = bytes.subspan(submitted.consumed_bytes_);
+            if (submitted.status_ == http3_data_submit_status::backpressured && submitted.consumed_bytes_ == 0) {
                 wait_or_throw([&] {
                     return codec.pending_output_bytes(stream_id) < max_stream_output_bytes || response_complete(stream);
                 },
@@ -486,11 +495,12 @@ public:
                 if (response_complete(stream)) {
                     throw std::runtime_error("HTTP/3 tunnel closed during write");
                 }
-            } else {
+            } else if (submitted.status_ != http3_data_submit_status::complete &&
+                       submitted.status_ != http3_data_submit_status::backpressured) {
                 throw std::runtime_error("HTTP/3 tunnel DATA was not accepted");
             }
         }
-        if (finish && codec.finish_stream(stream_id) != http3_status::accepted) {
+        if (finish && codec.finish_stream(stream_id) != http3_finish_status::accepted) {
             throw std::runtime_error("HTTP/3 tunnel FIN was not accepted");
         }
         flush();
@@ -533,14 +543,13 @@ public:
         return local_.port();
     }
 
-    // Model a NAT rebinding: retain the connection ID and switch UDP source
-    // port without initiating QUIC migration or replacing the connection.
+    // Model a NAT rebinding: switch the UDP source port underneath the
+    // connection, which keeps its connection ID and its own view of the path,
+    // without initiating QUIC migration (RFC 9000 §9.3).
     void rebind() {
         auto replacement = replacement_socket();
         local_ = replacement.local_endpoint();
         socket_ = std::move(replacement);
-        const auto rebound = path();
-        ngtcp2_conn_set_local_addr(connection_->native_handle(), &rebound.local);
     }
 
     void migrate() {
@@ -564,10 +573,13 @@ public:
             throw std::runtime_error("HTTP/3 client migration was not accepted");
         }
         wait_or_throw([&] {
-            return ngtcp2_path_eq(ngtcp2_conn_get_path2(connection_->native_handle()), &candidate) != 0;
+            const auto current = connection_->current_path();
+            return http3_test_same_address(current.local_, candidate.local) &&
+                   http3_test_same_address(current.remote_, candidate.remote);
         },
             "HTTP/3 client migration validation did not complete");
         local_ = migration_local_;
+        quic_local_ = migration_local_;
         socket_ = std::move(*migration_socket_);
         migration_socket_.reset();
         flush();
@@ -619,7 +631,7 @@ public:
 
     // Abandons the request in both directions with RESET_STREAM and
     // STOP_SENDING carrying `application_error` (RFC 9114 §4.1.1).
-    void reset_request(std::int64_t stream_id, std::uint64_t application_error) {
+    void reset_request(std::int64_t stream_id, http3_error_code application_error) {
         static_cast<void>(tracked_stream(stream_id));
         streams_.erase(stream_id);
         connection_->reset_stream(stream_id, application_error);
@@ -644,9 +656,9 @@ public:
         }
     }
 
-    // Every GOAWAY identifier received, in order; NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID
-    // marks a shutdown notice (RFC 9114 §5.2).
-    [[nodiscard]] const std::pmr::vector<std::int64_t>& goaway_ids() const noexcept {
+    // Every GOAWAY identifier received, in order; nullopt marks a shutdown
+    // notice (RFC 9114 §5.2).
+    [[nodiscard]] const std::pmr::vector<std::optional<std::int64_t>>& goaway_ids() const noexcept {
         return goaway_ids_;
     }
 
@@ -657,12 +669,25 @@ public:
 
     // Sends CONNECTION_CLOSE with H3_NO_ERROR (RFC 9114 §5.2).
     void close() {
-        connection_->close(NGHTTP3_H3_NO_ERROR);
+        connection_->close(http3_error_code::no_error);
         flush();
     }
 
-    // For transport-level assertions such as the server's transport
-    // parameters or the received CONNECTION_CLOSE error.
+    // The HTTP/3 or QUIC transport code of the CONNECTION_CLOSE sent or
+    // received.
+    [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept {
+        return connection_->application_error();
+    }
+    [[nodiscard]] std::optional<std::uint64_t> transport_error() const noexcept {
+        return connection_->transport_error();
+    }
+
+    [[nodiscard]] bool after_retry() const noexcept {
+        return connection_->after_retry();
+    }
+
+    // Only for the server's transport parameters and connection IDs, which no
+    // public API reports.
     [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept {
         return connection_->native_handle();
     }
@@ -710,7 +735,7 @@ private:
         }
         for (auto& [id, stream] : streams_) {
             static_cast<void>(id);
-            stream.response_.reset_error_ = NGHTTP3_H3_REQUEST_REJECTED;
+            stream.response_.reset_error_ = http3_error_code::request_rejected;
             stream.closed_ = true;
         }
         if (connection_->start_http3() != http3_quic_status::accepted) {
@@ -741,7 +766,7 @@ private:
     }
 
     [[nodiscard]] ngtcp2_path path() noexcept {
-        return path(local_);
+        return path(quic_local_);
     }
 
     [[nodiscard]] std::pmr::string authority() const {
@@ -761,14 +786,14 @@ private:
         if (!connection_->closed()) {
             return std::pmr::string("timed out", ruvia::process_resource());
         }
-        const auto error = connection_->connection_error();
-        if (error) {
-            return "connection closed with error " + std::pmr::string(std::to_string(*error), ruvia::process_resource());
+        if (const auto error = connection_->application_error()) {
+            return "connection closed with HTTP/3 error " +
+                   std::pmr::string(std::to_string(static_cast<std::uint64_t>(*error)), ruvia::process_resource());
         }
-        const auto* remote = ngtcp2_conn_get_ccerr2(connection_->native_handle());
-        return remote == nullptr ? std::pmr::string("connection closed", ruvia::process_resource())
-                                 : "connection closed (QUIC type " + std::pmr::string(std::to_string(remote->type), ruvia::process_resource()) +
-                                       ", error " + std::pmr::string(std::to_string(remote->error_code), ruvia::process_resource()) + ")";
+        if (const auto error = connection_->transport_error()) {
+            return "connection closed with QUIC error " + std::pmr::string(std::to_string(*error), ruvia::process_resource());
+        }
+        return std::pmr::string("connection closed", ruvia::process_resource());
     }
 
     template <typename predicate_type>
@@ -808,7 +833,7 @@ private:
             (void)peer_settings();
         }
         const auto stream_id = open_stream(false);
-        if (connection_->http3().submit_request_head(stream_id, request) != http3_status::accepted) {
+        if (connection_->http3().submit_request_head(stream_id, request) != http3_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 tunnel request was not accepted");
         }
         flush();
@@ -831,7 +856,7 @@ private:
             .target_ = request_path,
             .headers_ = fields,
             .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
-        if (connection_->http3().submit_request_head(stream_id, head) != http3_status::accepted) {
+        if (connection_->http3().submit_request_head(stream_id, head) != http3_submit_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the request head");
         }
         if (!body.empty()) {
@@ -845,11 +870,11 @@ private:
         auto& codec = connection_->http3();
         while (!body.empty()) {
             const auto submitted = codec.submit_data(stream_id, body);
-            if (submitted.status_ == http3_status::accepted) {
-                body = body.subspan(submitted.accepted_bytes_);
+            body = body.subspan(submitted.consumed_bytes_);
+            if (submitted.status_ == http3_data_submit_status::complete || submitted.consumed_bytes_ != 0) {
                 continue;
             }
-            if (submitted.status_ != http3_status::would_block) {
+            if (submitted.status_ != http3_data_submit_status::backpressured) {
                 // The server stopped the upload (STOP_SENDING or a reset);
                 // its response or reset is still awaited.
                 return;
@@ -864,7 +889,7 @@ private:
                 return;
             }
         }
-        if (codec.finish_stream(stream_id) != http3_status::accepted && !response_complete(stream)) {
+        if (codec.finish_stream(stream_id) != http3_finish_status::accepted && !response_complete(stream)) {
             throw std::runtime_error("HTTP/3 test client cannot finish the request body");
         }
     }
@@ -907,7 +932,7 @@ private:
     }
 
     void receive_available() {
-        receive_available(socket_, local_);
+        receive_available(socket_, quic_local_);
         if (migration_socket_) {
             receive_available(*migration_socket_, migration_local_);
         }
@@ -968,17 +993,13 @@ private:
     }
 
     void apply(http3_event& event) {
-        if (const auto* datagram = std::get_if<http3_datagram_event>(&event)) {
-            if (const auto found = streams_.find(datagram->stream_id_); found != streams_.end()) {
-                found->second.datagrams_.emplace_back(datagram->payload_);
+        if (const auto* datagram = event.datagram()) {
+            if (const auto found = streams_.find(datagram->stream_id()); found != streams_.end()) {
+                found->second.datagrams_.emplace_back(datagram->payload());
             }
-            return;
-        }
-        if (const auto* goaway = std::get_if<http3_goaway_event>(&event)) {
-            goaway_ids_.push_back(goaway->id_);
-            return;
-        }
-        if (auto* data = std::get_if<http3_data_event>(&event)) {
+        } else if (const auto* goaway = event.goaway()) {
+            goaway_ids_.push_back(goaway->id());
+        } else if (auto* data = event.data()) {
             // A released stream's late DATA returns its credit with the event.
             const auto found = streams_.find(data->stream_id());
             if (found == streams_.end()) {
@@ -997,52 +1018,46 @@ private:
                     stream.unread_credit_.emplace(std::move(credit));
                 }
             }
-            return;
-        }
-        if (const auto* interim = std::get_if<http3_informational_head_event>(&event)) {
+        } else if (const auto* interim = event.informational_head()) {
             if (const auto found = streams_.find(interim->stream_id()); found != streams_.end()) {
                 found->second.response_.interim_statuses_.push_back(interim->head().received_status().value());
             }
-            return;
-        }
-        if (const auto* head = std::get_if<http3_response_head_event>(&event)) {
+        } else if (const auto* head = event.response_head()) {
             if (const auto found = streams_.find(head->stream_id()); found != streams_.end()) {
                 auto& stream = found->second;
                 stream.response_.status_ = head->head().status().value();
                 stream.response_.headers_ = copy_fields(head->head().headers());
-                stream.ended_ = stream.ended_ || head->stream_ended();
             }
-            return;
-        }
-        std::visit(
-            [this](const auto& value) {
-                using event_type = std::decay_t<decltype(value)>;
-                if constexpr (std::is_same_v<event_type, http3_headers_event>) {
-                    apply_headers(value);
-                } else if constexpr (std::is_same_v<event_type, http3_stream_end_event>) {
-                    if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
-                        found->second.ended_ = true;
-                    }
-                } else if constexpr (std::is_same_v<event_type, http3_transport_action_event>) {
-                    if (value.action_ == http3_transport_action::stop_sending) {
-                        if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
-                            found->second.response_.stop_sending_error_ = value.application_error_code_;
-                        }
-                    }
-                    // The public event also carries local codec instructions:
-                    // a RESET_STREAM action is not proof of an inbound reset.
-                    // FIN and the actual stream-close event own completion.
-                } else if constexpr (std::is_same_v<event_type, http3_stream_close_event>) {
-                    if (const auto found = streams_.find(value.stream_id_); found != streams_.end()) {
-                        found->second.closed_ = true;
-                        auto& reset_error = found->second.response_.reset_error_;
-                        if (!reset_error) {
-                            reset_error = value.application_error_code_;
-                        }
-                    }
+        } else if (const auto* end = event.message_end()) {
+            if (const auto found = streams_.find(end->stream_id()); found != streams_.end()) {
+                found->second.response_.trailers_ = copy_fields(end->trailers());
+                found->second.ended_ = true;
+            }
+        } else if (const auto* action = event.transport_action()) {
+            // Local actions are codec instructions the connection already
+            // executed, and a peer RESET_STREAM is not completion either:
+            // the message end and the stream close own it.
+            if (action->action() == http3_transport_action::stop_sending &&
+                action->origin() == http3_transport_action_origin::peer) {
+                if (const auto found = streams_.find(action->stream_id()); found != streams_.end()) {
+                    found->second.response_.stop_sending_error_ = action->error();
                 }
-            },
-            event);
+            }
+        } else if (const auto* unprocessed = event.request_unprocessed()) {
+            // No later event names the stream.
+            if (const auto found = streams_.find(unprocessed->stream_id()); found != streams_.end()) {
+                found->second.response_.unprocessed_ = true;
+                found->second.closed_ = true;
+            }
+        } else if (const auto* closed = event.stream_close()) {
+            if (const auto found = streams_.find(closed->stream_id()); found != streams_.end()) {
+                found->second.closed_ = true;
+                auto& reset_error = found->second.response_.reset_error_;
+                if (!reset_error) {
+                    reset_error = closed->error();
+                }
+            }
+        }
     }
 
     [[nodiscard]] static http3_test_fields copy_fields(std::span<const http_header> source) {
@@ -1054,23 +1069,13 @@ private:
         return fields;
     }
 
-    // A client receives only trailer sections as field-section events.
-    void apply_headers(const http3_headers_event& event) {
-        const auto found = streams_.find(event.stream_id_);
-        if (found == streams_.end()) {
-            return;
-        }
-        auto& stream = found->second;
-        stream.response_.trailers_ = copy_fields(event.fields_);
-        if (event.stream_ended_) {
-            stream.ended_ = true;
-        }
-    }
-
     std::chrono::milliseconds timeout_;
     std::pmr::string server_name_{ruvia::process_resource()};
     asio::ip::udp::endpoint server_;
     asio::ip::udp::endpoint local_;
+    // The local address the QUIC connection uses for its path; rebind()
+    // changes only the socket, as a NAT would.
+    asio::ip::udp::endpoint quic_local_;
     asio::io_context io_;
     asio::ip::udp::socket socket_;
     std::optional<asio::ip::udp::socket> migration_socket_;
@@ -1081,7 +1086,7 @@ private:
     http3_quic_datagram output_;
     std::pmr::vector<std::byte> input_{ruvia::process_resource()};
     std::pmr::map<std::int64_t, stream_state> streams_{ruvia::process_resource()};
-    std::pmr::vector<std::int64_t> goaway_ids_{ruvia::process_resource()};
+    std::pmr::vector<std::optional<std::int64_t>> goaway_ids_{ruvia::process_resource()};
     bool early_attempted_{false};
     bool early_rejected_{false};
     bool early_rejection_pending_{false};

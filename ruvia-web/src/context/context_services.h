@@ -10,6 +10,7 @@
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
@@ -87,8 +88,12 @@ struct context_connection_services final {
     const worker_state_registry* router_states_{};
 };
 
+// The code request_stream::reset() chose; monostate selects the protocol's
+// cancellation code (HTTP/2 CANCEL, H3_REQUEST_CANCELLED).
+using request_reset_code = std::variant<std::monostate, http2_error_code, http3_error_code>;
+
 struct request_stream_control final {
-    callback_ref<void(std::optional<std::uint64_t>)> reset_;
+    callback_ref<void(request_reset_code)> reset_;
     bool reset_requested_{false};
 };
 
@@ -231,7 +236,7 @@ public:
         const auto* control = request_services_.stream_control_;
         return control != nullptr && control->reset_requested_;
     }
-    void reset_request(std::optional<std::uint64_t> error) const {
+    void reset_request(request_reset_code error) const {
         if (auto* control = request_services_.stream_control_) {
             if (!control->reset_requested_) {
                 control->reset_requested_ = true;

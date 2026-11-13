@@ -135,10 +135,10 @@ private:
     void process_events() noexcept;
     void drain_events();
     void start_application();
-    void on_headers(http3_headers_event& event);
-    void on_request_head(http3_headers_event& event);
+    void on_request_head(http3_request_head_event& event);
     void on_data(http3_data_event& event);
-    void on_datagram(http3_datagram_event& event);
+    void on_datagram(const http3_datagram_event& event);
+    void on_message_end(const http3_message_end_event& event);
     void on_stream_end(std::int64_t stream_id);
     void on_stream_abort(std::int64_t stream_id) noexcept;
     void on_stream_close(const http3_stream_close_event& event) noexcept;

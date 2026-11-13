@@ -257,7 +257,6 @@ private:
     // A router's WebSocket route reuses its frozen endpoint.
     [[nodiscard]] task<websocket_accept_result> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
     void require_unselected_response() const;
-    void reset_impl(std::optional<std::uint64_t> error);
 
     context& context_;
     response_stream_writer& response_;

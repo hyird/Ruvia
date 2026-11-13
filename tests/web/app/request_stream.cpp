@@ -1352,7 +1352,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
                         reset_requested = true;
 #if defined(RUVIA_ENABLE_HTTP2)
                         if (target.version_ == ruvia::http_protocol_version::http2) {
-                            EXPECT_THROW(pending->reset(static_cast<ruvia::http3_error_code>(0x10c)), std::invalid_argument);
+                            EXPECT_THROW(pending->reset(ruvia::http3_error_code::request_cancelled), std::invalid_argument);
                             pending->reset(ruvia::http2_error_code::internal_error);
                         }
 #endif

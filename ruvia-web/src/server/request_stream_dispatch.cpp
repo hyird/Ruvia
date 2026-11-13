@@ -158,26 +158,22 @@ request_body_state request_stream::body_state() const noexcept {
     return detail::context_access::services(context_).body_state();
 }
 
-void request_stream::reset_impl(std::optional<std::uint64_t> error) {
-    detail::context_access::services(context_).reset_request(error);
-}
-
 void request_stream::reset() {
-    reset_impl(std::nullopt);
+    detail::context_access::services(context_).reset_request({});
 }
 
 void request_stream::reset(http2_error_code error) {
     if (request().protocol_version() != http_protocol_version::http2) {
         throw std::invalid_argument("HTTP/2 reset code requires HTTP/2");
     }
-    reset_impl(static_cast<std::uint32_t>(error));
+    detail::context_access::services(context_).reset_request(error);
 }
 
 void request_stream::reset(http3_error_code error) {
     if (request().protocol_version() != http_protocol_version::http3) {
         throw std::invalid_argument("HTTP/3 reset code requires HTTP/3");
     }
-    reset_impl(static_cast<std::uint64_t>(error));
+    detail::context_access::services(context_).reset_request(error);
 }
 
 body_reader& request_stream::body() & {

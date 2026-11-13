@@ -1166,7 +1166,7 @@ void http2_connection::abandon_stream_lease_checked(std::uint32_t stream_id) {
     release_stream_lease(stream_id);
 }
 
-void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept {
+void http2_connection::return_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept {
     try {
         (void)release_received_data(stream_id, bytes);
         retry_deferred_stream_lease(stream_id);
@@ -1174,22 +1174,6 @@ void http2_connection::abandon_received_data(std::uint32_t stream_id, std::uint3
         leases_.defer_credit(stream_id, bytes);
     }
     flush_output();
-}
-
-bool http2_connection::acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes) {
-    bool released = false;
-    try {
-        released = release_received_data(stream_id, bytes);
-    } catch (...) {
-        leases_.defer_credit(stream_id, bytes);
-        throw;
-    }
-    if (!released) {
-        return false;
-    }
-    retry_deferred_stream_lease(stream_id);
-    flush_session();
-    return true;
 }
 
 void http2_connection::abandon_stream_lease(std::uint32_t stream_id) noexcept {

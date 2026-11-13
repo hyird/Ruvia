@@ -117,7 +117,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
                         request_lease.emplace(std::move(*request));
                     } else if (auto* data = event->tunnel_data()) {
                         websocket_input.append(data->bytes());
-                        (void)connection.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                         while (auto ws_event = websocket->next_event()) {
                             if (auto* message = ws_event->message()) {
                                 ++messages;
@@ -269,7 +269,7 @@ void exercise_closing_peer(closing_peer behavior) {
                         websocket.emplace(websocket_input);
                     } else if (auto* data = event->tunnel_data()) {
                         websocket_input.append(data->bytes());
-                        (void)connection.acknowledge(data->take_credit());
+                        (void)data->take_credit();
                         while (auto frame = websocket->next_event()) {
                             if (const auto* close = frame->close()) {
                                 received_close = true;

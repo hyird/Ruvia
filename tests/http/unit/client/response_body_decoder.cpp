@@ -3,13 +3,13 @@
 #include <array>
 #include <memory_resource>
 #include <new>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/http1_client_response_body_decoder.h"
-#include "ruvia/http/http_response_server.h"
 
 #include "content_decoding_fixture.h"
 #include "failing_memory_resource.h"
@@ -18,6 +18,19 @@
 #include "stl_allocation_fixture.h"
 
 using namespace ruvia::test;
+
+namespace {
+
+// Published trailer fields as "name=value;" in received order.
+std::pmr::string rendered(std::span<const ruvia::http_header> fields) {
+    std::pmr::string text;
+    for (const auto& field : fields) {
+        text.append(field.name()).append("=").append(field.value()).append(";");
+    }
+    return text;
+}
+
+}  // namespace
 
 TEST(Ruvia, http1_response_body_decoder_fixed_length_preserves_tail_and_eof) {
     const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nContent-Length: 3");
@@ -92,7 +105,7 @@ TEST(Ruvia, http1_response_body_decoder_chunked_trailers_and_tail) {
     EXPECT_EQ(body.output()->bytes(), "abc");
     auto trailer = decoder.decode("0\r\nX-Test: yes\r\n\r\nTAIL", scratch);
     EXPECT_TRUE(trailer.trailers() != nullptr);
-    EXPECT_EQ(trailer.trailers()->bytes(), "X-Test: yes");
+    EXPECT_EQ(rendered(trailer.trailers()->fields()), "x-test=yes;");
     EXPECT_EQ(trailer.consumed_bytes(), std::size_t{18});
     auto complete_value = decoder.decode("TAIL", scratch);
     EXPECT_TRUE(complete_value.complete() != nullptr);
@@ -107,27 +120,52 @@ TEST(Ruvia, http1_response_body_decoder_unfolds_obs_fold_in_trailers) {
     counting_memory_resource resource;
     {
         ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
-        // Debug STL 的构造期元数据不计入 trailer 展开本身的分配。
         const auto allocations_before = resource.allocation_count();
         std::array<char, 8> scratch{};
         constexpr std::string_view wire = "0\r\nX-T: a\r\n \t b\r\nX-U: c\r\n\r\nTAIL";
         const auto trailer = decoder.decode(wire, scratch);
         EXPECT_TRUE(trailer.trailers() != nullptr);
         if (const auto* trailers = trailer.trailers()) {
-            EXPECT_EQ(trailers->bytes(), "X-T: a b\r\nX-U: c");
+            EXPECT_EQ(rendered(trailers->fields()), "x-t=a b;x-u=c;");
             EXPECT_EQ(trailers->consumed_bytes(), wire.size() - 4);
-            std::pmr::string visited;
-            EXPECT_TRUE(ruvia::visit_http_response_trailers(trailers->bytes(), [&](std::string_view name, std::string_view value) {
-                visited.append(name).append("=").append(value).append(";");
-                return true;
-            }));
-            EXPECT_EQ(visited, "X-T=a b;X-U=c;");
         }
+        // The decoder owns the published fields in its resource.
+        EXPECT_TRUE(resource.allocation_count() > allocations_before);
         const auto complete_value = decoder.decode("TAIL", scratch);
         EXPECT_TRUE(complete_value.complete() != nullptr);
-        EXPECT_EQ(resource.allocation_count(), allocations_before + 1);
     }
     EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+}
+
+// RFC 9110 section 6.5.1 and RFC 9112 section 7.1.2: fields a server may not
+// send as trailers are discarded rather than published, like the HTTP/2 and
+// HTTP/3 clients do; a section without kept fields allocates nothing.
+TEST(Ruvia, http1_response_body_decoder_discards_fields_not_permitted_in_response_trailers) {
+    const auto head = parse_head("GET", "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked");
+    std::array<char, 8> scratch{};
+    for (const auto& [wire, expected] : std::array{
+             std::pair<std::string_view, std::string_view>{
+                 "0\r\nContent-Type: text/plain\r\nX-Sum: 1\r\nSet-Cookie: a=b\r\nAccept-Ranges: bytes\r\n\r\n",
+                 "x-sum=1;accept-ranges=bytes;"},
+             std::pair<std::string_view, std::string_view>{"0\r\nContent-Length: 1\r\nDate: x\r\n\r\n", ""},
+             std::pair<std::string_view, std::string_view>{"0\r\n\r\n", ""},
+         }) {
+        counting_memory_resource resource;
+        {
+            ruvia::http1_client_response_body_decoder decoder(head.plan(), &resource);
+            const auto allocations_before = resource.allocation_count();
+            const auto trailer = decoder.decode(wire, scratch);
+            EXPECT_TRUE(trailer.trailers() != nullptr);
+            if (const auto* trailers = trailer.trailers()) {
+                EXPECT_EQ(rendered(trailers->fields()), expected);
+                EXPECT_EQ(trailers->consumed_bytes(), wire.size());
+            }
+            if (expected.empty()) {
+                EXPECT_EQ(resource.allocation_count(), allocations_before);
+            }
+        }
+        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
+    }
 }
 
 TEST(Ruvia, http1_response_body_decoder_close_delimited_completes_only_at_eof) {
@@ -573,7 +611,8 @@ TEST(Ruvia, http1_response_body_decoder_handles_chunk_extension_and_trailer_over
             saw_body = result_value.output()->bytes() == "z";
         }
         if (result_value.trailers()) {
-            saw_trailers = result_value.trailers()->bytes().size() > 9000;
+            const auto fields = result_value.trailers()->fields();
+            saw_trailers = fields.size() == 1 && fields[0].value().size() == 9000;
         }
         wire.erase(0, result_value.consumed_bytes());
         if (saw_trailers) {
@@ -600,7 +639,7 @@ TEST(Ruvia, http1_response_body_decoder_fragmented_chunk_and_205_empty_chunk_com
     auto trailers = decoder.decode("0\r\n\r\nTAIL", scratch);
     EXPECT_TRUE(trailers.trailers() != nullptr);
     EXPECT_EQ(trailers.consumed_bytes(), std::size_t{5});
-    EXPECT_EQ(trailers.trailers()->bytes(), "");
+    EXPECT_TRUE(trailers.trailers()->fields().empty());
     const auto complete_value = decoder.decode("TAIL", scratch);
     EXPECT_TRUE(complete_value.complete() != nullptr);
 
@@ -609,7 +648,7 @@ TEST(Ruvia, http1_response_body_decoder_fragmented_chunk_and_205_empty_chunk_com
         reset_head.plan(), std::pmr::get_default_resource());
     auto empty_chunk = reset.decode("0\r\n\r\nTAIL", scratch);
     EXPECT_TRUE(empty_chunk.trailers() != nullptr);
-    EXPECT_TRUE(empty_chunk.trailers()->bytes().empty());
+    EXPECT_TRUE(empty_chunk.trailers()->fields().empty());
     const auto reset_complete = reset.decode("TAIL", scratch);
     EXPECT_TRUE(reset_complete.complete() != nullptr);
 }
@@ -713,7 +752,7 @@ TEST(Ruvia, http1_response_body_decoder_drains_pending_transfer_output_without_w
 
 TEST(Ruvia, http1_response_role_chunk_decoder_preserves_typed_views_and_wire_prefix) {
     constexpr std::string_view wire = "1\r\nx\r\n0\r\nAccept-Ranges: bytes\r\n\r\nNEXT";
-    ruvia::http1_chunked_body_decoder decoder;
+    ruvia::http1_chunked_body_decoder decoder({.trailer_message_ = ruvia::http1_trailer_message::response});
     bool zero_budget_rejected = false;
     try {
         (void)decoder.decode(wire, 0);
@@ -732,7 +771,7 @@ TEST(Ruvia, http1_response_role_chunk_decoder_preserves_typed_views_and_wire_pre
     const auto terminal = decoder.decode(pending, 1);
     EXPECT_TRUE(terminal.complete() != nullptr);
     if (const auto* complete = terminal.complete()) {
-        EXPECT_EQ(complete->trailers(), "Accept-Ranges: bytes");
+        EXPECT_EQ(rendered(complete->trailers()), "accept-ranges=bytes;");
     }
     pending.remove_prefix(terminal.consumed_bytes());
     EXPECT_EQ(pending, "NEXT");

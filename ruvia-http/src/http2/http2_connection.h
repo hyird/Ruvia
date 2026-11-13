@@ -940,11 +940,10 @@ public:
         http_request_field_source source = http_request_field_source::generated);
 
     // A DATA event borrows bytes from the accepted input and retains the matching
-    // receive-window debt; acknowledging it hands the bytes to
-    // nghttp2_session_consume(). False when the stream or its debt is gone.
-    [[nodiscard]] bool acknowledge_received_data(std::uint32_t stream_id, std::uint32_t bytes);
-    // Destruction path of an unacknowledged credit: never throws.
-    void abandon_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept;
+    // receive-window debt; destroying its credit hands the bytes to
+    // nghttp2_session_consume(). A no-op once the stream or its debt is gone;
+    // a failed release is deferred to the lease ledger. Never throws.
+    void return_received_data(std::uint32_t stream_id, std::uint32_t bytes) noexcept;
     [[nodiscard]] http2_request_content_release_status release_request_content(
         std::uint32_t stream_id) noexcept;
     [[nodiscard]] std::size_t pending_data_output_bytes(std::uint32_t stream_id) const noexcept;

@@ -405,26 +405,6 @@ TEST(Ruvia, http2_public_escaped_events_remain_usable_after_move_assignment) {
     credit.reset();
 }
 
-TEST(Ruvia, http2_public_client_terminal_event_preserves_unacknowledged_data_credit) {
-    std::pmr::monotonic_buffer_resource resource;
-    auto client = prepared_client(&resource);
-    const auto wire = client_response_wire(&resource, "x");
-    EXPECT_TRUE(client.feed(wire) == ruvia::http2_feed_result::accepted);
-
-    const auto head = client.next_event();
-    auto chunk = client.next_event();
-    auto* body = chunk ? chunk->message_body_chunk() : nullptr;
-    EXPECT_TRUE(head && head->response_head() != nullptr);
-    EXPECT_TRUE(body != nullptr && body->bytes() == "x");
-    auto credit = body->take_credit();
-
-    const auto end = client.next_event();
-    EXPECT_TRUE(end && end->message_end() != nullptr);
-    EXPECT_TRUE(client.acknowledge(std::move(credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)client.acknowledge(std::move(credit)); }));
-}
-
 TEST(Ruvia, http2_public_dropped_data_credit_returns_debt_and_releases_closed_stream) {
     std::pmr::monotonic_buffer_resource resource;
     auto client = prepared_client(&resource);
@@ -460,8 +440,10 @@ TEST(Ruvia, http2_public_client_reset_preserves_outstanding_data_credit) {
 
     EXPECT_TRUE(client.submit_reset(1, ruvia::http2_error_code::cancel) ==
                 ruvia::http2_submit_status::accepted);
-    EXPECT_TRUE(client.acknowledge(std::move(credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    EXPECT_TRUE(credit.valid());
+    (void)ruvia::http2_received_data_credit(std::move(credit));
+    EXPECT_TRUE(!credit.valid());
+    EXPECT_TRUE(!client.connection_error());
 }
 
 TEST(Ruvia, http2_public_peer_reset_preserves_outstanding_data_credit) {
@@ -481,8 +463,9 @@ TEST(Ruvia, http2_public_peer_reset_preserves_outstanding_data_credit) {
     const auto closed = client.next_event();
     EXPECT_TRUE(closed && closed->stream_closed() != nullptr);
 
-    EXPECT_TRUE(client.acknowledge(std::move(credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    EXPECT_TRUE(credit.valid());
+    (void)ruvia::http2_received_data_credit(std::move(credit));
+    EXPECT_TRUE(!client.connection_error());
 }
 
 // RFC 9113 section 8.7: REFUSED_STREAM means the server did not process the
@@ -598,8 +581,10 @@ TEST(Ruvia, http2_public_server_release_preserves_outstanding_data_credit) {
     EXPECT_TRUE(submit_buffered_response(server, 1, response) == ruvia::http2_submit_status::accepted);
     EXPECT_TRUE(server.release(std::move(*request_head)) ==
                 ruvia::http2_server_request_release_status::released);
-    EXPECT_TRUE(server.acknowledge(std::move(credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    // The outstanding credit keeps the finished stream until it is returned.
+    EXPECT_TRUE(server.stream_receive_status(1) == ruvia::http2_stream_receive_status::ended);
+    (void)ruvia::http2_received_data_credit(std::move(credit));
+    EXPECT_TRUE(server.stream_receive_status(1) == ruvia::http2_stream_receive_status::closed);
 }
 
 TEST(Ruvia, http2_public_send_window_observation_ends_with_protocol_closure) {
@@ -732,8 +717,7 @@ TEST(Ruvia, http2_public_send_window_observation_excludes_reset_streams_with_cre
         EXPECT_EQ(server.pending_data_output_bytes(1), std::size_t{0});
         EXPECT_TRUE(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
         EXPECT_TRUE(!server.send_window_state(1));
-        EXPECT_TRUE(server.acknowledge(std::move(credit)) ==
-                    ruvia::http2_received_data_acknowledge_status::acknowledged);
+        (void)ruvia::http2_received_data_credit(std::move(credit));
         EXPECT_TRUE(!server.send_window_state(1));
     }
 }
@@ -1090,8 +1074,7 @@ TEST(Ruvia, http2_public_transformed_coding_ows_preserves_response_framing) {
             EXPECT_TRUE(chunk != nullptr);
             if (chunk != nullptr) {
                 EXPECT_EQ(chunk->bytes(), encoded);
-                auto credit = chunk->take_credit();
-                (void)client.acknowledge(std::move(credit));
+                (void)chunk->take_credit();
             }
             const auto end = client.next_event();
             EXPECT_TRUE(end && end->message_end() && end->message_end()->stream_id() == 1);
@@ -1393,8 +1376,9 @@ TEST(Ruvia, http2_public_dropped_request_preserves_outstanding_data_credit) {
     auto credit = body->take_credit();
 
     request.reset();
-    EXPECT_TRUE(server.acknowledge(std::move(credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    EXPECT_TRUE(credit.valid());
+    (void)ruvia::http2_received_data_credit(std::move(credit));
+    EXPECT_TRUE(!server.connection_error());
 }
 
 TEST(Ruvia, http2_public_dropped_request_event_abandons_its_stream) {
@@ -1472,9 +1456,13 @@ TEST(Ruvia, http2_public_data_credit_endpoint_survives_connection_destruction_wi
     }();
     EXPECT_TRUE(escaped_credit.valid());
 
+    // Destroying the credit returns it only to its own connection state, even
+    // if a new connection reuses the destroyed connection's storage.
     auto other = prepared_client(&resource);
-    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)other.acknowledge(std::move(escaped_credit)); }));
-    EXPECT_TRUE(escaped_credit.valid());
+    (void)ruvia::test::drain_output(other);
+    (void)ruvia::http2_received_data_credit(std::move(escaped_credit));
+    EXPECT_TRUE(!other.wants_write());
+    EXPECT_TRUE(!other.connection_error());
 }
 
 TEST(Ruvia, http2_public_request_views_survive_connection_move_assignment) {
@@ -2142,12 +2130,10 @@ TEST(Ruvia, http2_public_failed_connection_releases_request_and_data_credit_with
             } else {
                 EXPECT_TRUE(server.submit_reset(1, ruvia::http2_error_code::cancel) == ruvia::http2_submit_status::accepted);
             }
-            EXPECT_TRUE(server.acknowledge(std::move(*credit)) ==
-                        ruvia::http2_received_data_acknowledge_status::acknowledged);
+            credit.reset();
             if (!release_first) {
                 EXPECT_TRUE(server.release(std::move(*head)) == ruvia::http2_server_request_release_status::released);
             }
-            EXPECT_TRUE(!credit->valid());
             EXPECT_TRUE(server.stream_aborted(1));
             EXPECT_TRUE(!server.wants_write());
             EXPECT_EQ(resource.allocation_attempts(), attempts);
@@ -2301,8 +2287,7 @@ TEST(Ruvia, http2_public_informational_metadata_does_not_frame_or_leak_into_fina
             if (chunk != nullptr) {
                 EXPECT_EQ(chunk->stream_id(), stream_id);
                 EXPECT_EQ(chunk->bytes(), expected);
-                auto credit = chunk->take_credit();
-                (void)client.acknowledge(std::move(credit));
+                (void)chunk->take_credit();
             }
             const auto end = client.next_event();
             EXPECT_TRUE(end && end->message_end() && end->message_end()->stream_id() == stream_id);
@@ -2427,7 +2412,7 @@ TEST(Ruvia, http2_public_client_discards_response_trailers_not_permitted_as_trai
         std::size_t trailers = 1;
         while (auto event = client.next_event()) {
             if (auto* chunk = event->message_body_chunk()) {
-                (void)client.acknowledge(chunk->take_credit());
+                (void)chunk->take_credit();
             } else if (const auto* end = event->message_end()) {
                 ++ends;
                 trailers = end->trailers().size();
@@ -2847,8 +2832,7 @@ TEST(Ruvia, http2_public_data_credit_merge_is_linear) {
     auto end = client.next_event();
     EXPECT_TRUE(end && end->message_end() != nullptr);
     EXPECT_TRUE(!client.wants_write());
-    EXPECT_TRUE(client.acknowledge(std::move(first_credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    (void)ruvia::http2_received_data_credit(std::move(first_credit));
     EXPECT_TRUE(client.submit_reset(1, ruvia::http2_error_code::cancel) ==
                 ruvia::http2_submit_status::closed);
 }
@@ -2876,10 +2860,10 @@ TEST(Ruvia, http2_public_data_credit_merge_rejects_different_connection_unchange
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)first_credit.merge(std::move(second_credit)); }));
     EXPECT_TRUE(first_credit.valid());
     EXPECT_TRUE(second_credit.valid());
-    EXPECT_TRUE(first_client.acknowledge(std::move(first_credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
-    EXPECT_TRUE(second_client.acknowledge(std::move(second_credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    (void)ruvia::http2_received_data_credit(std::move(first_credit));
+    (void)ruvia::http2_received_data_credit(std::move(second_credit));
+    EXPECT_TRUE(!first_client.connection_error());
+    EXPECT_TRUE(!second_client.connection_error());
 }
 
 TEST(Ruvia, http2_public_data_credit_merge_rejects_different_stream_unchanged) {
@@ -2907,10 +2891,9 @@ TEST(Ruvia, http2_public_data_credit_merge_rejects_different_stream_unchanged) {
     EXPECT_TRUE(ruvia::test::throws_on([&] { first_credit.merge(std::move(second_credit)); }));
     EXPECT_TRUE(first_credit.valid());
     EXPECT_TRUE(second_credit.valid());
-    EXPECT_TRUE(client.acknowledge(std::move(first_credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
-    EXPECT_TRUE(client.acknowledge(std::move(second_credit)) ==
-                ruvia::http2_received_data_acknowledge_status::acknowledged);
+    (void)ruvia::http2_received_data_credit(std::move(first_credit));
+    (void)ruvia::http2_received_data_credit(std::move(second_credit));
+    EXPECT_TRUE(!client.connection_error());
 }
 
 TEST(Ruvia, http2_public_server_message_end_owns_request_trailers) {
@@ -3029,8 +3012,7 @@ TEST(Ruvia, http2_public_trailer_declaration_does_not_authorize_forbidden_actual
             } else if (auto* chunk = event->message_body_chunk()) {
                 EXPECT_TRUE(chunk->stream_id() == 1);
                 body.append(chunk->bytes());
-                auto credit = chunk->take_credit();
-                (void)server.acknowledge(std::move(credit));
+                (void)chunk->take_credit();
             } else if (const auto* end = event->message_end()) {
                 if (end->stream_id() == 1) {
                     ++first_ends;
@@ -3164,8 +3146,7 @@ TEST(Ruvia, http2_public_semantically_invalid_expectations_preserve_upload_bound
             if (auto* chunk = content->message_body_chunk()) {
                 EXPECT_EQ(chunk->stream_id(), std::uint32_t{1});
                 body.append(chunk->bytes());
-                EXPECT_TRUE(server.acknowledge(chunk->take_credit()) ==
-                            ruvia::http2_received_data_acknowledge_status::acknowledged);
+                (void)chunk->take_credit();
             } else {
                 const auto* end = content->message_end();
                 EXPECT_TRUE(end != nullptr);
@@ -4049,8 +4030,7 @@ TEST(Ruvia, http2_public_options_without_content_type_preserves_body_and_followi
                 auto* chunk = data ? data->message_body_chunk() : nullptr;
                 EXPECT_TRUE(chunk && chunk->stream_id() == 1 && chunk->bytes() == body);
                 if (chunk) {
-                    auto credit = chunk->take_credit();
-                    (void)server.acknowledge(std::move(credit));
+                    (void)chunk->take_credit();
                 }
             }
             const auto end = server.next_event();
@@ -4132,8 +4112,7 @@ TEST(Ruvia, http2_public_opaque_metadata_preserves_request_and_response_bodies) 
                 EXPECT_TRUE(chunk != nullptr);
                 if (chunk != nullptr) {
                     EXPECT_EQ(chunk->bytes(), "abc");
-                    auto credit = chunk->take_credit();
-                    (void)connection.acknowledge(std::move(credit));
+                    (void)chunk->take_credit();
                 }
                 const auto end = connection.next_event();
                 EXPECT_TRUE(end && end->message_end() && end->message_end()->stream_id() == 1);

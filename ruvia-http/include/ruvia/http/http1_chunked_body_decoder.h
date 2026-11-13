@@ -2,12 +2,16 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory_resource>
+#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_status.h"
@@ -57,19 +61,22 @@ public:
     [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
         return consumed_bytes_;
     }
-    [[nodiscard]] constexpr std::string_view trailers() const& noexcept {
+    // The received trailer section, empty when there was none. The fields
+    // borrow the decoder that produced this result (see
+    // http1_chunked_body_decoder).
+    [[nodiscard]] constexpr std::span<const http_header> trailers() const& noexcept {
         return trailers_;
     }
-    std::string_view trailers() const&& = delete;
+    std::span<const http_header> trailers() const&& = delete;
 
 private:
     friend class http1_chunk_decode_result;
     explicit constexpr http1_chunk_decode_complete_view(
-        std::size_t consumed_bytes, std::string_view trailers) noexcept
+        std::size_t consumed_bytes, std::span<const http_header> trailers) noexcept
         : consumed_bytes_(consumed_bytes),
           trailers_(trailers) {}
     std::size_t consumed_bytes_;
-    std::string_view trailers_;
+    std::span<const http_header> trailers_;
 };
 
 class http1_chunk_decode_failure final {
@@ -124,7 +131,7 @@ private:
     [[nodiscard]] static http1_chunk_decode_result make_body_chunk(
         std::size_t consumed_bytes, std::string_view bytes) noexcept;
     [[nodiscard]] static http1_chunk_decode_result make_complete(
-        std::size_t consumed_bytes, std::string_view trailers = {}) noexcept;
+        std::size_t consumed_bytes, std::span<const http_header> trailers = {}) noexcept;
     [[nodiscard]] static http1_chunk_decode_result make_failure(
         std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     value_type value_;
@@ -134,21 +141,32 @@ private:
 // server may reject a request carrying it (the default); a user agent must
 // replace each obs-fold in a response with SP before interpreting the value,
 // so a response decoder accepts it. An accepted fold is validated, against the
-// field syntax and the section budget, as its HTTP unfolding: the obs-fold and
-// adjacent OWS become one SP. The published trailer block keeps the received
-// bytes; its consumer unfolds them (http1_client_response_body_decoder does).
+// field syntax and the section budget, and published as its HTTP unfolding:
+// the obs-fold and adjacent OWS become one SP.
 enum class http1_trailer_obs_fold : std::uint8_t {
     reject,
     accept,
 };
 
+// The message whose trailer section a decoder receives. A received field its
+// sender was not permitted to generate as a trailer of that message (RFC 9110
+// section 6.5.1) is not a framing error; it is discarded rather than published
+// (RFC 9112 section 7.1.2).
+enum class http1_trailer_message : std::uint8_t {
+    request,
+    response,
+};
+
 struct http1_chunked_body_decoder_config final {
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
     http1_trailer_obs_fold obs_fold_{http1_trailer_obs_fold::reject};
+    http1_trailer_message trailer_message_{http1_trailer_message::request};
+    // Owns published trailer fields; nullptr selects the default resource.
+    std::pmr::memory_resource* resource_{nullptr};
 };
 
-// Incremental sans-I/O HTTP/1 chunk framing decoder. Payload and trailer views
-// borrow the supplied input and remain valid only until it is modified;
+// Incremental sans-I/O HTTP/1 chunk framing decoder. Payload views borrow the
+// supplied input and remain valid only until it is modified;
 // incomplete framing stays unconsumed for the caller to retain. The body limit
 // counts chunk payload bytes, which may still be transfer-encoded.
 // RFC 9112 places no limit on the chunk count, and a zero-size chunk ends the
@@ -164,10 +182,13 @@ struct http1_chunked_body_decoder_config final {
 // Trailer sections must also fit the http_field_section_budget byte rule
 // (name.size() + value.size() + 4 per field, plus 2 for the terminating empty
 // line; see http_trailer_section_budget()). obs-fold in the trailer section
-// follows http1_chunked_body_decoder_config::obs_fold_. The complete view
-// publishes the raw trailer block; fields a sender was not permitted to generate as trailers are
-// not framing errors and are discarded by the block's consumers
-// (http_request_trailers::append_http1, visit_http_response_trailers).
+// follows http1_chunked_body_decoder_config::obs_fold_, and fields the sender
+// was not permitted to generate follow trailer_message_.
+// The complete view publishes the remaining fields in received order, names
+// lowercase and values without surrounding OWS. The decoder owns them: storage
+// is allocated from the configured resource only for a section that keeps a
+// field, and the view stays valid until the next decode() call, or until the
+// decoder is moved from, assigned to or destroyed.
 class http1_chunked_body_decoder final {
 public:
     explicit http1_chunked_body_decoder(http1_chunked_body_decoder_config config = {});
@@ -175,7 +196,8 @@ public:
     http1_chunked_body_decoder(const http1_chunked_body_decoder&) = delete;
     http1_chunked_body_decoder& operator=(const http1_chunked_body_decoder&) = delete;
     http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept;
-    http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
+    // Allocates when the two decoders' trailer resources differ.
+    http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&);
 
     [[nodiscard]] http1_chunk_decode_result decode(std::string_view available);
     [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes);
@@ -195,7 +217,7 @@ private:
 
     [[nodiscard]] http1_chunk_decode_result fail(std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept;
     [[nodiscard]] bool consume_delimiter(std::string_view available, std::size_t& cursor) noexcept;
-    [[nodiscard]] bool trailers_valid(std::string_view trailers) const noexcept;
+    [[nodiscard]] bool publish_trailers(std::string_view trailers);
 
     protocol_byte_limit body_limit_;
     http1_trailer_obs_fold obs_fold_;
@@ -209,6 +231,8 @@ private:
     // Charged size-line bytes beyond the shortest hex size; never exceeds
     // max_http_header_bytes.
     std::size_t framing_overhead_bytes_{0};
+    http1_trailer_message trailer_message_;
+    std::pmr::vector<http_header> trailers_;
 };
 
 [[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(

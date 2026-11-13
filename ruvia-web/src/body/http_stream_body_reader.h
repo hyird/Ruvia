@@ -156,7 +156,8 @@ public:
           initial_body_and_pipeline_(initial_body_and_pipeline),
           body_plan_(body_plan),
           body_limit_(body_limit_value),
-          chunk_decoder_(http1_chunked_body_decoder_config{.body_limit_ = body_limit_value}),
+          chunk_decoder_(http1_chunked_body_decoder_config{
+              .body_limit_ = body_limit_value, .resource_ = allocator.resource()}),
           trailers_(allocator.resource()),
           scanner_entry_(scanner_entry),
           interim_output_(interim_output),
@@ -636,7 +637,7 @@ private:
                 co_return ::ruvia::as_bytes(body_chunk->bytes());
             }
             if (const auto* complete = result_value.complete()) {
-                if (trailers_.append_http1(complete->trailers()).has_value()) {
+                if (trailers_.append_received(complete->trailers()).has_value()) {
                     throw std::logic_error("HTTP/1 decoder published invalid request trailers");
                 }
                 co_return std::nullopt;

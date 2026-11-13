@@ -232,7 +232,7 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/http_request.h"` / `"ruvia/http/http_request_trailers.h"` | `class http_request final`、`make_parsed_http_request`、`class http_request_trailers final` | 请求头与请求体零拷贝视图描述符、大小写不敏感首部/Cookie 查找与请求 Trailer 校验收集：收到的 Trailer 段由 HTTP/1 `append_http1()` 与 HTTP/2、HTTP/3 共用的 `append_received()` 吸收，计入全部字段预算并丢弃不得出现在请求 Trailer 中的字段；字段名无论来源均以小写保存 |
+| `"ruvia/http/http_request.h"` / `"ruvia/http/http_request_trailers.h"` | `class http_request final`、`make_parsed_http_request`、`class http_request_trailers final` | 请求头与请求体零拷贝视图描述符、大小写不敏感首部/Cookie 查找与请求 Trailer 校验收集：收到的 Trailer 段统一由 `append_received(std::span<const http_header>)` 吸收（HTTP/1 分块解码器与 HTTP/2、HTTP/3 结束事件产出同一视图），计入全部字段预算并丢弃不得出现在请求 Trailer 中的字段；字段名无论来源均以小写保存 |
 | `"ruvia/http/http_response.h"` / `"ruvia/http/http_interim_response.h"` | `class http_response final`、`class http_response_headers final`、`class http_interim_response_head final`、`plan_buffered_http_response_write` | 最终响应（`200..599`）与临时响应（`1xx`）模型，以及针对 `HEAD` / `204` / `205` / `304` 的响应体写计划。`head_metadata_body()` 将正文替换为描述 HEAD 所选表示的空正文；`has_head_metadata_body()` 查询该状态。显式 `Content-Length` 保留为 GET 表示的长度，缺失时不推断为零；重新设置正文会清除标记 |
 | `"ruvia/http/http_content_coding.h"` / `"ruvia/http/http_content_codec.h"` / `"ruvia/http/http_content_encoder.h"` | `enum class http_content_coding { identity, gzip, deflate, brotli, zstd }`、`parse_http_content_coding_headers`、`request_content_coding`、`encode_http_content`、`decode_http_content`、`class http_content_encode_context final`、`class http_content_codec_error final`、`class http_content_encoder final` | 接收方 `Content-Encoding` 解析，单次缓冲、可复用缓冲上下文与流式增量的 `gzip` / `deflate` / `br` / `zstd` 内容压缩，以及带解压上限保护的解码器 |
 | `"ruvia/http/multipart_parser.h"` | `parse_multipart_boundary`、`parse_multipart_body`、`class multipart_parser final` | 一次性与流式增量（`feed` / `poll`）的 `multipart/form-data` 解析器 |
@@ -277,7 +277,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 - **服务端解析与序列化**：
   - `"ruvia/http/http1_server_request_parser.h"`：`http1_server_request_parse_state::parse_head(buffer, offset, resource)` 解析请求行、首部、连接复用计划（`http1_request_connection_plan`）与请求体分帧计划（`http1_request_body_plan`），经左值访问器 `request()` / `body_plan()` / `connection_plan()` 只读借用（右值重载已删除），或以 `std::move(state).take_request()` / `take_body_plan()` / `take_connection_plan()` 提取（留下默认值，此后只可再次 `parse_head()` 或析构；取走请求即释放其描述符存储）。首行不包含 HTTP-version 词的明文输入（例如 TLS 记录、SSH banner）按非 HTTP 流量静默丢弃，不返回状态行；只有声明了版本号的非法请求行才回 400（RFC 9112 §2.2 的 400 为 SHOULD）。
-  - `"ruvia/http/http1_chunked_body_decoder.h"`：`http1_chunked_body_decoder::decode(available)` 增量解码 `chunked` 请求体与 Trailer。每个 chunk-size 行与 Trailer 区段各自受 `max_http_header_bytes`（64 KiB）约束；此外，同一消息所有 chunk-size 行中超出最短十六进制长度的字节（前导零与 chunk-ext）累计不得超过 `max_http_header_bytes`（RFC 9112 §7.1.1），超限与单行超限同样报告 `framing_limit_exceeded`（请求映射为 `413 chunked_framing_too_large`）。Trailer 中的 obs-fold 由 `http1_chunked_body_decoder_config::obs_fold_` 决定：默认 `reject`（请求，服务端可回 `400`），`accept` 时按展开后的字段校验并原样发布字节，由使用方展开（RFC 9112 §5.2）。
+  - `"ruvia/http/http1_chunked_body_decoder.h"`：`http1_chunked_body_decoder::decode(available)` 增量解码 `chunked` 请求体与 Trailer。每个 chunk-size 行与 Trailer 区段各自受 `max_http_header_bytes`（64 KiB）约束；此外，同一消息所有 chunk-size 行中超出最短十六进制长度的字节（前导零与 chunk-ext）累计不得超过 `max_http_header_bytes`（RFC 9112 §7.1.1），超限与单行超限同样报告 `framing_limit_exceeded`（请求映射为 `413 chunked_framing_too_large`）。Trailer 中的 obs-fold 由 `http1_chunked_body_decoder_config::obs_fold_` 决定：默认 `reject`（请求，服务端可回 `400`），`accept` 时按展开后的字段校验并发布展开值（RFC 9112 §5.2）。完成结果的 `trailers()` 是 `std::span<const http_header>`：字段名小写、值去掉首尾 OWS，按 `trailer_message_`（默认 `request`）丢弃发送方不得生成的 Trailer 字段（RFC 9110 §6.5.1、RFC 9112 §7.1.2）；字段归解码器所有，仅在保留了字段时从 `resource_` 分配，视图有效至下一次 `decode()` 或解码器被移动、赋值、析构。
   - `"ruvia/http/http1_server_semantics.h"` & `"ruvia/http/http1_response_head_plan.h"`：提交最终响应头与流式响应头分帧计划。临时、最终、`CONNECT` 与 `CONNECT-UDP` 响应头违反消息规则或超出头部大小上限时，统一抛出 `"ruvia/http/http1_response_head_error.h"` 的 `http1_response_head_error`（派生自 `std::invalid_argument`），表示应用或运行时缺陷而非对端错误。
   - 响应分帧只由协议 writer 决定（RFC 9112 §6.1、RFC 9113 §8.2.2）：应用在最终响应上设置的 `Transfer-Encoding` 只在值（忽略 ASCII 大小写）恰为单个 `chunked` 时作为分帧提示接受，HTTP/1 与 HTTP/2 采用同一规则。公开响应字段 setter 仍要求规范化字段值，首尾 SP/HTAB 在设置时即以 `std::invalid_argument` 拒绝；writer 的 OWS 去除不放宽此入口契约。HTTP/1 用分帧计划自己的字段替换它（仅分块流写出规范的 `Transfer-Encoding: chunked`；缓冲、HTTP/1.0 关闭定界、HEAD 与 `204` / `205` / `304` 不写出），HTTP/2 直接省略该分帧提示。其他任何值（如 `gzip`、`gzip, chunked`、`identity`、空值或畸形列表）声明了 writer 不会施加的编码，两种协议都拒绝写出该响应：HTTP/1 的 `http1_commit_final_response`（修改响应前）、`append_http1_response_head` 与 HTTP/1 分帧的 `prepare_http_response_stream_head` 抛 `http1_response_head_error`，HTTP/2 的 `submit_response_head` / `submit_streaming_response_head` 返回 `invalid_message`，`http2_frames` 分帧的 `prepare_http_response_stream_head` 抛 `std::invalid_argument`。Web 层在响应头尚未提交时可将此异常转换为独立的 `500` 错误响应，不会把非法编码或应用正文写上线。`Content-Length` 按协议规范化；HTTP/2 仍拒绝 `Connection`、`Upgrade`、`Keep-Alive` 与 `Proxy-Connection`。
   - `"ruvia/http/http_response_head_buffer.h"`：响应头缓冲保留 inline scratch 的两阶段写入能力。`stack_cursor(bound)` 只检查当前剩余空间，不占用独占 reservation；对象须存活且地址不变。`commit_stack(end)` 将 inline 已提交长度设到本对象数组内的端点（允许 one-past 和缩短长度），允许抛出异常：已经 spill 到堆时抛 `std::logic_error`，空指针或其他对象的端点抛 `std::invalid_argument`，拒绝时保留已有内容。失败的 reserve 不会使仍处于 inline 状态的 cursor 失效；堆状态须先 `reset()` 再取得新的 inline cursor。
@@ -287,7 +287,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
   - **响应头缓冲重置**：`reset()` 在释放超限堆存储前提交空 inline 状态，保留释放回调的重入写入。
 - **客户端写出与响应解析**：
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。`http1_client_request_wire_policy::target_form_`（`http1_request_target_form`，缺省 `origin`）选择非 CONNECT 请求行的目标形式：`origin` 写出 origin-form / asterisk-form；`absolute` 用于经正向代理的请求（RFC 9112 §3.2.2），以源站的 `http` / `https` scheme 与 authority（默认端口省略）前缀 origin-form 目标，生成的 `Host` 与之同源（§3.2），`OPTIONS *` 写为空路径的 `scheme://authority`（§3.2.4）。CONNECT 始终经 `prepare_connect()` 写 authority-form，对其设置 `absolute` 或使用未知枚举值返回 `invalid_target_form`。
-  - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。客户端按接收方规则处理响应：首部与 Trailer 中的 obs-fold 均替换为空格（响应体解码器发布的 Trailer 块已展开，仅含折叠时从解码器的 PMR 分配一次）；`000..099` 与 `600..999` 状态码按 `500` 处理，`received_status()` 保留原值；HTTP/1.0 响应携带 `Transfer-Encoding` 时按分帧故障处理：忽略 transfer codings，回退到 `Content-Length` 或关闭定界，并在该响应后关闭连接（RFC 9112 §6.1，HEAD/204/304 同样关闭）；`1xx` 永不终止交换，其 `Connection` 选项不改变连接生命周期，最终响应才决定复用（RFC 9110 §15.2）；`Connection` 仅拒绝点名影响响应处理的字段（`Content-Length`、`Transfer-Encoding`、`Set-Cookie`），请求端接收方另拒绝 `Host`、`Authorization`、`Cookie`、`Origin`。发送方（客户端请求含 `forwarded` 来源、CONNECT-UDP 握手与服务端响应）不得发送点名 `Content-Length`、`Transfer-Encoding`、`Host` 等由协议层管理或面向全部接收方的字段的 `Connection` 选项（RFC 9110 §7.6.1），也不得点名请求来源元数据 `Forwarded`（RFC 7239）、`X-Forwarded-For`、`X-Forwarded-Proto`、`X-Forwarded-Host`：下一跳按逐跳字段移除它们后，路由与客户端地址判定将失去依据（同 Pingora 的受保护集合；伪首部形式的名称不是 token，列表语法已拒绝）。HTTP/1 客户端 writer 对此返回 `invalid_connection`，响应首部写入同样拒绝；`TE`、`Upgrade`、`keep-alive`、`close`、`Proxy-Authorization` 与自定义逐跳字段仍可列出。接收方收到点名这些请求来源字段的 `Connection` 不因此报错。
+  - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。客户端按接收方规则处理响应：首部与 Trailer 中的 obs-fold 均替换为空格（响应体解码器的 `trailers()->fields()` 是已校验、已展开、字段名小写且已丢弃响应 Trailer 禁用字段的 `std::span<const http_header>`，归解码器所有，仅在保留了字段时从其 PMR 分配，有效至下一次 `decode()` / `finish_input()`）；`000..099` 与 `600..999` 状态码按 `500` 处理，`received_status()` 保留原值；HTTP/1.0 响应携带 `Transfer-Encoding` 时按分帧故障处理：忽略 transfer codings，回退到 `Content-Length` 或关闭定界，并在该响应后关闭连接（RFC 9112 §6.1，HEAD/204/304 同样关闭）；`1xx` 永不终止交换，其 `Connection` 选项不改变连接生命周期，最终响应才决定复用（RFC 9110 §15.2）；`Connection` 仅拒绝点名影响响应处理的字段（`Content-Length`、`Transfer-Encoding`、`Set-Cookie`），请求端接收方另拒绝 `Host`、`Authorization`、`Cookie`、`Origin`。发送方（客户端请求含 `forwarded` 来源、CONNECT-UDP 握手与服务端响应）不得发送点名 `Content-Length`、`Transfer-Encoding`、`Host` 等由协议层管理或面向全部接收方的字段的 `Connection` 选项（RFC 9110 §7.6.1），也不得点名请求来源元数据 `Forwarded`（RFC 7239）、`X-Forwarded-For`、`X-Forwarded-Proto`、`X-Forwarded-Host`：下一跳按逐跳字段移除它们后，路由与客户端地址判定将失去依据（同 Pingora 的受保护集合；伪首部形式的名称不是 token，列表语法已拒绝）。HTTP/1 客户端 writer 对此返回 `invalid_connection`，响应首部写入同样拒绝；`TE`、`Upgrade`、`keep-alive`、`close`、`Proxy-Authorization` 与自定义逐跳字段仍可列出。接收方收到点名这些请求来源字段的 `Connection` 不因此报错。
   - `http1_client_response_parser::parse` 在状态行的换行到达时即校验状态行（以裸 LF 结尾报告 `invalid_status_line`，其余错误与完整头部相同），之后任一以裸 LF 结尾的字段行立即报告 `invalid_header`（RFC 9112 §2.2），不必等到空行、64 KiB 上限或读超时，与服务端请求头的提前拒绝一致；非 HTTP 上游（如 SSH banner）因此在首行即失败。
 
 `http1_request_content_writer::chunk` 与 `http_datagram_write_plan` 是对应写入器／会话产出的只读分段快照，不允许默认构造，也不暴露可写的前缀缓冲、长度及正文成员。保留具名计划，通过 `prefix()`、`payload()`（请求块另有 `suffix()`）组成 scatter-gather 写入。`prefix()` 借用计划自身的内联存储，只允许左值调用；计划必须存活且不变，直到传输已消费前缀。`payload()` 仍借用原始输入，其寿命独立于计划，调用方同样须保留输入直到消费完成。复制／移动计划保留独立的内联前缀与原有正文借用，不分配、不复制正文。
@@ -357,7 +357,9 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 
 - **出站首部暂存**：字段条目与 `nghttp2_nv` 描述符向量分别复用不超过 4 KiB 的容量，超限在提交后归还 PMR。
 - **输出窗口 `take_output_batch()`**：部分批次只推进消费游标；在下一次追加或完整尾批存储交接时按摊销条件压缩前缀。
-- **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后，通过析构凭证或调用 `conn.acknowledge(std::move(credit))` 才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
+- **流控凭证 `http2_received_data_credit`**：`message_body_chunk()` 与 `tunnel_data()` 事件携带移动专属的流控凭证；当上层消费完缓冲数据后析构凭证（唯一归还途径），才把这部分字节计入 `nghttp2` 的接收窗口并按需发送连接与流级 `WINDOW_UPDATE`（关闭了 `nghttp2` 的自动窗口更新），实现精确背压。本端通告的 1 MiB 初始流窗口在对端确认本端 `SETTINGS` 后才生效，此前对端只能使用 RFC 默认的 65535 字节（RFC 9113 §6.9.2）；对端按协议先回 `SETTINGS` ACK 再发数据时不受影响。
+- **凭证归属**：凭证携带签发连接，不能经其他连接归还；凭证保活该连接状态，可比 `http2_connection` 门面长寿，所属流已结束时归还为空操作；归还失败时延迟到后续 `feed()` / `next_event()` / 输出排空等调用重试。
+- **Trailer 视图 `http2_message_end_event::trailers()`**：`std::span<const http_header>`，字段名小写；客户端已丢弃响应 Trailer 禁用字段，服务端交给 `http_request_trailers::append_received()`；视图借用事件自身存储，事件移动、销毁或 `take_trailers()` 后失效。
 - **服务端请求租约 `http2_request_head_event`**：持有服务端流请求头的底层内存租约；请求处理完毕后调用 `conn.release(std::move(event))` 归还存储。
 - **初始发送半边**：`http2_request_head_event::snapshot().initial_end_stream_` 保存初始 HEADERS 的 END_STREAM 位，包含 CONNECT；不随后续 DATA、Trailer 或复位改变。
 - **请求视图借用**：`build_request(..., borrowed_text body, ...) const&` 同时借用 head 租约与正文；两者均须覆盖返回请求的使用期。临时拥有型正文与右值 head 在编译期拒绝。
@@ -417,37 +419,62 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 | --- | --- |
 | `block_stream(id)` / `unblock_stream(id)` | QUIC 流信用耗尽／恢复时暂停／恢复发送调度；不提交字节，也不恢复应用正文源 |
 | `output_flushed(id)` | 当前已提交输出是否全部交给传输；不代表网络写完成或对端确认，也不禁止继续提交正文，已移除的流返回 `true` |
-| `shutdown_stream_read(id, error)` | 对端 RESET_STREAM 终止本地接收半边；不关闭发送半边 |
+| `shutdown_stream_read(id, error)` | 对端 RESET_STREAM 终止本地接收半边；不关闭发送半边；`error` 为 `std::optional<http3_error_code>` |
 | `shutdown_stream_write(id, error)` | 对端 STOP_SENDING 终止本地发送半边；不关闭接收半边 |
+| `close_stream(id, receive_error, send_error)` | QUIC 流最终退役，附带终止两个半边的 `http3_error_code`（如有） |
 | `set_max_client_streams_bidi(limit)` | 服务端接收 QUIC 单调递增的累计双向流上限，不是增量或并发流数 |
-| `next_event(local_transport_action)` | 对 RESET_STREAM／STOP_SENDING 事件，仅 `true` 表示须执行的传输命令；`false` 是已应用的对端通知，禁止回显 |
+| `http3_transport_action_event::origin()` | `local` 是须执行的传输命令（`http3_quic_connection` 发布前已执行）；`peer` 是已应用的对端通知，禁止回显 |
 
 - **终止收尾**：`shutdown_stream_*` 的 `std::nullopt` 表示不发布通知的本地终止；两者均不发送 QUIC 帧。最终退役仍由驱动调用 `close_stream()`。
+
+| 结果类型 | 入口 | 取值 |
+| --- | --- | --- |
+| `http3_transport_status` / `http3_transport_result` | `read_stream()`、`read_datagram()`、`peek_output()`、`commit_output()`、`acknowledge_output()`、`block_stream()`、`unblock_stream()`、`shutdown_stream_*()`、`close_stream()`、`bind_control_streams()` | `accepted`、`would_block`、`events_pending`、`closed`、`invalid_state`、`protocol_error`；结果另带 `error_code_`（`protocol_error` 及失败后的 `closed`）与 `credit_bytes_`（`read_stream()` 中核心自行消费、立即归还接收信用的分帧与 QPACK 字节） |
+| `http3_submit_status` | 请求头、临时响应、CONNECT 响应、ORIGIN、PRIORITY_UPDATE、`begin_drain()` / `finish_drain()`、`submit_http3_websocket_client_request()` | `accepted`、`closed`、`invalid_state`、`invalid_message`、`peer_settings_pending`、`peer_capability_unavailable`、`backpressured`（仅 ORIGIN：控制流输出预算已满） |
+| `http3_data_submit_result` | `submit_data()` | `consumed_bytes_` 为已复制前缀；`complete` 全部复制，`backpressured` 只复制了前缀（可为 0），`closed`，`invalid_message`（超出声明长度，未复制） |
+| `http3_finish_status` | `finish_stream()`、`finish_request()`、`finish_response()` | `accepted`、`closed`、`invalid_message`（正文未达声明长度或 Trailer 非法，流保持打开） |
+
+- **错误码**：`http3_error_code` 覆盖 RFC 9114 §8.1 全部 H3 码、RFC 9204 §6 QPACK 码与 RFC 9297 的 `datagram_error`，底层为 `std::uint64_t`；收到的未知或保留码（`0x1f * N + 0x21`）原值保留，按 RFC 9114 §9 视同 `H3_NO_ERROR`。所有 reset、close、事件与 `connection_error()` 都收发该强类型，公开契约不暴露 nghttp3 宏或库错误码。
 
 - **请求构造**：客户端 `submit_request_head()` 分别接受普通、CONNECT 与 extended CONNECT 视图；核心校验目标、字段、期望与对端能力，统一生成伪首部及 Content-Length，凭据始终 never-index。字段节预算按每个名称、值加 32 字节计算，受本地与已知对端限制共同约束。公开 API 不提供原始字段节提交。
 - **请求头结果**：角色、流号或重复提交返回 `invalid_state`，消息无法以 HTTP/3 表示返回 `invalid_message`；extended CONNECT 在对端 SETTINGS（或 0-RTT 记忆值）到达前返回 `peer_settings_pending`，对端未启用时返回 `peer_capability_unavailable`。
 - **WebSocket 客户端**：`submit_http3_websocket_client_request()` 按 RFC 9220 提交 extended CONNECT，与 HTTP/2 的 `submit_http2_websocket_client_request()` 共用同一字段合成，应用首部均以 `borrowed_http_headers` 传入；两者的最终头都由 `validate_extended_connect_websocket_client_response()` 校验。
 - **响应事件**：客户端收到 `http3_informational_head_event` 与 `http3_response_head_event`，与 HTTP/2 同形：`head()` / `take_head()` 交出 `http_client_response_head`，`request_content_signal()` 对带 `Expect: 100-continue` 的请求在首个 100 给出 `continue_value`、在仍等待 100 时到达的最终头给出 `exchange_complete`，`stream_ended()` 表示最终 HEADERS 已结束流。600–999 按 5xx 处理，101 拒绝；保持官方 `nghttp3`，其在应用回调前拒绝 000–099，这是当前实现例外。
-- **正文与 trailer**：核心校验 Content-Length 的实际字节数和终结；客户端 Trailer 以 `http3_headers_event::trailers_` 发布，已验证并丢弃仅违反发送方 trailer 限制的字段；服务端收到的请求 Trailer 交 `http_request_trailers::append_received()` 吸收。客户端以 `finish_request(stream_id, trailers)` 结束请求内容。驱动不再解析响应语法。
+- **正文与 trailer**：核心校验 Content-Length 的实际字节数和终结；对端发送半边正常结束时发布 `http3_message_end_event`（隧道接收方向结束同样如此），`trailers()` 以 `std::span<const http_header>` 借用事件自身存储，无 Trailer 时为空，事件移动、销毁或 `take_trailers()` 后失效。客户端收到的 Trailer 已验证并丢弃仅违反发送方 trailer 限制的字段；服务端收到的请求 Trailer 交 `http_request_trailers::append_received()` 吸收。客户端以 `finish_request(stream_id, trailers)` 结束请求内容。驱动不再解析响应语法。
+- **未处理请求**：客户端对 GOAWAY 标识及以上仍开启的请求流（在 `http3_goaway_event` 之后，按流号升序），以及最终响应头前被 `H3_REQUEST_REJECTED` 重置或停止发送的流，发布 `http3_request_unprocessed_event`（RFC 9114 §4.1.1、§5.2），可在其他连接重试；核心为仍开启的方向排队本地 `H3_REQUEST_CANCELLED` 传输动作，此后不再有事件（含 `http3_stream_close_event`）提及该流。`http3_goaway_event::id()` 对不限定任何流的 shutdown notice 返回 `std::nullopt`。
 - **响应提交与预算**：服务端只通过受检响应头、临时响应和握手入口提交；`available_output_bytes(stream_id)` 是 DATA 剩余容量的唯一权威，终结或关闭流返回零。最终、临时、WebSocket 与 CONNECT 响应共用字段生成规则；临时响应超出字段节上限返回 `invalid_message`，`submit_connect_response_head()` 与 HTTP/2 一样返回提交状态。
 - **流式响应方法**：`submit_streaming_response_head()` 使用该流收到的 `:method`，与 HTTP/2 同形，不由调用方重复传入。
 
 - **流控凭证 `http3_received_data_credit`**：`http3_data_event::take_credit()` 交出与 `http2_received_data_credit` 同形的只移动凭证；同流凭证可 `merge()`，析构时把精确字节数交给 `received_data_credit_sink_`，消费方持有到读完正文为止。凭证比连接长寿时归还为空操作。
 - **凭证去向**：`http3_quic_connection` 安装自己的回收器并拒绝调用方设置，归还的字节扩展 QUIC 流与连接接收窗口（RFC 9000 §4.1）；独立驱动通过选项提供回收器，未提供时归还被丢弃。
-- **延迟消费**：`http3_deferred_consume_event` 是 nghttp3 自行消费的分帧与 QPACK 字节以及核心丢弃的 DATA，无人持有，按 `read_stream()` 的 `consumed_bytes_` 同样立即归还，不转为凭证；`http3_quic_connection` 内部处理该事件。
+- **延迟消费**：`http3_deferred_consume_event` 是 nghttp3 自行消费的分帧与 QPACK 字节以及核心丢弃的 DATA，无人持有，按 `read_stream()` 的 `credit_bytes_` 同样立即归还，不转为凭证；`http3_quic_connection` 内部处理该事件。
 - **留存输入借用**：`read_stream()` 在编译期拒绝直接传入临时拥有型连续容器与 `std::initializer_list`；命名输入及显式借用视图仍可使用。借用模式下，底层存储须覆盖对应 DATA 事件的消费；显式构造 view/span 不延长 owner 寿命。
 - **DATA 事件**：只由核心构造；移动赋值先归还目标未取走的凭证，保留目标资源，复制拥有正文分配失败时双方不变。
-- **首部与数据报资源**：`http3_headers_event`、`http3_datagram_event` 复制继承源资源，赋值保留目标资源，分配失败不改变双方；首部跨资源赋值递归重绑定字段，等价但不同的资源对象也不转移嵌套资源寿命。
-- **事件构造**：上述两种事件使用显式构造函数，保留默认构造与原字段顺序的位置构造，不支持聚合指定成员初始化。
+- **事件形态**：`next_event()` 返回只可移动的 `http3_event`，与 `http2_event` 同形，由 `request_head()`、`informational_head()`、`response_head()`、`data()`、`message_end()`、`transport_action()`、`deferred_consume()`、`stream_close()`、`request_unprocessed()`、`goaway()`、`datagram()`、`origin_advertisement()` 中恰好一个返回非空指针；各事件只由核心构造，以访问器读取，拥有型内容（请求头、Trailer、数据报载荷）经右值 `take_*()` 交出。
 - **出站地址稳定**：名称拥有缓冲首次使用时按整节字节上界预留，后续增长不重分配；字段视图只借用至 `nghttp3` 完成提交。
 - **出站字段计数**：按实际发送数量预留描述符，扣除被过滤的分帧字段并计入生成字段。
+- **请求头校验**：服务端在连接内完成请求头校验（nghttp3 的帧层规则加上目标语法、`:authority`/`Host` 一致、接收方字段规则、Expect 与 Cookie 合并），通过者以 `http3_request_head_event` 发布、`take_head()` 交出 `http3_request_head`；畸形请求由核心按 RFC 9114 §4.1.2 以本地 STOP_SENDING 与 RESET_STREAM（`H3_MESSAGE_ERROR`）回应，不发布请求头、DATA 或消息结束事件，驱动无需自行重置。
 - **请求投影 `http3_request_head`**：普通字段索引首次使用时按剩余字段上界一次预留；仅含伪首部与 Cookie 的请求不分配该索引。
 - **投影所有权**：`http3_request_head` 仅可移动构造、不可复制或赋值；`std::optional` 持有点使用 `emplace` 重建。
 - **Cookie 惰性合并**：首个非空碎片直接借用请求投影已拥有的字段；第二个非空碎片出现时才分配合并缓冲，空碎片不参与。
 
-`http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件的 PMR 存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方提供 ngtcp2 加密回调、TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。
+##### 4.3.1 帧与字段观察
 
-`http3_headers_event::trailers_` 区分服务端收到的请求头与其后的 Trailer 段；`http3_error_code` 给出服务端使用的 RFC 9114 §8.1 应用错误码（`no_error`、`internal_error`、`request_rejected`、`request_cancelled`、`message_error`）。nghttp3 在帧层识别的格式错误（伪首部缺失或非法、连接专属字段等）由 `read_stream()` 报告为连接错误 `H3_MESSAGE_ERROR`，这是 RFC 9114 §8 允许的“把流错误升级为连接错误”。
+与 HTTP/2 的 [4.2.1](#421-帧与字段观察) 对齐，`http3_connection_options` 提供同步、只读的接收事实：
+
+| 字段 | 契约 |
+| --- | --- |
+| `frame_observer_` | `void(void*, const http3_frame_metadata&) noexcept`；请求流与对端控制流上每个帧头读完、载荷处理前交付：`observation_sequence_`（连接内从 0 递增）、流 ID、`http3_frame_type`（未知与保留类型原值保留）、载荷长度 |
+| `field_observer_` | `void(void*, const http3_field_metadata&) noexcept`；QPACK 解码输出的 `begin / field / end`、头部或 Trailer 段、字段下标与名称值，先于 HTTP 校验；被阻塞的字段节在动态表引用解出后交付 |
+| `observer_context_` | 回调上下文，借用至连接销毁；两个观察器共用 |
+
+- **验证边界**：观察不表示协议接受；QPACK 编解码流与其他单向流类型不分帧，不观察。
+- **借用与重入**：回调仅在 `read_stream()` 内同步执行，记录与字段视图仅在回调期间有效；返回前不得修改、重入、移动或销毁该连接。
+- **关闭成本**：空观察器不保留输入、不分配；开启帧观察时每条接收流只保存一个定长帧头扫描状态。
+
+`http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件的 PMR 存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方经 `crypto_callbacks_`（`http3_quic_crypto_callbacks`，仅含 QUIC-TLS 适配器回调）与 `owner_callbacks_`（`http3_quic_owner_callbacks`：连接 ID 签发与移除、握手完成与确认、无状态重置、早期数据被拒，均收到 `callback_user_data_`）提供回调，流数据、确认与关闭回调由包装器独占、无法传入；另提供 TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。`native_handle()` 只供适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用。`http3_quic_result` 以 `transport_error_code_`（RFC 9000 §20.1）或 `application_error_code_`（`http3_error_code`）给出本端发送或从对端收到的 CONNECTION_CLOSE 的错误码（空闲超时与无状态重置两者皆空），`transport_error()` / `application_error()` 查询同一事实。
+
+nghttp3 在帧层识别的格式错误（伪首部缺失或非法、连接专属字段等）由 `read_stream()` 报告为连接错误 `H3_MESSAGE_ERROR`，这是 RFC 9114 §8 允许的“把流错误升级为连接错误”。
 
 `ruvia::web` 的 HTTP/3 服务（`listen_config::http3_`）在这两层之上实现：
 - **端点与连接 ID 分流**：POSIX 上按 worker 下标顺序 `0..N-1` 以 `SO_REUSEADDR` + `SO_REUSEPORT` 绑定同一 UDP 端口；服务器签发的 20 字节连接 ID 将所属 worker 下标经后 16 字节随机数与监听器密钥派生的掩码异或隐藏（防外部关联同一连接的不同 CID，RFC 9000 §9.5）并附加 16 位认证标签；Linux 多 worker 下挂载无特权 `SO_ATTACH_REUSEPORT_CBPF` 在内核态直接校验标签并把携带服务端 CID 的长短包头数据报（含迁移后路径与 Retry/Handshake/0-RTT）直投所属 worker（客户端自选 Initial 与未认证包按密钥哈希分流），非 Linux 平台或落到其他 worker 的数据报经有界目录（每 worker 至多 256 个在途，满则丢弃）转交；接收循环每次唤醒后最多连读 32 个数据报，按 `ngtcp2_pkt_decode_version_cid` 解析目标连接 ID：命中本 worker 连接表即交给该连接；合法的客户端 Initial（`ngtcp2_accept`）在启用 `http3_retry_` 时先执行无状态 Retry 地址验证（伪造或过期 Token 回复 `INVALID_TOKEN`），验证通过或未启用 Retry 时在本 worker 新建连接并受 `max_connections_per_worker_` 约束（满额时先淘汰最久空闲连接），不支持的版本回复 Version Negotiation（仅对不小于 1200 字节的数据报）；命中本 worker 已退役服务端连接 ID 的短包头数据报按速率限制回复严格小于触发包长的无状态重置（`write_http3_quic_stateless_reset`），其余未知数据报直接丢弃。Windows 由应用级 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占 UDP socket，按连接 ID（新连接 Initial 按客户端 ID 的密钥哈希）经同一目录转交业务 worker，业务 worker 的出站数据报经每 worker 至多 256 个在途的有界队列交回 Acceptor 发送。
@@ -455,9 +482,9 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **生命周期**：连接计入 worker 的连接计数，由连接扫描器按 HTTP/2 相同的阶段计时；达到 `max_requests_per_connection_` 或连接超时时依次发送 shutdown-notice GOAWAY、`min(1 s, 3×PTO)` 后的最终 GOAWAY，所有已接纳流关闭后以 `H3_NO_ERROR` 发送 CONNECTION_CLOSE，并在 3×PTO 的关闭期内吸收迟到数据报；`stop()`（直接断连，不设排空阶段）、淘汰或超时宽限期满时立即以 `H3_NO_ERROR` 关闭。
 - **扩展与恢复**：支持 CONNECT、RFC 9220 WebSocket、RFC 9297/9298 HTTP Datagram 与 CONNECT-UDP、RFC 9412 `ORIGIN` 帧、RFC 9218 `PRIORITY_UPDATE` 帧、QUIC Retry 与无状态重置；Web 层的 0-RTT 准入和路径迁移策略见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。不提供 HTTP/3 服务端推送（nghttp3 不支持）与仅定义于 HTTP/2 的 `ALTSVC` 帧。
 
-独立 QUIC 驱动调用 `start_early_http3()` 时必须提供经认证保存的传输参数及对端 SETTINGS，并同时启用 TLS 早期数据。TLS 拒绝早期数据时调用 `reject_early_data()` 丢弃早期流，是否重发由调用方裁决。`http3_headers_event::early_data_` 保留实际传输来源，不能由请求字段代替。TLS 恢复并接受早期数据，也不保证某个请求属于 0-RTT：发送节拍或重传可能使请求在握手完成后才到达，应用应读取该请求的来源标记，而非连接的 TLS 协商结果。
+独立 QUIC 驱动调用 `start_early_http3()` 时必须提供经认证保存的传输参数及对端 SETTINGS，并同时启用 TLS 早期数据。TLS 拒绝早期数据时调用 `reject_early_data()` 丢弃早期流，是否重发由调用方裁决；`early_data_rejected()` 报告适配器或调用方已登记的拒绝。`encode_early_transport_parameters(output)` 编码 0-RTT 依赖的传输参数（RFC 9000 §7.4.1）：客户端取收到的服务端参数，与 TLS 会话票据一同保存、供 `start_early_http3()` 恢复；服务端取本端参数，供票据恢复检查绑定；客户端尚未收到或缓冲不足时返回 `std::nullopt`。`http3_request_head::early_data()` 保留实际传输来源，不能由请求字段代替。TLS 恢复并接受早期数据，也不保证某个请求属于 0-RTT：发送节拍或重传可能使请求在握手完成后才到达，应用应读取该请求的来源标记，而非连接的 TLS 协商结果。
 
-`migrate(path, timestamp)` 仅用于客户端，先验证新路径；调用方必须按输出数据报的 `path_` 发送，并在验证期间保持新旧路径接收。`submit_datagram(stream_id, payload)` 的载荷位于 Quarter Stream ID 之后；`max_datagram_payload_size()` 给出当前上限，队列满返回 `would_block`，不支持或超长返回 `invalid_state`。
+`migrate(path, timestamp)` 仅用于客户端，先验证新路径；调用方必须按输出数据报的 `path_` 发送，并在验证期间保持新旧路径接收。`current_path()` 以平台 sockaddr 字节给出当前发送路径（`http3_quic_path::local_` / `remote_`），借用连接存储至下一次输入、输出或迁移调用。`submit_datagram(stream_id, payload)` 的载荷位于 Quarter Stream ID 之后；`max_datagram_payload_size()` 给出当前上限，队列满返回 `would_block`，不支持或超长返回 `invalid_state`。
 
 HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制。关闭某项时不解析其源码、不安装其连接头文件，也不引入对应的 nghttp2 或 nghttp3/ngtcp2 依赖；两个开关互不要求对方启用。
 ---

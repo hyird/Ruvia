@@ -20,6 +20,7 @@
 
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http3_quic_connection.h"
 
 #include "tls/tls_random.h"
 
@@ -65,19 +66,21 @@ inline void fill_random(std::uint8_t* destination, std::size_t size, const ngtcp
     }
 }
 
-[[nodiscard]] inline ngtcp2_callbacks http3_quic_crypto_callbacks() noexcept {
-    ngtcp2_callbacks callbacks{};
-    callbacks.recv_crypto_data = ngtcp2_crypto_recv_crypto_data_cb;
-    callbacks.encrypt = ngtcp2_crypto_encrypt_cb;
-    callbacks.decrypt = ngtcp2_crypto_decrypt_cb;
-    callbacks.hp_mask = ngtcp2_crypto_hp_mask_cb;
-    callbacks.update_key = ngtcp2_crypto_update_key_cb;
-    callbacks.delete_crypto_aead_ctx = ngtcp2_crypto_delete_crypto_aead_ctx_cb;
-    callbacks.delete_crypto_cipher_ctx = ngtcp2_crypto_delete_crypto_cipher_ctx_cb;
-    callbacks.version_negotiation = ngtcp2_crypto_version_negotiation_cb;
-    callbacks.get_path_challenge_data2 = ngtcp2_crypto_get_path_challenge_data2_cb;
-    callbacks.rand = fill_random;
-    return callbacks;
+// The ngtcp2_crypto_ossl adapter callbacks both roles share; the client adds
+// client_initial_ and recv_retry_, the server recv_client_initial_.
+[[nodiscard]] inline http3_quic_crypto_callbacks make_http3_quic_crypto_callbacks() noexcept {
+    return {
+        .recv_crypto_data_ = ngtcp2_crypto_recv_crypto_data_cb,
+        .encrypt_ = ngtcp2_crypto_encrypt_cb,
+        .decrypt_ = ngtcp2_crypto_decrypt_cb,
+        .hp_mask_ = ngtcp2_crypto_hp_mask_cb,
+        .update_key_ = ngtcp2_crypto_update_key_cb,
+        .delete_crypto_aead_ctx_ = ngtcp2_crypto_delete_crypto_aead_ctx_cb,
+        .delete_crypto_cipher_ctx_ = ngtcp2_crypto_delete_crypto_cipher_ctx_cb,
+        .get_path_challenge_data_ = ngtcp2_crypto_get_path_challenge_data2_cb,
+        .version_negotiation_ = ngtcp2_crypto_version_negotiation_cb,
+        .rand_ = fill_random,
+    };
 }
 
 [[nodiscard]] inline ngtcp2_tstamp http3_quic_now() noexcept {

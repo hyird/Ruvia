@@ -4,7 +4,6 @@
 #include <memory_resource>
 #include <optional>
 #include <span>
-#include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
@@ -64,18 +63,18 @@ public:
         [[nodiscard]] constexpr std::size_t consumed_bytes() const noexcept {
             return consumed_;
         }
-        [[nodiscard]] constexpr std::string_view bytes() const& noexcept {
-            return bytes_;
+        [[nodiscard]] constexpr std::span<const http_header> fields() const& noexcept {
+            return fields_;
         }
-        std::string_view bytes() const&& = delete;
+        std::span<const http_header> fields() const&& = delete;
 
     private:
         friend class http1_client_response_body_decoder;
-        constexpr validated_trailers_view_type(std::size_t consumed, std::string_view bytes_value) noexcept
+        constexpr validated_trailers_view_type(std::size_t consumed, std::span<const http_header> fields) noexcept
             : consumed_(consumed),
-              bytes_(bytes_value) {}
+              fields_(fields) {}
         std::size_t consumed_;
-        std::string_view bytes_;
+        std::span<const http_header> fields_;
     };
 
     class complete_type final {
@@ -166,12 +165,14 @@ public:
     http1_client_response_body_decoder& operator=(http1_client_response_body_decoder&&) = delete;
 
     // Output borrows available without transfer coding and scratch otherwise;
-    // trailers borrow available, or decoder-owned storage when the received
-    // section carried obs-fold: RFC 9112 section 5.2 makes a user agent replace
-    // each obs-fold with SP, so the published block is already unfolded (one
-    // allocation from `resource`, only for a folded section). Consume views
-    // before changing either storage or making the next call. Erase exactly
-    // consumed_bytes() from available.
+    // consume it before changing either storage or making the next call.
+    // Trailer fields are validated and owned by the decoder, allocated from
+    // `resource` only for a section that keeps a field: names are lowercase,
+    // each obs-fold is already replaced with SP (RFC 9112 section 5.2), and
+    // fields RFC 9110 section 6.5.1 forbids in response trailers are discarded
+    // (RFC 9112 section 7.1.2). They stay valid until the next decode() or
+    // finish_input() call, or until the decoder is destroyed.
+    // Erase exactly consumed_bytes() from available.
     // After finish_input(), decode() continues with the same EOF state: it can
     // drain buffered input/output, but missing body bytes are an incomplete_body
     // failure rather than a request for more input. Terminal results replay
@@ -208,7 +209,7 @@ private:
     [[nodiscard]] result_type emit_transfer_output(std::size_t consumed, std::string_view bytes);
     [[nodiscard]] static result_type with_consumed(const result_type& result, std::size_t consumed) noexcept;
     [[nodiscard]] static result_type with_consumed_prefix(const result_type& result, std::size_t prefix) noexcept;
-    [[nodiscard]] result_type validated_trailers(std::size_t consumed, std::string_view bytes);
+    [[nodiscard]] result_type validated_trailers(std::size_t consumed, std::span<const http_header> fields);
     [[nodiscard]] result_type complete(std::size_t consumed);
     [[nodiscard]] result_type fail(http1_client_response_body_error error, std::size_t consumed = 0);
     [[nodiscard]] result_type decoder_failure(std::size_t consumed = 0);
@@ -230,8 +231,6 @@ private:
     bool discard_content_{false};
     bool eof_{false};
     bool trailers_reported_{false};
-    // Owns the unfolded copy of a trailer section that carried obs-fold.
-    std::pmr::string unfolded_trailers_;
     transfer_phase_type transfer_phase_{transfer_phase_type::needs_framed_input};
 };
 

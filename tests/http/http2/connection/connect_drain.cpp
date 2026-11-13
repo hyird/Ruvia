@@ -214,8 +214,7 @@ TEST(Ruvia, http2_connect_data_before_accept_is_held_and_delivered_as_tunnel_dat
         ruvia::http_response accepted(&resource);
         accepted.status(ruvia::http_status::ok);
         EXPECT_TRUE(server.submit_connect_response_head(1, accepted) == ruvia::http2_submit_status::accepted);
-        EXPECT_TRUE(server.acknowledge(std::move(*credit)) ==
-                    ruvia::http2_received_data_acknowledge_status::acknowledged);
+        credit.reset();
         const auto after_accept = take_frames(server);
         EXPECT_TRUE(has_frame(after_accept, ruvia::http2_frame_type::headers, 1));
         EXPECT_TRUE(has_frame(after_accept, ruvia::http2_frame_type::window_update, 1));

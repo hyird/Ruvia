@@ -16,7 +16,6 @@
 #include <stdexcept>
 #include <system_error>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include <asio/bind_allocator.hpp>
@@ -70,15 +69,19 @@ int new_cid(ngtcp2_conn*, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, 
     cid->datalen = size;
     return 0;
 }
-ngtcp2_callbacks crypto_callbacks() noexcept {
-    auto result = http3_quic_crypto_callbacks();
-    result.client_initial = ngtcp2_crypto_client_initial_cb;
-    result.recv_retry = ngtcp2_crypto_recv_retry_cb;
-    result.get_new_connection_id2 = new_cid;
+http3_quic_crypto_callbacks client_crypto_callbacks() noexcept {
+    auto result = make_http3_quic_crypto_callbacks();
+    result.client_initial_ = ngtcp2_crypto_client_initial_cb;
+    result.recv_retry_ = ngtcp2_crypto_recv_retry_cb;
     return result;
 }
-void require_accepted(http3_status status) {
-    if (status != http3_status::accepted) {
+void require_accepted(http3_submit_status status) {
+    if (status != http3_submit_status::accepted) {
+        throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
+    }
+}
+void require_accepted(http3_finish_status status) {
+    if (status != http3_finish_status::accepted) {
         throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
     }
 }
@@ -222,7 +225,7 @@ public:
         // Protocol submission precedes UDP completion and the producer's resumption.
         bool request_end_submitted_{};
         bool request_end_flushed_{};
-        std::optional<std::uint64_t> stop_sending_error_;
+        std::optional<http3_error_code> stop_sending_error_;
     };
     session(http_client_pool& pool, http3_client_tls& shared_tls, const http3_client_route& route, std::size_t index)
         : pool_(pool),
@@ -264,9 +267,8 @@ public:
         } catch (...) {
             return 0;
         }
-        const auto size = ngtcp2_conn_encode_0rtt_transport_params2(self.quic_->native_handle(),
-            entry->params_.data(), entry->params_.size());
-        if (size < 0) {
+        const auto size = self.quic_->encode_early_transport_parameters(std::as_writable_bytes(std::span(entry->params_)));
+        if (!size) {
             entry->session_.reset();
             entry->params_size_ = 0;
             return 0;
@@ -281,7 +283,7 @@ public:
         }
         entry->session_.reset(saved);
         entry->endpoint_ = self.remote_;
-        entry->params_size_ = static_cast<std::size_t>(size);
+        entry->params_size_ = *size;
         entry->settings_valid_ = false;
         if (const auto settings = self.quic_->http3().peer_settings()) {
             entry->settings_ = *settings;
@@ -407,19 +409,10 @@ public:
         response.tunnel_->output_.space_.notify();
         response.data_signal_.notify();
     }
-    static void fail_or_retry_closed_stream(stream& item, std::optional<std::uint64_t> application_error_code) noexcept {
-        auto& response = item.response_;
-        if (application_error_code == static_cast<std::uint64_t>(http3_error_code::request_rejected) &&
-            !response.head_ready_ && response.output() == nullptr) {
-            item.retry_ = true;
-            item.rejected_ = true;
-        } else {
-            item.error_ = application_error_code == static_cast<std::uint64_t>(http3_error_code::message_error)
-                              ? error_code::protocol_error
-                              : error_code::io_error;
-            if (auto* output = response.output()) {
-                output->stop();
-            }
+    static void fail_closed_stream(stream& item, std::optional<http3_error_code> error) noexcept {
+        item.error_ = error == http3_error_code::message_error ? error_code::protocol_error : error_code::io_error;
+        if (auto* output = item.response_.output()) {
+            output->stop();
         }
     }
     void reset_transport() noexcept {
@@ -454,7 +447,7 @@ public:
         item.error_ = code;
         item.response_.request_informational_stop();
         if (quic_ && item.id_ >= 0) {
-            quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+            quic_->reset_stream(item.id_, http3_error_code::request_cancelled);
         }
         if (auto* output = item.response_.output()) {
             output->stop();
@@ -533,37 +526,11 @@ public:
             .field_source_ = request.options_.field_source_};
         require_accepted(connection.submit_request_head(item.id_, head));
     }
-    void consume_event(http_origin_advertisement& origins) {
-        pool_.advertisements().retain(index_, http_protocol_version::http3, origins);
-    }
-    void consume_event(http3_goaway_event& away) {
-        draining_ = true;
-        for (auto* item : streams_) {
-            if (item->id_ >= away.id_ && !item->response_.head_ready_) {
-                item->retry_ = true;
-                item->error_.reset();
-                if (auto* output = item->response_.output()) {
-                    output->stop();
-                }
-                item->signal_.notify();
-            }
-        }
-    }
-    // http3_quic_connection applies deferred consumption itself.
-    void consume_event(http3_deferred_consume_event&) noexcept {}
-    template <typename event_type>
-    [[nodiscard]] static std::int64_t event_stream_id(const event_type& value) noexcept {
-        if constexpr (requires { value.stream_id(); }) {
-            return value.stream_id();
-        } else {
-            return value.stream_id_;
-        }
-    }
     // An event of a stream nobody reads is dropped; a DATA event returns its
     // credit as it is destroyed.
     template <typename event_type>
     void consume_event(event_type& value) {
-        auto* item = find(event_stream_id(value));
+        auto* item = find(value.stream_id());
         if (!item || item->error_ || item->failure_) {
             return;
         }
@@ -571,22 +538,9 @@ public:
             consume_stream_event(*item, value);
         } catch (...) {
             item->failure_ = std::current_exception();
-            quic_->reset_stream(item->id_, static_cast<std::uint64_t>(http3_error_code::message_error));
+            quic_->reset_stream(item->id_, http3_error_code::message_error);
         }
         item->signal_.notify();
-    }
-    void consume_stream_event(stream& item, const http3_headers_event& value) {
-        // A client receives only trailer sections as field-section events.
-        if (item.retry_425_) {
-            return;
-        }
-        auto& response = item.response_;
-        response.trailers_.clear();
-        response.trailers_.reserve(value.fields_.size());
-        for (const auto& field : value.fields_) {
-            response.trailers_.emplace_back(field.name(), field.value(), response.resource_);
-        }
-        read_progress(item);
     }
     void consume_stream_event(stream& item, const http3_informational_head_event& value) {
         if (item.retry_425_) {
@@ -665,15 +619,21 @@ public:
         }
         item.timer_.read_deadline_.reset();
     }
-    void consume_stream_event(stream& item, const http3_stream_end_event&) {
+    void consume_stream_event(stream& item, const http3_message_end_event& value) {
         auto& response = item.response_;
+        if (const auto trailers = value.trailers(); !trailers.empty() && !item.retry_425_) {
+            response.trailers_.clear();
+            response.trailers_.reserve(trailers.size());
+            for (const auto& field : trailers) {
+                response.trailers_.emplace_back(field.name(), field.value(), response.resource_);
+            }
+        }
         if (item.retry_425_) {
             item.retry_ = true;
             item.done_ = true;
         } else if (response.tunnel_ && response.tunnel_->accepted_) {
             response.tunnel_->receive_ended_ = true;
-            if (item.websocket_ && item.write_stopped_ &&
-                item.stop_sending_error_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+            if (item.websocket_ && item.write_stopped_ && item.stop_sending_error_ == http3_error_code::no_error) {
                 complete_websocket_tunnel(item);
             } else if (response.tunnel_->output_.ended_ || response.tunnel_->output_.stopped_) {
                 item.done_ = true;
@@ -693,25 +653,46 @@ public:
     }
     void consume_stream_event(stream& item, const http3_transport_action_event& value) {
         auto& response = item.response_;
-        if (value.action_ == http3_transport_action::stop_sending) {
+        if (value.origin() == http3_transport_action_origin::local) {
+            // The codec abandoned the stream: a malformed response
+            // (H3_MESSAGE_ERROR), or the cancellation that follows an
+            // unprocessed request, which already retries.
+            if (!item.done_ && !item.retry_) {
+                fail_closed_stream(item, value.error());
+            }
+        } else if (value.action() == http3_transport_action::stop_sending) {
             item.write_stopped_ = true;
-            item.stop_sending_error_ = value.application_error_code_;
+            item.stop_sending_error_ = value.error();
             if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
-                response.tunnel_->receive_ended_ &&
-                value.application_error_code_ == static_cast<std::uint64_t>(http3_error_code::no_error)) {
+                response.tunnel_->receive_ended_ && value.error() == http3_error_code::no_error) {
                 complete_websocket_tunnel(item);
             } else if (auto* output = response.output();
-                output && (!item.request_end_submitted_ ||
-                              value.application_error_code_ != static_cast<std::uint64_t>(http3_error_code::no_error))) {
+                output && (!item.request_end_submitted_ || value.error() != http3_error_code::no_error)) {
                 output->stop();
             }
         } else if (!item.done_ && !item.retry_) {
-            fail_or_retry_closed_stream(item, value.application_error_code_);
+            fail_closed_stream(item, value.error());
+        }
+    }
+    // The server did not process the request (RFC 9114 §4.1.1, §5.2). The
+    // codec cancels the stream itself and publishes nothing more for it.
+    void consume_stream_event(stream& item, const http3_request_unprocessed_event&) {
+        auto& response = item.response_;
+        if (response.head_ready_ || (!draining_ && response.output() != nullptr)) {
+            fail_closed_stream(item, http3_error_code::request_rejected);
+            return;
+        }
+        item.retry_ = true;
+        item.rejected_ = true;
+        item.error_.reset();
+        if (auto* output = response.output()) {
+            output->stop();
         }
     }
     void consume_stream_event(stream& item, const http3_stream_close_event& value) {
         auto& response = item.response_;
-        if (!value.application_error_code_ && item.request_end_submitted_) {
+        const auto error = value.error();
+        if (!error && item.request_end_submitted_) {
             // A clean QUIC stream close confirms both wire halves, even while
             // the upload driver is queued behind this receive completion.
             item.request_end_flushed_ = true;
@@ -719,15 +700,15 @@ public:
                 item.done_ = true;
             }
         }
-        if (value.application_error_code_ && item.request_end_submitted_ && !item.request_end_flushed_) {
-            fail_or_retry_closed_stream(item, value.application_error_code_);
+        if (error && item.request_end_submitted_ && !item.request_end_flushed_) {
+            fail_closed_stream(item, error);
         } else if (item.websocket_ && response.tunnel_ && response.tunnel_->accepted_ &&
-                   response.tunnel_->receive_ended_ && !value.application_error_code_) {
+                   response.tunnel_->receive_ended_ && !error) {
             complete_websocket_tunnel(item);
         } else if (!item.done_ && !item.retry_) {
-            fail_or_retry_closed_stream(item, value.application_error_code_);
+            fail_closed_stream(item, error);
         } else if (auto* output = response.output();
-            output && item.done_ && (!item.request_end_flushed_ || value.application_error_code_)) {
+            output && item.done_ && (!item.request_end_flushed_ || error)) {
             output->stop();
         }
     }
@@ -738,11 +719,12 @@ public:
         }
         const auto bound = pool_.config().max_response_bytes_;
         const auto available = bound - (std::min)(bound, response.http3_datagram_bytes_);
-        if (response.http3_datagrams_->size() >= 64 || value.payload_.size() > available) {
+        const auto payload = value.payload();
+        if (response.http3_datagrams_->size() >= 64 || payload.size() > available) {
             return;
         }
-        response.http3_datagrams_->emplace_back(value.payload_);
-        response.http3_datagram_bytes_ += value.payload_.size();
+        response.http3_datagrams_->emplace_back(payload);
+        response.http3_datagram_bytes_ += payload.size();
         response.data_signal_.notify();
     }
     task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_deadline timeout) {
@@ -788,7 +770,7 @@ public:
         }
     }
     void consume_events() {
-        if (early_started_ && !early_rejected_ && ngtcp2_conn_get_tls_early_data_rejected2(quic_->native_handle())) {
+        if (early_started_ && !early_rejected_ && quic_->early_data_rejected()) {
             early_rejected_ = true;
             if (quic_->reject_early_data() != http3_quic_status::accepted) {
                 throw http_client_error(error_code::protocol_error, "HTTP/3 early-data reset failed");
@@ -801,8 +783,8 @@ public:
             }
         }
         while (auto event = quic_->next_event()) {
-            std::visit([this](auto& value) { consume_event(value); }, *event);
-            if (const auto* head = std::get_if<http3_informational_head_event>(&*event)) {
+            if (auto* head = event->informational_head()) {
+                consume_event(*head);
                 auto* item = find(head->stream_id());
                 if (item && !item->error_ && !item->failure_ && item->response_.informational_callback_ &&
                     !item->response_.informational_active_) {
@@ -821,6 +803,26 @@ public:
                         throw;
                     }
                 }
+            } else if (auto* final_head = event->response_head()) {
+                consume_event(*final_head);
+            } else if (auto* data = event->data()) {
+                consume_event(*data);
+            } else if (const auto* end = event->message_end()) {
+                consume_event(*end);
+            } else if (const auto* action = event->transport_action()) {
+                consume_event(*action);
+            } else if (const auto* closed = event->stream_close()) {
+                consume_event(*closed);
+            } else if (const auto* unprocessed = event->request_unprocessed()) {
+                consume_event(*unprocessed);
+            } else if (const auto* datagram = event->datagram()) {
+                consume_event(*datagram);
+            } else if (event->goaway()) {
+                // Streams the server will not process arrive as
+                // http3_request_unprocessed_event.
+                draining_ = true;
+            } else if (auto* origins = event->origin_advertisement()) {
+                pool_.advertisements().retain(index_, http_protocol_version::http3, *origins);
             }
         }
         if (auto* entry = shared_tls_.find(route_); entry != nullptr && entry->session_) {
@@ -1117,8 +1119,8 @@ public:
         }
         crypto_.reset(crypto);
         const auto& config = pool_.config();
-        auto callbacks = crypto_callbacks();
-        callbacks.handshake_completed = [](ngtcp2_conn*, void* target) noexcept {
+        http3_quic_owner_callbacks owner_callbacks{.get_new_connection_id_ = new_cid};
+        owner_callbacks.handshake_completed_ = [](ngtcp2_conn*, void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
             owner.tls_duration_ = std::chrono::steady_clock::now() - owner.tls_started_at_;
             if (tls_selected_alpn(*owner.tls_) != "h3") {
@@ -1135,7 +1137,7 @@ public:
             return 0;
         };
         handshake_confirmed_ = false;
-        callbacks.handshake_confirmed = [](ngtcp2_conn*, void* target) noexcept {
+        owner_callbacks.handshake_confirmed_ = [](ngtcp2_conn*, void* target) noexcept {
             auto& owner = *static_cast<session*>(target);
             owner.handshake_confirmed_ = true;
             owner.changed_.notify();
@@ -1145,7 +1147,8 @@ public:
             (std::min)(std::uint64_t{16 * 1024 * 1024},
                 static_cast<std::uint64_t>(config.max_response_bytes_)));
         const http3_quic_connection_options options{
-            .callbacks_ = callbacks,
+            .crypto_callbacks_ = client_crypto_callbacks(),
+            .owner_callbacks_ = owner_callbacks,
             .source_connection_id_ = random_cid(),
             .destination_connection_id_ = random_cid(),
             .initial_path_ = path(local_, remote_),
@@ -1224,8 +1227,7 @@ public:
         while ((!item.request_end_flushed_ && !quic_->http3().output_flushed(item.id_)) || packet_pending_) {
             check(item);
             if (item.retry_ || (item.write_stopped_ &&
-                                   (!item.request_end_submitted_ ||
-                                       item.stop_sending_error_ != static_cast<std::uint64_t>(http3_error_code::no_error)))) {
+                                   (!item.request_end_submitted_ || item.stop_sending_error_ != http3_error_code::no_error))) {
                 break;
             }
             co_await changed_.wait();
@@ -1258,18 +1260,21 @@ public:
                 co_return false;
             }
             const auto sent = quic_->http3().submit_data(item.id_, std::as_bytes(std::span(bytes.data(), bytes.size())));
-            if (sent.status_ != http3_status::accepted && sent.status_ != http3_status::would_block) {
-                require_accepted(sent.status_);
+            if (sent.status_ == http3_data_submit_status::closed ||
+                sent.status_ == http3_data_submit_status::invalid_message) {
+                throw http_client_error(error_code::protocol_error, "HTTP/3 stream operation rejected");
             }
-            bytes.remove_prefix(sent.accepted_bytes_);
-            pool_.wire_counters().sent_ += sent.accepted_bytes_;
-            if (sent.accepted_bytes_ != 0 && item.response_.effective_write_timeout_) {
+            // backpressured keeps the unconsumed suffix until acknowledgements
+            // free stream output budget.
+            bytes.remove_prefix(sent.consumed_bytes_);
+            pool_.wire_counters().sent_ += sent.consumed_bytes_;
+            if (sent.consumed_bytes_ != 0 && item.response_.effective_write_timeout_) {
                 item.timer_.write_deadline_ = deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
             // Until the final head, and through an accepted tunnel, sending
             // progress also restarts read inactivity.
-            if (sent.accepted_bytes_ != 0 && item.timer_.read_deadline_ &&
+            if (sent.consumed_bytes_ != 0 && item.timer_.read_deadline_ &&
                 (!item.response_.head_ready_ || (item.response_.tunnel_ && item.response_.tunnel_->accepted_))) {
                 read_progress(item);
             }
@@ -1809,7 +1814,7 @@ void http3_client_connection::abandon(http_client_response_state& response, bool
         if (&item->response_ == &response) {
             self.cancel(*item, error_code::cancelled);
             if (malformed && item->id_ >= 0 && self.quic_) {
-                self.quic_->reset_stream(item->id_, static_cast<std::uint64_t>(http3_error_code::message_error));
+                self.quic_->reset_stream(item->id_, http3_error_code::message_error);
             }
             return;
         }
@@ -1862,7 +1867,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             item_.timer_.cancel();
             owner_.release(item_.response_);
             if (item_.id_ >= 0 && !item_.done_ && owner_.quic_ && item_.response_.connection_generation_ == owner_.generation_) {
-                owner_.quic_->reset_stream(item_.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+                owner_.quic_->reset_stream(item_.id_, http3_error_code::request_cancelled);
                 owner_.writer_.notify();
             }
             if (auto* output = item_.response_.output()) {
@@ -2004,7 +2009,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                     if (request.upload() != nullptr && request.upload()->abandoned_ && !output->ended_ && item.id_ >= 0) {
                         // Only the sending half ends; the response keeps
                         // arriving (RFC 9114 section 4.1).
-                        self.quic_->reset_send_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::no_error));
+                        self.quic_->reset_send_stream(item.id_, http3_error_code::no_error);
                         self.writer_.notify();
                     }
                     if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_ &&
@@ -2018,7 +2023,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 }
                 self.check(item);
             } catch (...) {
-                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+                self.quic_->reset_stream(item.id_, http3_error_code::request_cancelled);
                 self.writer_.notify();
                 throw;
             }
@@ -2032,14 +2037,15 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 throw http_client_error(error_code::protocol_error, "HTTP/3 early request replay exhausted");
             }
             if (!self.early_rejected_ && !item.rejected_ && item.id_ >= 0) {
-                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+                self.quic_->reset_stream(item.id_, http3_error_code::request_cancelled);
             }
         } else {
             if (attempt != 0 || (item.id_ >= 0 && request.output() != nullptr)) {
                 throw http_client_error(error_code::protocol_unavailable, "HTTP/3 request was not processed by the server (GOAWAY)");
             }
-            if (item.id_ >= 0 && self.quic_) {
-                self.quic_->reset_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::request_cancelled));
+            // The codec already cancelled an unprocessed stream.
+            if (item.id_ >= 0 && self.quic_ && !item.rejected_) {
+                self.quic_->reset_stream(item.id_, http3_error_code::request_cancelled);
                 self.writer_.notify();
             }
         }
@@ -2173,8 +2179,8 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
     try {
         for (;;) {
             check();
-            const auto* active = ngtcp2_conn_get_path2(self.quic_->native_handle());
-            if (active->local.addrlen == self.local_.size() && std::memcmp(active->local.addr, self.local_.data(), self.local_.size()) == 0) {
+            const auto active = self.quic_->current_path().local_;
+            if (active.size() == self.local_.size() && std::memcmp(active.data(), self.local_.data(), self.local_.size()) == 0) {
                 break;
             }
             co_await self.changed_.wait();

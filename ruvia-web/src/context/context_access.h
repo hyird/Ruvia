@@ -24,7 +24,7 @@ struct context_access final {
     static void reset_interrupted_request(void* raw_context) noexcept {
         auto& request_services = static_cast<context*>(raw_context)->services();
         try {
-            request_services.reset_request(std::nullopt);
+            request_services.reset_request({});
         } catch (...) {
             request_services.abort_connection();
         }

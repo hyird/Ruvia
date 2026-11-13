@@ -1209,7 +1209,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             const auto authority = "localhost:" + std::pmr::string(std::to_string(port), ruvia::process_resource());
             const auto malformed = raw.request({{":method", "GET"}, {":scheme", "https"}, {":authority", authority},
                 {":path", "/hello"}, {"host", "attacker.example"}});
-            EXPECT_EQ(malformed.reset_error_.value_or(0), std::uint64_t{NGHTTP3_H3_MESSAGE_ERROR});
+            EXPECT_EQ(malformed.reset_error_, std::optional(ruvia::http3_error_code::message_error));
             EXPECT_EQ(malformed.status_, 0);
             const auto served = raw.request({{":method", "GET"}, {":scheme", "https"}, {":authority", authority}, {":path", "/hello"}});
             EXPECT_EQ(served.status_, 200);
@@ -1230,7 +1230,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
         const auto cancelled = client.start_tunnel(ruvia::http3_connect_request_head_view{.authority_ = "echo.test:443"});
         EXPECT_EQ(client.wait_for_response_head(cancelled).status_, 200);
-        client.reset_request(cancelled, NGHTTP3_H3_REQUEST_CANCELLED);
+        client.reset_request(cancelled, ruvia::http3_error_code::request_cancelled);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
 
         constexpr std::array websocket_fields{ruvia::http_header_view{"sec-websocket-version", "13"}};
@@ -1292,7 +1292,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_TRUE(client.finish_response(malformed).reset_error_.has_value());
         const auto cancelled = client.start_tunnel(udp_head);
         EXPECT_EQ(client.wait_for_response_head(cancelled).status_, 200);
-        client.reset_request(cancelled, NGHTTP3_H3_REQUEST_CANCELLED);
+        client.reset_request(cancelled, ruvia::http3_error_code::request_cancelled);
         EXPECT_EQ(client.request("GET", "/hello").status_, 200);
     }
     {
@@ -1363,7 +1363,8 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
             std::runtime_error);
         EXPECT_TRUE(raw.closed());
         const auto* close_error = ngtcp2_conn_get_ccerr2(raw.native_handle());
-        EXPECT_TRUE(close_error != nullptr && close_error->error_code == NGHTTP3_H3_MESSAGE_ERROR);
+        EXPECT_TRUE(close_error != nullptr &&
+                    close_error->error_code == static_cast<std::uint64_t>(ruvia::http3_error_code::message_error));
     }
 
     // The HTTPS listener advertises the HTTP/3 service (RFC 7838 §3).
@@ -1438,12 +1439,8 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         EXPECT_TRUE(client.wait_until([&client] { return client.closed(); }, client_timeout));
         stopper.join();
         EXPECT_TRUE(client.goaway_ids().empty());
-        const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
-        EXPECT_TRUE(close_error != nullptr);
-        if (close_error != nullptr) {
-            EXPECT_TRUE(close_error->type == NGTCP2_CCERR_TYPE_APPLICATION);
-            EXPECT_EQ(close_error->error_code, std::uint64_t{NGHTTP3_H3_NO_ERROR});
-        }
+        EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::no_error));
+        EXPECT_FALSE(client.transport_error().has_value());
     }
     run.join();
     backends.finish();
@@ -1465,15 +1462,11 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         const auto& goaways = client.goaway_ids();
         EXPECT_EQ(goaways.size(), std::size_t{2});
         if (goaways.size() == 2) {
-            EXPECT_EQ(goaways.front(), std::int64_t{NGHTTP3_SHUTDOWN_NOTICE_STREAM_ID});
-            EXPECT_TRUE(goaways.back() > last);
+            EXPECT_FALSE(goaways.front().has_value());
+            EXPECT_TRUE(goaways.back().has_value() && *goaways.back() > last);
         }
-        const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
-        EXPECT_TRUE(close_error != nullptr);
-        if (close_error != nullptr) {
-            EXPECT_TRUE(close_error->type == NGTCP2_CCERR_TYPE_APPLICATION);
-            EXPECT_EQ(close_error->error_code, std::uint64_t{NGHTTP3_H3_NO_ERROR});
-        }
+        EXPECT_EQ(client.application_error(), std::optional(ruvia::http3_error_code::no_error));
+        EXPECT_FALSE(client.transport_error().has_value());
     }
     {
         ruvia::blocking_pool capped_blocking;

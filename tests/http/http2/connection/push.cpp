@@ -70,8 +70,7 @@ TEST(Ruvia, http2_push_promise_fragmentation_response_and_detached_metadata) {
     auto data = client.next_event();
     EXPECT_TRUE(data && data->message_body_chunk());
     EXPECT_TRUE(data->message_body_chunk()->bytes() == "asset");
-    auto credit = data->message_body_chunk()->take_credit();
-    EXPECT_TRUE(client.acknowledge(std::move(credit)) == ruvia::http2_received_data_acknowledge_status::acknowledged);
+    (void)data->message_body_chunk()->take_credit();
     auto end = client.next_event();
     EXPECT_TRUE(end && end->message_end());
     EXPECT_TRUE(promise->push_promise()->request_.headers_[0].value() == value);
@@ -377,7 +376,7 @@ TEST(Ruvia, http2_push_response_events_survive_a_reset_in_the_same_input_batch) 
         EXPECT_TRUE(parent_head && parent_head->response_head() && parent_head->response_head()->stream_id() == 1);
         EXPECT_TRUE(body && body->message_body_chunk() && body->message_body_chunk()->bytes() == "parent");
         if (body && body->message_body_chunk()) {
-            EXPECT_TRUE(client.acknowledge(body->message_body_chunk()->take_credit()) == ruvia::http2_received_data_acknowledge_status::acknowledged);
+            (void)body->message_body_chunk()->take_credit();
         }
         auto end = client.next_event();
         EXPECT_TRUE(end && end->message_end());
@@ -564,8 +563,7 @@ TEST(Ruvia, http2_push_repeated_response_and_cancellation_preserve_promises) {
                     auto data = client.next_event();
                     EXPECT_TRUE(data && data->message_body_chunk());
                     if (data && data->message_body_chunk()) {
-                        auto credit = data->message_body_chunk()->take_credit();
-                        EXPECT_TRUE(client.acknowledge(std::move(credit)) == ruvia::http2_received_data_acknowledge_status::acknowledged);
+                        (void)data->message_body_chunk()->take_credit();
                     }
                     auto end = client.next_event();
                     EXPECT_TRUE(head && head->response_head());

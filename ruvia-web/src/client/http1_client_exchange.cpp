@@ -31,7 +31,6 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/http_response_server.h"
 
 #include "body/http_body_buffer.h"
 #include "client/http_client_connection.h"
@@ -177,13 +176,10 @@ void publish_body_progress(http_client_response_state& state_value,
                 http_client_error::code_type::response_too_large, "HTTP response exceeds configured byte limit");
         }
     } else if (const auto* trailers = decoded.trailers()) {
-        const auto ok = visit_http_response_trailers(
-            trailers->bytes(), [&](std::string_view name, std::string_view value) {
-                state_value.trailers_.emplace_back(name, value, state_value.resource_);
-                return true;
-            });
-        if (!ok) {
-            throw std::logic_error("HTTP decoder published invalid response trailers");
+        const auto fields = trailers->fields();
+        state_value.trailers_.reserve(state_value.trailers_.size() + fields.size());
+        for (const auto& field : fields) {
+            state_value.trailers_.emplace_back(field.name(), field.value(), state_value.resource_);
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(http_client_error::code_type::protocol_error,

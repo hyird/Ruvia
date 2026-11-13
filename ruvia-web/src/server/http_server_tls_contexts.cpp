@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -358,41 +359,33 @@ void configure_family(http_server_session_config& session, tls_context_family fa
 
 #if defined(RUVIA_ENABLE_HTTP3)
 void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
-    const http3_connection_options& options, bool early_data,
+    std::uint32_t version, const http3_connection_options& options, bool early_data,
     std::array<unsigned char, 32>& resumption_context) {
-    const auto* parameters = ngtcp2_conn_get_local_transport_params2(connection.native_handle());
-    // Encode only remembered limits: connection IDs and reset tokens change
-    // for each connection and must not prevent legitimate ticket resumption.
-    const std::array<std::uint64_t, 18> values{
-        ngtcp2_conn_get_client_chosen_version2(connection.native_handle()),
-        parameters->initial_max_data,
-        parameters->initial_max_stream_data_bidi_local,
-        parameters->initial_max_stream_data_bidi_remote,
-        parameters->initial_max_stream_data_uni,
-        parameters->initial_max_streams_bidi,
-        parameters->initial_max_streams_uni,
-        parameters->active_connection_id_limit,
-        parameters->max_datagram_frame_size,
-        parameters->max_udp_payload_size,
-        static_cast<std::uint64_t>(parameters->disable_active_migration),
-        parameters->max_idle_timeout,
-        options.max_field_section_size_,
-        options.qpack_max_dtable_capacity_,
-        options.qpack_blocked_streams_,
+    // Only remembered limits (RFC 9000 §7.4.1): connection IDs and reset
+    // tokens change for each connection and must not prevent legitimate
+    // ticket resumption.
+    std::array<std::byte, 256> parameters{};
+    const auto parameter_bytes = connection.encode_early_transport_parameters(parameters);
+    if (!parameter_bytes.has_value()) {
+        throw std::runtime_error("failed to encode QUIC early transport parameters");
+    }
+    const std::array<std::uint64_t, 7> values{version, options.max_field_section_size_,
+        options.qpack_max_dtable_capacity_, options.qpack_blocked_streams_,
         static_cast<std::uint64_t>(options.enable_connect_protocol_),
-        static_cast<std::uint64_t>(options.enable_h3_datagram_),
-        static_cast<std::uint64_t>(early_data)};
-    std::array<unsigned char, values.size() * sizeof(std::uint64_t)> encoded{};
+        static_cast<std::uint64_t>(options.enable_h3_datagram_), static_cast<std::uint64_t>(early_data)};
+    std::array<unsigned char, values.size() * sizeof(std::uint64_t) + parameters.size()> encoded{};
     for (std::size_t i = 0; i < values.size(); ++i) {
         for (std::size_t byte = 0; byte < sizeof(std::uint64_t); ++byte) {
             encoded[i * sizeof(std::uint64_t) + byte] =
                 static_cast<unsigned char>(values[i] >> (8 * (sizeof(std::uint64_t) - byte - 1)));
         }
     }
+    const auto encoded_size = values.size() * sizeof(std::uint64_t) + *parameter_bytes;
+    std::memcpy(encoded.data() + values.size() * sizeof(std::uint64_t), parameters.data(), *parameter_bytes);
     unsigned int digest_size = 0;
     const auto index = quic_resumption_context_index();
     if (index < 0 ||
-        EVP_Digest(encoded.data(), encoded.size(), resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
+        EVP_Digest(encoded.data(), encoded_size, resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 ||
         digest_size != resumption_context.size() ||
         SSL_set_ex_data(&tls, index, &resumption_context) != 1 ||
         SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {

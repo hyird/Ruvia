@@ -337,7 +337,7 @@ private:
                     body_.append(chunk->bytes());
                 }
                 if (const auto* complete = decoded.complete()) {
-                    if (trailers_.append_http1(complete->trailers())) {
+                    if (trailers_.append_received(complete->trailers())) {
                         throw std::runtime_error("invalid upload trailers");
                     }
                     break;
@@ -3405,7 +3405,7 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
                             request_body.append(chunk->bytes());
                         }
                         const bool complete = decoded.complete() != nullptr;
-                        if (complete && request_trailers.append_http1(decoded.complete()->trailers())) {
+                        if (complete && request_trailers.append_received(decoded.complete()->trailers())) {
                             throw std::runtime_error("invalid upload trailers");
                         }
                         buffered.erase(0, decoded.consumed_bytes());

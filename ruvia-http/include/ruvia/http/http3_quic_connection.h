@@ -28,21 +28,60 @@ enum class http3_quic_status : std::uint8_t {
     application_error,
 };
 
+// The error code of the CONNECTION_CLOSE that ended the connection, whether
+// sent or received (RFC 9000 §19.19): transport_error and a transport close
+// carry a QUIC transport error code (§20.1, 0x0100-0x01ff for a TLS alert);
+// application_error and an application close carry an HTTP/3 code. Both are
+// unset while the connection is open, and after an idle timeout or a
+// stateless reset.
 struct http3_quic_result final {
     http3_quic_status status_{http3_quic_status::accepted};
-    std::uint64_t error_code_{0};
+    std::optional<std::uint64_t> transport_error_code_{};
+    std::optional<http3_error_code> application_error_code_{};
 };
 
 using http3_quic_stateless_reset_token =
     std::array<std::uint8_t, NGTCP2_STATELESS_RESET_TOKENLEN>;
 
+// The QUIC-TLS adapter (for example ngtcp2_crypto_ossl's ngtcp2_crypto_*_cb).
+// The connection installs these unchanged; they receive the connection's own
+// user data, which the adapters do not read. client_initial_ and recv_retry_
+// are client-only, recv_client_initial_ server-only; the others are required
+// for both roles. The connection owns every stream, acknowledgement and
+// close callback ngtcp2 defines, so none can be supplied.
+struct http3_quic_crypto_callbacks final {
+    ngtcp2_client_initial client_initial_{nullptr};
+    ngtcp2_recv_client_initial recv_client_initial_{nullptr};
+    ngtcp2_recv_crypto_data recv_crypto_data_{nullptr};
+    ngtcp2_encrypt encrypt_{nullptr};
+    ngtcp2_decrypt decrypt_{nullptr};
+    ngtcp2_hp_mask hp_mask_{nullptr};
+    ngtcp2_recv_retry recv_retry_{nullptr};
+    ngtcp2_update_key update_key_{nullptr};
+    ngtcp2_delete_crypto_aead_ctx delete_crypto_aead_ctx_{nullptr};
+    ngtcp2_delete_crypto_cipher_ctx delete_crypto_cipher_ctx_{nullptr};
+    ngtcp2_get_path_challenge_data2 get_path_challenge_data_{nullptr};
+    ngtcp2_version_negotiation version_negotiation_{nullptr};
+    ngtcp2_rand rand_{nullptr};
+};
+
+// Connection lifecycle notifications for the owner; each, when set, receives
+// http3_quic_connection_options::callback_user_data_. A nonzero return fails
+// the connection as ngtcp2 documents for the callback.
+struct http3_quic_owner_callbacks final {
+    // Issues a connection ID and its stateless reset token (RFC 9000 §5.1.1).
+    ngtcp2_get_new_connection_id2 get_new_connection_id_{nullptr};
+    ngtcp2_remove_connection_id remove_connection_id_{nullptr};
+    ngtcp2_handshake_completed handshake_completed_{nullptr};
+    ngtcp2_handshake_confirmed handshake_confirmed_{nullptr};
+    ngtcp2_recv_stateless_reset2 recv_stateless_reset_{nullptr};
+    // Runs after the connection discarded its rejected 0-RTT HTTP/3 streams.
+    ngtcp2_tls_early_data_rejected tls_early_data_rejected_{nullptr};
+};
+
 struct http3_quic_connection_options final {
-    // Crypto callbacks come from the selected ngtcp2 crypto adapter. The
-    // wrapper owns stream-data, acknowledgement and stream-close callbacks.
-    // get_new_connection_id2, remove_connection_id, handshake_completed,
-    // handshake_confirmed, recv_retry, recv_stateless_reset2 and
-    // tls_early_data_rejected, when set, receive callback_user_data_.
-    ngtcp2_callbacks callbacks_{};
+    http3_quic_crypto_callbacks crypto_callbacks_{};
+    http3_quic_owner_callbacks owner_callbacks_{};
     ngtcp2_cid source_connection_id_{};
     ngtcp2_cid destination_connection_id_{};
     // Server only and required (RFC 9000 §7.3): the Destination Connection ID
@@ -86,6 +125,13 @@ struct http3_quic_connection_options final {
     http3_connection_options http3_{};
 };
 
+// Socket addresses of one QUIC path (RFC 9000 §9), in the platform's
+// sockaddr layout.
+struct http3_quic_path final {
+    std::span<const std::byte> local_;
+    std::span<const std::byte> remote_;
+};
+
 struct http3_quic_datagram final {
     explicit http3_quic_datagram(
         std::pmr::memory_resource* resource = nullptr);
@@ -119,6 +165,8 @@ public:
     http3_quic_connection& operator=(http3_quic_connection&&) noexcept;
 
     [[nodiscard]] http3_role role() const noexcept;
+    // For the QUIC-TLS adapter's connection reference
+    // (ngtcp2_crypto_conn_ref::get_conn); every other capability has a member.
     [[nodiscard]] ngtcp2_conn* native_handle() noexcept;
     [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept;
     [[nodiscard]] void* callback_user_data() const noexcept;
@@ -140,6 +188,22 @@ public:
     // On TLS early rejection, discard the rejected HTTP/3 streams before a
     // caller explicitly retries requests in 1-RTT; never replays requests.
     [[nodiscard]] http3_quic_status reject_early_data();
+    // Client: TLS rejected the early data, whether reported through
+    // reject_early_data() or by the QUIC-TLS adapter during the handshake.
+    [[nodiscard]] bool early_data_rejected() const noexcept;
+    // The transport parameters 0-RTT depends on (RFC 9000 §7.4.1). A client
+    // gets the server's, once received, to store with the TLS session ticket
+    // and restore with start_early_http3(); a server gets its own, which a
+    // ticket's resumption check must bind. Returns the encoded size, or
+    // nullopt when a client has not received them yet or `output` is too
+    // small.
+    [[nodiscard]] std::optional<std::size_t> encode_early_transport_parameters(
+        std::span<std::byte> output) const noexcept;
+    // The path the connection currently sends on, after any validated
+    // migration (RFC 9000 §9). The views borrow connection storage until the
+    // next call that processes input, writes output or migrates.
+    [[nodiscard]] http3_quic_path current_path() const& noexcept RUVIA_LIFETIMEBOUND;
+    http3_quic_path current_path() const&& = delete;
     // Client only, QUIC v1: validate a new path before switching. The caller
     // must send packets on output.path_ and keep both paths receiving.
     [[nodiscard]] http3_quic_result migrate(const ngtcp2_path& path, ngtcp2_tstamp timestamp);
@@ -159,20 +223,20 @@ public:
     [[nodiscard]] ngtcp2_tstamp expiry() const noexcept;
 
     // Abandons both directions of a request stream with RESET_STREAM and
-    // STOP_SENDING carrying `application_error_code` (RFC 9114 §4.1.1).
-    void reset_stream(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;
+    // STOP_SENDING carrying `error` (RFC 9114 §4.1.1).
+    void reset_stream(std::int64_t stream_id, http3_error_code error) noexcept;
     // Ends only the sending half of a stream with RESET_STREAM carrying
-    // `application_error_code`; its receiving half keeps delivering
-    // (RFC 9000 section 3.1, RFC 9114 section 4.1).
-    void reset_send_stream(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;
+    // `error`; its receiving half keeps delivering (RFC 9000 §3.1,
+    // RFC 9114 §4.1).
+    void reset_send_stream(std::int64_t stream_id, http3_error_code error) noexcept;
     // Stops reading a request whose response no longer needs the rest of its
     // content (RFC 9114 §4.1.2 permits H3_NO_ERROR once the response is
     // complete).
-    void stop_receiving(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;
+    void stop_receiving(std::int64_t stream_id, http3_error_code error) noexcept;
     // Requests an orderly close: the next next_datagram() writes a
-    // CONNECTION_CLOSE carrying this application error code (RFC 9000
-    // §10.2; H3_NO_ERROR for a graceful HTTP/3 shutdown, RFC 9114 §5.2).
-    void close(std::uint64_t application_error_code) noexcept;
+    // CONNECTION_CLOSE carrying `error` (RFC 9000 §10.2; H3_NO_ERROR for a
+    // graceful HTTP/3 shutdown, RFC 9114 §5.2).
+    void close(http3_error_code error) noexcept;
     // The closing or draining period began (see http3_quic_status::closed).
     [[nodiscard]] bool closed() const noexcept;
     // How long a closed connection keeps absorbing late packets: three times
@@ -182,7 +246,12 @@ public:
     [[nodiscard]] std::optional<http3_event> next_event();
     [[nodiscard]] http3_connection& http3() noexcept;
     [[nodiscard]] const http3_connection& http3() const noexcept;
-    [[nodiscard]] std::optional<std::uint64_t> connection_error() const noexcept;
+    // The HTTP/3 code of the CONNECTION_CLOSE this connection sent or
+    // received, or of the codec error it failed on.
+    [[nodiscard]] std::optional<http3_error_code> application_error() const noexcept;
+    // The QUIC transport error code (RFC 9000 §20.1) of the CONNECTION_CLOSE
+    // this connection sent or received.
+    [[nodiscard]] std::optional<std::uint64_t> transport_error() const noexcept;
 
 private:
     class impl;

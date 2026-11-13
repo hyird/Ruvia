@@ -760,11 +760,11 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             .content_length_ = initial.declared_content_length_,
             .initial_end_stream_ = (stream_id & 1U) != 0 ? std::optional(initial.initial_end_stream_) : std::nullopt,
         });
-        auto reset_request = [this, stream_id](std::optional<std::uint64_t> error) {
-            reset_stream_no_throw(stream_id, error ? static_cast<http2_error_code>(*error) : http2_error_code::cancel);
+        auto reset_request = [this, stream_id](request_reset_code error) {
+            const auto* code = std::get_if<http2_error_code>(&error);
+            reset_stream_no_throw(stream_id, code != nullptr ? *code : http2_error_code::cancel);
         };
-        request_stream_control stream_control{
-            callback_access::bind<void(std::optional<std::uint64_t>)>(reset_request)};
+        request_stream_control stream_control{callback_access::bind<void(request_reset_code)>(reset_request)};
         admission_services.bind_stream_control(stream_control);
         admission_services.bind_request_channels({
             .interim_output_ = &interim_output,
@@ -1121,8 +1121,8 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
     const auto stream_id = body_chunk.stream_id();
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     if (stream_runtime == nullptr) {
-        if (auto credit = body_chunk.take_credit(); credit.valid()) {
-            (void)connection_.acknowledge(std::move(credit));
+        // Destroying the taken credit returns its bytes to the receive windows.
+        if (body_chunk.take_credit().valid()) {
             wake_writer();
         }
         return;
@@ -1141,9 +1141,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         // request borrows the buffered bytes as they were at dispatch.
         // Appending would reallocate under that borrowed view, so later DATA
         // is discarded and only its flow-control credit returned.
-        if (auto credit = body_chunk.take_credit(); credit.valid()) {
-            (void)connection_.acknowledge(std::move(credit));
-        }
+        (void)body_chunk.take_credit();
         wake_writer();
         return;
     }
@@ -1157,9 +1155,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
     }
     if (store_status == http2_request_body_store_status::too_large) {
         stream_runtime->mark_body_failure(http_request_body_failure::too_large);
-        if (auto credit = body_chunk.take_credit(); credit.valid()) {
-            (void)connection_.acknowledge(std::move(credit));
-        }
+        (void)body_chunk.take_credit();
         if (stream_runtime->response_committed()) {
             reset_event_stream(stream_id, http2_error_code::cancel);
             return;
@@ -1180,7 +1176,7 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         }
         signal->wake();
     } else {
-        (void)connection_.acknowledge(body_chunk.take_credit());
+        (void)body_chunk.take_credit();
         wake_writer();
     }
 }
@@ -1191,8 +1187,7 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     auto* stream_runtime = stream_runtimes_.find(stream_id);
     auto* signal = stream_runtime != nullptr ? stream_runtime->signal() : nullptr;
     if (stream_runtime == nullptr || signal == nullptr) {
-        if (auto credit = tunnel_data.take_credit(); credit.valid()) {
-            (void)connection_.acknowledge(std::move(credit));
+        if (tunnel_data.take_credit().valid()) {
             wake_writer();
         }
         return;
@@ -1200,7 +1195,7 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
     if (!stream_runtime->route_selected() || stream_runtime->body_mode() != request_body_mode::stream) {
         // Only a CONNECT that no tunnel route will accept lacks a streaming body:
         // its optimistic DATA is never consumed, so return the credit at once.
-        (void)connection_.acknowledge(tunnel_data.take_credit());
+        (void)tunnel_data.take_credit();
         wake_writer();
         return;
     }

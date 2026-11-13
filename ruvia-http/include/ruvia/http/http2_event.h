@@ -29,8 +29,14 @@ class http2_connection_owner_endpoint;
 
 class http2_received_data_credit final {
 public:
-    // A credit is linear. acknowledge() consumes it explicitly; destroying a
-    // still-valid token returns the same exact byte credit without throwing.
+    // A credit is linear and has one return path: destroying a still-valid
+    // token returns its exact byte count to the issuing connection's stream and
+    // connection receive windows (queuing any WINDOW_UPDATE) without throwing.
+    // The token carries its connection, so it cannot be returned through
+    // another one, and it keeps that connection's state alive, so it may
+    // outlive the facade. Returning credit for a stream that is already gone
+    // is a no-op. A return whose release fails is deferred and retried as
+    // described on http2_connection.
     ~http2_received_data_credit();
     http2_received_data_credit(const http2_received_data_credit&) = delete;
     http2_received_data_credit& operator=(const http2_received_data_credit&) = delete;
@@ -54,10 +60,6 @@ private:
     std::uint32_t bytes_{0};
 };
 
-enum class http2_received_data_acknowledge_status : std::uint8_t {
-    acknowledged,
-    closed,
-};
 class http2_informational_head_event final {
 public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {
@@ -208,6 +210,13 @@ enum class http2_message_content_semantics : std::uint8_t {
     metadata_only,
 };
 
+// The peer ended its send half normally. trailers() is the trailer section that
+// preceded the end, empty when there was none: lowercase field names (RFC 9113
+// §8.2.2); a client receives them with the fields RFC 9110 §6.5.1 forbids in
+// response trailers already discarded, and a server passes them to
+// http_request_trailers::append_received(). The span borrows the event: it is
+// invalidated when the event is moved or destroyed, or once take_trailers()
+// moved the fields out.
 class http2_message_end_event final {
 public:
     [[nodiscard]] std::uint32_t stream_id() const noexcept {

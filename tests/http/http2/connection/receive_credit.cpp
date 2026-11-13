@@ -112,12 +112,11 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     if (!credit) {
         return;
     }
-    // Received bytes are credited only on acknowledgement.
+    // Received bytes are credited only once their credit is destroyed.
     std::pmr::string prefix(&resource);
     append_frame(prefix, ruvia::http2_frame_type::settings, 0x1, 0, {});
     EXPECT_TRUE(ruvia::test::drain_output(client) == std::string_view(prefix));
-    EXPECT_TRUE(client.acknowledge(std::move(*credit)) == ruvia::http2_received_data_acknowledge_status::acknowledged);
-    EXPECT_TRUE(!credit->valid());
+    credit.reset();
 
     const auto output = ruvia::test::drain_output(client);
     std::string_view updates(output);

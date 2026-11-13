@@ -106,8 +106,8 @@ public:
         connection_.abandon_stream_lease(stream_id);
     }
 
-    void abandon_credit(std::uint32_t stream_id, std::uint32_t bytes_value) noexcept {
-        connection_.abandon_received_data(stream_id, bytes_value);
+    void return_credit(std::uint32_t stream_id, std::uint32_t bytes_value) noexcept {
+        connection_.return_received_data(stream_id, bytes_value);
     }
     [[nodiscard]] ::ruvia::http2_event materialize_message_head_event(
         const detail::http2_message_head_record& value) {
@@ -199,7 +199,7 @@ http2_received_data_credit::~http2_received_data_credit() {
     if (endpoint_ == nullptr) {
         return;
     }
-    endpoint_->abandon_credit(stream_id_, bytes_);
+    endpoint_->return_credit(stream_id_, bytes_);
     endpoint_->release();
 }
 
@@ -514,23 +514,6 @@ http2_submit_status http2_connection::submit_ping() {
 }
 http2_submit_status http2_connection::submit_max_concurrent_streams(std::uint32_t limit) {
     return impl_->connection_.submit_max_concurrent_streams(limit);
-}
-http2_received_data_acknowledge_status http2_connection::acknowledge(http2_received_data_credit&& credit) {
-    if (!credit.valid() || credit.endpoint_ != impl_.get()) {
-        throw std::logic_error("invalid HTTP/2 received data credit");
-    }
-    auto* const endpoint = std::exchange(credit.endpoint_, nullptr);
-    const auto stream_id = std::exchange(credit.stream_id_, 0);
-    const auto bytes = std::exchange(credit.bytes_, 0);
-    struct endpoint_guard final {
-        detail::http2_connection_owner_endpoint* endpoint_;
-        ~endpoint_guard() {
-            endpoint_->release();
-        }
-    } guard{endpoint};
-    const bool acknowledged = impl_->connection_.acknowledge_received_data(stream_id, bytes);
-    return acknowledged ? http2_received_data_acknowledge_status::acknowledged
-                        : http2_received_data_acknowledge_status::closed;
 }
 std::size_t http2_connection::available_request_streams(std::size_t local_limit) const noexcept {
     return impl_->connection_.available_local_request_streams(local_limit);

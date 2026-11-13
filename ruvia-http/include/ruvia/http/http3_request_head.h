@@ -9,25 +9,28 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/websocket_handshake.h"
 
 namespace ruvia {
 
-// A validated HTTP/3 request head (RFC 9114 §4.3.1). nghttp3 has already
-// rejected the framing-level violations of §4.1.2 and §4.3.1 -- uppercase
-// names, misplaced, repeated or missing pseudo-header fields, connection-
-// specific fields, TE other than "trailers", malformed Content-Length -- with
-// H3_MESSAGE_ERROR. parse() adds the request semantics every HTTP version
-// shares in ruvia-http (target grammar, :authority/Host agreement, the
-// recipient field rules, Expect, Cookie joining) and fails closed on anything
-// it cannot represent as an http_request.
+class http3_connection;
+
+// A validated HTTP/3 request head (RFC 9114 §4.3.1), published by a server
+// http3_connection as http3_request_head_event. nghttp3 rejects the
+// framing-level violations of §4.1.2 and §4.3.1 -- uppercase names,
+// misplaced, repeated or missing pseudo-header fields, connection-specific
+// fields, TE other than "trailers", malformed Content-Length -- and the
+// connection adds the request semantics every HTTP version shares in
+// ruvia-http (target grammar, :authority/Host agreement, the recipient field
+// rules, Expect, Cookie joining). A head it cannot represent as an
+// http_request is a malformed request the connection answers itself with
+// H3_MESSAGE_ERROR (§4.1.2); no head is published for it.
 class http3_request_head final {
 public:
-    [[nodiscard]] static std::optional<http3_request_head> parse(
-        http3_headers_event event, std::pmr::memory_resource* resource);
-
     http3_request_head(http3_request_head&&) noexcept = default;
     http3_request_head& operator=(http3_request_head&&) = delete;
     http3_request_head(const http3_request_head&) = delete;
@@ -75,12 +78,17 @@ public:
         std::pmr::memory_resource* resource, borrowed_text body = {}) const&& = delete;
 
 private:
+    friend class http3_connection;
     struct regular_field final {
         std::uint32_t index_;
         detail::http_field_kind kind_;
     };
 
-    explicit http3_request_head(http3_headers_event event, std::pmr::memory_resource* resource);
+    http3_request_head(std::int64_t stream_id, std::pmr::vector<http_header> fields, bool stream_ended,
+        bool early_data, std::pmr::memory_resource* resource);
+    // nullopt: the head is malformed (RFC 9114 §4.1.2).
+    [[nodiscard]] static std::optional<http3_request_head> try_create(std::int64_t stream_id,
+        std::pmr::vector<http_header> fields, bool stream_ended, bool early_data, std::pmr::memory_resource* resource);
     [[nodiscard]] bool validate();
     [[nodiscard]] std::string_view field_value(std::uint32_t index) const noexcept;
 

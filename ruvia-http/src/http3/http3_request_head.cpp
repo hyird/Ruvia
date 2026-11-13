@@ -25,17 +25,19 @@
 
 namespace ruvia {
 
-http3_request_head::http3_request_head(http3_headers_event event, std::pmr::memory_resource* resource)
-    : fields_(std::move(event.fields_)),
+http3_request_head::http3_request_head(std::int64_t stream_id, std::pmr::vector<http_header> fields,
+    bool stream_ended, bool early_data, std::pmr::memory_resource* resource)
+    : fields_(std::move(fields)),
       regular_(resource),
       cookie_(resource),
-      stream_id_(event.stream_id_),
-      stream_ended_(event.stream_ended_),
-      early_data_(event.early_data_) {}
+      stream_id_(stream_id),
+      stream_ended_(stream_ended),
+      early_data_(early_data) {}
 
-std::optional<http3_request_head> http3_request_head::parse(
-    http3_headers_event event, std::pmr::memory_resource* resource) {
-    http3_request_head head(std::move(event), detail::http_pmr_resource_or_default(resource));
+std::optional<http3_request_head> http3_request_head::try_create(std::int64_t stream_id,
+    std::pmr::vector<http_header> fields, bool stream_ended, bool early_data, std::pmr::memory_resource* resource) {
+    http3_request_head head(stream_id, std::move(fields), stream_ended, early_data,
+        detail::http_pmr_resource_or_default(resource));
     if (!head.validate()) {
         return std::nullopt;
     }

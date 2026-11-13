@@ -66,9 +66,10 @@ void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& obse
 
 #if defined(RUVIA_ENABLE_HTTP3)
 // Called after binding the QUIC connection, before receiving its Initial.
-// The caller owns resumption_context for the entire SSL lifetime.
+// `version` is the QUIC version of the client's first Initial. The caller
+// owns resumption_context for the entire SSL lifetime.
 void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& connection,
-    const http3_connection_options& options, bool early_data,
+    std::uint32_t version, const http3_connection_options& options, bool early_data,
     std::array<unsigned char, 32>& resumption_context);
 #endif
 }  // namespace ruvia::detail

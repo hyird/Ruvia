@@ -193,7 +193,7 @@ private:
     }
 
     void finish_stream_response(const http_response_trailer_section& trailer_section) {
-        http3_status finished{};
+        http3_finish_status finished{};
         try {
             finished = session_.codec().finish_response(stream_.id(), trailer_section);
         } catch (...) {
@@ -201,10 +201,10 @@ private:
             throw;
         }
         session_.wake_writer();
-        if (finished == http3_status::invalid_message) {
+        if (finished == http3_finish_status::invalid_message) {
             throw std::invalid_argument("HTTP/3 response ended before its declared Content-Length");
         }
-        if (finished != http3_status::accepted) {
+        if (finished != http3_finish_status::accepted) {
             throw inbound_transport_error(
                 std::make_error_code(std::errc::connection_reset), reset_error_message);
         }
@@ -272,7 +272,7 @@ public:
         if (result != http3_data_write_status::completed || signal_.stopped() || stream_.aborted()) {
             co_return signal_.terminated() ? signal_.terminal_error() : std::make_error_code(std::errc::connection_reset);
         }
-        if (disposition == http_stream_end::end && session_.codec().finish_stream(stream_.id()) != http3_status::accepted) {
+        if (disposition == http_stream_end::end && session_.codec().finish_stream(stream_.id()) != http3_finish_status::accepted) {
             co_return std::make_error_code(std::errc::protocol_error);
         }
         session_.wake_writer();
@@ -314,16 +314,6 @@ private:
     http3_session& session_;
     http3_stream& stream_;
 };
-[[nodiscard]] std::uint64_t error_value(http3_error_code code) noexcept {
-    return static_cast<std::uint64_t>(code);
-}
-
-[[nodiscard]] ngtcp2_callbacks server_callbacks() noexcept {
-    auto callbacks = http3_quic_crypto_callbacks();
-    callbacks.recv_client_initial = ngtcp2_crypto_recv_client_initial_cb;
-    return callbacks;
-}
-
 }  // namespace
 ngtcp2_conn* http3_session::native_connection(ngtcp2_crypto_conn_ref* reference) noexcept {
     return static_cast<http3_session*>(reference->user_data)->connection_->native_handle();
@@ -399,9 +389,8 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         throw std::runtime_error("failed to issue a QUIC connection ID");
     }
     const auto& server = services_.options_.server_;
-    auto callbacks = server_callbacks();
-    callbacks.get_new_connection_id2 = new_connection_id;
-    callbacks.remove_connection_id = remove_connection_id;
+    auto crypto_callbacks = make_http3_quic_crypto_callbacks();
+    crypto_callbacks.recv_client_initial_ = ngtcp2_crypto_recv_client_initial_cb;
     const auto handshake_timeout = http3_quic_duration(
         server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_);
     const http3_connection_options http3_options{
@@ -411,7 +400,8 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .enable_connect_protocol_ = true,
         .enable_h3_datagram_ = true};
     connection_.emplace(http3_quic_connection::server({
-        .callbacks_ = callbacks,
+        .crypto_callbacks_ = crypto_callbacks,
+        .owner_callbacks_ = {.get_new_connection_id_ = new_connection_id, .remove_connection_id_ = remove_connection_id},
         .source_connection_id_ = source,
         .destination_connection_id_ = initial.scid,
         .original_destination_connection_id_ = original_dcid,
@@ -436,7 +426,7 @@ http3_session::http3_session(http3_endpoint& endpoint, connection_slot slot, con
         .http3_ = http3_options,
     }));
     connection_->set_tls_native_handle(crypto_.get());
-    configure_http3_server_tls_session(*tls_, *connection_, http3_options,
+    configure_http3_server_tls_session(*tls_, *connection_, initial.version, http3_options,
         endpoint.session_config().http3_->early_data_, tls_resumption_context_);
 
     const connection_transport transport(
@@ -556,7 +546,7 @@ void http3_session::wake_writer() noexcept {
 
 void http3_session::reset_stream(std::int64_t stream_id, http3_error_code error) noexcept {
     if (lifecycle_ == lifecycle_type::open) {
-        connection_->reset_stream(stream_id, error_value(error));
+        connection_->reset_stream(stream_id, error);
     }
     if (auto* stream = find_stream(stream_id)) {
         stream->mark_aborted();
@@ -577,13 +567,13 @@ http3_quic_status http3_session::submit_datagram(std::int64_t stream_id, std::sp
     return status;
 }
 
-void http3_session::on_datagram(http3_datagram_event& event) {
-    auto* stream = find_stream(event.stream_id_);
+void http3_session::on_datagram(const http3_datagram_event& event) {
+    auto* stream = find_stream(event.stream_id());
     if (stream == nullptr || stream->aborted() || stream->handler_done() || !stream->head().connect()) {
         return;
     }
     stream->note_request_body_progress(scanner_entry_.last_active_ms());
-    stream->store_datagram(event.payload_, services_.options_.server_.max_buffered_body_bytes_);
+    stream->store_datagram(event.payload(), services_.options_.server_.max_buffered_body_bytes_);
 }
 
 void http3_session::receive(std::span<const std::byte> datagram, const asio::ip::udp::endpoint& remote,
@@ -600,7 +590,7 @@ void http3_session::receive(std::span<const std::byte> datagram, const asio::ip:
         (void)connection_->receive_datagram(path(path_remote_), NGTCP2_ECN_NOT_ECT, datagram, now());
     } catch (...) {
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
-        connection_->close(error_value(http3_error_code::internal_error));
+        connection_->close(http3_error_code::internal_error);
     }
     process_events();
     // Acknowledgements may have freed stream output budget.
@@ -615,7 +605,7 @@ void http3_session::process_events() noexcept {
         // Only allocation fails here; the connection cannot keep its streams
         // consistent without the event it lost.
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
-        connection_->close(error_value(http3_error_code::internal_error));
+        connection_->close(http3_error_code::internal_error);
         terminate(std::make_error_code(std::errc::not_enough_memory));
     }
 }
@@ -623,17 +613,20 @@ void http3_session::process_events() noexcept {
 void http3_session::drain_events() {
     start_application();
     while (auto event = connection_->next_event()) {
-        if (auto* headers = std::get_if<http3_headers_event>(&*event)) {
-            on_headers(*headers);
-        } else if (auto* data = std::get_if<http3_data_event>(&*event)) {
+        if (auto* head = event->request_head()) {
+            on_request_head(*head);
+        } else if (auto* data = event->data()) {
             on_data(*data);
-        } else if (auto* datagram = std::get_if<http3_datagram_event>(&*event)) {
+        } else if (const auto* datagram = event->datagram()) {
             on_datagram(*datagram);
-        } else if (const auto* end = std::get_if<http3_stream_end_event>(&*event)) {
-            on_stream_end(end->stream_id_);
-        } else if (const auto* action = std::get_if<http3_transport_action_event>(&*event)) {
-            on_stream_abort(action->stream_id_);
-        } else if (const auto* closed = std::get_if<http3_stream_close_event>(&*event)) {
+        } else if (const auto* end = event->message_end()) {
+            on_message_end(*end);
+        } else if (const auto* action = event->transport_action()) {
+            // Either origin abandons the request: a peer RESET_STREAM or
+            // STOP_SENDING, or the connection's own stream error (a malformed
+            // trailer section, RFC 9114 §4.1.2), already sent.
+            on_stream_abort(action->stream_id());
+        } else if (const auto* closed = event->stream_close()) {
             on_stream_close(*closed);
         }
         // A client GOAWAY (RFC 9114 §5.2) bounds only server push, which this
@@ -656,7 +649,7 @@ void http3_session::start_application() {
     // RFC 9114 §6.2: a client must allow the three server unidirectional
     // streams; one that does not cannot be served.
     if (connection_->start_http3() != http3_quic_status::accepted) {
-        connection_->close(error_value(http3_error_code::internal_error));
+        connection_->close(http3_error_code::internal_error);
         return;
     }
     std::optional<std::string_view> client_subject;
@@ -674,8 +667,8 @@ void http3_session::start_application() {
     base_services_->bind_routes(services_.routes_);
     set_inactivity_phase();
     if (drain_begun_) {
-        if (codec().begin_drain() != http3_status::accepted) {
-            connection_->close(error_value(http3_error_code::internal_error));
+        if (codec().begin_drain() != http3_submit_status::accepted) {
+            connection_->close(http3_error_code::internal_error);
             return;
         }
         arm_drain_timer();
@@ -691,7 +684,7 @@ void http3_session::start_application() {
         }
         if (stream.take_continue_pending() && !stream.request_ended() && !stream.body_failure().has_value()) {
             if (codec().submit_interim_response_head(
-                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
+                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 continue;
             }
@@ -703,25 +696,8 @@ void http3_session::start_application() {
     }
 }
 
-void http3_session::on_headers(http3_headers_event& event) {
-    const auto stream_id = event.stream_id_;
-    if (!event.trailers_) {
-        on_request_head(event);
-        return;
-    }
-    auto* stream = find_stream(stream_id);
-    if (stream == nullptr || stream->aborted() || stream->handler_done()) {
-        return;
-    }
-    if (stream->trailers().append_received(event.fields_).has_value()) {
-        // RFC 9114 §4.1.2: a malformed trailer section makes the request
-        // malformed.
-        reset_stream(stream_id, http3_error_code::message_error);
-    }
-}
-
-void http3_session::on_request_head(http3_headers_event& event) {
-    const auto stream_id = event.stream_id_;
+void http3_session::on_request_head(http3_request_head_event& event) {
+    const auto stream_id = event.stream_id();
     if (find_stream(stream_id) != nullptr) {
         reset_stream(stream_id, http3_error_code::internal_error);
         return;
@@ -732,25 +708,21 @@ void http3_session::on_request_head(http3_headers_event& event) {
         accepted_request_heads_ >= *server.max_requests_per_connection_) {
         begin_drain();
     }
-    auto head = http3_request_head::parse(std::move(event), process_resource());
-    if (!head.has_value()) {
-        // RFC 9114 §4.1.2: a malformed request is a stream error of type
-        // H3_MESSAGE_ERROR.
-        reset_stream(stream_id, http3_error_code::message_error);
-        return;
-    }
-    const auto connect = head->connect();
+    // The connection validated the head; a malformed request never reaches
+    // here (RFC 9114 §4.1.2).
+    auto head = std::move(event).take_head();
+    const auto connect = head.connect();
     auto [resolution, body_mode] = resolve_multiplexed_stream_route(services_.routes_,
-        endpoint_.session_config().request_stream_, head->method(), head->path(), head->authority(), head->protocol());
+        endpoint_.session_config().request_stream_, head.method(), head.path(), head.authority(), head.protocol());
     const auto* resolved = resolution.resolved();
     if (connect) {
         body_mode = request_body_mode::stream;
     }
     const bool resolved_route = resolved != nullptr && !connect;
-    const auto expectation_plan = head->expectation_plan(http_unsupported_expectation_policy::reject);
-    const auto declared_length = head->declared_content_length();
-    const bool ended = head->stream_ended();
-    auto stream_value = make_pmr_object<http3_stream>(process_resource(), std::move(*head), std::move(resolution),
+    const auto expectation_plan = head.expectation_plan(http_unsupported_expectation_policy::reject);
+    const auto declared_length = head.declared_content_length();
+    const bool ended = head.stream_ended();
+    auto stream_value = make_pmr_object<http3_stream>(process_resource(), std::move(head), std::move(resolution),
         body_mode, process_resource(), static_cast<std::pmr::memory_resource*>(&inbound_buffers_));
     auto& stream = *stream_value;
     stream.set_priority(codec().stream_priority(stream_id));
@@ -781,7 +753,7 @@ void http3_session::on_request_head(http3_headers_event& event) {
             stream.defer_continue();
         } else {
             if (codec().submit_interim_response_head(
-                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_status::accepted) {
+                    stream_id, http_interim_response_head(ruvia::http_status::continue_value)) != http3_submit_status::accepted) {
                 reset_stream(stream_id, http3_error_code::internal_error);
                 return;
             }
@@ -845,6 +817,18 @@ void http3_session::on_data(http3_data_event& event) {
     }
 }
 
+void http3_session::on_message_end(const http3_message_end_event& event) {
+    const auto stream_id = event.stream_id();
+    auto* stream = find_stream(stream_id);
+    if (stream != nullptr && !stream->aborted() && !stream->handler_done() && !event.trailers().empty() &&
+        stream->trailers().append_received(event.trailers()).has_value()) {
+        // RFC 9114 §4.1.2: a malformed trailer section makes the request
+        // malformed.
+        reset_stream(stream_id, http3_error_code::message_error);
+    }
+    on_stream_end(stream_id);
+}
+
 void http3_session::on_stream_end(std::int64_t stream_id) {
     auto* stream = find_stream(stream_id);
     if (stream == nullptr || stream->request_ended()) {
@@ -868,19 +852,19 @@ void http3_session::on_stream_abort(std::int64_t stream_id) noexcept {
 }
 
 void http3_session::on_stream_close(const http3_stream_close_event& event) noexcept {
-    auto* stream = find_stream(event.stream_id_);
+    auto* stream = find_stream(event.stream_id());
     if (stream == nullptr) {
         finish_drain_if_ready();
         return;
     }
     stream->mark_closed();
-    if (event.application_error_code_.has_value()) {
+    if (event.error().has_value()) {
         stream->mark_aborted();
     }
     if (auto* signal = stream->signal()) {
         signal->wake();
     }
-    remove_stream_if_done(event.stream_id_);
+    remove_stream_if_done(event.stream_id());
 }
 
 void http3_session::wake_output_waiters() noexcept {
@@ -919,11 +903,11 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
     }
     stream->mark_handler_done();
     if (stream->aborted() && lifecycle_ == lifecycle_type::open) {
-        connection_->reset_stream(stream_id, error_value(http3_error_code::request_cancelled));
+        connection_->reset_stream(stream_id, http3_error_code::request_cancelled);
     } else if (!stream->request_ended() && lifecycle_ == lifecycle_type::open) {
         // RFC 9114 §4.1.2: once the response is complete the server may stop
         // reading the request with H3_NO_ERROR.
-        connection_->stop_receiving(stream_id, error_value(http3_error_code::no_error));
+        connection_->stop_receiving(stream_id, http3_error_code::no_error);
     }
     // Content that arrived but was never read holds connection credit.
     stream->mark_request_body_closed();
@@ -1030,7 +1014,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                 auto& output = *static_cast<interim_target*>(raw);
                 // RFC 9114 §4.1: any number of 1xx heads may precede the final one.
                 if (output.session_.codec().submit_interim_response_head(output.stream_id_, interim) !=
-                    http3_status::accepted) {
+                    http3_submit_status::accepted) {
                     throw std::invalid_argument("HTTP/3 interim response rejected");
                 }
                 output.session_.wake_writer();
@@ -1040,7 +1024,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             this,
             [](void* raw, std::span<const std::string_view> origins) {
                 auto& session = *static_cast<http3_session*>(raw);
-                if (session.codec().submit_origin_advertisement(origins) != http3_status::accepted) {
+                if (session.codec().submit_origin_advertisement(origins) != http3_submit_status::accepted) {
                     throw std::invalid_argument("HTTP/3 ORIGIN advertisement rejected");
                 }
                 session.wake_writer();
@@ -1053,11 +1037,11 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
             .content_length_ = head.declared_content_length(),
             .initial_end_stream_ = head.stream_ended(),
         });
-        auto reset_request = [this, stream_id](std::optional<std::uint64_t> error) {
-            reset_stream(stream_id, error ? static_cast<http3_error_code>(*error) : http3_error_code::request_cancelled);
+        auto reset_request = [this, stream_id](request_reset_code error) {
+            const auto* code = std::get_if<http3_error_code>(&error);
+            reset_stream(stream_id, code != nullptr ? *code : http3_error_code::request_cancelled);
         };
-        request_stream_control stream_control{
-            callback_access::bind<void(std::optional<std::uint64_t>)>(reset_request)};
+        request_stream_control stream_control{callback_access::bind<void(request_reset_code)>(reset_request)};
         admission_services.bind_stream_control(stream_control);
         admission_services.bind_early_data(head.early_data());
         admission_services.bind_request_channels({
@@ -1117,7 +1101,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                 case http_request_endpoint::tunnel: {
                     auto commit = [this, stream, signal, &admission, &options](
                                       context& context_value, const http_response& head_response) {
-                        if (codec().submit_connect_response_head(stream->id(), head_response) != http3_status::accepted) {
+                        if (codec().submit_connect_response_head(stream->id(), head_response) != http3_submit_status::accepted) {
                             throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
                         }
                         if (!stream->tunnel()) {
@@ -1393,7 +1377,7 @@ void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
         (void)connection_->handle_expiry(now());
     } catch (...) {
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
-        connection_->close(error_value(http3_error_code::internal_error));
+        connection_->close(http3_error_code::internal_error);
     }
     process_events();
     wake_output_waiters();
@@ -1427,7 +1411,7 @@ void http3_session::close_now() noexcept {
         return;
     }
     if (lifecycle_ == lifecycle_type::open && !connection_->closed()) {
-        connection_->close(error_value(http3_error_code::no_error));
+        connection_->close(http3_error_code::no_error);
         // Written at once: a stopping worker closes the socket before the
         // writer would run again.
         try {
@@ -1480,7 +1464,7 @@ void http3_session::begin_drain() noexcept {
     if (!connection_->http3_started()) {
         if (streams_.empty() && accepted_request_heads_ == 0) {
             // No request can be in flight before the handshake completed.
-            connection_->close(error_value(http3_error_code::no_error));
+            connection_->close(http3_error_code::no_error);
             wake_writer();
             return;
         }
@@ -1491,8 +1475,8 @@ void http3_session::begin_drain() noexcept {
         drain_begun_ = true;
         // RFC 9114 §5.2: the shutdown notice still admits requests the client
         // already sent; the final GOAWAY follows a round trip later.
-        if (codec().begin_drain() != http3_status::accepted) {
-            connection_->close(error_value(http3_error_code::internal_error));
+        if (codec().begin_drain() != http3_submit_status::accepted) {
+            connection_->close(http3_error_code::internal_error);
         }
         wake_writer();
     }
@@ -1515,8 +1499,8 @@ void http3_session::drain_timer_expired() noexcept {
     if (lifecycle_ != lifecycle_type::open || termination_.terminated()) {
         return;
     }
-    if (codec().finish_drain() != http3_status::accepted) {
-        connection_->close(error_value(http3_error_code::internal_error));
+    if (codec().finish_drain() != http3_submit_status::accepted) {
+        connection_->close(http3_error_code::internal_error);
     }
     drain_timer_.mark_expired();
     wake_writer();
@@ -1535,7 +1519,7 @@ void http3_session::finish_drain_if_ready() noexcept {
         if (drain_timer_.expired()) {
             terminate(std::make_error_code(std::errc::timed_out));
         }
-        connection_->close(error_value(http3_error_code::no_error));
+        connection_->close(http3_error_code::no_error);
         wake_writer();
     }
 }

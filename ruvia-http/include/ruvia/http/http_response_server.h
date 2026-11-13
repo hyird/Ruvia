@@ -77,20 +77,4 @@ http_response_trailer_section validate_http_response_trailers(headers_type&&) = 
 http_response_trailer_section validate_http_response_trailers(
     std::initializer_list<http_header_view>) = delete;
 
-// Visit normalized response trailer fields from a received HTTP/1 trailer
-// block: the bytes between the terminal zero-size chunk and the empty line that
-// ends the trailer section (a final CRLF after the last field is accepted),
-// already free of obs-fold as http1_client_response_body_decoder publishes it
-// (RFC 9112 section 5.2); a fold left in `block` is malformed.
-// Values are exposed with optional whitespace stripped and borrow `block`.
-// Fields not permitted in response trailers (RFC 9110 section 6.5.1) are
-// discarded without reaching the visitor (RFC 9112 section 7.1.2). Returns false
-// for a malformed or oversized section, or when the visitor returns false.
-template <typename visitor_type>
-[[nodiscard]] inline bool visit_http_response_trailers(std::string_view block, visitor_type&& visitor) {
-    auto budget = http_trailer_section_budget();
-    return detail::visit_http1_trailer_block(block, http1_trailer_obs_fold::reject,
-               detail::is_forbidden_response_trailer_name, budget, std::forward<visitor_type>(visitor)) ==
-           detail::http_trailer_block_status::ok;
-}
 }  // namespace ruvia

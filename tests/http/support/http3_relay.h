@@ -13,10 +13,10 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http3_request_head.h"
 
 namespace ruvia::test {
 
@@ -45,12 +45,12 @@ template <typename event_consumer_type>
     std::pmr::vector<std::byte> input;
     for (int iteration = 0; iteration < max_outputs; ++iteration) {
         const auto produced = source.peek_output(64 * 1024, output);
-        if (produced.status_ == http3_status::would_block) {
+        if (produced.status_ == http3_transport_status::would_block) {
             return true;
         }
         const auto output_size = output.size();
-        if (produced.status_ != http3_status::accepted ||
-            source.commit_output(output.stream_id_, output_size) != http3_status::accepted) {
+        if (produced.status_ != http3_transport_status::accepted ||
+            source.commit_output(output.stream_id_, output_size) != http3_transport_status::accepted) {
             return false;
         }
         input.clear();
@@ -59,7 +59,7 @@ template <typename event_consumer_type>
             input.insert(input.end(), output.buffers_[index].begin(), output.buffers_[index].end());
         }
         const auto received = destination.read_stream(output.stream_id_, input, output.fin_, timestamp++);
-        if (received.status_ != http3_status::accepted) {
+        if (received.status_ != http3_transport_status::accepted) {
             return false;
         }
         while (auto event = destination.next_event()) {
@@ -71,7 +71,7 @@ template <typename event_consumer_type>
         }
         if (withheld != nullptr) {
             withheld->push_back({output.stream_id_, output_size});
-        } else if (source.acknowledge_output(output.stream_id_, output_size) != http3_status::accepted) {
+        } else if (source.acknowledge_output(output.stream_id_, output_size) != http3_transport_status::accepted) {
             return false;
         }
     }
@@ -82,7 +82,7 @@ template <typename event_consumer_type>
     http3_connection& source, const std::pmr::vector<http3_withheld_acknowledgement>& withheld) {
     for (const auto& acknowledgement : withheld) {
         if (source.acknowledge_output(acknowledgement.stream_id_, acknowledgement.bytes_) !=
-            http3_status::accepted) {
+            http3_transport_status::accepted) {
             return false;
         }
     }
@@ -94,60 +94,85 @@ struct http3_field_record final {
     std::pmr::string value_;
 };
 
+[[nodiscard]] inline std::optional<std::string_view> find_http3_field(
+    std::span<const http3_field_record> fields, std::string_view name) noexcept {
+    for (const auto& field : fields) {
+        if (field.name_ == name) {
+            return field.value_;
+        }
+    }
+    return std::nullopt;
+}
+
+// A received head. A server's request head lists the pseudo-header fields
+// the validated head reports, then the fields of the request it builds (so
+// Host follows from :authority and Cookie crumbs are joined). A client's
+// response head carries its status and no :status field.
 struct http3_headers_record final {
     [[nodiscard]] std::optional<std::string_view> field(std::string_view name) const noexcept {
-        for (const auto& field : fields_) {
-            if (field.name_ == name) {
-                return field.value_;
-            }
-        }
-        return std::nullopt;
+        return find_http3_field(fields_, name);
     }
 
     std::int64_t stream_id_{-1};
     std::pmr::vector<http3_field_record> fields_;
     bool stream_ended_{false};
     std::optional<http_received_status> status_;
-    bool trailers_{false};
+    bool early_data_{false};
+};
+
+// A message end and the trailer section that preceded it (empty for none).
+struct http3_message_end_record final {
+    [[nodiscard]] std::optional<std::string_view> field(std::string_view name) const noexcept {
+        return find_http3_field(trailers_, name);
+    }
+
+    std::int64_t stream_id_{-1};
+    std::pmr::vector<http3_field_record> trailers_;
 };
 
 // Owned copy of every event a codec published, in arrival order. sequence_
-// records one letter per event kind (H headers, D data, E stream end,
-// C stream close, G goaway, T transport action) with consecutive DATA events
-// collapsed, so tests can assert frame order independent of chunking.
+// records one letter per event kind (H head, D data, E message end, C stream
+// close, G goaway, T transport action, U request unprocessed, O origin
+// advertisement, X datagram) with consecutive DATA events collapsed, so
+// tests can assert frame order independent of chunking.
 class http3_event_log final {
 public:
     void operator()(const http3_event& event) {
-        if (const auto* headers = std::get_if<http3_headers_event>(&event)) {
-            http3_headers_record record{headers->stream_id_, {}, headers->stream_ended_, std::nullopt, headers->trailers_};
-            for (const auto& field : headers->fields_) {
-                record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
-            }
-            headers_.push_back(std::move(record));
-            sequence_.push_back('H');
-        } else if (const auto* interim = std::get_if<http3_informational_head_event>(&event)) {
+        if (const auto* request = event.request_head()) {
+            record_request_head(request->head());
+        } else if (const auto* interim = event.informational_head()) {
             record_response_head(interim->stream_id(), interim->head(), false);
-        } else if (const auto* head = std::get_if<http3_response_head_event>(&event)) {
+        } else if (const auto* head = event.response_head()) {
             record_response_head(head->stream_id(), head->head(), head->stream_ended());
             content_lengths_.emplace_back(head->stream_id(), head->head().content_length());
-        } else if (const auto* data = std::get_if<http3_data_event>(&event)) {
+        } else if (const auto* data = event.data()) {
             data_.emplace_back(data->stream_id(), std::pmr::string(data->bytes()));
             if (sequence_.empty() || sequence_.back() != 'D') {
                 sequence_.push_back('D');
             }
-        } else if (const auto* end = std::get_if<http3_stream_end_event>(&event)) {
-            ends_.push_back(end->stream_id_);
+        } else if (const auto* end = event.message_end()) {
+            http3_message_end_record record{end->stream_id(), {}};
+            for (const auto& field : end->trailers()) {
+                record.trailers_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+            }
+            ends_.push_back(std::move(record));
             sequence_.push_back('E');
-        } else if (const auto* close = std::get_if<http3_stream_close_event>(&event)) {
+        } else if (const auto* close = event.stream_close()) {
             closes_.push_back(*close);
             sequence_.push_back('C');
-        } else if (const auto* goaway = std::get_if<http3_goaway_event>(&event)) {
-            goaways_.push_back(goaway->id_);
+        } else if (const auto* goaway = event.goaway()) {
+            goaways_.push_back(goaway->id());
             sequence_.push_back('G');
-        } else if (const auto* action = std::get_if<http3_transport_action_event>(&event)) {
+        } else if (const auto* action = event.transport_action()) {
             transport_actions_.push_back(*action);
             sequence_.push_back('T');
-        } else if (const auto* origins = std::get_if<http_origin_advertisement>(&event)) {
+        } else if (const auto* unprocessed = event.request_unprocessed()) {
+            unprocessed_.push_back(unprocessed->stream_id());
+            sequence_.push_back('U');
+        } else if (const auto* datagram = event.datagram()) {
+            datagrams_.emplace_back(datagram->stream_id(), std::pmr::string(datagram->payload()));
+            sequence_.push_back('X');
+        } else if (const auto* origins = event.origin_advertisement()) {
             std::pmr::vector<std::pmr::string> list;
             list.reserve(origins->origins_.size());
             for (const auto& origin : origins->origins_) {
@@ -158,8 +183,27 @@ public:
         }
     }
 
-    // Client response heads are recorded like field sections, with their
-    // status and without the :status pseudo-header.
+    void record_request_head(const http3_request_head& head) {
+        http3_headers_record record{head.stream_id(), {}, head.stream_ended(), std::nullopt, head.early_data()};
+        const auto pseudo = [&](std::string_view name, std::string_view value) {
+            if (!value.empty()) {
+                record.fields_.push_back({std::pmr::string(name), std::pmr::string(value)});
+            }
+        };
+        pseudo(":method", head.method());
+        pseudo(":scheme", head.scheme());
+        pseudo(":authority", head.authority());
+        pseudo(":path", head.path());
+        pseudo(":protocol", head.protocol());
+        std::pmr::unsynchronized_pool_resource resource;
+        const auto request = head.build_request(&resource);
+        for (const auto& field : request.headers()) {
+            record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+        }
+        headers_.push_back(std::move(record));
+        sequence_.push_back('H');
+    }
+
     void record_response_head(std::int64_t stream_id, const http_client_response_head& head, bool stream_ended) {
         http3_headers_record record{stream_id, {}, stream_ended, head.received_status(), false};
         for (const auto& field : head.headers()) {
@@ -179,13 +223,24 @@ public:
         return bytes;
     }
 
-    [[nodiscard]] bool ended(std::int64_t stream_id) const noexcept {
-        for (const auto id : ends_) {
-            if (id == stream_id) {
-                return true;
+    [[nodiscard]] const http3_message_end_record* end(std::int64_t stream_id) const noexcept {
+        for (const auto& record : ends_) {
+            if (record.stream_id_ == stream_id) {
+                return &record;
             }
         }
-        return false;
+        return nullptr;
+    }
+
+    [[nodiscard]] bool ended(std::int64_t stream_id) const noexcept {
+        return end(stream_id) != nullptr;
+    }
+
+    // Any event that names `stream_id`, other than transport actions.
+    [[nodiscard]] bool names_message(std::int64_t stream_id) const noexcept {
+        return std::ranges::any_of(headers_, [&](const auto& record) { return record.stream_id_ == stream_id; }) ||
+               std::ranges::any_of(data_, [&](const auto& chunk) { return chunk.first == stream_id; }) ||
+               ended(stream_id);
     }
 
     void clear() {
@@ -195,10 +250,12 @@ public:
     std::pmr::vector<http3_headers_record> headers_;
     std::pmr::vector<std::pair<std::int64_t, std::pmr::string>> data_;
     std::pmr::vector<std::pair<std::int64_t, std::optional<std::uint64_t>>> content_lengths_;
-    std::pmr::vector<std::int64_t> ends_;
+    std::pmr::vector<http3_message_end_record> ends_;
     std::pmr::vector<http3_stream_close_event> closes_;
-    std::pmr::vector<std::int64_t> goaways_;
+    std::pmr::vector<std::optional<std::int64_t>> goaways_;
     std::pmr::vector<http3_transport_action_event> transport_actions_;
+    std::pmr::vector<std::int64_t> unprocessed_;
+    std::pmr::vector<std::pair<std::int64_t, std::pmr::string>> datagrams_;
     std::pmr::vector<std::pmr::vector<std::pmr::string>> origins_;
     std::pmr::string sequence_;
 };
@@ -213,8 +270,8 @@ public:
           server_(http3_connection::server(server_options)) {}
 
     [[nodiscard]] bool bind() {
-        return client_.bind_control_streams(2, 6, 10) == http3_status::accepted &&
-               server_.bind_control_streams(3, 7, 11) == http3_status::accepted;
+        return client_.bind_control_streams(2, 6, 10) == http3_transport_status::accepted &&
+               server_.bind_control_streams(3, 7, 11) == http3_transport_status::accepted;
     }
 
     template <typename event_consumer_type>
@@ -234,7 +291,7 @@ public:
         if (!end_stream && head.content_.without_content() != nullptr) {
             head.content_ = http_request_content_plan::streaming();
         }
-        return client_.submit_request_head(stream_id, head) == http3_status::accepted &&
+        return client_.submit_request_head(stream_id, head) == http3_submit_status::accepted &&
                to_server(server_log);
     }
 

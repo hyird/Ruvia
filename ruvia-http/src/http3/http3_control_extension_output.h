@@ -48,19 +48,19 @@ public:
     http3_control_extension_output(http3_control_extension_output&&) = delete;
     http3_control_extension_output& operator=(http3_control_extension_output&&) = delete;
 
-    [[nodiscard]] http3_status queue(std::span<const std::string_view> origins, std::size_t limit) {
+    [[nodiscard]] http3_submit_status queue(std::span<const std::string_view> origins, std::size_t limit) {
         if (shutdown_) {
-            return http3_status::invalid_state;
+            return http3_submit_status::invalid_state;
         }
         const auto payload_size = http_origin_payload_size(origins, 16384);
         if (payload_size.index() != 0) {
-            return http3_status::invalid_state;
+            return http3_submit_status::invalid_message;
         }
         const auto length = std::get<0>(payload_size);
         const auto length_varint_bytes = quic_varint_size(length);
         const auto total_bytes = 1 + length_varint_bytes + length;
         if (total_bytes > limit - (std::min)(limit, pending_bytes_)) {
-            return http3_status::would_block;
+            return http3_submit_status::backpressured;
         }
 
         // All allocation precedes publication of counters. Appending never
@@ -74,12 +74,12 @@ public:
             {reinterpret_cast<char*>(dst + 1 + length_varint_bytes), length}, origins);
         pending_bytes_ += total_bytes;
         unwritten_bytes_ += total_bytes;
-        return http3_status::accepted;
+        return http3_submit_status::accepted;
     }
 
     // nullopt leaves output to nghttp3; the caller owns the control stream id
     // and initializes output before trying either source.
-    [[nodiscard]] std::optional<http3_result> peek(nghttp3_conn* connection,
+    [[nodiscard]] std::optional<http3_transport_result> peek(nghttp3_conn* connection,
         std::int64_t control_id, std::size_t max_bytes, http3_stream_output& output) noexcept {
         peeked_ = false;
         if (blocked_ || shutdown_ || unwritten_bytes_ == 0 ||
@@ -87,7 +87,7 @@ public:
             return std::nullopt;
         }
         if (max_bytes == 0) {
-            return http3_result{http3_status::would_block, 0};
+            return http3_transport_result{.status_ = http3_transport_status::would_block};
         }
         const auto& current = frames_[write_frame_];
         const auto offered = (std::min)(current.bytes_.size() - current.written_, max_bytes);
@@ -96,7 +96,7 @@ public:
         output.buffer_count_ = 1;
         output.fin_ = false;
         peeked_ = true;
-        return http3_result{http3_status::accepted, 0};
+        return http3_transport_result{};
     }
 
     [[nodiscard]] int commit(nghttp3_conn* connection, std::int64_t id, std::size_t bytes) noexcept {
