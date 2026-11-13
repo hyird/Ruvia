@@ -19,8 +19,6 @@
 #include "ruvia/http/http_request.h"
 
 #include "http3_relay.h"
-#include "http3_wire.h"
-
 namespace {
 
 static_assert(std::is_nothrow_move_constructible_v<ruvia::http3_request_head>);

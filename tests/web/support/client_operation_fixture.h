@@ -18,7 +18,6 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
 
 // Per-operation timeouts and stop tokens of the public outbound client, driven

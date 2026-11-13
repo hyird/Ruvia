@@ -22,7 +22,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"

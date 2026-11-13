@@ -1,5 +1,3 @@
-#include "ruvia/http/http3_quic_connection.h"
-
 #include <algorithm>
 #include <array>
 #include <cstring>
@@ -8,6 +6,8 @@
 #include <limits>
 #include <stdexcept>
 #include <utility>
+
+#include "ruvia/http/http3_connection.h"
 
 #include "http_wire_sink.h"
 namespace ruvia {

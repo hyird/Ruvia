@@ -18,8 +18,8 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait.h"
 
 namespace ruvia {
 

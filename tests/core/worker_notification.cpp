@@ -1,5 +1,3 @@
-#include "ruvia/core/worker_notification.h"
-
 #include <gtest/gtest.h>
 
 #include <atomic>

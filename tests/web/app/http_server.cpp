@@ -27,8 +27,6 @@
 
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
-#include "udp_port_reservation.h"
-
 namespace standalone_server_test {
 using namespace std::chrono_literals;
 

@@ -35,8 +35,7 @@
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
 
-#include "ruvia/http/http3_quic_connection.h"
-
+#include "ruvia/http/http3_connection.h"
 namespace ruvia::test {
 
 using http3_test_fields = std::vector<std::pair<std::string, std::string>>;

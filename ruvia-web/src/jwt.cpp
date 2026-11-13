@@ -19,12 +19,10 @@
 #include <vector>
 
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/model.h"
 
-#include "http/inline_http_header_views.h"
-
+#include "http/operation_interrupt.h"
 namespace ruvia {
 
 namespace detail {

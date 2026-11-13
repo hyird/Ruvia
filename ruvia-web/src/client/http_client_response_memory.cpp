@@ -18,11 +18,11 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 

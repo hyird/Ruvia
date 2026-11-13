@@ -35,7 +35,6 @@
 
 #if defined(RUVIA_ENABLE_HTTP2)
 
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 
 #include "http2_wire_fixture.h"
@@ -45,7 +44,6 @@
 #include <asio/ip/udp.hpp>
 
 #include "http3_test_client.h"
-#include "udp_port_reservation.h"
 #endif
 
 namespace server_observation_test {

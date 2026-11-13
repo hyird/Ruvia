@@ -23,7 +23,6 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_transfer_coding_decoder.h"
 namespace ruvia::test {
 
 using ruvia::decode_http_content;

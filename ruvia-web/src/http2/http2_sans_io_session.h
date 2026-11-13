@@ -10,7 +10,7 @@
 
 #include "http/context_access.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
+#include "server/route_table.h"
 namespace ruvia::detail {
 
 class route_table;

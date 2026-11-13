@@ -22,10 +22,9 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/websocket_connection.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client.h"
 
 #include "output_drain.h"

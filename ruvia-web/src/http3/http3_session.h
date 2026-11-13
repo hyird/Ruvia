@@ -10,8 +10,6 @@
 #include <optional>
 #include <span>
 
-#include "ruvia/http/http3_quic_connection.h"
-
 // Server-chosen QUIC connection IDs (RFC 9000 §5.1) that route themselves
 // without exposing a linkable worker prefix on the wire (RFC 9000 §9.5).
 // Every worker of a POSIX HTTP/3 listener binds the UDP port with
@@ -71,9 +69,8 @@
 #include "ruvia/web/web_worker.h"
 
 #include "http/context_access.h"
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/route_table.h"
 

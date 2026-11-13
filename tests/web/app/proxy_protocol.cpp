@@ -17,9 +17,9 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/router.h"
 
 #include "raw_http_peer.h"
 #include "tcp_port_reservation.h"

@@ -26,7 +26,6 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/server_config.h"
-#include "ruvia/web/testing.h"
 
 #include "scoped_temp_directory.h"
 

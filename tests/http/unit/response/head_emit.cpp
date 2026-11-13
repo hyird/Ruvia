@@ -11,7 +11,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"

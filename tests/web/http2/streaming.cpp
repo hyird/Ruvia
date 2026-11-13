@@ -18,7 +18,6 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"

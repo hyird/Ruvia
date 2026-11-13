@@ -28,7 +28,6 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -55,7 +54,6 @@
 
 #include "client/client_tcp_transport.h"
 #include "http/operation_interrupt.h"
-#include "http/tls_protocol_policy.h"
 #include "server/connection_lifecycle.h"
 
 #ifdef RUVIA_ENABLE_HTTP2

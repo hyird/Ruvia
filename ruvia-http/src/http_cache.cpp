@@ -15,8 +15,8 @@
 
 #include "ruvia/http/http_cors.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
 namespace ruvia {

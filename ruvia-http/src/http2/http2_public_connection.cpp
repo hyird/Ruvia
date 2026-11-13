@@ -15,13 +15,12 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "http1/http_header_block_parser.h"
 #include "http2/http2_connection.h"
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"

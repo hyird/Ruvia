@@ -7,7 +7,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/dotenv.h"
+#include "ruvia/web/app.h"
 
 #include "scoped_temp_directory.h"
 

@@ -23,12 +23,11 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/url_encoding.h"
 
-#include "http1/http_header_block_parser.h"
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"
 #include "http_wire_sink.h"

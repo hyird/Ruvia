@@ -10,9 +10,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_file.h"
 
 #include "test_exceptions.h"
 

@@ -15,8 +15,6 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/testing.h"
-
 namespace {
 
 // Stamps a header so a response shows whether this middleware ran at all.

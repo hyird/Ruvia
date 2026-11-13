@@ -27,11 +27,9 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/websocket.h"
 
 #include "http_server_fixture.h"
 #include "tcp_port_reservation.h"

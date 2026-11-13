@@ -53,7 +53,6 @@
 #include <asio/ip/udp.hpp>
 
 #include "http3_test_client.h"
-#include "udp_port_reservation.h"
 #endif
 
 namespace listener_sockets_test {

@@ -19,7 +19,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/hpack.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"

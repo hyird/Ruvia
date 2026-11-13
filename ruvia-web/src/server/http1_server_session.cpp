@@ -34,26 +34,23 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_transfer_coding_decoder.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/web_worker.h"
 
 #include "http/context_access.h"
-#include "http/http_tunnel_session.h"
+#include "http/http_websocket_connection.h"
 #include "http/operation_interrupt.h"
 #include "http2/http2_sans_io_session.h"
+#include "server/app_state.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/route_table.h"
-#include "server/worker_connections.h"
-
 namespace ruvia::detail {
 
 // Connection-private ownership of the Web product's request-count policy.

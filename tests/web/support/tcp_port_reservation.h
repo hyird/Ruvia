@@ -14,6 +14,8 @@
 #include <memory>
 #endif
 
+#include <asio/ip/udp.hpp>
+
 namespace ruvia::test {
 
 // Selects a free loopback TCP port and keeps other test fixtures off it until
@@ -90,6 +92,97 @@ private:
 #endif
     asio::ip::tcp::acceptor socket_;
     asio::ip::tcp::endpoint endpoint_;
+};
+
+}  // namespace ruvia::test
+
+#if defined(_WIN32)
+#include <windows.h>
+
+#include <cwchar>
+#include <memory>
+#endif
+
+namespace ruvia::test {
+
+// Selects a free loopback UDP port and keeps other test fixtures off it until
+// every server using it has stopped.
+//
+// POSIX: selection binds the wildcard address (0.0.0.0) without reuse so no
+// other socket holds the port number, then joins 0.0.0.0's SO_REUSEPORT group
+// so loopback servers (127.0.0.1) can bind the same port. Keeping the
+// reservation on 0.0.0.0 rather than 127.0.0.1 leaves the loopback server's
+// SO_REUSEPORT socket group pure (indices 0..N-1 belong only to the server's
+// workers for SO_ATTACH_REUSEPORT_CBPF), while Linux's address specificity
+// preference delivers every loopback datagram to the 127.0.0.1 server sockets.
+//
+// Windows: SO_REUSEPORT does not exist and a server binds one UDP socket; a
+// second socket bound to the port would split its datagrams. The reservation
+// therefore releases the UDP port after selection and keeps only a
+// process-independent named lease, which stops other fixtures from selecting
+// the port. A process outside the test fixtures may still take it before the
+// server binds; that bind then fails loudly instead of sharing traffic.
+class udp_port_reservation final {
+public:
+    explicit udp_port_reservation(asio::io_context& io)
+        : socket_(io) {
+        socket_.open(asio::ip::udp::v4());
+#if defined(_WIN32)
+        for (;;) {
+            socket_.bind({asio::ip::address_v4::loopback(), 0});
+            const auto selected = socket_.local_endpoint();
+            wchar_t name[64];
+            std::swprintf(name, 64, L"Global\\Ruvia.Test.UdpPort.%u", static_cast<unsigned>(selected.port()));
+            ::SetLastError(ERROR_SUCCESS);
+            port_lease candidate(::CreateEventW(nullptr, TRUE, FALSE, name));
+            const auto error = ::GetLastError();
+            if (!candidate) {
+                throw std::system_error(static_cast<int>(error), asio::system_category(), "failed to reserve UDP test port lease");
+            }
+            socket_.close();
+            if (error == ERROR_ALREADY_EXISTS) {
+                // Another fixture holds this port number between its
+                // selection and its server's bind.
+                socket_.open(asio::ip::udp::v4());
+                continue;
+            }
+            lease_ = std::move(candidate);
+            endpoint_ = selected;
+            break;
+        }
+#else
+        socket_.bind({asio::ip::address_v4::any(), 0});
+        endpoint_ = {asio::ip::address_v4::loopback(), socket_.local_endpoint().port()};
+        socket_.set_option(asio::socket_base::reuse_address(true));
+#if defined(SO_REUSEPORT)
+        const int enabled = 1;
+        if (::setsockopt(socket_.native_handle(), SOL_SOCKET, SO_REUSEPORT, &enabled, sizeof(enabled)) != 0) {
+            throw std::system_error(errno, asio::system_category(), "failed to share reserved UDP test port");
+        }
+#else
+        throw std::system_error(asio::error::operation_not_supported, "UDP test reservations require SO_REUSEPORT");
+#endif
+#endif
+    }
+
+    [[nodiscard]] asio::ip::udp::endpoint endpoint() const {
+        return endpoint_;
+    }
+
+private:
+#if defined(_WIN32)
+    struct close_lease final {
+        void operator()(void* handle) const noexcept {
+            ::CloseHandle(handle);
+        }
+    };
+    using port_lease = std::unique_ptr<void, close_lease>;
+    // The named object survives until the last handle closes, including when
+    // a process exits without running destructors.
+    port_lease lease_;
+#endif
+    asio::ip::udp::socket socket_;
+    asio::ip::udp::endpoint endpoint_;
 };
 
 }  // namespace ruvia::test

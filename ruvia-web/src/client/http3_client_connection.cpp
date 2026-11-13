@@ -21,15 +21,15 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http3_quic_connection.h"
+#include "ruvia/core/worker_wait.h"
+#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
 #include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #include "http3/http3_session.h"
 #include "server/connection_lifecycle.h"
 namespace ruvia::detail {

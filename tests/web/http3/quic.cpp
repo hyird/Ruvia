@@ -50,7 +50,6 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http3_quic_connection.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -64,8 +63,6 @@
 #include "tcp_port_reservation.h"
 #include "test_exceptions.h"
 #include "test_tls_identity.h"
-#include "udp_port_reservation.h"
-
 namespace {
 
 using namespace std::chrono_literals;

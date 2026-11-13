@@ -21,7 +21,7 @@
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 #include "raw_http_peer.h"

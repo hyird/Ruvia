@@ -6,8 +6,6 @@
 // Run ruvia_example_testing with no arguments or external services.
 // Assertions below check functional responses; test_app owns startup/teardown.
 
-#include "ruvia/web/testing.h"
-
 #include <cstdio>
 #include <string>
 #include <string_view>

@@ -11,7 +11,7 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/http/http_number_format.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "db/db_pipeline.h"
 #include "db/db_pipeline_impl.h"

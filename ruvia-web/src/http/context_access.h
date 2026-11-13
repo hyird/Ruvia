@@ -28,12 +28,12 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_client_ip.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_server.h"
@@ -42,7 +42,6 @@
 
 #include "http/operation_interrupt.h"
 #include "http/static_root_index.h"
-#include "http/tls_protocol_policy.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia {

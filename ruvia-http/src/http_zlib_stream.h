@@ -20,7 +20,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http_transfer_coding_decoder.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 
 #include "http_wire_sink.h"
 

@@ -7,10 +7,9 @@
 #include <utility>
 
 #include "ruvia/http/http_header.h"
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/testing.h"
-
 namespace csrf_test {
 
 using ruvia::http_known_method;

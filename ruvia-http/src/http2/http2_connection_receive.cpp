@@ -7,8 +7,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 
-#include "http1/http_header_block_parser.h"
 #include "http2/http2_connection.h"
+#include "http_websocket_permessage_deflate.h"
 #include "http_zlib_stream.h"
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in

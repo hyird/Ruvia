@@ -27,14 +27,11 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/timer.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/websocket.h"
 
 #include "app_run.h"
 #include "raw_http_peer.h"

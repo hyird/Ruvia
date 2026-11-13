@@ -9,7 +9,7 @@
 
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/websocket_connection.h"
+#include "ruvia/http/websocket_handshake.h"
 
 #include "test_exceptions.h"
 

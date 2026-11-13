@@ -4,9 +4,8 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/testing.h"
-
 RUVIA_MODEL(request_binding_params,
     RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(2, "id is too short")));
 

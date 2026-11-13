@@ -12,7 +12,6 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_repository.h"

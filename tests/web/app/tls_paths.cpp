@@ -35,7 +35,6 @@
 #include "app_run.h"
 #include "scoped_temp_directory.h"
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 namespace tls_paths_test {

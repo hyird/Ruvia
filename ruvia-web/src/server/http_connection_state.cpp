@@ -31,7 +31,6 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -46,16 +45,12 @@
 #include "ruvia/web/streaming.h"
 
 #include "http/context_access.h"
-#include "http/http_tunnel_session.h"
-#include "http/inline_http_header_views.h"
+#include "http/http_websocket_connection.h"
 #include "http/operation_interrupt.h"
-#include "http/tls_protocol_policy.h"
+#include "server/app_state.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/route_table.h"
-#include "server/worker_connections.h"
-
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 #endif

@@ -18,8 +18,7 @@
 
 #include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "http/inline_http_header_views.h"
-
+#include "http/operation_interrupt.h"
 namespace ruvia::detail {
 
 namespace {

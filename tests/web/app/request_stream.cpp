@@ -45,14 +45,12 @@
 #include "tcp_port_reservation.h"
 #include "test_io_context.h"
 #include "test_tls_identity.h"
-#include "udp_port_reservation.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
 
 #include "http3_test_client.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 
 #include "http2_wire_fixture.h"

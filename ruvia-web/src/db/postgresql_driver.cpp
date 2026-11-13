@@ -23,7 +23,7 @@
 #include "db/db_pool.h"
 #include "db/db_sql_format.h"
 #include "db/postgresql_pipeline.h"
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 namespace ruvia::detail {
 namespace {
 

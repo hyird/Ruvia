@@ -32,7 +32,6 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -44,11 +43,9 @@
 #include "ruvia/web/streaming.h"
 
 #include "http/context_access.h"
-#include "http/http_tunnel_session.h"
 #include "http/http_websocket_connection.h"
 #include "http2/http2_sans_io_session.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/multiplexed_stream_signal.h"
 #include "server/route_table.h"
 namespace ruvia::detail {

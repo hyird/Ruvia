@@ -1,5 +1,3 @@
-#include "ruvia/http/websocket_connection.h"
-
 #include <array>
 #include <cstddef>
 #include <cstdint>

@@ -1,5 +1,3 @@
-#include "ruvia/core/pool_lease_scheduler.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -15,6 +13,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_wait.h"
 
 #include "worker_task_fixture.h"
 

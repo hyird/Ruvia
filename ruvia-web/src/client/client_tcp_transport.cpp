@@ -32,11 +32,10 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/http_number_format.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "http/operation_interrupt.h"
-#include "http/tls_protocol_policy.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

@@ -16,11 +16,10 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/testing.h"
-
 namespace {
 
 class rate_limit_table_controller final {

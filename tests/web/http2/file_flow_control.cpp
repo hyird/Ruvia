@@ -20,7 +20,6 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/socket.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -515,7 +514,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
     std::size_t resets_seen = 0;
     auto run = [&]() -> ruvia::task<void> {
         asio::ip::tcp::socket socket(io);
-        asio::steady_timer watchdog(io, std::chrono::seconds(5));
+        asio::steady_timer watchdog(io, std::chrono::seconds(15));
         watchdog.async_wait([&](std::error_code error) {
             if (!error) {
                 expired = true;

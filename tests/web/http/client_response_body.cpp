@@ -56,8 +56,8 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/model.h"
+#include "ruvia/web/streaming.h"
 
 #include "output_drain.h"
 #include "test_io_context.h"

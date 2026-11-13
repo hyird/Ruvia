@@ -24,15 +24,13 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/router.h"
-#include "ruvia/web/websocket.h"
+#include "ruvia/web/streaming.h"
 
 #include "http/context_access.h"
 #include "http/http_websocket_connection.h"
 #include "http/static_root_index.h"
-#include "server/http_server_options.h"
+
 namespace ruvia::detail {
 
 class router;

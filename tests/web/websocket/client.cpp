@@ -38,13 +38,11 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client.h"
 
 #include "test_io_context.h"
-#include "test_tls_crypto.h"
-
+#include "test_tls_identity.h"
 namespace websocket_client_test {
 
 template <typename value_type>

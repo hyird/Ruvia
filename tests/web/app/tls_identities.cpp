@@ -36,7 +36,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -51,7 +50,6 @@
 #include <asio/ip/udp.hpp>
 
 #include "http3_test_client.h"
-#include "udp_port_reservation.h"
 #endif
 
 namespace tls_identities_test {

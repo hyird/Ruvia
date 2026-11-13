@@ -30,7 +30,6 @@
 #include "http/operation_interrupt.h"
 #include "server/app_state.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/route_table.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_pipeline.h"

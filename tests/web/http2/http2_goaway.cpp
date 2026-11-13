@@ -24,7 +24,6 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/timer.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"

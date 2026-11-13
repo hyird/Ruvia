@@ -19,7 +19,6 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/web/http_client.h"
 #ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 
 #include "http2_wire_fixture.h"

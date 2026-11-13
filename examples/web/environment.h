@@ -9,8 +9,7 @@
 #include <string_view>
 #include <type_traits>
 
-#include "ruvia/web/dotenv.h"
-
+#include "ruvia/web/app.h"
 namespace example {
 
 // Startup-only lookup shared by the examples. Process variables take precedence

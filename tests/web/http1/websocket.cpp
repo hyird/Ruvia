@@ -1,5 +1,3 @@
-#include "ruvia/web/websocket.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -26,10 +24,11 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/websocket_connection.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 #include "test_io_context.h"

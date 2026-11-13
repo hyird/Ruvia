@@ -45,7 +45,7 @@
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/tls_config.h"
 
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

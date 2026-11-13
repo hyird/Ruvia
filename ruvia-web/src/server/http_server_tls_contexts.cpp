@@ -19,7 +19,7 @@
 
 #include "server/connection_lifecycle.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "ruvia/http/http3_quic_connection.h"
+#include "ruvia/http/http3_connection.h"
 #endif
 
 #include <algorithm>
@@ -48,10 +48,8 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 
-#include "http/inline_http_header_views.h"
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #include "server/app_state.h"
-#include "server/http_server_options.h"
 #include "server/route_table.h"
 
 #if defined(_WIN32)

@@ -16,8 +16,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/testing.h"
-
 namespace route_middleware_config_test {
 // Configuration carried in the type, so the middleware stays default
 // constructible and the route macro needs no constructor arguments.

@@ -13,7 +13,6 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/http2_observation.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"

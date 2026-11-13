@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_byte_range.h"
+#include "ruvia/http/http_response.h"
 
 #include "test_exceptions.h"
 

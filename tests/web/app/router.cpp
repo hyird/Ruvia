@@ -1,5 +1,3 @@
-#include "ruvia/web/router.h"
-
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -24,6 +22,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
@@ -36,8 +35,6 @@
 
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
-#include "udp_port_reservation.h"
-
 namespace public_router_test {
 using namespace std::chrono_literals;
 

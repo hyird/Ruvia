@@ -6,8 +6,7 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/http/http_number_format.h"
-
+#include "ruvia/http/url_encoding.h"
 TEST(Ruvia, number_format_decimal_width_and_string_output) {
     EXPECT_EQ(ruvia::http_unsigned_decimal_size(0), std::size_t{1});
     EXPECT_EQ(ruvia::http_unsigned_decimal_size(999), std::size_t{3});

@@ -27,10 +27,7 @@
 #include "http/operation_interrupt.h"
 #include "server/app_state.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_server_options.h"
 #include "server/route_table.h"
-#include "server/worker_connections.h"
-
 namespace ruvia::detail {
 namespace {
 

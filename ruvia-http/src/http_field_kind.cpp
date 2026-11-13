@@ -28,7 +28,6 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "http1/http_header_block_parser.h"
 #include "http_connection_fields.h"
 #include "http_wire_sink.h"
 #include "http_zlib_stream.h"

@@ -18,7 +18,7 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/http_number_format.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"

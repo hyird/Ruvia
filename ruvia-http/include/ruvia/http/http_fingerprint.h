@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http2_observation.h"
+#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http3_connection.h"
 
 namespace ruvia {

@@ -22,7 +22,6 @@
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"

@@ -17,7 +17,7 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/web/http_tunnel.h"
+#include "ruvia/web/streaming.h"
 
 #include "client/client_tcp_transport.h"
 #include "http/operation_interrupt.h"

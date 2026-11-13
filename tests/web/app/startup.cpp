@@ -24,12 +24,11 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/websocket.h"
+#include "ruvia/web/streaming.h"
 
 #include "app_run.h"
 #include "raw_http_peer.h"
 #include "tcp_port_reservation.h"
-#include "test_tls_crypto.h"
 #include "test_tls_identity.h"
 
 namespace startup_test {

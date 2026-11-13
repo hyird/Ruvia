@@ -7,9 +7,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_server_request_parser.h"
-#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_response_server.h"
 

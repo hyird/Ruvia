@@ -29,16 +29,14 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/websocket_connection.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
 
 #include "tcp_port_reservation.h"
 #include "test_tls_identity.h"
-#include "udp_port_reservation.h"
-
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/hpack.h"
+#include "ruvia/http/http2_framing.h"
 
 #include "http2_wire_fixture.h"
 #endif

@@ -26,13 +26,10 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/websocket.h"
-
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_observation.h"
+#include "ruvia/http/http2_framing.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"

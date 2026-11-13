@@ -25,7 +25,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_header.h"
@@ -33,7 +32,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 

@@ -26,7 +26,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/model.h"

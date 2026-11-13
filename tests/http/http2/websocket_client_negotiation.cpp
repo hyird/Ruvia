@@ -8,8 +8,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/hpack.h"
-#include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"

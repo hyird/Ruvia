@@ -1,25 +1,37 @@
 #pragma once
 
+#include <algorithm>
 #include <chrono>
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <memory>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/multipart_parser.h"
 #include "ruvia/http/sse.h"
+#include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/error.h"
 
 namespace ruvia {
@@ -379,6 +391,647 @@ private:
     scoped_capability_registration registration_;
 
     [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
+};
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace detail {
+class http_capsule_stream_state;
+class capsule_state_pin;
+class inbound_buffer_account;
+template <typename stream_type>
+class http_tunnel_session;
+// Transport input for a single tunnel read lane. Datagram bytes exclude the
+// HTTP/3 Quarter Stream ID but retain any protocol-specific Context ID.
+struct http_tunnel_input final {
+    std::string bytes_;
+    bool datagram_{};
+};
+}  // namespace detail
+
+class http_tunnel;
+class http_client_tunnel;
+class http_udp_tunnel;
+class http_datagram_stream;
+
+// Owns one capsule payload. Its storage remains valid across subsequent reads,
+// stream destruction and connection retirement, even if input remains unread.
+// Like other worker results, destroy it on its owner worker before that worker retires.
+class http_capsule final {
+public:
+    http_capsule(const http_capsule&) = delete;
+    http_capsule& operator=(const http_capsule&) = delete;
+    http_capsule(http_capsule&& other) noexcept;
+    http_capsule& operator=(http_capsule&& other) noexcept;
+    ~http_capsule();
+    [[nodiscard]] std::uint64_t type() const noexcept {
+        return type_;
+    }
+    [[nodiscard]] std::string_view payload() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload_ ? std::string_view(*payload_) : std::string_view{};
+    }
+    std::string_view payload() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        const auto view = payload();
+        return std::as_bytes(std::span(view.data(), view.size()));
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload();
+    }
+    std::string_view text() const&& = delete;
+
+private:
+    friend class http_capsule_stream;
+    friend class http_datagram_stream;
+    http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::string payload_value) noexcept;
+    void release() noexcept;
+    detail::http_capsule_stream_state* state_{};
+    std::uint64_t type_{};
+    std::optional<std::string> payload_;
+};
+
+// RFC 9297 reliable Capsule Protocol over an established tunnel. The protocol
+// using the capsules owns negotiation. Server streams borrow their route
+// tunnel; client streams take tunnel ownership. Use this adapter exclusively:
+// do not interleave raw tunnel operations with capsule operations. Abort wakes
+// pending I/O; join started operations before destroying their scope owner.
+// Operations occupy their read or write/finish lane when started; unstarted
+// operations may coexist. One read and one output operation may run concurrently.
+// `operation` bounds a whole call: a timeout or stop ends only that read,
+// keeping a partly received capsule for the next one, and aborts the stream
+// during an output operation. Either throws std::system_error (timed_out or
+// operation_canceled) -- over an http_client_tunnel its http_client_error
+// subclass -- and a stop requested before an output operation starts sends nothing.
+class http_capsule_stream final {
+public:
+    http_capsule_stream(const http_capsule_stream&) = delete;
+    http_capsule_stream& operator=(const http_capsule_stream&) = delete;
+    http_capsule_stream(http_capsule_stream&& other) noexcept;
+    http_capsule_stream& operator=(http_capsule_stream&& other) noexcept;
+    ~http_capsule_stream();
+    [[nodiscard]] task<std::optional<http_capsule>> read(operation_options operation = {}) &;
+    task<std::optional<http_capsule>> read(operation_options = {}) && = delete;
+    // Owns input before returning its cold operation. Unknown capsule types are
+    // delivered to the protocol consumer, which must ignore types it does not understand.
+    [[nodiscard]] task<void> write(std::uint64_t type, std::string_view payload, operation_options operation = {}) &;
+    task<void> write(std::uint64_t, std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::uint64_t type, std::span<const std::byte> payload, operation_options operation = {}) &;
+    task<void> write(std::uint64_t, std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> write(std::uint64_t type, string_type&& payload, operation_options operation = {}) & {
+        return write_owned(type, std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> write(std::uint64_t, string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
+    task<void> finish(operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+
+private:
+    friend class http_tunnel;
+    friend class http_client_tunnel;
+    friend class http_udp_tunnel;
+    friend class http_datagram_stream;
+    [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
+    [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram, operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::uint64_t type, std::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> write_frame_owned(
+        std::string_view prefix, std::string&& payload, bool datagram, operation_options operation);
+    explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
+    explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
+    void release() noexcept;
+    detail::http_capsule_stream_state* state_{};
+};
+
+// Owned opaque HTTP Datagram payload, valid across later reads, stream and
+// connection retirement, and client shutdown even if input remains unread.
+// Destroy results on their worker before the worker retires.
+class http_datagram final {
+public:
+    http_datagram(const http_datagram&) = delete;
+    http_datagram& operator=(const http_datagram&) = delete;
+    http_datagram(http_datagram&&) noexcept = default;
+    http_datagram& operator=(http_datagram&&) noexcept = default;
+    [[nodiscard]] std::span<const std::byte> payload() const& noexcept RUVIA_LIFETIMEBOUND {
+        const auto view = text();
+        return std::as_bytes(std::span(view.data(), view.size()));
+    }
+    std::span<const std::byte> payload() const&& = delete;
+    [[nodiscard]] std::span<const std::byte> bytes() const& noexcept RUVIA_LIFETIMEBOUND {
+        return payload();
+    }
+    std::span<const std::byte> bytes() const&& = delete;
+    [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND {
+        auto bytes_value = capsule_.payload();
+        bytes_value.remove_prefix(std::min(offset_, bytes_value.size()));
+        return bytes_value;
+    }
+    std::string_view text() const&& = delete;
+
+private:
+    friend class http_datagram_stream;
+    http_datagram(http_capsule capsule, std::size_t offset) noexcept
+        : capsule_(std::move(capsule)),
+          offset_(offset) {}
+    http_capsule capsule_;
+    std::size_t offset_{};
+};
+
+// RFC 9297 channel using native QUIC DATAGRAMs when available, with reliable
+// DATAGRAM capsule fallback. Reads accept both representations concurrently.
+// Create through http_tunnel::datagrams() or http_client_tunnel::datagrams();
+// arbitrary Capsule Protocol streams cannot be promoted to this channel.
+// Empty payloads are data; an empty optional is EOF. Use exclusively with the tunnel.
+// Operations occupy separate read and send/finish lanes when started; unstarted
+// operations may coexist. send() owns its payload before returning. `operation`
+// follows http_capsule_stream.
+class http_datagram_stream final {
+public:
+    http_datagram_stream(const http_datagram_stream&) = delete;
+    http_datagram_stream& operator=(const http_datagram_stream&) = delete;
+    http_datagram_stream(http_datagram_stream&&) noexcept = default;
+    http_datagram_stream& operator=(http_datagram_stream&&) noexcept = default;
+    [[nodiscard]] task<std::optional<http_datagram>> read(operation_options operation = {}) &;
+    task<std::optional<http_datagram>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(std::span<const std::byte> payload, operation_options operation = {}) &;
+    task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
+    task<void> send(std::string_view, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
+        return send_owned(std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> send(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(operation_options operation = {}) & {
+        return stream_.finish(std::move(operation));
+    }
+    task<void> finish(operation_options = {}) && = delete;
+    void abort() & noexcept {
+        stream_.abort();
+    }
+    void abort() && = delete;
+
+private:
+    friend class http_tunnel;
+    friend class http_client_tunnel;
+    friend class http_udp_tunnel;
+    explicit http_datagram_stream(http_capsule_stream&& stream);
+    static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
+    [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp, operation_options operation);
+    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> send_payload_owned(
+        std::string&& payload, bool udp, operation_options operation);
+    http_capsule_stream stream_;
+};
+
+// RFC 9297 HTTP Datagrams and reliable DATAGRAM capsules for a negotiated RFC 9298 CONNECT-UDP
+// tunnel. Unknown capsule types and unknown context IDs are silently dropped;
+// malformed DATAGRAM capsules terminate only this tunnel. Empty UDP packets are
+// data; an empty optional is EOF. Owns its capsule stream and preserves separate
+// read and send/finish lanes when moved.
+// Operations occupy their lane when started; unstarted operations may coexist.
+// send() owns its payload before returning. `operation` follows http_capsule_stream.
+class http_udp_tunnel final {
+public:
+    http_udp_tunnel(const http_udp_tunnel&) = delete;
+    http_udp_tunnel& operator=(const http_udp_tunnel&) = delete;
+    http_udp_tunnel(http_udp_tunnel&&) noexcept = default;
+    http_udp_tunnel& operator=(http_udp_tunnel&&) noexcept = default;
+    [[nodiscard]] task<std::optional<http_datagram>> read(operation_options operation = {}) &;
+    task<std::optional<http_datagram>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(std::span<const std::byte> payload, operation_options operation = {}) &;
+    task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
+    task<void> send(std::string_view, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
+        return send_owned(std::move(payload), std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> send(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(operation_options operation = {}) & {
+        return stream_.finish(std::move(operation));
+    }
+    task<void> finish(operation_options = {}) && = delete;
+    void abort() & noexcept {
+        stream_.abort();
+    }
+    void abort() && = delete;
+
+private:
+    friend class http_tunnel;
+    friend class http_client_tunnel;
+    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
+    explicit http_udp_tunnel(http_datagram_stream stream) noexcept
+        : stream_(std::move(stream)) {}
+    http_datagram_stream stream_;
+};
+struct http_tunnel_route_config final {
+    // Once the handler returns, bound flushing the local FIN and draining peer
+    // input. A handler may half-close and continue reading without this deadline.
+    timeout_duration peer_transport_fin_timeout_{5000};
+    // Declares HTTP Datagram semantics for an upgrade-protocol
+    // tunnel: a 2xx response carries Capsule-Protocol: ?1 (RFC 9297 section
+    // 3.4) and the handler may use http_tunnel::datagrams(), udp() and
+    // capsules(). HTTP/3 datagrams use native transport when negotiated and
+    // within the path limit, otherwise capsules. CONNECT-UDP enables this
+    // automatically; plain CONNECT rejects it.
+    bool datagrams_{};
+};
+
+// An established CONNECT byte stream. The session owns this facade and its
+// allocator. The tunnel retains the last received chunk until the next read
+// starts; it counts against the connection's and the worker's inbound buffer
+// budgets (server_config::max_inbound_buffer_bytes_per_connection_ /
+// _per_worker_). A read that would exceed a budget throws std::bad_alloc.
+class http_tunnel final {
+public:
+    http_tunnel(const http_tunnel&) = delete;
+    http_tunnel& operator=(const http_tunnel&) = delete;
+
+    // One running read and one running output operation are allowed.
+    // An operation occupies its lane when started; unstarted operations may coexist.
+    // A timeout or stop in a read's `operation` ends only that read with
+    // std::system_error (timed_out or operation_canceled); no input is lost.
+    // In a write or finish it aborts the tunnel (a partial write cannot be
+    // withdrawn) and throws the same; a stop requested before the operation
+    // starts sends nothing. A non-positive timeout throws std::invalid_argument.
+    // The view borrows this tunnel until the next read starts; nullopt is EOF
+    // and an empty chunk is never returned.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
+        return write_owned(std::move(bytes), std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> write(string_type&&, operation_options = {}) && = delete;
+
+    // Half-close the send direction; reading remains available until peer EOF.
+    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
+    task<void> finish(operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+    // Borrow the established route tunnel for HTTP Datagrams. The route protocol
+    // owns negotiation: these throw std::logic_error unless the route declared
+    // http_tunnel_route_config::datagrams_. Use only in the negotiated datagram
+    // handler, exclusively with this tunnel. Capsule Protocol payload limits
+    // apply to both native datagrams and reliable DATAGRAM capsules.
+    [[nodiscard]] http_datagram_stream datagrams(http_capsule_config config = {}) &;
+    http_datagram_stream datagrams(http_capsule_config = {}) && = delete;
+    [[nodiscard]] http_udp_tunnel udp(http_capsule_config config = {}) &;
+    http_udp_tunnel udp(http_capsule_config = {}) && = delete;
+    [[nodiscard]] http_capsule_stream capsules(http_capsule_config config = {}) &;
+    http_capsule_stream capsules(http_capsule_config = {}) && = delete;
+
+private:
+    template <typename stream_type>
+    friend class detail::http_tunnel_session;
+    friend class detail::http_capsule_stream_state;
+    friend class http_capsule_stream;
+    using read_type = task<std::optional<std::string>> (*)(void*, operation_options);
+    using write_type = task<void> (*)(void*, std::string_view, operation_options);
+    using read_datagram_type = task<std::optional<detail::http_tunnel_input>> (*)(void*, operation_options);
+    using write_datagram_type = task<bool> (*)(void*, std::string_view, operation_options);
+    using finish_type = task<void> (*)(void*, operation_options);
+    // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
+    using abort_type = void (*)(void*, bool malformed) noexcept;
+    http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value,
+        void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
+        bool datagrams, read_datagram_type read_datagram = nullptr,
+        write_datagram_type write_datagram = nullptr) noexcept;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_borrowed(operation_options operation);
+    [[nodiscard]] task<std::optional<std::string>> read_raw(operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
+    [[nodiscard]] task<void> write_raw(std::string&& bytes, operation_options operation);
+    [[nodiscard]] task<std::optional<detail::http_tunnel_input>> read_datagram_raw(operation_options operation);
+    [[nodiscard]] task<bool> write_datagram_raw(std::string_view bytes, operation_options operation);
+    void abort_input(bool malformed) noexcept;
+    void require_active() const;
+    void require_unadapted() const;
+    detail::inbound_buffer_account* inbound_;
+    const worker_ref& worker_;
+    void* target_;
+    read_type read_;
+    write_type write_;
+    finish_type finish_;
+    abort_type abort_;
+    read_datagram_type read_datagram_;
+    write_datagram_type write_datagram_;
+    // The chunk the last read() returned.
+    std::optional<std::string> read_chunk_;
+    bool datagrams_;
+    bool adapted_{false};
+    bool read_active_{false};
+    bool write_active_{false};
+    bool send_ended_{false};
+    ::ruvia::operation_scope operations_;
+};
+}  // namespace ruvia
+
+namespace ruvia {
+
+struct websocket_heartbeat_config final {
+    // Absence disables heartbeat. When ping is present and pong is absent,
+    // pong defaults to the ping interval during configuration normalization.
+    std::optional<timeout_duration> ping_interval_{};
+    std::optional<timeout_duration> pong_timeout_{};
+};
+
+// Runtime-only liveness policy. Wire framing and close-handshake state remain in
+// ruvia-http; timers and transport abort policy belong to the Web runtime.
+struct websocket_lifecycle_options final {
+    websocket_heartbeat_config heartbeat_{};
+    // A locally initiated Close waits for the peer Close before the underlying
+    // transport is ended. The timeout starts when the Close is submitted, so it
+    // also bounds writing the Close frame. nullopt disables this guard.
+    std::optional<timeout_duration> close_handshake_timeout_{std::chrono::seconds(5)};
+};
+
+struct websocket_route_config final {
+    // Server preference order. Every entry must be a nonempty, unique HTTP token.
+    std::vector<std::string> subprotocols_{};
+    // By default a client offering none of subprotocols_ is still accepted,
+    // with no Sec-WebSocket-Protocol response field (RFC 6455 4.2.2). When
+    // set, such an upgrade is refused with 400 before any middleware or
+    // handler runs; subprotocols_ must then be nonempty.
+    bool require_subprotocol_{false};
+    websocket_lifecycle_options lifecycle_{};
+    websocket_deflate_config deflate_{};
+    // 单会话接收消息上限（含解压后）；unlimited 继承服务器上限，只能收紧。
+    protocol_byte_limit max_message_bytes_{};
+};
+
+struct websocket_send_options final {
+    // False bypasses compression and never adds payload bytes to its dictionary.
+    bool compress_{true};
+};
+
+struct websocket_close_options final {
+    websocket_close_code code_{websocket_close_status::normal_closure};
+    ::ruvia::borrowed_text reason_{};
+};
+
+class websocket;
+
+namespace detail {
+template <typename connection_type>
+[[nodiscard]] websocket make_websocket_facade(connection_type& connection);
+struct websocket_accept_access;
+class websocket_state;
+// Whether a write submits a whole message or one fragment of one.
+enum class websocket_write_extent : std::uint8_t {
+    message,
+    fragment,
+    final_fragment,
+};
+}  // namespace detail
+
+class websocket_message_writer;
+
+// A handshake the server refused. The server sends the selected response,
+// with this status, after the request callback returns.
+struct websocket_rejection final {
+    http_status_code status_;
+    // The failed handshake check, as in the error response's code:
+    // invalid_websocket_handshake, unsupported_websocket_version or
+    // unsupported_websocket_subprotocol.
+    std::string_view code_;
+};
+
+// Outcome of accepting a WebSocket upgrade, fixed at construction: the
+// established session, borrowed until the request callback ends, or the
+// rejection.
+class websocket_accept_result final {
+public:
+    websocket_accept_result(const websocket_accept_result&) = delete;
+    websocket_accept_result& operator=(const websocket_accept_result&) = delete;
+    websocket_accept_result(websocket_accept_result&&) noexcept = default;
+    websocket_accept_result& operator=(websocket_accept_result&&) = delete;
+
+    // nullptr when the handshake was rejected.
+    [[nodiscard]] websocket* session() const noexcept {
+        const auto* accepted = std::get_if<websocket*>(&value_);
+        return accepted != nullptr ? *accepted : nullptr;
+    }
+    // nullptr when the session was established.
+    [[nodiscard]] const websocket_rejection* rejection() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<websocket_rejection>(&value_);
+    }
+    const websocket_rejection* rejection() const&& = delete;
+
+private:
+    friend struct detail::websocket_accept_access;
+    explicit websocket_accept_result(websocket& session) noexcept
+        : value_(&session) {}
+    explicit websocket_accept_result(websocket_rejection rejection) noexcept
+        : value_(rejection) {}
+    std::variant<websocket*, websocket_rejection> value_;
+};
+
+// One worker-affine session API for both roles. Client handshakes return an owning
+// handle; server acceptance borrows the request lifetime. Moving preserves writers
+// and cold/running operations, but never extends a server request lifetime.
+class websocket final {
+public:
+    websocket(const websocket&) = delete;
+    websocket& operator=(const websocket&) = delete;
+    websocket(websocket&&) noexcept;
+    websocket& operator=(websocket&&) noexcept;
+    ~websocket();
+
+    /// Only one read operation may run at a time. Starting another before the
+    /// current operation completes throws std::logic_error. Unstarted operations may coexist.
+    /// One reader may overlap one writer. A reader waiting behind an in-flight
+    /// message polls control frames at message boundaries before the writer's
+    /// next operation; the current complete message is never interrupted.
+    /// nullopt is the only end: the peer's or this side's completed close
+    /// handshake, EOF, a rejected frame, abort() or a heartbeat/close timeout;
+    /// termination() tells which. A stop request or timeout in `operation`
+    /// ends only this read with std::system_error (operation_canceled or
+    /// timed_out); buffered input, the read lane and the session stay usable.
+    [[nodiscard]] task<std::optional<websocket_message>> read(operation_options operation = {}) &;
+    task<std::optional<websocket_message>> read(operation_options = {}) && = delete;
+
+    /// The string_view overloads copy payloads into owned storage before
+    /// returning. std::string&& inputs transfer their existing allocation.
+    /// Output operations share one write lane: starting a second before the
+    /// current operation completes throws std::logic_error. A stop request or
+    /// timeout in `operation` aborts the session (a partly written frame
+    /// cannot be withdrawn) and throws std::system_error (operation_canceled
+    /// or timed_out); an already-stopped token fails before any output.
+    [[nodiscard]] task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> text(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    /// Zero-copy text frame: takes ownership of an already-allocated payload.
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> text(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::text, std::move(payload), options.compress_, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> text(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    [[nodiscard]] task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> binary(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    [[nodiscard]] task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> binary(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    /// Zero-copy binary frame.
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> binary(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::binary, std::move(payload), options.compress_, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> binary(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
+
+    /// Zero-copy pong frame.
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> pong(string_type&& payload, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::pong, std::move(payload), true, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> pong(string_type&&, operation_options = {}) && = delete;
+
+    [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
+
+    /// Zero-copy ping frame.
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::ping, std::move(payload), true, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> ping(string_type&&, operation_options = {}) && = delete;
+
+    /// Zero-copy send of a message returned by this connection's read(), with
+    /// the message's own opcode (for example an echo). The frame borrows the
+    /// payload from the connection's read storage, so this call claims the
+    /// read lane immediately and holds it until the operation completes or is
+    /// destroyed: read() and close() throw std::logic_error meanwhile, and this
+    /// call throws std::logic_error while a read is pending. A message built
+    /// with websocket_message::borrow over caller storage must keep that
+    /// storage alive and unchanged until the operation completes.
+    [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> send(websocket_message&&, websocket_send_options = {}, operation_options = {}) && = delete;
+
+    /// Claims the write lane only, so it may start while a read is pending:
+    /// that read returns nullopt once the peer answers (termination()
+    /// local_close) or the close-handshake timeout aborts the transport
+    /// (timeout). Without a pending read, close() itself reads until the peer
+    /// Close and a read started meanwhile throws std::logic_error. A handshake
+    /// timeout throws std::system_error (timed_out); `operation` bounds the
+    /// whole close like an output operation.
+    [[nodiscard]] task<void> close(websocket_close_options options = {}, operation_options operation = {}) &;
+    task<void> close(websocket_close_options = {}, operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+
+    /// Starts a data message sent as several frames; see websocket_message_writer.
+    /// Throws std::logic_error while another such message is open.
+    [[nodiscard]] websocket_message_writer begin_text(websocket_send_options options = {}) &;
+    websocket_message_writer begin_text(websocket_send_options = {}) && = delete;
+    [[nodiscard]] websocket_message_writer begin_binary(websocket_send_options options = {}) &;
+    websocket_message_writer begin_binary(websocket_send_options = {}) && = delete;
+
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view subprotocol() const&& = delete;
+
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
+    std::string_view peer_close_reason() const&& = delete;
+
+    /// Why the session ended; none while it is active. The first cause wins
+    /// and stays readable once read() has returned nullopt.
+    [[nodiscard]] websocket_termination termination() const noexcept;
+    /// RFC 6455 frame bytes on the wire (header, mask key and payload, after
+    /// permessage-deflate) of data and control frames; the HTTP upgrade and
+    /// the HTTP/2 or HTTP/3 framing that carries the frames are excluded.
+    [[nodiscard]] std::uint64_t bytes_received() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
+
+    [[nodiscard]] bool connected() const noexcept;
+    [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
+
+private:
+    friend class http_client_websocket_request;
+    template <typename connection_type>
+    friend websocket detail::make_websocket_facade(connection_type&);
+    explicit websocket(std::shared_ptr<detail::websocket_state> state) noexcept;
+    [[nodiscard]] task<void> write_owned(websocket_opcode, std::string&&, bool, operation_options);
+    std::shared_ptr<detail::websocket_state> state_;
+};
+
+/// A data message sent as several frames (RFC 6455 section 5.4), so that a
+/// caller can pace a large message, for example under a shared bandwidth
+/// budget. Each write() sends one non-final frame and completes once the
+/// transport accepted it; finish() sends the final frame. Fragments of a
+/// compressed message continue one permessage-deflate stream. Until finish()
+/// completes the message owns the data lane: text(), binary(), send() and
+/// another begin_*() throw std::logic_error, while ping(), pong(), close() and
+/// automatic control frames may go out between fragments. Fragment operations
+/// share the write lane with them and accept the same operation_options.
+/// Destroying or abort()ing an unfinished message aborts the session, since
+/// the peer could not tell where the message ends. The writer borrows the
+/// websocket and expires with it.
+class websocket_message_writer final {
+public:
+    websocket_message_writer(websocket_message_writer&& other) noexcept;
+    websocket_message_writer& operator=(websocket_message_writer&&) = delete;
+    websocket_message_writer(const websocket_message_writer&) = delete;
+    websocket_message_writer& operator=(const websocket_message_writer&) = delete;
+    ~websocket_message_writer();
+
+    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
+        return submit_owned(std::move(chunk), false, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> write(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
+    task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
+    task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
+    template <std::same_as<std::string> string_type>
+    [[nodiscard]] task<void> finish(string_type&& last_chunk, operation_options operation = {}) & {
+        return submit_owned(std::move(last_chunk), true, std::move(operation));
+    }
+    template <std::same_as<std::string> string_type>
+    task<void> finish(string_type&&, operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+
+private:
+    friend class detail::websocket_state;
+    websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
+    [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
+    [[nodiscard]] task<void> submit_owned(
+        std::string&& chunk, bool final, operation_options operation);
+    [[nodiscard]] bool message_open() const noexcept;
+    static void expire_capability(void* target) noexcept;
+
+    detail::websocket_state* owner_;
+    std::uint64_t message_id_;
+    websocket_opcode opcode_;
+    bool compress_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia

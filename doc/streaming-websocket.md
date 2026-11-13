@@ -178,7 +178,7 @@ ruvia::task<void> stream_subscription(
 
 ## 3. WebSocket 服务端
 
-头文件：`"ruvia/web/websocket.h"`、`"ruvia/http/websocket_protocol.h"`。
+头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/websocket_protocol.h"`。
 参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
@@ -191,7 +191,7 @@ Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended 
 ### 3.1 路由注册与配置
 
 ```cpp
-#include "ruvia/web/websocket.h"
+#include "ruvia/web/streaming.h"
 
 inline const ruvia::websocket_route_config chat_ws_options{
     .subprotocols_ = {"chat.v1", "json.v1"},
@@ -301,7 +301,7 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"ruvia/web/http_tunnel.h"`。
+头文件：`"ruvia/web/streaming.h"`。
 参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
 不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发ruviawebserver_connectionh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)。
 

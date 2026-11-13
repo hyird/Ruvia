@@ -30,7 +30,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_file.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"

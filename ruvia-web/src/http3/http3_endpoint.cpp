@@ -33,10 +33,10 @@
 #include <asio/error.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 #if defined(_WIN32)
-#include "server/http_server_options.h"
+#include "server/route_table.h"
 #endif
 
 #include <ngtcp2/ngtcp2_crypto.h>
@@ -45,7 +45,7 @@
 
 #include "ruvia/core/worker_ref.h"
 
-#include "http/tls_protocol_policy.h"
+#include "http/operation_interrupt.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
 #include <sys/socket.h>

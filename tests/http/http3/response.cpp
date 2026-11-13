@@ -22,8 +22,6 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http3_relay.h"
-#include "http3_wire.h"
-
 namespace {
 
 constexpr ruvia::http3_regular_request_head_view get_request_head{

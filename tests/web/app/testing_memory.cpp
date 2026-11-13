@@ -10,10 +10,9 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/testing.h"
-
 namespace {
 
 class testing_memory_controller final {

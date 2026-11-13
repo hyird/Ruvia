@@ -27,11 +27,11 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/testing.h"
 
 #include "http_server_fixture.h"
 #include "redis_session_store_peer.h"

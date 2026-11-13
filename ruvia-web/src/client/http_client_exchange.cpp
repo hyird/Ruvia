@@ -23,9 +23,7 @@
 #include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
 #include "http/http_websocket_connection.h"
-#include "http/inline_http_header_views.h"
 #include "http/operation_interrupt.h"
-#include "http/tls_protocol_policy.h"
 namespace ruvia::detail {
 
 struct http_client_output_write_input final {

@@ -16,7 +16,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_response.h"

@@ -5,7 +5,6 @@
 #include <cstring>
 
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_number_format.h"
 #include "ruvia/http/ip_address.h"
 #include "ruvia/http/url_encoding.h"
 
