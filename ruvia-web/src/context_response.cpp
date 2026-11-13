@@ -35,14 +35,12 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
@@ -50,7 +48,7 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/db/db_session.h"
+#include "ruvia/web/db/db.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"

@@ -14,7 +14,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/web/db/db_query.h"
+#include "ruvia/web/db/db.h"
 
 #include "test_exceptions.h"
 

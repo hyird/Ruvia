@@ -1,5 +1,3 @@
-#include "ruvia/web/db/db_query.h"
-
 #include <algorithm>
 #include <array>
 #include <cstdint>
@@ -11,6 +9,8 @@
 #include <string_view>
 #include <utility>
 #include <vector>
+
+#include "ruvia/web/db/db.h"
 
 #include "db_pool.h"
 namespace ruvia::detail {

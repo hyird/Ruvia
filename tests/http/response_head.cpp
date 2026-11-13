@@ -15,7 +15,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"

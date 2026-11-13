@@ -34,15 +34,14 @@
 
 #include "ruvia/core/event_loop.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
+#include "ruvia/web/db/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
 #endif
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_session.h"
-
+#include "ruvia/web/db/db.h"
 namespace ruvia::test {
 
 // Connection startup, scripted PostgreSQL results and an

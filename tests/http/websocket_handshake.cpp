@@ -1,3 +1,5 @@
+#include "ruvia/http/websocket_handshake.h"
+
 #include <gtest/gtest.h>
 #include <zlib.h>
 
@@ -22,7 +24,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/websocket_handshake.h"
 
 #include "content_decoding_fixture.h"
 #include "test_exceptions.h"

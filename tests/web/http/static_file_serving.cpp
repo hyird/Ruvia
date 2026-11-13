@@ -28,7 +28,7 @@
 
 #include <gtest/gtest.h>
 
-#include "ruvia/http/http_cache.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"

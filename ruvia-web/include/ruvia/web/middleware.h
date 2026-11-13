@@ -24,7 +24,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"

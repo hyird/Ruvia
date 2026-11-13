@@ -39,7 +39,6 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http2_connection.h"
@@ -48,7 +47,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"
 

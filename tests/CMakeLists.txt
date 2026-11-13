@@ -79,10 +79,10 @@ endif()
 if(RUVIA_BUILD_HTTP)
     ruvia_collect_test_sources(_ruvia_http_unit_sources http/*.cpp)
     if(NOT RUVIA_ENABLE_HTTP2)
-        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http2/")
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http2_")
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
-        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http3/")
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http3_")
     endif()
     list(SORT _ruvia_http_unit_sources)
 
@@ -126,7 +126,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_router 60 web/app/router.cpp)
     ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/app/connection_lifecycle.cpp)
-    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket/standalone_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/app/websocket_standalone_server.cpp)
     ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
@@ -137,8 +137,7 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
     set(_ruvia_tcp_client_test_sources
-        web/http1/websocket.cpp
-        web/http/udp_tunnel.cpp)
+        web/http1/websocket.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
             web/http2/client_tunnel.cpp
@@ -200,10 +199,10 @@ if(RUVIA_BUILD_WEB)
         web/client/operation_interruption.cpp)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
-        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3/quic.cpp)
+        ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http/http3_quic.cpp)
         # Owns a four-worker application serving HTTP/3 beside its HTTPS
         # listener, stopped gracefully at its end.
-        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3/serving.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http/http3_serving.cpp)
     endif()
 
     # Feature directories join the unit suite only when their feature is built.
@@ -213,7 +212,7 @@ if(RUVIA_BUILD_WEB)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
-        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http3/")
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/http3_")
     endif()
     list(REMOVE_ITEM _ruvia_web_unit_sources ${_ruvia_web_standalone_sources})
     if(RUVIA_ENABLE_JWT)

@@ -18,7 +18,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
@@ -38,7 +37,7 @@
 #include "route_table.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
+#include "ruvia/web/db/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
@@ -55,7 +54,7 @@
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_cache.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/model.h"

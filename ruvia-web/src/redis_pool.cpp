@@ -1,5 +1,3 @@
-#include "redis_pool.h"
-
 #include <hiredis/hiredis.h>
 
 #include <algorithm>
@@ -36,6 +34,7 @@
 
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
+#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

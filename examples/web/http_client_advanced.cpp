@@ -16,8 +16,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/http_client.h"

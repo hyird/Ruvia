@@ -20,8 +20,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
 #include "test_exceptions.h"

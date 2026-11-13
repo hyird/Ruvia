@@ -28,7 +28,6 @@ using ruvia::http_content_encoder;
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 

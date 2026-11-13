@@ -29,7 +29,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/db/db_session.h"
+#include "ruvia/web/db/db.h"
 
 #include "connection_lifecycle.h"
 #include "db_pool.h"

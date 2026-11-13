@@ -17,7 +17,7 @@
 #include <thread>
 #include <utility>
 
-#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"

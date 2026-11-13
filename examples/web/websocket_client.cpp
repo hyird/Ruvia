@@ -13,8 +13,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"

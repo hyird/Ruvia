@@ -12,10 +12,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/middleware.h"
 
 #include "backend_config.h"

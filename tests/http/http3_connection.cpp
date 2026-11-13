@@ -2,6 +2,8 @@
 // lossless byte relay: every stream byte one codec emits is delivered to its
 // peer in order and, unless the test withholds it, acknowledged immediately.
 
+#include "ruvia/http/http3_connection.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -21,7 +23,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"

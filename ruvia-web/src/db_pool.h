@@ -33,8 +33,6 @@
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/db/db.h"
-#include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_session.h"
 
 #include "connection_lifecycle.h"
 #include "http_client_pool.h"
