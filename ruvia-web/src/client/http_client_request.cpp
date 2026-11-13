@@ -259,10 +259,20 @@ bool connection_named_field(std::span<const http_header> fields, std::string_vie
     return false;
 }
 
-task<void> pipe_response(http_client_response response, task<void> body, response_stream_writer& output,
-    std::pmr::memory_resource* resource) {
+// One bound for the whole forward: commit, body and end share the deadline
+// started here and the caller's stop token.
+task<void> pipe_response(http_client_response response, detail::http_client_response_state& state,
+    response_stream_writer& output, std::pmr::memory_resource* resource, operation_options operation) {
+    if (operation.stop_token_.stop_requested()) {
+        throw http_client_error(http_client_error::code_type::cancelled, "HTTP client operation cancelled");
+    }
+    const operation_timeout deadline(operation.timeout_);
     if (co_await output.commit() == stream_commit_result::body) {
-        co_await std::move(body);
+        const auto remaining = deadline.remaining();
+        if (remaining && remaining->value() <= std::chrono::milliseconds::zero()) {
+            throw http_client_error(http_client_error::code_type::timeout, "HTTP client read timed out");
+        }
+        co_await state.consume_body<void>({.timeout_ = remaining, .stop_token_ = operation.stop_token_}, &output);
         std::pmr::vector<http_header_view> trailers(pmr_resource_or_default(resource));
         trailers.reserve(response.trailers().size());
         for (const auto& field : response.trailers()) {
@@ -724,11 +734,12 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     return dispatched;
 }
 
-task<void> http_client_response::pipe_to(context& output) & {
+task<void> http_client_response::pipe_to(context& output, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("response owner has moved");
     }
     state_->require_owner_worker("HTTP response requires its owner worker");
+    validate_operation_options(operation);
     if (!state_->body_operation_scope_.active() || !output.operation_scope_.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }
@@ -746,7 +757,7 @@ task<void> http_client_response::pipe_to(context& output) & {
     }
     auto& writer = output.stream();
     auto source = make_scoped_operation(state_->body_operation_scope_,
-        pipe_response(http_client_response(state_), body_.pipe_to(writer), writer, state_->resource_));
+        pipe_response(http_client_response(state_), *state_, writer, state_->resource_, std::move(operation)));
     return make_scoped_operation(output.operation_scope_,
         pipe_response_in_context(std::move(source)));
 }

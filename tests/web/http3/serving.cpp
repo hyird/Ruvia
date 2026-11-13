@@ -54,6 +54,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "app_run.h"
+#include "client_operation_fixture.h"
 #include "http3_raw_request_client.h"
 #include "http3_test_client.h"
 #include "test_tls_identity.h"
@@ -1001,6 +1002,7 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
             co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_versions{.http1_ = false});
 #endif
             co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true});
+            co_await ruvia::test::client_operations::exercise(h3_owner.client(), loop.handle());
         }
         {
             if (h2_owner) {

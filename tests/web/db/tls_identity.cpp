@@ -18,6 +18,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db.h"
 
+#include "db_migration_fixture.h"
 #include "test_tls_identity.h"
 
 namespace database_tls_tests {
@@ -163,7 +164,7 @@ bool sends_startup(ruvia::db_driver driver, const char* reference, const char* c
     config.connect_timeout_ = std::chrono::seconds(3);
     bool connect_failed = false;
     try {
-        (void)ruvia::db_migrator::migrate(config, {});
+        (void)ruvia::test::run_db_migration(config, {});
     } catch (const ruvia::db_error& error) {
         connect_failed = error.code() == ruvia::db_error::code_type::connect_failed;
     }

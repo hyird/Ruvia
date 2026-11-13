@@ -138,6 +138,12 @@ private:
 // 不等正文结束即交付第一块；framing()/content_length() 始终表示线面计划。
 // For HTTP/1, bytes received beyond a complete framed response retire the
 // connection and are discarded; they do not turn that response into a failure.
+//
+// Every body operation takes its own operation_options, timed from when it
+// starts; a non-positive timeout throws std::invalid_argument at the call. Its
+// expiry or stop request ends only that wait with http_client_error (timeout /
+// cancelled): buffered bytes and the read lane remain, so reading may resume.
+// The request's own deadlines and host cancellation keep bounding the exchange.
 class http_client_response_body final {
 public:
     http_client_response_body(const http_client_response_body&) = delete;
@@ -148,26 +154,28 @@ public:
     // The returned view remains valid until the next body operation starts. A null
     // optional is the only end-of-body signal; an empty data chunk is never
     // returned. Reads are linear and concurrent operations are rejected.
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
-    task<std::optional<std::span<const std::byte>>> read() && = delete;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
 
     // Reads one chunk as characters, without decoding or charset validation.
     // Encoded characters may straddle chunks. Uses the same linear read lane.
-    [[nodiscard]] task<std::optional<std::string_view>> text() &;
-    task<std::optional<std::string_view>> text() && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
 
     // Collects the unread remainder of this same stream. max_bytes is a caller
-    // bound in addition to the origin's transport bound.
+    // bound in addition to the origin's transport bound. An interrupted
+    // collection keeps the bytes received so far for the next body operation.
     [[nodiscard]] task<http_client_response_bytes> read_all(
-        std::size_t max_bytes = default_max_buffered_body_bytes) &;
+        std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) &;
     task<http_client_response_bytes> read_all(
-        std::size_t = default_max_buffered_body_bytes) && = delete;
+        std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
 
     // 以自然背压转发当前上游正文；调用者必须先对 output 执行 commit()，
     // 只有 body 结果才启动转发，completed 时不得消费/生产转发正文。
-    [[nodiscard]] task<void> pipe_to(response_stream_writer& output) &;
-    task<void> pipe_to(response_stream_writer&) && = delete;
-
+    // operation 约束整个转发；中断抛出 timeout / cancelled，已提交的下游
+    // 输出按流式提交契约随该异常中止，上游正文游标停在最后一块成功写出处。
+    [[nodiscard]] task<void> pipe_to(response_stream_writer& output, operation_options operation = {}) &;
+    task<void> pipe_to(response_stream_writer&, operation_options = {}) && = delete;
     // 尚有未读正文或接收尚未终止时返回 false；耗尽后仅正常完成返回 true。
     // 失败时与 read() 一样抛出，包括客户端提前关闭；独立上传失败不影响
     // 已完整接收的响应。移动后不再持有状态的响应仍返回 true。
@@ -233,30 +241,31 @@ public:
         return body_;
     }
     http_client_response_body& stream() && = delete;
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() & {
-        return body_.read();
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) & {
+        return body_.read(std::move(operation));
     }
-    task<std::optional<std::span<const std::byte>>> read() && = delete;
-    [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes) & {
-        return body_.read_all(max_bytes);
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<http_client_response_bytes> bytes(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
+        return body_.read_all(max_bytes, std::move(operation));
     }
-    task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes) && = delete;
-    [[nodiscard]] task<http_client_response_bytes> text(std::size_t max_bytes = default_max_buffered_body_bytes) & {
-        return body_.read_all(max_bytes);
+    task<http_client_response_bytes> bytes(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
+    [[nodiscard]] task<http_client_response_bytes> text(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
+        return body_.read_all(max_bytes, std::move(operation));
     }
-    task<http_client_response_bytes> text(std::size_t = default_max_buffered_body_bytes) && = delete;
+    task<http_client_response_bytes> text(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
-    [[nodiscard]] task<value_type> json(std::size_t max_bytes = default_max_buffered_body_bytes) & {
-        return decode_json<value_type>(bytes(max_bytes));
+    [[nodiscard]] task<value_type> json(std::size_t max_bytes = default_max_buffered_body_bytes, operation_options operation = {}) & {
+        return decode_json<value_type>(bytes(max_bytes, std::move(operation)));
     }
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
-    task<value_type> json(std::size_t = default_max_buffered_body_bytes) && = delete;
+    task<value_type> json(std::size_t = default_max_buffered_body_bytes, operation_options = {}) && = delete;
     // Forwards status, end-to-end fields, unread body and trailers. The cold
     // operation expires with either this response or the destination context.
-    [[nodiscard]] task<void> pipe_to(context& output) &;
-    task<void> pipe_to(context&) && = delete;
+    // operation bounds the whole forward, as pipe_to(response_stream_writer&).
+    [[nodiscard]] task<void> pipe_to(context& output, operation_options operation = {}) &;
+    task<void> pipe_to(context&, operation_options = {}) && = delete;
 
 private:
     template <typename value_type>
@@ -289,6 +298,11 @@ private:
 // owner preserves operations. Destruction aborts both directions; shutdown joins
 // transport drivers. finish() closes only the local sending direction and is
 // idempotent after successful completion, including normal transport retirement.
+// Each read/text/write/finish takes its own operation_options, timed from when
+// it starts. A read's expiry or stop request ends only that read with
+// http_client_error (timeout / cancelled) and keeps received bytes; a write's
+// or finish's aborts the tunnel, since partly sent bytes cannot be withdrawn,
+// and an already-stopped token fails before anything is queued.
 class http_client_tunnel final {
 public:
     http_client_tunnel(const http_client_tunnel&) = delete;
@@ -324,23 +338,23 @@ public:
         return response_.informational_responses();
     }
     std::span<const http_client_informational_response> informational_responses() const&& = delete;
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
-    task<std::optional<std::span<const std::byte>>> read() && = delete;
-    [[nodiscard]] task<std::optional<std::string_view>> text() &;
-    task<std::optional<std::string_view>> text() && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes) &;
-    task<void> write(std::string_view) && = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
-    task<void> write(std::span<const std::byte>) && = delete;
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes) & {
-        return write_owned(std::move(bytes));
+    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
+        return write_owned(std::move(bytes), std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
-    task<void> write(string_type&&) && = delete;
+    task<void> write(string_type&&, operation_options = {}) && = delete;
     // A successful finish stays idempotent after transport retirement.
-    [[nodiscard]] task<void> finish() &;
-    task<void> finish() && = delete;
+    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
+    task<void> finish(operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
     // Transfers tunnel ownership to the Capsule Protocol adapter.
@@ -360,7 +374,7 @@ private:
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation = {});
     // abort() for received content that violates the tunnel's protocol (RFC 9297
     // section 3.3 capsule error): HTTP/2 resets the stream with PROTOCOL_ERROR.
     void abort_malformed() & noexcept;
@@ -438,8 +452,10 @@ public:
     const http_push_request& request() const&& = delete;
     // Transfers the response once, when the operation is started. Promise
     // metadata remains available through this push until it is destroyed.
-    [[nodiscard]] task<http_client_response> response() &;
-    task<http_client_response> response() && = delete;
+    // An operation timeout or stop request ends only this wait for the head
+    // with http_client_error (timeout / cancelled); a later response() retries.
+    [[nodiscard]] task<http_client_response> response(operation_options operation = {}) &;
+    task<http_client_response> response(operation_options = {}) && = delete;
 
 private:
     friend class detail::http_client_pool;
@@ -456,22 +472,25 @@ private:
 // transport write failure does not discard a complete final response arriving
 // from the peer: response() remains consumable, while the failed upload is
 // reported independently and its connection is not reused.
+// A write()/end() timeout or stop request in its operation_options aborts the
+// exchange with http_client_error (timeout / cancelled), since a partly sent
+// chunk cannot be withdrawn; an already-stopped token fails before queuing.
 class http_client_request_body_writer final {
 public:
     http_client_request_body_writer(const http_client_request_body_writer&) = delete;
     http_client_request_body_writer& operator=(const http_client_request_body_writer&) = delete;
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
-    task<void> write(std::span<const std::byte>) && = delete;
-    [[nodiscard]] task<void> write(std::string_view bytes) &;
-    task<void> write(std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> write(string_type&& bytes) & {
-        return write_owned(std::move(bytes));
+    [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
+        return write_owned(std::move(bytes), std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
-    task<void> write(string_type&&) && = delete;
-    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}) &;
-    task<void> end(std::span<const http_header_view> = {}) && = delete;
+    task<void> write(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
     // Stops sending without failing the exchange: the request content stays
     // incomplete and response() remains consumable. HTTP/1 closes the
@@ -486,7 +505,7 @@ private:
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept
         : state_(state_value) {}
     ~http_client_request_body_writer() = default;
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes);
+    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
     detail::http_client_response_state* state_;
 };
 
@@ -504,8 +523,11 @@ public:
         return body_;
     }
     http_client_request_body_writer& body() && = delete;
-    [[nodiscard]] task<http_client_response> response() &;
-    task<http_client_response> response() && = delete;
+    // Waits for the final head. An operation timeout or stop request ends only
+    // this wait with http_client_error (timeout / cancelled); a later
+    // response() retries, and the upload lane is unaffected.
+    [[nodiscard]] task<http_client_response> response(operation_options operation = {}) &;
+    task<http_client_response> response(operation_options = {}) && = delete;
 
 private:
     friend class detail::http_client_pool;

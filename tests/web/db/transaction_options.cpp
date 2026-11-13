@@ -19,6 +19,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/db/db_handle.h"
@@ -288,6 +289,60 @@ TEST(Ruvia, db_stream_close_after_exhaustion_is_idempotent) {
     });
 }
 
+// A read's own operation refines the stream's options. An already-stopped
+// token is refused before the connection is touched, so the stream stays
+// usable; once the read waits, its timeout or stop request closes the
+// connection and ends the stream.
+TEST(Ruvia, db_stream_read_takes_its_own_operation_options) {
+    using namespace ruvia;
+    for (const bool cancel : {false, true}) {
+        SCOPED_TRACE(cancel ? "cancelled" : "timed out");
+        test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
+            test::backend_startup_peer::after_startup::idle,
+            std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = {"first", "withheld"},
+                                                                                    .command_ = "SELECT 2",
+                                                                                    .deferred_ = true,
+                                                                                    .first_row_before_hold_ = true}},
+                ruvia::process_resource()));
+        auto& context = test::new_test_io_context();
+        auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
+        db_client client(attachment.loop(), peer.config());
+        test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
+            auto stream = co_await connected.db().query_stream("SELECT v FROM records");
+            const auto failure_of = [](task<std::optional<db_row>> read) -> task<std::optional<db_error::code_type>> {
+                try {
+                    (void)co_await std::move(read);
+                } catch (const db_error& error) {
+                    co_return error.code();
+                }
+                co_return std::nullopt;
+            };
+            stop_source stopped;
+            stopped.request_stop();
+            EXPECT_TRUE(co_await failure_of(stream.read({.stop_token_ = stopped.token()})) == db_error::code_type::cancelled);
+            EXPECT_TRUE(stream.active());
+            EXPECT_THROW((void)stream.read({.timeout_ = std::chrono::milliseconds(0)}), std::invalid_argument);
+            const auto first = co_await stream.read();
+            EXPECT_TRUE(first && (*first)["v"].as<std::string_view>() == "first");
+            stop_source stop;
+            task_scope stopper(connected.worker());
+            const auto stop_later = [&]() -> task<void> {
+                (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(30));
+                stop.request_stop();
+            };
+            operation_options operation{.timeout_ = std::chrono::milliseconds(30)};
+            if (cancel) {
+                operation = {.stop_token_ = stop.token()};
+                stopper.spawn(stop_later());
+            }
+            const auto code = co_await failure_of(stream.read(std::move(operation)));
+            co_await stopper.join();
+            EXPECT_TRUE(code == (cancel ? db_error::code_type::cancelled : db_error::code_type::timeout));
+            EXPECT_TRUE(!stream.active());
+        });
+    }
+}
+
 TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transaction_active) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
@@ -529,7 +584,7 @@ TEST(Ruvia, db_config_transaction_timeout_defaults_to_one_minute_and_rejects_non
                 client_rejected = true;
             }
             try {
-                db_migrator migrator(config);
+                db_migrator migrator(pool.loop(0), config);
             } catch (const std::invalid_argument&) {
                 migrator_rejected = true;
             }

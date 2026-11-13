@@ -10,14 +10,13 @@
 #include <span>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 #include <utility>
+#include <vector>
 
-#include <asio/config.hpp>
-#include <asio/io_context.hpp>
-
-#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
@@ -30,6 +29,7 @@
 #include "db/db_registry.h"
 #include "db/db_sql_format.h"
 #include "integration/named_capability.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia {
 namespace detail {
@@ -352,9 +352,14 @@ void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_vi
 
 class detail::db_migration_runner final {
 public:
-    [[nodiscard]] static task<db_migration_report> run(asio::io_context& io_context,
-        const worker_handle& worker_value, db_config_storage config, std::span<const db_migration> migrations,
-        db_migrator_options_storage options, std::pmr::memory_resource* resource) {
+    // Every input is owned by this frame, so the run outlives neither the
+    // migrator nor the caller's migration list.
+    [[nodiscard]] static task<db_migration_report> run(event_loop loop, db_config_storage config,
+        std::pmr::vector<db_migration> migrations, db_migrator_options_storage options,
+        std::pmr::memory_resource* resource, operation_options operation) {
+        if (!loop.is_current()) {
+            throw std::logic_error("database migration must run on its bound event loop");
+        }
         auto* resolved = pmr_resource_or_default(resource);
         const auto driver = config.driver_;
 
@@ -378,37 +383,54 @@ public:
             detail::db_definition{std::pmr::string(detail::default_capability_alias.data(),
                                       detail::default_capability_alias.size(), resolved),
                 std::move(config)}};
-        detail::db_registry registry(io_context, worker_value, databases);
-        co_await registry.connect();
-        ::ruvia::operation_scope operation_scope;
-        auto handle = registry.get(operation_scope, nullptr);
-
-        co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_, resolved);
+        detail::db_registry registry(loop.io_context(), loop.handle(), databases);
+        // One bound for the whole run, connection included: its expiry or stop
+        // request closes the dedicated connection, which also releases the lock.
+        operation_interrupt_source interrupts;
+        std::optional<operation_interrupt> interrupt;
+        try {
+            interrupt.emplace(interrupts, loop.handle(), operation, &registry, &close_registry, "database migration");
+        } catch (const std::system_error&) {
+            throw db_error(db_error::code_type::cancelled, driver, "database migration cancelled");
+        }
 
         std::exception_ptr failure;
         try {
-            co_await apply_migrations(handle, driver, migrations, options, report, resolved);
+            co_await registry.connect();
+            ::ruvia::operation_scope operation_scope;
+            auto handle = registry.get(operation_scope, nullptr);
+            co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_, resolved);
+            try {
+                co_await apply_migrations(handle, driver, migrations, options, report, resolved);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            // Release explicitly only after a clean run. After a failure the
+            // session may already be gone, or still be inside a transaction a
+            // failed statement left; closing it below releases the lock in
+            // every case, since both lock flavours end with their session.
+            if (failure == nullptr) {
+                co_await release_lock(handle, driver, lock_name);
+            }
         } catch (...) {
             failure = std::current_exception();
         }
 
-        // Release explicitly only after a clean run. After a failure the
-        // session may already be gone, or still be inside a transaction a
-        // failed statement left; closing it below releases the lock in every
-        // case, since both lock flavours end with their session.
-        if (failure == nullptr) {
-            try {
-                co_await release_lock(handle, driver, lock_name);
-            } catch (...) {
-                failure = std::current_exception();
-            }
-        }
-
         registry.close_now();
+        if (const auto cause = interrupt->cause()) {
+            throw db_error(*cause == operation_interrupt_cause::timed_out ? db_error::code_type::timeout
+                                                                          : db_error::code_type::cancelled,
+                driver, *cause == operation_interrupt_cause::timed_out ? "database migration timed out" : "database migration cancelled");
+        }
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
         co_return std::move(report);
+    }
+
+private:
+    static void close_registry(void* registry) noexcept {
+        static_cast<detail::db_registry*>(registry)->close_now();
     }
 
 private:
@@ -522,12 +544,14 @@ private:
 
 class db_migrator::storage_type final {
 public:
-    storage_type(detail::validated_db_config_view config_source_value, const db_migrator_options& options_source,
-        std::pmr::memory_resource* storage_resource)
-        : resource_(storage_resource),
+    storage_type(event_loop loop, detail::validated_db_config_view config_source_value,
+        const db_migrator_options& options_source, std::pmr::memory_resource* storage_resource)
+        : loop_(std::move(loop)),
+          resource_(storage_resource),
           config_(config_source_value, storage_resource),
           options_(options_source, storage_resource) {}
 
+    event_loop loop_;
     std::pmr::memory_resource* resource_;
     detail::db_config_storage config_;
     db_migrator_options_storage options_;
@@ -537,57 +561,22 @@ void db_migrator::storage_deleter_type::operator()(storage_type* storage) const 
     destroy_pmr_object(storage, resource_);
 }
 
-namespace {
-
-task<db_migration_report> stop_migration_loop_when_done(
-    event_loop_attachment& attachment, task<db_migration_report> operation) {
-    try {
-        auto report = co_await std::move(operation);
-        attachment.stop();
-        co_return report;
-    } catch (...) {
-        attachment.stop();
-        throw;
-    }
-}
-
-[[nodiscard]] db_migration_report run_migrations(detail::db_config_storage config,
-    std::span<const db_migration> migrations, db_migrator_options_storage options,
-    std::pmr::memory_resource* resource) {
-    // The migrator drives its own event loop, so it also owns the pool that
-    // loop borrows for a DNS host lookup; an IP literal needs none.
-    std::optional<blocking_pool> host_lookups;
-    if (detail::client_host_needs_lookup(config.host_)) {
-        host_lookups.emplace(blocking_pool_options{.thread_count_ = 1});
-    }
-    asio::io_context io_context(std::allocator_arg,
-        std::pmr::polymorphic_allocator<std::byte>(pmr_resource_or_default(resource)),
-        asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));
-    auto attachment =
-        attach_event_loop(io_context, {.blocking_pool_ = host_lookups.has_value() ? &*host_lookups : nullptr});
-    const auto loop = attachment.loop();
-    const auto worker_value = loop.handle();
-    auto result_value = loop.start(stop_migration_loop_when_done(
-        attachment, detail::db_migration_runner::run(io_context, worker_value, std::move(config), migrations,
-                        std::move(options), resource)));
-    attachment.run();
-    return std::move(result_value).get();
-}
-
-}  // namespace
-
 db_migrator::storage_owner_type db_migrator::make_storage(
-    const db_config& config, const db_migrator_options& options) {
+    event_loop loop, const db_config& config, const db_migrator_options& options) {
+    if (!loop.valid()) {
+        throw std::invalid_argument("database migrator requires a valid event loop");
+    }
     auto* resource = pmr_resource_or_default(options.resource_);
     const auto validated_config = detail::validated_db_config(config);
     validate_db_migrator_options(options, validated_config.get().driver_);
+    detail::require_client_host_lookup(validated_config.get().host_, loop.handle());
     return storage_owner_type(
-        construct_pmr_object<storage_type>(resource, validated_config, options, resource),
+        construct_pmr_object<storage_type>(resource, std::move(loop), validated_config, options, resource),
         storage_deleter_type{resource});
 }
 
-db_migrator::db_migrator(const db_config& config, const db_migrator_options& options)
-    : storage_(make_storage(config, options)) {}
+db_migrator::db_migrator(event_loop loop, const db_config& config, const db_migrator_options& options)
+    : storage_(make_storage(std::move(loop), config, options)) {}
 
 db_migrator::~db_migrator() = default;
 
@@ -595,23 +584,17 @@ db_migrator::db_migrator(db_migrator&&) noexcept = default;
 
 db_migrator& db_migrator::operator=(db_migrator&&) noexcept = default;
 
-db_migration_report db_migrator::migrate(std::span<const db_migration> migrations) const {
+task<db_migration_report> db_migrator::migrate(
+    std::span<const db_migration> migrations, operation_options operation) const& {
     if (storage_ == nullptr) {
         throw std::logic_error("database migrator has been moved from");
     }
     detail::validate_migration_list(migrations, storage_->config_.driver_);
-    return run_migrations(detail::db_config_storage(storage_->config_, storage_->resource_), migrations,
-        db_migrator_options_storage(storage_->options_, storage_->resource_), storage_->resource_);
-}
-
-db_migration_report db_migrator::migrate(const db_config& config,
-    std::span<const db_migration> migrations, const db_migrator_options& options) {
-    auto* resource = pmr_resource_or_default(options.resource_);
-    const auto validated_config = detail::validated_db_config(config);
-    validate_db_migrator_options(options, validated_config.get().driver_);
-    detail::validate_migration_list(migrations, validated_config.get().driver_);
-    return run_migrations(detail::db_config_storage(validated_config, resource), migrations,
-        db_migrator_options_storage(options, resource), resource);
+    validate_operation_options(operation);
+    auto* resource = storage_->resource_;
+    return detail::db_migration_runner::run(storage_->loop_, detail::db_config_storage(storage_->config_, resource),
+        std::pmr::vector<db_migration>(migrations.begin(), migrations.end(), resource),
+        db_migrator_options_storage(storage_->options_, resource), resource, std::move(operation));
 }
 
 }  // namespace ruvia

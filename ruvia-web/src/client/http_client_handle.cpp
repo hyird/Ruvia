@@ -2,6 +2,7 @@
 #include <array>
 #include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
@@ -235,6 +236,7 @@ task<void> detail::http_client_response_state::dispatch_informational(const oper
 
 task<void> detail::http_client_response_state::await_head(std::string_view head_message) {
     while ((!head_ready_ || informational_active_) && !failure_ && !pool_closed_) {
+        throw_if_read_interrupted();
         co_await head_signal_.wait();
     }
     rethrow_response_failure();
@@ -250,12 +252,68 @@ task<void> detail::http_client_response_state::await_head(std::string_view head_
     }
     notify_producer_space();
     while (!complete_) {
+        throw_if_read_interrupted();
         co_await data_signal_.wait();
     }
     rethrow_response_failure();
     if (pool_closed_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client encoded response failed", std::nullopt,
             connection_info_.id_ != 0 ? &connection_info_ : nullptr);
+    }
+}
+
+namespace {
+[[noreturn]] void throw_interrupted(const detail::http_client_response_state& state_value,
+    detail::operation_interrupt_cause cause, std::string_view timed_out, std::string_view cancelled) {
+    const bool timeout = cause == detail::operation_interrupt_cause::timed_out;
+    throw http_client_error(timeout ? http_client_error::code_type::timeout : http_client_error::code_type::cancelled,
+        timeout ? timed_out : cancelled, std::nullopt,
+        state_value.connection_info_.id_ != 0 ? &state_value.connection_info_ : nullptr);
+}
+}  // namespace
+
+void detail::http_client_response_state::throw_if_read_interrupted() const {
+    if (read_interrupted()) {
+        throw_interrupted(*this, *read_operation_->cause(), "HTTP client read timed out", "HTTP client read cancelled");
+    }
+}
+
+void detail::http_client_response_state::throw_if_output_interrupted() const {
+    if (output_operation_ != nullptr && output_operation_->interrupted()) {
+        throw_interrupted(*this, *output_operation_->cause(), "HTTP client write timed out", "HTTP client write cancelled");
+    }
+}
+
+detail::http_client_operation_interruption::http_client_operation_interruption(http_client_response_state& state,
+    http_client_operation_lane lane, const operation_options& operation) try
+    : state_(state),
+      lane_(lane),
+      interrupt_(state.interrupt_source_, state.memory_domain().worker(), operation, &state,
+          lane == http_client_operation_lane::read ? &wake_reader : &abort_output,
+          lane == http_client_operation_lane::read ? "HTTP client read" : "HTTP client write") {
+    (lane == http_client_operation_lane::read ? state.read_operation_ : state.output_operation_) = &interrupt_;
+} catch (const std::system_error&) {
+    // The only system_error at construction is an already-stopped token.
+    throw_interrupted(state, operation_interrupt_cause::cancelled, {}, "HTTP client operation cancelled");
+}
+
+detail::http_client_operation_interruption::~http_client_operation_interruption() {
+    (lane_ == http_client_operation_lane::read ? state_.read_operation_ : state_.output_operation_) = nullptr;
+}
+
+void detail::http_client_operation_interruption::wake_reader(void* state) noexcept {
+    auto& state_value = *static_cast<http_client_response_state*>(state);
+    state_value.head_signal_.notify();
+    state_value.data_signal_.notify();
+}
+
+void detail::http_client_operation_interruption::abort_output(void* state) noexcept {
+    auto& state_value = *static_cast<http_client_response_state*>(state);
+    if (auto* queue = state_value.output()) {
+        queue->stop();
+    }
+    if (state_value.pool_ != nullptr && !state_value.complete_ && !state_value.abandoned_) {
+        state_value.pool_->abandon_response(state_value);
     }
 }
 
@@ -326,28 +384,37 @@ bool http_client_response_body::complete() const {
     return true;
 }
 
-task<std::optional<std::span<const std::byte>>> http_client_response_body::read() & {
+task<std::optional<std::span<const std::byte>>> http_client_response_body::read(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        state_value.body_operation_scope_, state_value.consume_body<std::span<const std::byte>>());
+        state_value.body_operation_scope_, state_value.consume_body<std::span<const std::byte>>(std::move(operation)));
 }
 
-task<std::optional<std::string_view>> http_client_response_body::text() & {
+task<std::optional<std::string_view>> http_client_response_body::text(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        state_value.body_operation_scope_, state_value.consume_body<std::string_view>());
+        state_value.body_operation_scope_, state_value.consume_body<std::string_view>(std::move(operation)));
 }
 
 template <typename view>
-task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(response_stream_writer* output) {
+task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(operation_options operation, response_stream_writer* output) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
+    const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
     for (;;) {
+        // A forward is bounded as a whole: its bound also ends it between
+        // chunks that are already buffered.
+        if constexpr (std::is_void_v<view>) {
+            state_value.throw_if_read_interrupted();
+        }
         // Reclaim a returned borrow only at the next consumption step. A pipe
         // commits its cursor only after the downstream write succeeds.
         state_value.release_consumed_body_prefix();
         while ((state_value.body_decode_required_ && !state_value.receive_complete()) ||
                (state_value.buffered_.empty() && state_value.pending_.empty() && !state_value.receive_complete())) {
+            state_value.throw_if_read_interrupted();
             co_await state_value.data_signal_.wait();
         }
         promote_pending_data();
@@ -381,19 +448,21 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
     }
 }
 
-template task<std::optional<std::span<const std::byte>>> detail::http_client_response_state::consume_body<std::span<const std::byte>>(response_stream_writer*);
-template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(response_stream_writer*);
-template task<void> detail::http_client_response_state::consume_body<void>(response_stream_writer*);
+template task<std::optional<std::span<const std::byte>>> detail::http_client_response_state::consume_body<std::span<const std::byte>>(operation_options, response_stream_writer*);
+template task<std::optional<std::string_view>> detail::http_client_response_state::consume_body<std::string_view>(operation_options, response_stream_writer*);
+template task<void> detail::http_client_response_state::consume_body<void>(operation_options, response_stream_writer*);
 
-task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes) & {
+task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        state_value.body_operation_scope_, state_value.read_all(max_bytes));
+        state_value.body_operation_scope_, state_value.read_all(max_bytes, std::move(operation)));
 }
 
-task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes) {
+task<http_client_response_bytes> detail::http_client_response_state::read_all(std::size_t max_bytes, operation_options operation) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
+    const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
     state_value.release_consumed_body_prefix();
     state_value.collect_all_ = true;
     if (state_value.pool_ != nullptr) {
@@ -401,6 +470,12 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     }
     state_value.notify_producer_space();
     while (!state_value.receive_complete()) {
+        if (state_value.read_interrupted()) {
+            // The collected prefix stays buffered for the next body operation,
+            // which restores ordinary backpressure.
+            state_value.collect_all_ = false;
+            state_value.throw_if_read_interrupted();
+        }
         co_await state_value.data_signal_.wait();
     }
     state_value.rethrow_response_failure();
@@ -441,10 +516,11 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
     co_return std::move(result_value);
 }
 
-task<void> http_client_response_body::pipe_to(response_stream_writer& output) & {
+task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        state_value.body_operation_scope_, state_value.consume_body<void>(&output));
+        state_value.body_operation_scope_, state_value.consume_body<void>(std::move(operation), &output));
 }
 
 std::optional<std::string_view> http_client_response::header(std::string_view name) const& {

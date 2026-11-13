@@ -44,7 +44,7 @@ TEST(Ruvia, db_pool_rejects_zero_capacity_at_configuration) {
             client_rejected = true;
         }
         try {
-            ruvia::db_migrator migrator(config);
+            ruvia::db_migrator migrator(pool.loop(0), config);
         } catch (const std::invalid_argument&) {
             migrator_rejected = true;
         }

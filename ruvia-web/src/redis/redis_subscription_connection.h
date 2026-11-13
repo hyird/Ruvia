@@ -26,6 +26,7 @@
 
 #include "redis/redis_config_storage.h"
 #include "redis/redis_connection.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -56,7 +57,9 @@ public:
     task<void> send(redis_owned_command command);
     // Reads the next pushed reply, consuming PING replies. Views of the
     // returned event borrow current_reply_ until the next read() releases it.
-    task<std::optional<redis_pubsub_event>> read();
+    // `operation` tightens the read deadline; its stop request closes the
+    // connection and fails this read with cancelled.
+    task<std::optional<redis_pubsub_event>> read(operation_options operation);
     void abort(client_abort_reason reason) noexcept;
 
     [[nodiscard]] const worker_handle& worker() const noexcept;
@@ -82,6 +85,7 @@ private:
     void fail_idle_probe() noexcept;
     // Bounded by `timeout`: one interval, capped by the joining read's deadline.
     task<void> write_ping(operation_timeout timeout);
+    static void cancel_read(void* connection) noexcept;
 
     redis_subscription_set& owner_;
     operation_options options_;
@@ -121,6 +125,8 @@ private:
     // Armed only while a read() waits and cancelled before it returns; its
     // completion addresses this connection.
     worker_timer_registration idle_probe_timer_;
+    // Routes the stop request of the waiting read().
+    operation_interrupt_source read_stops_;
     // Declared last: it is armed with the stop token once the connection is
     // linked and is released before any other member is destroyed.
     worker_cancellation_registration<worker_cancellation_target<redis_subscription_set>> cancellation_;

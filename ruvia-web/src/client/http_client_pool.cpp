@@ -1784,7 +1784,7 @@ const http_push_request& http_client_push::request() const& {
     }
     return *state_value->promised_request_;
 }
-task<http_client_response> http_client_push::response() & {
+task<http_client_response> http_client_push::response(operation_options operation) & {
     auto* state_value = response_.state_;
     (void)request();
     // Unlike an exchange, a push admits no second receive, even a cold one.
@@ -1792,6 +1792,6 @@ task<http_client_response> http_client_push::response() & {
         throw std::logic_error("push response has already been transferred or is active");
     }
     return state_value->push_response_.receive(
-        http_client_response(state_value), "HTTP push failed before its response head");
+        http_client_response(state_value), "HTTP push failed before its response head", std::move(operation));
 }
 }  // namespace ruvia

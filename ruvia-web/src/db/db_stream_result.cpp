@@ -62,22 +62,41 @@ void db_stream_result::expire_capability(void* target) noexcept {
     result_value.reset();
 }
 
-task<std::optional<db_row>> db_stream_result::read() & {
+namespace {
+
+// The stream's handle options with this operation's own: its timeout only
+// tightens, a supplied token replaces the inherited one. An already-stopped
+// token gives the lease back before it reaches the connection, so the stream
+// stays usable.
+template <typename guard_type>
+[[nodiscard]] operation_options admit_stream_operation(guard_type& operation, operation_options operation_value) {
+    auto effective = override_operation_options(operation.lease().options_, std::move(operation_value));
+    if (effective.stop_token_.stop_requested()) {
+        operation.finish_active();
+        throw db_error(db_error::code_type::cancelled, std::nullopt, "database stream operation cancelled");
+    }
+    return effective;
+}
+
+}  // namespace
+
+task<std::optional<db_row>> db_stream_result::read(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(
-        registration_.scope(), read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_));
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(registration_.scope(),
+        read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
 }
 
 task<std::optional<db_row>> db_stream_result::read_task(
     detail::request_io_metrics* io_metrics, operation_guard_type pending,
-    std::pmr::vector<std::pmr::string>& column_names) {
+    std::pmr::vector<std::pmr::string>& column_names, operation_options operation_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
+    auto effective = admit_stream_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
     auto row = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return client.read_stream_row(
-            lease_value.slot_, lease_value.fields_, column_names, lease_value.resource_, lease_value.options_);
+        return client.read_stream_row(lease_value.slot_, lease_value.fields_, column_names, lease_value.resource_, effective);
     });
     if (row) {
         operation.finish_active();
@@ -87,22 +106,25 @@ task<std::optional<db_row>> db_stream_result::read_task(
     co_return row;
 }
 
-task<void> db_stream_result::close() & {
+task<void> db_stream_result::close(operation_options operation) & {
     registration_.require_active();
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_)));
+        registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
 }
 
-task<void> db_stream_result::close_task(detail::request_io_metrics* io_metrics, operation_guard_type pending) {
+task<void> db_stream_result::close_task(
+    detail::request_io_metrics* io_metrics, operation_guard_type pending, operation_options operation_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     if (operation.finished()) {
         co_return;
     }
     operation.start();
+    auto effective = admit_stream_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
     co_await detail::visit_db_pool(
-        lease_value.client_, [&](auto& client) { return client.close_stream(lease_value.slot_, lease_value.options_); });
+        lease_value.client_, [&](auto& client) { return client.close_stream(lease_value.slot_, effective); });
     operation.finish_closed();
 }
 

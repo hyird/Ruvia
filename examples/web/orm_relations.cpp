@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
             std::cout << migration.sql() << ";\n";
         }
         if (migrate) {
-            (void)ruvia::db_migrator::migrate(ruvia::examples::config(), changes);
+            (void)example::apply_migrations(ruvia::examples::config(), changes);
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));

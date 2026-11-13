@@ -12,7 +12,10 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/task.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_types.h"
@@ -123,9 +126,11 @@ private:
     std::pmr::vector<std::pmr::string> skipped_;
 };
 
-// Applies pending migrations synchronously on the calling thread, holding a
-// backend lock so that concurrent deployers serialize. It runs its own event
-// loop and blocks until done, so it belongs in startup code, never on a worker.
+// Applies pending migrations on the caller's event loop, holding a backend lock
+// so that concurrent deployers serialize. Like db_client it borrows the loop's
+// io_context and blocking pool (for a DNS host); it opens one dedicated
+// connection per run, independent of any pool and of
+// db_config::pool_size_per_worker_, that carries the lock and every statement.
 //
 // On PostgreSQL a migration and the row recording it commit together unless the
 // migration opts out. MariaDB commits DDL implicitly, so there they are two
@@ -138,16 +143,17 @@ private:
 // from the current source. Upgrade legacy history only after independently
 // verifying the SQL actually applied; then record that SQL's digest explicitly.
 //
-// db_config's timeouts apply here as they do on a worker: without connect_timeout
-// or query_timeout_ a stalled backend blocks startup indefinitely.
-// Migration locks and statements share one dedicated connection, independent
-// of db_config::pool_size_per_worker_.
+// db_config's timeouts apply to each step: without connect_timeout or
+// query_timeout_ a stalled backend blocks the run indefinitely unless the
+// run's own operation_options bound it.
 class db_migrator final {
 public:
     // The configuration and migration-table name are copied into options.resource;
     // their source PMR storage may be released after construction. The supplied
-    // resource itself must outlive this migrator.
-    explicit db_migrator(const db_config& config, const db_migrator_options& options = {});
+    // resource itself must outlive this migrator and its runs. An invalid loop,
+    // or a DNS host on a loop without a blocking pool, throws
+    // std::invalid_argument.
+    db_migrator(event_loop loop, const db_config& config, const db_migrator_options& options = {});
     ~db_migrator();
 
     db_migrator(const db_migrator&) = delete;
@@ -155,10 +161,17 @@ public:
     db_migrator(db_migrator&&) noexcept;
     db_migrator& operator=(db_migrator&&) noexcept;
 
-    [[nodiscard]] db_migration_report migrate(std::span<const db_migration> migrations) const;
-
-    [[nodiscard]] static db_migration_report migrate(const db_config& config,
-        std::span<const db_migration> migrations, const db_migrator_options& options = {});
+    // Validates and copies the migration list before returning the cold task,
+    // which owns every input and must run on the bound loop (std::logic_error
+    // otherwise). `operation` bounds the whole run, connecting included; a
+    // non-positive timeout throws std::invalid_argument at the call and an
+    // already-stopped token throws db_error(cancelled) before connecting. Its
+    // expiry or stop request closes the dedicated connection, which releases
+    // the lock, and throws db_error(timeout / cancelled); a migration already
+    // committed stays recorded.
+    [[nodiscard]] task<db_migration_report> migrate(
+        std::span<const db_migration> migrations, operation_options operation = {}) const&;
+    task<db_migration_report> migrate(std::span<const db_migration>, operation_options = {}) const&& = delete;
 
 private:
     class storage_type;
@@ -169,7 +182,7 @@ private:
     using storage_owner_type = std::unique_ptr<storage_type, storage_deleter_type>;
 
     [[nodiscard]] static storage_owner_type make_storage(
-        const db_config& config, const db_migrator_options& options);
+        event_loop loop, const db_config& config, const db_migrator_options& options);
 
     storage_owner_type storage_;
 };

@@ -236,6 +236,9 @@ if(RUVIA_BUILD_WEB)
     # Owns named fixed origins and redirect policies on the process application.
     ruvia_add_web_standalone_test(ruvia_http_client_api_tests 60
         web/client/handle_and_response.cpp)
+    # Owns the process application whose routes stall each client operation.
+    ruvia_add_web_standalone_test(ruvia_http_client_operation_tests 60
+        web/client/operation_interruption.cpp)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
         ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3/quic.cpp)

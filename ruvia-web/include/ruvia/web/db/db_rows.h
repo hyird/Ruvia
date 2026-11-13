@@ -321,10 +321,17 @@ public:
     // the stream ends and also counts the time between operations; once it has
     // passed, the connection is closed and read() and close() fail with
     // db_error::code_type::timeout.
-    [[nodiscard]] task<std::optional<db_row>> read() &;
-    task<std::optional<db_row>> read() && = delete;
-    [[nodiscard]] task<void> close() &;
-    task<void> close() && = delete;
+    // `operation` refines the handle's options for this call only: its timeout
+    // may only tighten, and a supplied token replaces the inherited one. A
+    // non-positive timeout throws std::invalid_argument at the call; an
+    // already-stopped token throws db_error(cancelled) and leaves the stream
+    // usable. Once started, a timeout or stop request closes the connection --
+    // a pooled connection interrupted mid-result is never reused -- and ends
+    // the stream with db_error timeout / cancelled.
+    [[nodiscard]] task<std::optional<db_row>> read(operation_options operation = {}) &;
+    task<std::optional<db_row>> read(operation_options = {}) && = delete;
+    [[nodiscard]] task<void> close(operation_options operation = {}) &;
+    task<void> close(operation_options = {}) && = delete;
 
 private:
     friend class db_handle;
@@ -363,8 +370,8 @@ private:
     void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
     static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics,
-        operation_guard_type operation, std::pmr::vector<std::pmr::string>& column_names);
-    static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation);
+        operation_guard_type operation, std::pmr::vector<std::pmr::string>& column_names, operation_options operation_value);
+    static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
 
     state_owner_type state_;
     detail::request_io_metrics* io_metrics_{nullptr};

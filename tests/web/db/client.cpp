@@ -15,6 +15,8 @@
 #include <string_view>
 #include <system_error>
 
+#include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
@@ -35,6 +37,16 @@ using ruvia::test::tracking_resource;
     return ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
 #endif
 }
+
+// A loop a migrator can bind; its blocking pool admits a DNS host.
+struct migrator_loop final {
+    ruvia::blocking_pool host_lookups_{{.thread_count_ = 1}};
+    ruvia::event_loop_pool loops_{{.loop_count_ = 1, .blocking_pool_ = &host_lookups_}};
+
+    [[nodiscard]] ruvia::event_loop loop() const {
+        return loops_.loop(0);
+    }
+};
 
 }  // namespace
 
@@ -73,23 +85,25 @@ TEST(Ruvia, db_error_carries_category_and_native_diagnostics) {
 }
 
 TEST(Ruvia, db_config_rejects_non_positive_timeouts) {
+    const migrator_loop loop;
     auto config = test_db_config();
     for (const auto field : {&ruvia::db_config::connect_timeout_, &ruvia::db_config::read_timeout_,
              &ruvia::db_config::write_timeout_, &ruvia::db_config::query_timeout_,
              &ruvia::db_config::acquire_timeout_, &ruvia::db_config::transaction_timeout_}) {
         for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
             config.*field = invalid;
-            EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(config); }));
+            EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(loop.loop(), config); }));
         }
         (config.*field).reset();
     }
 }
 
 TEST(Ruvia, db_migrator_rejects_non_positive_lock_timeouts) {
+    const migrator_loop loop;
     ruvia::db_migrator_options options;
     for (const auto invalid : {std::chrono::milliseconds(0), std::chrono::milliseconds(-1)}) {
         options.lock_timeout_ = invalid;
-        EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(test_db_config(), options); }));
+        EXPECT_TRUE(throws_on([&] { ruvia::db_migrator migrator(loop.loop(), test_db_config(), options); }));
     }
 }
 
@@ -98,10 +112,11 @@ TEST(Ruvia, db_migrator_validates_before_opening_connection) {
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 1"}},
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
     }};
+    const migrator_loop loop;
+    const ruvia::db_migrator migrator(loop.loop(), test_db_config());
     bool rejected = false;
     try {
-        (void)ruvia::db_migrator::migrate(
-            test_db_config(), std::span<const ruvia::db_migration>(migrations));
+        (void)migrator.migrate(std::span<const ruvia::db_migration>(migrations));
     } catch (const std::invalid_argument& error) {
         rejected = std::string_view(error.what()) ==
                    "database migration ids must be unique, including case";
@@ -111,19 +126,19 @@ TEST(Ruvia, db_migrator_validates_before_opening_connection) {
 
 #ifdef RUVIA_ENABLE_MARIADB
 TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
-    // Nothing listens on port 1, so validation is the only step that can
-    // reject the list with std::invalid_argument; a connect failure is not one.
-    const auto validation_error = [](std::string_view sql) {
+    // The cold run is never started: only validation can reject the list.
+    const migrator_loop loop;
+    const auto validation_error = [&](std::string_view sql) {
         const std::array<ruvia::db_migration, 1> migrations{{
             ruvia::db_migration{{.id_ = "001", .sql_ = std::pmr::string(sql, ruvia::process_resource())}},
         }};
         auto config = ruvia::db_config{.driver_ = ruvia::db_driver::mariadb, .port_ = std::uint16_t{1}};
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
+        const ruvia::db_migrator migrator(loop.loop(), config);
         try {
-            (void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(migrations));
+            (void)migrator.migrate(std::span<const ruvia::db_migration>(migrations));
         } catch (const std::invalid_argument& error) {
             return std::pmr::string(error.what(), ruvia::process_resource());
-        } catch (const std::exception&) {
         }
         return std::pmr::string(ruvia::process_resource());
     };
@@ -135,6 +150,7 @@ TEST(Ruvia, db_migrator_treats_mariadb_double_dash_at_end_of_sql_as_comment) {
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 TEST(Ruvia, db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_connecting) {
+    const migrator_loop loop;
     const auto config = ruvia::db_config{.driver_ = ruvia::db_driver::postgresql};
     for (const auto timeout : {
              ruvia::timeout_duration(std::chrono::duration<std::uint64_t, std::milli>{
@@ -142,13 +158,13 @@ TEST(Ruvia, db_migrator_rejects_unrepresentable_postgresql_lock_timeout_before_c
              ruvia::timeout_duration(std::chrono::milliseconds{
                  std::int64_t{std::numeric_limits<std::int32_t>::max()} + 1})}) {
         const ruvia::db_migrator_options options{.lock_timeout_ = timeout};
-        EXPECT_THROW((void)ruvia::db_migrator::migrate(config, std::span<const ruvia::db_migration>(), options),
-            std::invalid_argument);
+        EXPECT_THROW((void)ruvia::db_migrator(loop.loop(), config, options), std::invalid_argument);
     }
 }
 #endif
 
 TEST(Ruvia, db_migrator_copies_public_configuration) {
+    const migrator_loop loop;
     tracking_resource target_resource;
     std::optional<ruvia::db_migrator> migrator;
     {
@@ -164,7 +180,7 @@ TEST(Ruvia, db_migrator_copies_public_configuration) {
             .lock_timeout_ = std::chrono::seconds(30),
             .resource_ = &target_resource,
         };
-        migrator.emplace(config, options);
+        migrator.emplace(loop.loop(), config, options);
     }
     // Opaque owner + four long DB strings + the long migration table all use
     // the caller's resource rather than the input strings' allocators.
@@ -173,6 +189,7 @@ TEST(Ruvia, db_migrator_copies_public_configuration) {
 }
 
 TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
+    const migrator_loop loop;
     {
         auto config = test_db_config();
         config.host_ = std::pmr::string(40, 'h', ruvia::process_resource()) + "." + std::pmr::string(40, 'h', ruvia::process_resource());
@@ -185,7 +202,7 @@ TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
             .resource_ = &resource,
         };
 
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, options); }));
         EXPECT_EQ(resource.allocation_count(), std::size_t{0});
     }
     {
@@ -198,28 +215,30 @@ TEST(Ruvia, db_migrator_validates_complete_configuration_before_allocating) {
             .resource_ = &resource,
         };
 
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, options); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, options); }));
         EXPECT_EQ(resource.allocation_count(), std::size_t{0});
     }
 }
 
 TEST(Ruvia, db_migrator_rejects_nul_bytes_in_credentials) {
     using namespace std::string_literals;
+    const migrator_loop loop;
     for (const auto field : {&ruvia::db_config::username_, &ruvia::db_config::password_, &ruvia::db_config::database_}) {
         auto config = test_db_config();
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
         config.*field = "app\0suffix"s;
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, {}); }));
     }
 }
 
 TEST(Ruvia, database_config_rejects_non_host_dns_inputs) {
+    const migrator_loop loop;
     for (const std::string_view host : {std::string_view("bad_name"), std::string_view("1.2.3.999"),
              std::string_view("host..example"), std::string_view("-host.example")}) {
         auto config = test_db_config();
         config.host_ = host;
         config.tls_.mode_ = ruvia::client_tls_mode::disabled;
-        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(config, {}); }));
+        EXPECT_TRUE(throws_on([&] { (void)ruvia::db_migrator(loop.loop(), config, {}); }));
     }
 }
 
@@ -229,7 +248,7 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
         ruvia::db_migration{{.id_ = "duplicate", .sql_ = "SELECT 2"}},
     }};
     auto config = test_db_config();
-    config.host_ = std::pmr::string(80, 'h', ruvia::process_resource());
+    config.host_ = std::pmr::string(40, 'h', ruvia::process_resource()) + "." + std::pmr::string(40, 'h', ruvia::process_resource());
     config.tls_.mode_ = ruvia::client_tls_mode::disabled;
     tracking_resource resource;
     const std::pmr::string table_name(60, 't', ruvia::process_resource());
@@ -237,12 +256,14 @@ TEST(Ruvia, db_migrator_validates_migration_list_before_allocating_runtime) {
         .table_ = table_name,
         .resource_ = &resource,
     };
+    const migrator_loop loop;
+    const ruvia::db_migrator migrator(loop.loop(), config, options);
+    const auto configured = resource.allocation_count();
 
     EXPECT_TRUE(throws_on([&] {
-        (void)ruvia::db_migrator::migrate(
-            config, std::span<const ruvia::db_migration>(migrations), options);
+        (void)migrator.migrate(std::span<const ruvia::db_migration>(migrations));
     }));
-    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
+    EXPECT_EQ(resource.allocation_count(), configured);
 }
 
 TEST(Ruvia, db_expression_values_use_explicit_resource_for_owned_parameters) {

@@ -485,8 +485,16 @@ public:
     // connection open; a malformed push closes it with protocol_error; an
     // unanswered idle probe closes it with timeout.
     // Requires a completed subscribe() first: std::logic_error otherwise.
-    [[nodiscard]] task<std::optional<redis_pubsub_event>> read() &;
-    task<std::optional<redis_pubsub_event>> read() && = delete;
+    // `operation` bounds this read only: its timeout may only tighten the
+    // subscription's, and its token cancels the read while the subscription's
+    // own token still ends the stream with std::nullopt. A non-positive
+    // timeout throws std::invalid_argument at the call; an already-stopped
+    // token throws redis_error(cancelled) and leaves the subscription open.
+    // Once started, its timeout or stop request closes the connection -- a
+    // Redis connection interrupted mid-reply is never reused -- and throws
+    // redis_error(timeout / cancelled).
+    [[nodiscard]] task<std::optional<redis_pubsub_event>> read(operation_options operation = {}) &;
+    task<std::optional<redis_pubsub_event>> read(operation_options = {}) && = delete;
 
     // Closes the connection now; a pending read() completes with std::nullopt.
     void abort() noexcept;

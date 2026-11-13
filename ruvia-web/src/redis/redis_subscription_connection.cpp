@@ -7,6 +7,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <utility>
 #include <vector>
 
@@ -118,7 +119,7 @@ task<void> redis_subscription_connection::send(redis_owned_command command) {
     }
 }
 
-task<std::optional<redis_pubsub_event>> redis_subscription_connection::read() {
+task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(operation_options operation) {
     auto lease = claim_operation_lane(read_active_, "redis subscription read is already in progress");
     if (closed_) {
         co_return std::nullopt;
@@ -126,7 +127,15 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read() {
     if (!ready_) {
         throw std::logic_error("redis subscription has no connection: subscribe first");
     }
-    const operation_timeout timeout_value(options_.timeout_);
+    std::optional<operation_interrupt> read_stop;
+    try {
+        read_stop.emplace(read_stops_, owner_.worker_, operation_options{.stop_token_ = operation.stop_token_}, this,
+            &redis_subscription_connection::cancel_read, "redis subscription read");
+    } catch (const std::system_error&) {
+        // An already-stopped token: nothing was read, the subscription stays open.
+        throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
+    }
+    const operation_timeout timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
     std::exception_ptr failure;
     task_scope ping_writes(owner_.worker_, {.resource_ = process_resource()});
     begin_idle_probe(ping_writes, timeout_value);
@@ -161,6 +170,11 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read() {
     // read observed, the subscription failed by timing out.
     if (closed_ && closed_reason_ == client_abort_reason::timeout) {
         throw redis_error(redis_error::code_type::timeout, "redis subscription idle probe timed out");
+    }
+    // This read's own stop request closed the connection: unlike the
+    // subscription's token, it is a failed read, not the end of the stream.
+    if (read_stop->interrupted() && closed_reason_ == client_abort_reason::cancelled) {
+        throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
     }
     if (failure != nullptr) {
         try {
@@ -273,6 +287,10 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
     if (!closed_) {
         arm_idle_probe(worker_timer_saturating_deadline(now, interval));
     }
+}
+
+void redis_subscription_connection::cancel_read(void* connection) noexcept {
+    static_cast<redis_subscription_connection*>(connection)->abort(client_abort_reason::cancelled);
 }
 
 task<void> redis_subscription_connection::write_ping(operation_timeout timeout) {
@@ -400,9 +418,10 @@ task<void> redis_subscription::punsubscribe(std::span<const std::string_view> pa
     return send("PUNSUBSCRIBE", patterns, false);
 }
 
-task<std::optional<redis_pubsub_event>> redis_subscription::read() & {
+task<std::optional<redis_pubsub_event>> redis_subscription::read(operation_options operation) & {
     registration_.require_active();
-    return make_scoped_operation(registration_.scope(), connection_->read());
+    validate_operation_options(operation);
+    return make_scoped_operation(registration_.scope(), connection_->read(std::move(operation)));
 }
 
 void redis_subscription::abort() noexcept {

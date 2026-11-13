@@ -244,7 +244,7 @@ int main(int argc, char** argv) {
         const example::environment env(&app.env());
         const auto settings = config(env);
         if (migrate) {
-            (void)db_migrator::migrate(settings, changes);
+            (void)example::apply_migrations(settings, changes);
         }
         if (execute) {
             asio::io_context context_value(asio::config_from_concurrency_hint(ASIO_CONCURRENCY_HINT_UNSAFE_IO));

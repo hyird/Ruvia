@@ -183,9 +183,9 @@ int main() {
 
         if (env_value.get<bool>("RUVIA_DB_MIGRATE").value_or(false)) {
             if (config.driver_ == ruvia::db_driver::postgresql) {
-                (void)ruvia::db_migrator::migrate(config, postgresql_migrations);
+                (void)example::apply_migrations(config, postgresql_migrations);
             } else {
-                (void)ruvia::db_migrator::migrate(config, mariadb_migrations);
+                (void)example::apply_migrations(config, mariadb_migrations);
             }
         }
         database_controller::set_driver(config.driver_);

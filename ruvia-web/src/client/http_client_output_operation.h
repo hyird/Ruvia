@@ -17,6 +17,7 @@ namespace ruvia::detail {
 struct http_client_output_write_input final {
     http_client_response pin_;
     std::pmr::string bytes_;
+    operation_options operation_;
 };
 
 struct in_flight_output_guard final {
@@ -36,10 +37,13 @@ struct in_flight_output_guard final {
 
 // The input pin and owned payload live in this single cold frame. Policies
 // handle upload validation/trailers and tunnel retirement without another task.
+// The operation's own interruption aborts the exchange or tunnel and reports
+// its timeout or cancellation, even if the driver had already taken the chunk.
 template <typename policy>
 [[nodiscard]] task<void> write_client_output(http_client_response_state* state_value, http_client_output_write_input input) {
     auto& output = policy::output(*state_value);
     auto activity = claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
+    const http_client_operation_interruption interruption(*state_value, http_client_operation_lane::output, input.operation_);
     policy::require_write(*state_value);
     if (output.chunk_ready_) {
         throw std::logic_error("HTTP client output queue still owns a chunk");
@@ -55,6 +59,7 @@ template <typename policy>
         co_await output.space_.wait();
     }
     in_flight.active_ = false;
+    state_value->throw_if_output_interrupted();
     // Retirement may stop the queue after its driver acknowledged this chunk
     // but before this waiter resumes. It cannot revoke the completed write.
     if (output.chunk_ready_) {
@@ -63,9 +68,10 @@ template <typename policy>
 }
 
 template <typename policy, typename input_type>
-[[nodiscard]] task<void> finish_client_output(http_client_response_state* state_value, input_type input) {
+[[nodiscard]] task<void> finish_client_output(http_client_response_state* state_value, input_type input, operation_options operation) {
     auto& output = policy::output(*state_value);
     auto activity = claim_operation_lane(output.operation_active_, "HTTP client output operation is already active");
+    const http_client_operation_interruption interruption(*state_value, http_client_operation_lane::output, operation);
     if (!policy::begin_finish(*state_value, input)) {
         co_return;
     }
@@ -79,6 +85,7 @@ template <typename policy, typename input_type>
         co_await output.space_.wait();
     }
     in_flight.active_ = false;
+    state_value->throw_if_output_interrupted();
     if (!output.ended_) {
         policy::throw_stopped(*state_value);
     }

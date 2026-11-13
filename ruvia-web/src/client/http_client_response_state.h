@@ -43,6 +43,7 @@
 
 #include "body/http_body_buffer.h"
 #include "client/http_client_request_storage.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia {
 class response_stream_writer;
@@ -121,14 +122,15 @@ public:
         return scope_.has_pending_operations();
     }
     // A cold receive of `pin`'s response, bound to this handoff's scope;
-    // `head_message` (static text) reports a failure before the head.
-    [[nodiscard]] task<http_client_response> receive(http_client_response pin, std::string_view head_message);
+    // `head_message` (static text) reports a failure before the head. Its
+    // own `operation` interrupts only this wait.
+    [[nodiscard]] task<http_client_response> receive(http_client_response pin, std::string_view head_message, operation_options operation);
     // The owner retires: its pending receives close, and once the response was
     // transferred the owner's handle no longer consumes it.
     void release(http_client_response& owner) noexcept;
 
 private:
-    [[nodiscard]] task<http_client_response> receive_owned(http_client_response pin, std::string_view head_message);
+    [[nodiscard]] task<http_client_response> receive_owned(http_client_response pin, std::string_view head_message, operation_options operation);
 
     ::ruvia::operation_scope scope_;
     bool taken_{false};
@@ -310,10 +312,11 @@ public:
 
     // Body algorithms run on the address-stable storage owner. The public
     // facade tracks cold frames in body_operation_scope_; the algorithms claim
-    // body_operation_active_ only when their lazy task starts.
+    // body_operation_active_ only when their lazy task starts. `operation` is
+    // validated by the facade and timed from here.
     template <typename view>
-    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(response_stream_writer* output = nullptr);
-    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes);
+    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, response_stream_writer* output = nullptr);
+    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes, operation_options operation);
     void retain_reference() noexcept;
     void release_reference() noexcept;
     [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {
@@ -328,6 +331,13 @@ public:
     // completely before the head is returned, so its failure is observed here.
     [[nodiscard]] task<void> await_head(std::string_view head_message);
     void rethrow_response_failure() const;
+    // The running consumer (body read or head receive) or output operation's
+    // own interruption, reported as http_client_error timeout / cancelled.
+    [[nodiscard]] bool read_interrupted() const noexcept {
+        return read_operation_ != nullptr && read_operation_->interrupted();
+    }
+    void throw_if_read_interrupted() const;
+    void throw_if_output_interrupted() const;
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
     [[nodiscard]] task<void> dispatch_informational(const operation_timeout& timeout);
@@ -446,6 +456,10 @@ public:
     bool abandoned_{false};
     bool collect_all_{false};
     bool body_operation_active_{false};
+    // The interrupts of the running consumer and output operations; null
+    // while none runs. Their source routes stop requests on this worker.
+    const operation_interrupt* read_operation_{};
+    const operation_interrupt* output_operation_{};
     bool body_decode_required_{false};
     // Content-Encoding parsed with the final head while decoding is pending.
     std::optional<http_content_coding_field_result> content_coding_{};
@@ -474,6 +488,7 @@ public:
     std::uint64_t stream_id_{0};
     std::optional<http_push_request> promised_request_{};
     http_client_response_handoff push_response_;
+    operation_interrupt_source interrupt_source_;
     // Declared after every field a body coroutine borrows, so the operation
     // scope closes while they are alive.
     ::ruvia::operation_scope body_operation_scope_;
@@ -487,6 +502,33 @@ private:
     http_client_response_state* next_memory_state_{};
 
     friend class http_client_response_memory_domain;
+};
+
+enum class http_client_operation_lane : std::uint8_t {
+    read,
+    output,
+};
+
+// Binds one operation's own timeout and stop token to a response lane while it
+// runs. A read interruption wakes the consumer and keeps buffered bytes; an
+// output interruption stops the output and abandons the exchange or tunnel,
+// since a partly sent chunk cannot be withdrawn. An already-stopped token
+// throws http_client_error(cancelled) before anything is armed.
+class http_client_operation_interruption final {
+public:
+    http_client_operation_interruption(http_client_response_state& state, http_client_operation_lane lane,
+        const operation_options& operation);
+    ~http_client_operation_interruption();
+    http_client_operation_interruption(const http_client_operation_interruption&) = delete;
+    http_client_operation_interruption& operator=(const http_client_operation_interruption&) = delete;
+
+private:
+    static void wake_reader(void* state) noexcept;
+    static void abort_output(void* state) noexcept;
+
+    http_client_response_state& state_;
+    http_client_operation_lane lane_;
+    operation_interrupt interrupt_;
 };
 
 // Publish both identities before arm(), which may deliver cancellation inline.

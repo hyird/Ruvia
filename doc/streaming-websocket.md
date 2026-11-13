@@ -424,6 +424,17 @@ co_return c.text(body.text());
 
 - **双向异常归属**：上传失败不追溯撤销已验证完整的响应；响应尚未完成时，导致交换失败的传输或解码异常仍由响应消费入口报告。
 
+出站流式与会话 I/O 入口的末参数统一为 `operation_options operation = {}`，自本次操作启动起计时；非正超时在调用处抛 `std::invalid_argument`，请求自身期限与宿主取消照常约束整个交换，逐次选项只收紧不放宽。
+
+| 入口 | 超时或取消时 |
+| --- | --- |
+| 正文 `read()` / `text()`、`read_all()` / `bytes()` / `text(max)` / `json<T>()`，隧道 `read()` / `text()` | 只结束本次等待，抛 `http_client_error(timeout / cancelled)`；已缓冲正文与读通道保留，可继续读取 |
+| `exchange.response()`、`push.response()` | 只结束本次等待响应头；随后可再次调用 `response()` |
+| 上传 `write()` / `end()`，隧道 `write()` / `finish()` | 中止该交换或隧道（已写出部分无法撤回），抛 `timeout / cancelled` |
+| `stream().pipe_to(writer)`、`pipe_to(c)` | 约束整次转发；中断抛 `timeout / cancelled`，已提交下游随异常中止 |
+
+- **启动前已停止**：令牌在操作启动前已停止时抛 `cancelled`，不写出任何字节，交换、隧道与读通道保持可用。
+
 WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。返回消息借用连接的接收存储，视图在下一次 `read()` 或 `close()` 前有效。连接不能跨 worker 使用。
 
 - **结束与失败**：`read()` 在任一方完成关闭握手、或本端 `close()` 已发出 Close 后会话以任何方式结束时返回 `nullopt`；其余失败中止会话并抛 `http_client_error`，读取中断为 `cancelled` / `timeout`。

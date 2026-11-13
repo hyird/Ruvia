@@ -18,18 +18,22 @@ struct http_client_upload_end_input final {
 };
 
 task<http_client_response> http_client_response_handoff::receive(
-    http_client_response pin, std::string_view head_message) {
-    return ::ruvia::make_scoped_operation(scope_, receive_owned(std::move(pin), head_message));
+    http_client_response pin, std::string_view head_message, operation_options operation) {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(scope_, receive_owned(std::move(pin), head_message, std::move(operation)));
 }
 
 task<http_client_response> http_client_response_handoff::receive_owned(
-    http_client_response pin, std::string_view head_message) {
+    http_client_response pin, std::string_view head_message, operation_options operation) {
     // `pin` keeps the response state, and with it this handoff, alive.
     auto activity = claim_operation_lane(active_, "HTTP response receive is already active");
     if (taken_) {
         throw std::logic_error("HTTP response has already been transferred");
     }
-    co_await pin.state_->await_head(head_message);
+    {
+        const http_client_operation_interruption interruption(*pin.state_, http_client_operation_lane::read, operation);
+        co_await pin.state_->await_head(head_message);
+    }
     taken_ = true;
     pin.consumer_ = true;
     co_return std::move(pin);
@@ -117,42 +121,45 @@ void http_client_exchange::release() noexcept {
     body_.state_ = nullptr;
 }
 
-task<void> http_client_request_body_writer::write(std::span<const std::byte> bytes_value) & {
-    return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()));
+task<void> http_client_request_body_writer::write(std::span<const std::byte> bytes_value, operation_options operation) & {
+    return write(std::string_view(reinterpret_cast<const char*>(bytes_value.data()), bytes_value.size()), std::move(operation));
 }
-task<void> http_client_request_body_writer::write(std::string_view bytes_value) & {
+task<void> http_client_request_body_writer::write(std::string_view bytes_value, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
+    validate_operation_options(operation);
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_)}));
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_), std::move(operation)}));
 }
-task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value) {
+task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
+    validate_operation_options(operation);
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), detail::rebind_owned_storage(bytes_value, state_->resource_)}));
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), detail::rebind_owned_storage(bytes_value, state_->resource_), std::move(operation)}));
 }
-task<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value) & {
+task<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
+    validate_operation_options(operation);
     http_request_trailers validation(state_->resource_);
     if (validation.append(fields_value).has_value()) {
         throw std::invalid_argument("invalid request trailer section");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_), std::move(validation).take_fields()}));
+        detail::finish_client_output<upload_output_policy>(state_, detail::http_client_upload_end_input{http_client_response(state_), std::move(validation).take_fields()}, std::move(operation)));
 }
 bool http_client_request_body_writer::complete() const noexcept {
     return state_ == nullptr || state_->upload_->output_.ended_;
@@ -165,13 +172,13 @@ void http_client_request_body_writer::abandon() & noexcept {
     state_->upload_->output_.stop();
 }
 
-task<http_client_response> http_client_exchange::response() & {
+task<http_client_response> http_client_exchange::response(operation_options operation) & {
     auto* state_value = response_.state_;
     if (state_value == nullptr || state_value->upload_->response_.taken()) {
         throw std::logic_error("HTTP exchange response has already been transferred");
     }
     state_value->require_owner_worker("HTTP exchange must run on its owner worker");
     return state_value->upload_->response_.receive(
-        http_client_response(state_value), "HTTP request failed before response head");
+        http_client_response(state_value), "HTTP request failed before response head", std::move(operation));
 }
 }  // namespace ruvia

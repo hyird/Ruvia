@@ -42,7 +42,7 @@ ruvia::app().database({
 
 // 2. 或在独立 event_loop 上使用 db_client（通过 client.db() 获取句柄）。
 //    host_ 不是 IP 字面量时，事件循环须借用执行 DNS 查询的阻塞池，否则构造抛出
-//    std::invalid_argument；db_migrator 为 DNS 主机自建临时查询池：
+//    std::invalid_argument；db_migrator 同样借用其事件循环的阻塞池：
 // ruvia::blocking_pool lookups({.thread_count_ = 1});  // 比事件循环存活更久
 // ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &lookups});
 // auto loop = loops.loop(0);
@@ -116,6 +116,9 @@ co_await stream.close();
 
 `query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。MariaDB 的 `close()` 则异步读取并丢弃剩余行，解析行尾状态及后续结果后才归还连接，并受操作取消和超时约束。
 
+- **逐次选项**：`read(operation_options)` / `close(operation_options)` 在句柄选项之上收紧本次超时，提供的令牌替换继承的令牌；非正超时在调用处抛 `std::invalid_argument`。
+- **中断即退役**：启动前已停止的令牌抛 `db_error(cancelled)` 且流仍可读；等待中的超时或取消关闭连接（池化连接中途中断后不复用）并以 `timeout` / `cancelled` 结束流。
+
 - **列元数据**：`stream.column_names() const&` 在行结果集启动完成时即可读取，包含零行结果；EOF、失败和 `close()` 不清除列名。视图借用流的地址稳定状态，资源及状态必须保持存活；逐行字段仍只借用至下一次读取或关闭。
 - **流启动所有权**：两种驱动均在列元数据构造完成后移交原生结果；失败先释放结果，再关闭连接并归还租约。PostgreSQL 启动会等待首个原生结果，保留首行供第一次 `read()` 消费，不额外复制它。
 
@@ -149,7 +152,7 @@ PostgreSQL 事务还额外支持：
 
 ### 1.4 启动期数据库迁移（`"ruvia/web/db/db_schema.h"`）
 
-`ruvia::db_migrator::migrate` 使用独立连接同步执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
+`ruvia::db_migrator(event_loop, config, options = {})` 与 `db_client` 一样绑定调用方事件循环；`co_await migrator.migrate(migrations, operation = {})` 在该循环上以独立连接执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
 
 ```cpp
 const std::array<ruvia::db_migration, 1> migrations{
@@ -158,10 +161,13 @@ const std::array<ruvia::db_migration, 1> migrations{
         .sql_ = "CREATE TABLE IF NOT EXISTS users (id BIGINT PRIMARY KEY, name TEXT NOT NULL);",
     }),
 };
-auto report = ruvia::db_migrator::migrate(config, migrations);
+const ruvia::db_migrator migrator(loop, config);
+auto report = co_await migrator.migrate(migrations);
 // report.applied(), report.skipped(), report.changed()
 ```
 
+- **输入与线程**：返回冷任务前校验并复制迁移列表，任务拥有全部输入；只能在绑定循环上运行，否则抛 `std::logic_error`。进程启动期的同步宿主自行启停事件循环桥接（见示例 `backend_config.h` 的 `apply_migrations`）。
+- **整次期限与取消**：`operation_options` 约束整次运行（含建连）；非正超时在调用处抛 `std::invalid_argument`，启动前已停止的令牌在建连前抛 `db_error(cancelled)`；到期或取消关闭专用连接（随之释放迁移锁）并抛 `db_error(timeout / cancelled)`，已提交的迁移保留其记录。
 - **迁移锁时长**：`db_migrator_options::lock_timeout_` 使用 `timeout_duration`，默认 `30s`；MariaDB 向上取整至整秒，PostgreSQL 超过 `INT32_MAX` 毫秒时在连接前拒绝。输入与解包规则见 [Core 超时契约](core-and-http.md)。
 
 迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不自动建列，也不把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
@@ -210,7 +216,7 @@ auto report = ruvia::db_migrator::migrate(config, migrations);
   - 列与约束：`add_column`、`drop_column`、`rename_column`、`alter_column_type`、`set_column_nullable`、`set_column_default`、`add_constraint`、`drop_constraint`
   - 索引、视图、枚举与扩展：`create_index`（支持 B-Tree / GIN / GiST 与部分索引条件）、`create_view`、`create_enum`、`create_extension`
   - 函数、触发器与 TimescaleDB：`create_function`、`create_trigger_function`、`create_trigger`、`create_hypertable`、`set_compression`、`add_compression_policy`、`add_retention_policy`
-  - 调用 `schema.compile("0001_init")` 直接生成 `std::pmr::vector<db_migration>` 供 `db_migrator::migrate` 执行。
+  - 调用 `schema.compile("0001_init")` 直接生成 `std::pmr::vector<db_migration>` 供 `db_migrator::migrate()` 执行。
   - `db_drop_behavior::cascade` 仅 PostgreSQL 支持。MariaDB 的 `DROP TABLE` / `ALTER TABLE ... DROP` 只为移植兼容而接受 `CASCADE` 且不产生任何效果（[DROP TABLE](https://mariadb.com/docs/server/server-usage/tables/drop-table)），因此 MariaDB 下所有 `drop_*` 传入 `cascade` 均抛出 `std::invalid_argument`，须改用 `restrict` 并显式删除依赖对象。
   - 实体生成的约束名使用去掉 schema 前缀的表名：`<表>_pkey`、`<表>_<关系>_fkey`、`<表>_<关系>_key`，多对多关系表为 `<表>_owner_fkey` / `<表>_inverse_fkey` / `<表>_pkey`。
 - **`db_procedure`**：结构化构建 PL/pgSQL 过程块（变量声明、`select_into`、`begin_if`/`else_if`/`otherwise`/`end_if`、异常捕获块 `begin_block`/`catch_sql_state`、循环与 `raise_exception`）。
@@ -472,6 +478,8 @@ while (auto event = co_await sub.read()) {
     }
 }
 ```
+
+- **逐次读取选项**：`read(operation_options)` 的超时只收紧订阅选项，其令牌只取消本次读取（订阅自身令牌仍以 `std::nullopt` 结束事件流）；非正超时在调用处抛 `std::invalid_argument`。启动前已停止的令牌抛 `redis_error(cancelled)` 且订阅保持打开；等待中的超时或取消关闭订阅连接并抛 `redis_error(timeout / cancelled)`。
 
 `read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
 

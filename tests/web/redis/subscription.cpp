@@ -14,6 +14,7 @@
 #include <string_view>
 #include <system_error>
 #include <thread>
+#include <utility>
 #include <vector>
 
 #include <asio/co_spawn.hpp>
@@ -29,6 +30,7 @@
 
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/redis/redis_handle.h"
@@ -475,6 +477,46 @@ ruvia::task<void> check_read_timeout(ruvia::redis_client& client) {
     co_await client.shutdown();
 }
 
+// A read's own operation: an already-stopped token leaves the subscription
+// open, while a timeout or stop request of a waiting read closes it and fails
+// that read rather than ending the stream.
+ruvia::task<void> check_read_operation_options(ruvia::redis_client& client, bool cancel) {
+    co_await client.connect();
+    auto subscription = client.redis().subscription();
+    const std::array<std::string_view, 1> channels{"silent"};
+    co_await subscription.subscribe(channels);
+    const auto failure_of = [](ruvia::task<std::optional<ruvia::redis_pubsub_event>> read) -> ruvia::task<std::optional<ruvia::redis_error::code_type>> {
+        try {
+            (void)co_await std::move(read);
+        } catch (const ruvia::redis_error& error) {
+            co_return error.code();
+        }
+        co_return std::nullopt;
+    };
+    ruvia::stop_source stopped;
+    stopped.request_stop();
+    EXPECT_TRUE(co_await failure_of(subscription.read({.stop_token_ = stopped.token()})) == ruvia::redis_error::code_type::cancelled);
+    EXPECT_THROW((void)subscription.read({.timeout_ = std::chrono::milliseconds(0)}), std::invalid_argument);
+    auto confirmed = co_await subscription.read();
+    EXPECT_TRUE(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "silent");
+    ruvia::stop_source stop;
+    ruvia::task_scope stopper(client.worker());
+    const auto stop_later = [&]() -> ruvia::task<void> {
+        (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(30));
+        stop.request_stop();
+    };
+    ruvia::operation_options operation{.timeout_ = std::chrono::milliseconds(30)};
+    if (cancel) {
+        operation = {.stop_token_ = stop.token()};
+        stopper.spawn(stop_later());
+    }
+    const auto code = co_await failure_of(subscription.read(std::move(operation)));
+    co_await stopper.join();
+    EXPECT_TRUE(code == (cancel ? ruvia::redis_error::code_type::cancelled : ruvia::redis_error::code_type::timeout));
+    EXPECT_TRUE(!(co_await subscription.read()).has_value());
+    co_await client.shutdown();
+}
+
 ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, ruvia::stop_source& stop,
     std::promise<void>& confirmed_promise) {
     co_await client.connect();
@@ -706,6 +748,19 @@ TEST(Ruvia, redis_subscription_read_honors_the_operation_timeout) {
     pool.loop(0).start(check_read_timeout(client)).get();
     pool.stop();
     pool.join();
+}
+
+TEST(Ruvia, redis_subscription_read_takes_its_own_operation_options) {
+    for (const bool cancel : {false, true}) {
+        SCOPED_TRACE(cancel ? "cancelled" : "timed out");
+        pubsub_peer peer;
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::redis_client client(pool.loop(0), peer.config());
+        pool.start();
+        pool.loop(0).start(check_read_operation_options(client, cancel)).get();
+        pool.stop();
+        pool.join();
+    }
 }
 
 TEST(Ruvia, redis_subscription_stop_token_ends_the_stream) {
