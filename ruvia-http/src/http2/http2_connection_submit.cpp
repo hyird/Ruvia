@@ -7,7 +7,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_header.h"

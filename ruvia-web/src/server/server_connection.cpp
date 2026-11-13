@@ -26,10 +26,10 @@
 #include "integration/operation_lane_lease.h"
 #include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"
+#include "server/http_connection_close.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
 #include "server/peer_address.h"
-#include "server/server_tls_stream.h"
 #include "server/worker_connections.h"
 
 namespace ruvia::detail {

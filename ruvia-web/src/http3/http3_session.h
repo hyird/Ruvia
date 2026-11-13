@@ -33,7 +33,7 @@
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/protocol_byte_limit.h"
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
 
 #include "context/context_services.h"
 #include "http3/http3_connection_id.h"

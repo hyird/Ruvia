@@ -23,7 +23,6 @@
 #include "ruvia/http/http_number_format.h"
 
 #include "integration/request_io_metrics.h"
-#include "redis/redis_connection.h"
 #include "redis/redis_protocol.h"
 
 namespace ruvia::detail {

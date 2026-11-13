@@ -23,7 +23,7 @@
 #include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/http/request/request_fields_access.h"
+#include "ruvia/web/detail/request_fields_access.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/streaming.h"

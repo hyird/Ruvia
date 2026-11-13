@@ -13,7 +13,7 @@
 #include <utility>
 
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/web/detail/db/db_sql_scan.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "db/db_sql_format.h"
 

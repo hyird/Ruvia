@@ -27,7 +27,7 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/web/detail/router/prefix_fallback.h"
+#include "ruvia/web/detail/app_configuration.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/streaming.h"

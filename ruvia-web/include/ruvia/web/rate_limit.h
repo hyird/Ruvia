@@ -11,7 +11,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/ip_address.h"
-#include "ruvia/web/detail/middleware/middleware_registration.h"
+#include "ruvia/web/detail/middleware_registration.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia {

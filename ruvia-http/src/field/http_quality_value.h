@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <string_view>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_field_syntax.h"
 
 // Shared quality parsing (RFC 9110 section 12.4.2). Token fields use one

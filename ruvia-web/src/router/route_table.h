@@ -13,7 +13,7 @@
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 

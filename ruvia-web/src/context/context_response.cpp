@@ -29,7 +29,7 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/detail/json/json_scan.h"
+#include "ruvia/web/detail/json_scan.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/redis/redis_session.h"
 #include "ruvia/web/session.h"

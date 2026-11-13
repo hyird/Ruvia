@@ -18,6 +18,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/web/detail/worker_state.h"
 
 #include "server/connection_count.h"
 #include "server/connection_scanner.h"

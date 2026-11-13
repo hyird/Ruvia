@@ -13,8 +13,8 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_known_method.h"
-#include "ruvia/web/detail/middleware/middleware_registration.h"
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
+#include "ruvia/web/detail/middleware_registration.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/websocket.h"
 

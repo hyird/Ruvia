@@ -17,7 +17,7 @@
 
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/http/context/request_bindings.h"
+#include "ruvia/web/detail/request_bindings.h"
 
 #include "context/context_services.h"
 #include "context/context_session_state.h"

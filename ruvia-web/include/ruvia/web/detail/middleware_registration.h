@@ -7,12 +7,12 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/http/context/request_bindings.h"
+#include "ruvia/web/detail/request_bindings.h"
 
 // Internal startup-time middleware descriptor.
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia {

@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"

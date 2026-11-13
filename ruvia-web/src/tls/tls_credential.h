@@ -1,8 +1,17 @@
 #pragma once
 
+#include <algorithm>
+#include <filesystem>
+#include <memory>
+#include <stdexcept>
+#include <string>
 #include <string_view>
+#include <vector>
 
 #include <openssl/x509.h>
+
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/tls_config.h"
 
 namespace ruvia::detail {
 
@@ -84,5 +93,113 @@ private:
 
     X509_STORE* store_{};
 };
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// A TLS file name in UTF-8, the encoding OpenSSL's file BIOs decode (on
+// Windows into a wide name for _wfopen). Converting through char8_t never
+// narrows a native wide path through the ANSI code page.
+using tls_file_name = std::u8string;
+
+// The one TLS path validator, shared by servers and clients: a path must not
+// be empty, and since OpenSSL and the database drivers consume C strings, it
+// must not contain NUL either. Throws std::invalid_argument.
+[[nodiscard]] inline tls_file_name make_tls_file_name(const std::filesystem::path& file) {
+    if (file.empty()) {
+        throw std::invalid_argument("TLS file paths must not be empty");
+    }
+    auto name = file.u8string();
+    if (name.find(u8'\0') != tls_file_name::npos) {
+        throw std::invalid_argument("TLS file paths must not contain NUL bytes");
+    }
+    return name;
+}
+
+// The NUL-terminated UTF-8 form handed to OpenSSL and the database drivers.
+[[nodiscard]] inline const char* tls_file_name_c_str(const tls_file_name& name RUVIA_LIFETIMEBOUND) noexcept {
+    return reinterpret_cast<const char*>(name.c_str());
+}
+const char* tls_file_name_c_str(tls_file_name&&) = delete;
+
+// One identity's validated file names. The private key password is not kept:
+// it is needed only while the key is loaded.
+struct tls_identity_files final {
+    tls_file_name certificate_chain_file_;
+    tls_file_name private_key_file_;
+};
+
+[[nodiscard]] inline tls_identity_files make_tls_identity_files(const tls_identity_config& identity) {
+    return {
+        .certificate_chain_file_ = make_tls_file_name(identity.certificate_chain_file_),
+        .private_key_file_ = make_tls_file_name(identity.private_key_file_),
+    };
+}
+
+[[nodiscard]] inline tls_identity_files copy_tls_identity_files(const tls_identity_files& files) {
+    return files;
+}
+
+// Reads and parses the files once; throws on unreadable, invalid or mismatched files.
+[[nodiscard]] inline tls_certificate load_tls_certificate(
+    const tls_identity_files& files, std::string_view private_key_password) {
+    return tls_certificate::load(tls_file_name_c_str(files.certificate_chain_file_),
+        tls_file_name_c_str(files.private_key_file_), private_key_password);
+}
+[[nodiscard]] inline tls_trust_store load_tls_trust_store(const tls_file_name& ca_file) {
+    return tls_trust_store::load_file(tls_file_name_c_str(ca_file));
+}
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class tls_certificate_snapshot final {
+public:
+    struct entry_type final {
+        tls_certificate_id id_{};
+        std::shared_ptr<const tls_certificate> certificate_;
+    };
+
+    [[nodiscard]] const tls_certificate* find(tls_certificate_id id) const noexcept {
+        const auto it = std::ranges::lower_bound(entries_, id, {}, &entry_type::id_);
+        return (it != entries_.end() && it->id_ == id) ? it->certificate_.get() : nullptr;
+    }
+
+    [[nodiscard]] bool contains(tls_certificate_id id) const noexcept {
+        return find(id) != nullptr;
+    }
+
+    [[nodiscard]] std::size_t size() const noexcept {
+        return entries_.size();
+    }
+
+    void insert_or_assign(tls_certificate_id id, std::shared_ptr<const tls_certificate> certificate) {
+        const auto it = std::ranges::lower_bound(entries_, id, {}, &entry_type::id_);
+        if (it != entries_.end() && it->id_ == id) {
+            it->certificate_ = std::move(certificate);
+        } else {
+            entries_.insert(it, entry_type{id, std::move(certificate)});
+        }
+    }
+
+    void erase(tls_certificate_id id) noexcept {
+        const auto it = std::ranges::lower_bound(entries_, id, {}, &entry_type::id_);
+        if (it != entries_.end() && it->id_ == id) {
+            entries_.erase(it);
+        }
+    }
+
+private:
+    std::vector<entry_type> entries_;
+};
+
+struct tls_certificate_store_access final {
+    [[nodiscard]] static std::shared_ptr<const tls_certificate_snapshot> snapshot(
+        const tls_certificate_store& store) noexcept;
+};
+
+// Same validated loader used by fixed listener identities and incremental IDs.
+[[nodiscard]] tls_certificate load_server_tls_certificate(const tls_identity_config& identity);
 
 }  // namespace ruvia::detail

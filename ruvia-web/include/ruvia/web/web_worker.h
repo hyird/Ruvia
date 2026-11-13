@@ -15,7 +15,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/detail/integration/worker_context_capabilities.h"
+#include "ruvia/web/detail/worker_state.h"
 
 namespace ruvia {
 

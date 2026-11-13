@@ -12,7 +12,7 @@
 
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/detail/app/app_configuration.h"
+#include "ruvia/web/detail/app_configuration.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_config_storage.h"

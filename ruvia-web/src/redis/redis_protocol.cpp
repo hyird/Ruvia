@@ -20,9 +20,7 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/decimal_number.h"
 
-#include "redis/redis_command_args.h"
 #include "redis/redis_reply_parsers.h"
-#include "redis/redis_types_access.h"
 
 namespace ruvia::detail {
 namespace {

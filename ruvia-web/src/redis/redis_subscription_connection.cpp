@@ -16,7 +16,6 @@
 #include "redis/redis_client_runtime.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_reply_parsers.h"
-#include "redis/redis_types_access.h"
 
 namespace ruvia::detail {
 namespace {

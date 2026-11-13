@@ -25,7 +25,6 @@
 
 #include "integration/operation_interrupt.h"
 #include "redis/redis_config_storage.h"
-#include "redis/redis_connection.h"
 #include "redis/redis_pool.h"
 
 namespace ruvia::detail {

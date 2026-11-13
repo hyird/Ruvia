@@ -8,15 +8,109 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/fnv1a.h"
+#include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/detail/app/app_configuration.h"
-#include "ruvia/web/detail/router/prefix_fallback.h"
+#include "ruvia/web/detail/app_configuration.h"
 
-#include "router/path_segments.h"
 #include "router/route_table.h"
 #include "router/router_impl.h"
+
+namespace ruvia::detail {
+
+enum class route_segment_kind { literal,
+    param,
+    wildcard };
+
+[[nodiscard]] constexpr route_segment_kind classify_route_segment(std::string_view segment) noexcept {
+    if (segment == "*") {
+        return route_segment_kind::wildcard;
+    }
+    return !segment.empty() && segment.front() == ':' ? route_segment_kind::param : route_segment_kind::literal;
+}
+
+[[nodiscard]] inline bool is_dot_segment(std::string_view segment) noexcept {
+    // The longest spelling is "%2E%2E"; the size check keeps ordinary segments cheap.
+    return !segment.empty() && segment.size() <= 6 &&
+           (uri_paths_equivalent(segment, ".") || uri_paths_equivalent(segment, ".."));
+}
+
+// Build, reverse routing and request matching share the same segments.
+// Each remainder retains its leading slash, preserving empty segments without
+// allowing them to match a parameter. A final slash yields a trailing empty
+// segment, so "/a/" and "/a" are distinct paths (RFC 3986) for dynamic routes
+// exactly as they are for byte-exact static routes.
+[[nodiscard]] inline bool split_path_segment(
+    std::string_view path, std::string_view& segment, std::string_view& rest) noexcept {
+    if (path.empty()) {
+        segment = {};
+        rest = {};
+        return false;
+    }
+    if (path.front() == '/') {
+        path.remove_prefix(1);
+    }
+
+    const auto slash = path.find('/');
+    if (slash == std::string_view::npos) {
+        segment = path;
+        rest = {};
+        return true;
+    }
+
+    segment = path.substr(0, slash);
+    rest = path.substr(slash);  // keep the leading '/' so empty segments survive
+    return true;
+}
+
+// Without parameter names, equality means the same trie slot: literal children
+// compare canonically, parameters share one child, and wildcards share one slot.
+// Other overlaps have a deterministic literal-before-parameter-before-wildcard
+// winner and are not conflicts.
+[[nodiscard]] inline bool route_patterns_equivalent(
+    std::string_view left, std::string_view right, bool compare_param_names) noexcept {
+    for (;;) {
+        std::string_view left_segment;
+        std::string_view left_rest;
+        std::string_view right_segment;
+        std::string_view right_rest;
+        const auto has_left = split_path_segment(left, left_segment, left_rest);
+        const auto has_right = split_path_segment(right, right_segment, right_rest);
+        if (!has_left || !has_right) {
+            return has_left == has_right;
+        }
+        const auto kind = classify_route_segment(left_segment);
+        if (kind != classify_route_segment(right_segment) ||
+            ((kind == route_segment_kind::literal || compare_param_names) &&
+                !uri_paths_equivalent(left_segment, right_segment))) {
+            return false;
+        }
+        left = left_rest;
+        right = right_rest;
+    }
+}
+
+// Whether any segment of `path` is "." or "..", in any percent-encoded
+// spelling (RFC 3986 6.2.2.2). Requests carrying one are rejected before
+// routing, so a route pattern containing one could never be matched.
+[[nodiscard]] inline bool has_dot_segment(std::string_view path) noexcept {
+    std::size_t cursor = 0;
+    for (;;) {
+        const auto slash = path.find('/', cursor);
+        const auto end = slash == std::string_view::npos ? path.size() : slash;
+        if (is_dot_segment(path.substr(cursor, end - cursor))) {
+            return true;
+        }
+        if (slash == std::string_view::npos) {
+            return false;
+        }
+        cursor = slash + 1;
+    }
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia {
 
@@ -911,6 +1005,446 @@ std::string detail::route_table::url_for(std::string_view pattern,
         }
     }
     return url;
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+detail::route_handler detail::resolved_route::handler() const noexcept {
+    return callback_access::make<task<http_response>(context&)>(
+        handler_target_, route_->endpoint().buffered()->invoke());
+}
+
+detail::route_stream_handler detail::resolved_route::stream_handler() const noexcept {
+    return callback_access::make<task<void>(context&)>(handler_target_, route_->endpoint().stream_invoke());
+}
+
+detail::route_resolution detail::route_table::resolved(
+    const route_entry& route) const noexcept {
+    return route_resolution::resolved(route, handler_targets_[route.index()]);
+}
+
+detail::route_resolution detail::route_table::resolved(
+    const route_entry& route, const route_match& match) const noexcept {
+    return route_resolution::resolved(route, handler_targets_[route.index()], match);
+}
+
+namespace {
+
+[[nodiscard]] bool is_routable_origin_or_asterisk_path(
+    http_known_method known_method, std::string_view path) noexcept {
+    // Routes and path scopes name origin paths. A generic-scheme absolute-form
+    // target can carry a rootless path ("x:admin/panel") that the segment trie
+    // would match like "/admin/panel" while every path-scoped middleware and
+    // fallback treats it as outside its prefix, so it names no route here.
+    // Only an OPTIONS asterisk-form stays, for the server-wide answer.
+    //
+    // Dot-segments are refused for the same reason: path scopes compare raw
+    // segments, while a handler resolving "/public/../private" (a wildcard
+    // capture handed to static_file, for one) reaches a resource outside the
+    // scope the route was matched and guarded under. A conforming client
+    // removes them before sending (RFC 3986 5.2.4).
+    //
+    // The rejection is terminal: the document root normalizes dot segments
+    // itself, so serving "/private/./file" from it would bypass the guards of
+    // the route that owns "/private/file".
+    return !path.empty() &&
+           (path.front() == '/' || (path == "*" && known_method == http_known_method::options)) &&
+           !detail::has_dot_segment(path);
+}
+
+}  // namespace
+
+detail::route_resolution detail::route_table::resolve(const http_request& request) const noexcept {
+    // A plain CONNECT routes by its authority-form target.
+    if (request.known_method() == http_known_method::connect) {
+        return resolve_connect({}, request.path());
+    }
+    const auto path = request.path();
+    if (!is_routable_origin_or_asterisk_path(request.known_method(), path)) {
+        return route_resolution::reject();
+    }
+    // An HTTP/1.1 `Upgrade: connect-udp` request routes by its origin-form path
+    // among the connect-udp tunnel routes. Without one, the Upgrade is ignored
+    // (RFC 9110 §7.8) and the GET routes as usual, as a WebSocket upgrade does.
+    if (is_http_connect_udp_upgrade_request(request)) {
+        auto tunnel = resolve_connect("connect-udp", path);
+        if (tunnel.resolved() != nullptr) {
+            return tunnel;
+        }
+    }
+    return request.known_method() == http_known_method::unknown
+               ? resolve_extension_method(request.method(), path)
+               : resolve(request.known_method(), path);
+}
+
+detail::route_resolution detail::route_table::resolve(route_request_view request) const noexcept {
+    if (request.known_method_ == http_known_method::connect && request.extended_protocol_.empty()) {
+        return resolve_connect({}, request.connect_target_);
+    }
+    const auto path = request.path_;
+    if (!is_routable_origin_or_asterisk_path(request.known_method_, path)) {
+        return route_resolution::reject();
+    }
+    if (request.known_method_ == http_known_method::connect) {
+        if (request.extended_protocol_ == "websocket") {
+            auto websocket = resolve(http_known_method::get, path);
+            const auto* route = websocket.resolved();
+            return route != nullptr && route->route().endpoint().websocket() != nullptr
+                       ? websocket
+                       : route_resolution::reject();
+        }
+        return resolve_connect(request.extended_protocol_, path);
+    }
+    return request.known_method_ == http_known_method::unknown
+               ? resolve_extension_method(request.method_, path)
+               : resolve(request.known_method_, path);
+}
+
+detail::route_resolution detail::route_table::resolve_connect(std::string_view protocol, std::string_view target) const noexcept {
+    const route_entry* fallback = nullptr;
+    for (const auto index : plan_->connect_route_indices_) {
+        const auto& route = plan_->routes_[index];
+        if (route.endpoint().tunnel()->protocol() != protocol) {
+            continue;
+        }
+        if (!route.dynamic() && (protocol.empty() ? http_authorities_equal(route.path(), target, 0) : uri_paths_equivalent(route.path(), target))) {
+            return resolved(route);
+        }
+        if (protocol.empty() && route.path() == "*") {
+            fallback = &route;
+        }
+    }
+    if (!protocol.empty()) {
+        for (const auto& index : plan_->connect_protocols_) {
+            if (index.protocol_ != protocol) {
+                continue;
+            }
+            route_match match;
+            const auto found = find_dynamic_node(index.root_, target, match);
+            if (found != no_route_index) {
+                return resolved(plan_->routes_[found], match);
+            }
+            break;
+        }
+    }
+    return fallback == nullptr ? route_resolution{} : resolved(*fallback);
+}
+
+detail::route_resolution detail::route_table::resolve_extension_method(
+    std::string_view method_token, std::string_view path) const noexcept {
+    // Not registered anywhere means the server does not know this method, which
+    // is 501 and not this function's business -- dispatch decides that before
+    // asking about any particular resource.
+    const auto& indices = plan_->extension_route_indices_;
+    const auto found = std::lower_bound(indices.begin(), indices.end(), std::pair{method_token, path},
+        [this](std::size_t index, const auto& key) noexcept {
+            const auto& route = plan_->routes_[index];
+            if (route.method_token() != key.first) {
+                return route.method_token() < key.first;
+            }
+            return compare_uri_paths(route.path(), key.second) < 0;
+        });
+    if (found != indices.end()) {
+        const auto& route = plan_->routes_[*found];
+        if (route.method_token() == method_token && uri_paths_equivalent(route.path(), path)) {
+            return resolved(route);
+        }
+    }
+    if (!recognizes_method_token(method_token)) {
+        return route_resolution{};
+    }
+
+    // The path exists under other methods, so this is 405 rather than 404. The
+    // mask cannot carry extension tokens; the resolution carries them for Allow.
+    const auto hash = plan_->static_method_mask_ != 0 ? path_hash(path) : 0;
+    auto method_mask = allowed_methods(path, hash);
+    const auto extension_methods = extension_methods_for(path);
+    if (method_mask != 0 || !extension_methods.empty()) {
+        method_mask |= 1U << method_index(http_known_method::options);
+    }
+    return route_resolution::method_not_allowed(method_mask, extension_methods);
+}
+
+bool detail::route_table::recognizes_method_token(std::string_view method_token) const noexcept {
+    const auto& indices = plan_->extension_route_indices_;
+    const auto found = std::ranges::lower_bound(indices, method_token, {},
+        [this](std::size_t index) noexcept { return plan_->routes_[index].method_token(); });
+    return found != indices.end() && plan_->routes_[*found].method_token() == method_token;
+}
+
+std::span<const std::string_view> detail::route_table::extension_methods_for(std::string_view path) const noexcept {
+    const auto& paths = plan_->extension_paths_;
+    const auto found = std::ranges::lower_bound(paths, path, [](std::string_view left, std::string_view right) noexcept { return compare_uri_paths(left, right) < 0; }, &compiled_route_plan::extension_path_type::path_);
+    return found != paths.end() && uri_paths_equivalent(found->path_, path)
+               ? found->methods_
+               : std::span<const std::string_view>{};
+}
+
+detail::route_resolution detail::route_table::resolve(
+    http_known_method method, std::string_view path) const noexcept {
+    // RFC 9110 7.1 / 9.3.7: the asterisk-form target ("OPTIONS *") applies to the
+    // server as a whole, not any resource, so it must not bind to a route -- a
+    // catch-all such as RUVIA_ALL("/*") would otherwise capture it through the
+    // wildcard node. Leave it unresolved so dispatch emits the server-wide response.
+    if (method == http_known_method::options && path == "*") {
+        return route_resolution{};
+    }
+    const bool has_static_method = is_routable_method(method) &&
+                                   (plan_->static_method_mask_ & (1U << method_index(method))) != 0;
+    auto hash = has_static_method ? path_hash(path) : 0;
+    if (has_static_method) {
+        if (const auto* route = find_static_route(method, path, hash); route != nullptr) {
+            return resolved(*route);
+        }
+    }
+
+    route_match match;
+    const auto* dynamic_route = find_dynamic_route(method, path, match);
+    if (dynamic_route != nullptr) {
+        return resolved(*dynamic_route, match);
+    }
+
+    if (!has_static_method && plan_->static_method_mask_ != 0) {
+        hash = path_hash(path);
+    }
+    std::uint32_t excluded_mask = is_routable_method(method) ? (1U << method_index(method)) : 0U;
+    std::uint32_t initial_mask = 0;
+    if (method == http_known_method::head) {
+        const auto get_bit = 1U << method_index(http_known_method::get);
+        const auto* fallback = (plan_->static_method_mask_ & get_bit) != 0
+                                   ? find_static_route(http_known_method::get, path, hash)
+                                   : nullptr;
+        if (fallback == nullptr) {
+            fallback = find_dynamic_route(http_known_method::get, path, match);
+        }
+        if (fallback != nullptr && supports_head_fallback(*fallback)) {
+            return resolved(*fallback, match);
+        }
+        excluded_mask |= get_bit;
+        if (fallback != nullptr) {
+            initial_mask |= get_bit;
+        }
+    }
+    auto method_mask = allowed_methods(path, hash, excluded_mask, initial_mask);
+    // A resource may be served only by extension methods. It still exists, so
+    // an unsupported known method is 405 and OPTIONS must answer with Allow --
+    // the mask alone cannot tell that apart from no resource at all.
+    const auto extension_methods = extension_methods_for(path);
+    if (method_mask != 0 || !extension_methods.empty()) {
+        method_mask |= 1U << method_index(http_known_method::options);
+    }
+    return route_resolution::method_not_allowed(method_mask, extension_methods);
+}
+
+std::size_t detail::route_table::method_index(http_known_method method) noexcept {
+    return static_cast<std::size_t>(method);
+}
+
+bool detail::route_table::is_routable_method(http_known_method method) noexcept {
+    return method_index(method) < routable_method_count;
+}
+
+bool detail::route_table::supports_head_fallback(const route_entry& route) noexcept {
+    // RFC 9110 9.3.2: HEAD is GET without content. Buffered responses omit
+    // content; response-stream/SSE handlers observe completed at explicit
+    // commit and must not start producing a body. A websocket GET is an
+    // upgrade, not a representation, so HEAD needs its own route there.
+    const auto& endpoint = route.endpoint();
+    return route.method() == http_known_method::get &&
+           (endpoint.buffered() != nullptr || endpoint.response_stream() != nullptr);
+}
+
+std::uint64_t detail::route_table::path_hash(std::string_view path) noexcept {
+    // FNV-1a over the canonical octets (uri_paths_equivalent), so every
+    // spelling of one path hashes alike without decoding into storage. A
+    // literal '/' and a decoded "%2F" hash alike; only equality tells them apart.
+    auto hash = fnv1a_offset_basis;
+    for (std::size_t i = 0; i < path.size();) {
+        const auto unit = path[i] == '%' ? next_uri_path_unit(path, i) : static_cast<unsigned char>(path[i++]);
+        hash ^= static_cast<unsigned char>(unit);
+        hash *= fnv1a_prime;
+    }
+
+    // MurmurHash3's public-domain fmix64 spreads common path prefixes across
+    // the low bits used by the power-of-two table.
+    hash ^= hash >> 33;
+    hash *= 0xff51afd7ed558ccdULL;
+    hash ^= hash >> 33;
+    hash *= 0xc4ceb9fe1a85ec53ULL;
+    hash ^= hash >> 33;
+    return hash;
+}
+
+std::uint64_t detail::route_table::route_hash(
+    http_known_method method, std::uint64_t hash) noexcept {
+    return hash ^ (static_cast<std::uint64_t>(method) * fnv1a_prime);
+}
+
+const detail::route_entry* detail::route_table::find_static_route(
+    http_known_method method, std::string_view path, std::uint64_t hash) const noexcept {
+    const auto key_hash = route_hash(method, hash);
+    auto slot_index = static_cast<std::size_t>(key_hash) & plan_->static_slot_mask_;
+    for (;;) {
+        const auto& slot = plan_->static_slots_[slot_index];
+        if (slot.route_index_ == no_route_index) {
+            return nullptr;
+        }
+        const auto& route = plan_->routes_[slot.route_index_];
+        if (slot.hash_ == key_hash && route.method() == method &&
+            (route.path() == path || uri_paths_equivalent(route.path(), path))) {
+            return &route;
+        }
+        slot_index = (slot_index + 1) & plan_->static_slot_mask_;
+    }
+}
+
+std::uint32_t detail::route_table::allowed_methods(std::string_view path, std::uint64_t hash,
+    std::uint32_t excluded_mask, std::uint32_t initial_mask) const noexcept {
+    std::uint32_t mask = initial_mask;
+    // Keep OPTIONS in the candidate mask: a path whose only registered method is
+    // OPTIONS must yield a non-zero Allow set so resolve() answers 405 (method known
+    // but unsupported, RFC 9110 15.5.6) instead of 404. Clearing it here made such a
+    // path resolve to not-found. resolve() still ORs OPTIONS into any non-zero mask,
+    // so GET-only paths keep advertising OPTIONS.
+    auto candidate_mask = (plan_->static_method_mask_ | plan_->dynamic_method_mask_) & ~excluded_mask;
+    while (candidate_mask != 0) {
+        const auto i = static_cast<std::size_t>(std::countr_zero(candidate_mask));
+        const auto method = static_cast<http_known_method>(i);
+        const auto method_bit = 1U << i;
+        candidate_mask &= ~method_bit;
+
+        // resolve() already proved requested_method has no route for this path, so it
+        // was cleared from the candidate mask above.
+        const bool has_static_routes = (plan_->static_method_mask_ & method_bit) != 0;
+        const auto* const static_route = has_static_routes ? find_static_route(method, path, hash) : nullptr;
+        const auto dynamic_route_index = static_route == nullptr && (plan_->dynamic_method_mask_ & method_bit) != 0
+                                             ? find_dynamic_node_no_params(plan_->dynamic_roots_[i], path)
+                                             : no_route_index;
+        const auto* route = static_route != nullptr ? static_route
+                                                    : (dynamic_route_index != no_route_index ? &plan_->routes_[dynamic_route_index] : nullptr);
+        if (route != nullptr) {
+            mask |= 1U << i;
+            if (supports_head_fallback(*route)) {
+                mask |= 1U << method_index(http_known_method::head);
+            }
+        }
+    }
+    return mask;
+}
+
+std::size_t detail::route_table::find_dynamic_node(
+    const dynamic_node_type& node_value, std::string_view path, route_match& match) noexcept {
+    std::string_view segment;
+    std::string_view rest;
+    if (!split_path_segment(path, segment, rest)) {
+        if (node_value.route_index_ != no_route_index) {
+            return node_value.route_index_;
+        }
+        if (node_value.wildcard_route_index_ != no_route_index && match.add({})) {
+            return node_value.wildcard_route_index_;
+        }
+        return no_route_index;
+    }
+
+    const auto original_param_count = match.size();
+    if (const auto* static_child = find_dynamic_static_child(node_value, segment); static_child != nullptr) {
+        if (const auto route_index = find_dynamic_node(*static_child->node_, rest, match);
+            route_index != no_route_index) {
+            return route_index;
+        }
+        match.truncate(original_param_count);
+    }
+
+    if (node_value.param_child_ && !segment.empty() && match.add(segment)) {
+        if (const auto route_index = find_dynamic_node(*node_value.param_child_, rest, match);
+            route_index != no_route_index) {
+            return route_index;
+        }
+        match.truncate(original_param_count);
+    }
+
+    if (node_value.wildcard_route_index_ != no_route_index) {
+        auto capture_value = path;
+        if (capture_value.starts_with('/')) {
+            capture_value.remove_prefix(1);
+        }
+        if (match.add(capture_value)) {
+            return node_value.wildcard_route_index_;
+        }
+        match.truncate(original_param_count);
+    }
+
+    return no_route_index;
+}
+
+std::size_t detail::route_table::find_dynamic_node_no_params(
+    const dynamic_node_type& node_value, std::string_view path) noexcept {
+    std::string_view segment;
+    std::string_view rest;
+    if (!split_path_segment(path, segment, rest)) {
+        return node_value.route_index_ != no_route_index ? node_value.route_index_ : node_value.wildcard_route_index_;
+    }
+
+    if (const auto* static_child = find_dynamic_static_child(node_value, segment); static_child != nullptr) {
+        if (const auto route_index = find_dynamic_node_no_params(*static_child->node_, rest);
+            route_index != no_route_index) {
+            return route_index;
+        }
+    }
+
+    if (node_value.param_child_ != nullptr && !segment.empty()) {
+        if (const auto route_index = find_dynamic_node_no_params(*node_value.param_child_, rest);
+            route_index != no_route_index) {
+            return route_index;
+        }
+    }
+
+    return node_value.wildcard_route_index_;
+}
+
+const detail::route_table::dynamic_static_child_type* detail::route_table::find_dynamic_static_child(
+    const dynamic_node_type& node_value, std::string_view segment) noexcept {
+    // Literal segments compare in their canonical form (uri_paths_equivalent),
+    // so "%61dmin" and "admin" select the same child; children are sorted by
+    // compare_uri_paths at build time.
+    if (node_value.static_children_.size() <= 4) {
+        for (const auto& child : node_value.static_children_) {
+            if (uri_paths_equivalent(child.segment_, segment)) {
+                return &child;
+            }
+        }
+        return nullptr;
+    }
+
+    const auto iter = std::ranges::partition_point(node_value.static_children_,
+        [segment](const dynamic_static_child_type& child_value) noexcept {
+            return compare_uri_paths(child_value.segment_, segment) < 0;
+        });
+    if (iter != node_value.static_children_.end() && uri_paths_equivalent(iter->segment_, segment)) {
+        return &*iter;
+    }
+    return nullptr;
+}
+
+const detail::route_entry* detail::route_table::find_dynamic_route(
+    http_known_method method, std::string_view path, route_match& match) const noexcept {
+    match.clear();
+    if (!is_routable_method(method)) {
+        return nullptr;
+    }
+
+    const auto method_bit = 1U << method_index(method);
+    if ((plan_->dynamic_method_mask_ & method_bit) == 0) {
+        return nullptr;
+    }
+    const auto route_index = find_dynamic_node(plan_->dynamic_roots_[method_index(method)], path, match);
+    if (route_index == no_route_index || match.size() != plan_->routes_[route_index].param_names().size()) {
+        match.clear();
+        return nullptr;
+    }
+    return &plan_->routes_[route_index];
 }
 
 }  // namespace ruvia

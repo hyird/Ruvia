@@ -2,7 +2,7 @@
 #include <stdexcept>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_protocol_managed_fields.h"

@@ -10,7 +10,7 @@
 
 #include <asio/cancellation_signal.hpp>
 
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "context/context_access.h"

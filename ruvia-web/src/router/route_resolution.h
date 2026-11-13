@@ -8,7 +8,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/detail/router/route_handlers.h"
+#include "ruvia/web/detail/callback_ref.h"
 
 // Lightweight, self-contained route-resolution result types. A materialized
 // resolution is exactly one of resolved, method-not-allowed, not-found, or

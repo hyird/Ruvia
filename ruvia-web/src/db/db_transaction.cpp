@@ -15,7 +15,7 @@
 #include <array>
 #include <stdexcept>
 
-#include "ruvia/web/detail/db/db_sql_scan.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "db/db_query_cache_state.h"
 

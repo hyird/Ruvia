@@ -18,7 +18,6 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_limits.h"
 
-#include "server/http1_session_request_completion.h"
 #include "server/http_connection_close.h"
 #include "server/http_server_options.h"
 

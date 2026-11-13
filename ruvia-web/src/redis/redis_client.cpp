@@ -16,7 +16,7 @@
 #include "client/client_lifecycle.h"
 #include "client/client_tls.h"
 #include "redis/redis_client_runtime.h"
-#include "redis/redis_command_args.h"
+#include "redis/redis_protocol.h"
 #include "redis/redis_registry.h"
 
 namespace ruvia::detail {

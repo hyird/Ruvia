@@ -4,7 +4,7 @@
 #include "ruvia/http/websocket_connection.h"
 
 #include "integration/operation_lane_lease.h"
-#include "websocket/websocket_state.h"
+#include "websocket/http_websocket_connection.h"
 
 namespace {
 ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target,

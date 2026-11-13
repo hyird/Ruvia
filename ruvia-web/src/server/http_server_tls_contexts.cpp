@@ -25,7 +25,7 @@
 
 #include "auth/constant_time.h"
 #include "server/http_server_tls_identity.h"
-#include "tls/tls_certificate_store.h"
+#include "tls/tls_credential.h"
 #include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {

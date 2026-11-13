@@ -1,11 +1,13 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/core/move_only_function.h"
+#include "ruvia/core/task.h"
 
 namespace ruvia::detail {
 
@@ -115,3 +117,26 @@ struct callback_access final {
 static_assert(sizeof(callback_ref<void()>) == 2 * sizeof(void*));
 static_assert(std::is_trivially_copyable_v<callback_ref<void()>>);
 }  // namespace ruvia::detail
+
+// The three non-owning callable shapes a route runs: a buffered handler, a
+// streaming (response-stream / websocket / tunnel) handler, and one middleware
+// frame. Each binds a worker-local instance to a process-invariant invoke thunk.
+
+namespace ruvia {
+
+class context;
+class http_response;
+class next;
+
+namespace detail {
+
+enum class request_body_mode : std::uint8_t { buffered,
+    stream };
+
+using route_handler = callback_ref<task<http_response>(context&)>;
+using route_stream_handler = callback_ref<task<void>(context&)>;
+using route_middleware = callback_ref<task<void>(context&, next&)>;
+
+}  // namespace detail
+
+}  // namespace ruvia

@@ -10,7 +10,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"

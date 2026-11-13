@@ -19,6 +19,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/web/detail/worker_state.h"
 
 #include "http3/http3_connection_id.h"
 #include "http3/http3_worker_directory.h"

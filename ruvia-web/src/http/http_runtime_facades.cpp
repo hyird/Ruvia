@@ -20,7 +20,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "context/context_access.h"
-#include "context/context_capabilities.h"
+#include "context/context_services.h"
 #include "http/inline_http_header_views.h"
 #include "integration/operation_interrupt.h"
 #include "integration/operation_lane_lease.h"

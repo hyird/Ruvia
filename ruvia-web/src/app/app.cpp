@@ -8,7 +8,7 @@
 
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_native_path.h"
-#include "ruvia/web/detail/app/app_configuration.h"
+#include "ruvia/web/detail/app_configuration.h"
 #include "ruvia/web/server_config.h"
 
 #include "app/app_runtime_graph.h"

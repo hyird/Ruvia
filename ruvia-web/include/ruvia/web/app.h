@@ -17,7 +17,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/web/connection_events.h"
-#include "ruvia/web/detail/app/app_configuration.h"
+#include "ruvia/web/detail/app_configuration.h"
 #include "ruvia/web/dotenv.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"

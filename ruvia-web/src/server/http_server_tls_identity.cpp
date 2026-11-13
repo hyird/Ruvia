@@ -22,9 +22,7 @@
 #include "ruvia/http/http_ascii.h"
 
 #include "tls/dns_host.h"
-#include "tls/tls_certificate_store.h"
 #include "tls/tls_credential.h"
-#include "tls/tls_files.h"
 #include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {

@@ -6,7 +6,7 @@
 #include <limits>
 #include <stdexcept>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http1_response_head_error.h"

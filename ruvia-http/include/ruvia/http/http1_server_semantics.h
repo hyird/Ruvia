@@ -5,7 +5,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/field/http_field_list_grammar.h"
+#include "ruvia/http/detail/http_field_list_grammar.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"

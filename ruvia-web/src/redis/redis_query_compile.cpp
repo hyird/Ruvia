@@ -8,7 +8,6 @@
 
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/redis/redis_repository.h"
 
 namespace ruvia::detail {

@@ -26,7 +26,6 @@
 
 #include "integration/runtime_control_gate.h"
 #include "server/http_server_listener.h"
-#include "tls/tls_certificate_store.h"
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {
