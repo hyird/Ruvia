@@ -1,5 +1,3 @@
-#include "ruvia/core/worker_wait.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>

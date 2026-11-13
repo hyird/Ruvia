@@ -48,8 +48,7 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_wait.h"
-
+#include "ruvia/core/worker_ref.h"
 #ifdef _WIN32
 #include <array>
 #include <charconv>

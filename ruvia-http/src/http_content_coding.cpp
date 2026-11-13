@@ -1,5 +1,3 @@
-#include "ruvia/http/http_content_coding.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>

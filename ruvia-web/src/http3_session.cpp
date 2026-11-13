@@ -32,7 +32,6 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
@@ -59,7 +58,7 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/worker_wait.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "route_table.h"
 namespace ruvia::detail {

@@ -34,8 +34,6 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_wait.h"
-
 namespace ruvia {
 
 class task_scope final {

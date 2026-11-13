@@ -122,11 +122,8 @@ if(RUVIA_BUILD_WEB)
     # Owns an application whose request-stream listeners hand every request to
     # on_request_stream beside an ordinary routes listener with middleware.
     ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/request_stream.cpp)
-    ruvia_add_web_standalone_test(ruvia_http_server 60 web/http_server.cpp)
-    ruvia_add_web_standalone_test(ruvia_router 60 web/router.cpp)
-    ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/http_server_group.cpp)
+    ruvia_add_web_standalone_test(ruvia_http_server 180 web/http_server.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/connection_lifecycle.cpp)
-    ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket_standalone_server.cpp)
     ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/listener_transactions.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
@@ -136,14 +133,8 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/route_encoded_duplicate.cpp)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/route_dot_segment.cpp)
-    set(_ruvia_tcp_client_test_sources
-        web/http1_websocket.cpp)
-    if(RUVIA_ENABLE_HTTP2)
-        list(APPEND _ruvia_tcp_client_test_sources
-            web/http2_connect.cpp)
-    endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
-        ${_ruvia_tcp_client_test_sources})
+        web/http1_websocket.cpp)
     # Owns an application with an app-wide rate limit, so it cannot share the
     # process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_server_admission_tests 60

@@ -14,8 +14,8 @@
 #include <system_error>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"

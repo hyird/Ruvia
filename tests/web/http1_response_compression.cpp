@@ -23,7 +23,7 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 
