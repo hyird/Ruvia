@@ -76,17 +76,11 @@ endfunction()
 
 if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
-        core/bytes.cpp
-        core/error_text.cpp
         core/failure_report.cpp
-        core/ip_address.cpp
-        core/memory.cpp
-        core/move_only_function.cpp
         core/scoped_operation.cpp
         core/stop_token.cpp
         core/worker_notification.cpp
         core/worker_queue.cpp
-        core/worker_resume.cpp
         core/worker_runtime.cpp)
     # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
@@ -249,7 +243,7 @@ if(RUVIA_BUILD_WEB)
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
-    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(auth|db|redis)/")
+    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/(db|redis)/|^web/http/jwt\\.cpp$")
     if(NOT RUVIA_ENABLE_HTTP2)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
     endif()

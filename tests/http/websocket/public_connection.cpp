@@ -13,7 +13,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/websocket_handshake.h"
 
 #include "test_exceptions.h"

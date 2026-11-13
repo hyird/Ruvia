@@ -12,13 +12,11 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/http/websocket_protocol.h"
 
 #include "http_websocket_permessage_deflate.h"
-#include "http_wire_sink.h"
 // The Close frame payload (RFC 6455 section 5.5.1): encoding the one an
 // endpoint sends (a validated status code followed by an optional UTF-8
 // reason, capped at the 125-byte control-frame limit) and checking the one a
@@ -28,9 +26,9 @@
 #include <exception>
 
 #include "ruvia/http/http1_server_request_parser.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 

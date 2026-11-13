@@ -7,7 +7,10 @@
 #include <cstdint>
 #include <exception>
 #include <future>
+#include <iterator>
+#include <limits>
 #include <memory>
+#include <new>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -29,8 +32,10 @@
 #include "ruvia/core/task.h"
 #include "ruvia/web/redis/redis_repository.h"
 #include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis_types.h"
 
 #include "backend_client_fixture.h"
+#include "test_exceptions.h"
 #include "test_io_context.h"
 
 namespace {
@@ -729,4 +734,340 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
         }));
         co_return;
     });
+}
+
+namespace {
+RUVIA_REDIS_ENTITY(redis_query_user, "query-user",
+    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(email, ruvia::string),
+    RUVIA_REDIS_COLUMN(age, std::int32_t));
+}
+
+TEST(Ruvia, redis_predicate_composition_moves_source_and_preserves_range) {
+    {
+        std::string text(200, 'x');
+        auto filter = redis_query_user::column<"email">() == text;
+        text.assign(200, 'y');
+        auto range = redis_query_user::column<"age">().between(18, 65);
+        ruvia::redis_find_options options{.where_ = std::move(filter) && range};
+        EXPECT_TRUE(filter.empty());
+        EXPECT_TRUE(!options.where_.empty());
+        EXPECT_TRUE(!range.empty());
+    }
+}
+
+TEST(Ruvia, redis_predicate_supports_copy_and_where_or_where_combination) {
+    {
+        auto base = redis_query_user::column<"email">() == "alice@example.com";
+        auto copied = base;
+        EXPECT_TRUE(!base.empty());
+        EXPECT_TRUE(!copied.empty());
+
+        ruvia::redis_predicate combined;
+        combined.and_where(copied);
+        combined.or_where(redis_query_user::column<"age">() >= 21);
+        EXPECT_TRUE(!combined.empty());
+    }
+}
+
+namespace {
+RUVIA_REDIS_ENTITY(redis_unsigned_pk_entity, "unsigned-pk",
+    RUVIA_REDIS_COLUMN(id, std::uint64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string));
+
+RUVIA_REDIS_ENTITY(redis_signed_pk_entity, "signed-pk",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string));
+}  // namespace
+
+TEST(Ruvia, redis_predicate_holds_signed_and_unsigned_primary_key_comparisons) {
+    const auto unsigned_eq = redis_unsigned_pk_entity::column<"id">() == std::uint64_t{42};
+    const auto signed_eq = redis_signed_pk_entity::column<"id">() == std::int64_t{-7};
+    EXPECT_TRUE(!unsigned_eq.empty());
+    EXPECT_TRUE(!signed_eq.empty());
+}
+
+TEST(Ruvia, redis_predicate_self_combination_preserves_operands) {
+    for (const bool use_or : {false, true}) {
+        auto predicate = redis_signed_pk_entity::column<"id">() == std::int64_t{1};
+        if (use_or) {
+            predicate.or_where(predicate);
+        } else {
+            predicate.and_where(predicate);
+        }
+        EXPECT_TRUE(!predicate.empty());
+    }
+}
+
+TEST(Ruvia, redis_predicate_negation_and_entity_column_name) {
+    static_assert(redis_query_user::column_name<"email">() == "email");
+    const auto pred = !(redis_query_user::column<"email">() == "alice@example.com");
+    EXPECT_TRUE(!pred.empty());
+    const ruvia::redis_predicate empty;
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)!empty; }));
+}
+
+namespace {
+const ruvia::redis_repository_config search_config{
+    .indexes_ = {
+        {.column_ = "email", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
+        {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
+    },
+};
+
+template <typename command_type>
+concept borrows_temporary_command = requires(command_type command) {
+    std::move(command).arguments();
+};
+static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
+}  // namespace
+
+TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
+    auto command = [&] {
+        std::string prefix = "offline:users";
+        std::string column = "email";
+        const ruvia::redis_repository_config config{
+            .prefix_ = prefix,
+            .indexes_ = {{.column_ = column, .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true}},
+        };
+        const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(config);
+        prefix.assign("changed");
+        column.assign("age");
+        std::string text("a|{ }\0", 6);
+        std::string order = "email";
+        ruvia::redis_find_options options{
+            .where_ = redis_query_user::column<"email">() == text,
+            .order_ = ruvia::redis_find_order{.column_ = order, .direction_ = ruvia::redis_order_direction::desc},
+            .skip_ = 2,
+            .take_ = 3,
+        };
+        text.assign("changed");
+        return mapping.compile_find(options);
+    }();
+    const auto args = command.arguments();
+    ASSERT_EQ(args.size(), std::size_t{11});
+    EXPECT_EQ(args[1], "offline:users:idx");
+    EXPECT_EQ(args[2], "@email:{x617c7b207d00}");
+    EXPECT_EQ(args[4], "2");
+    EXPECT_EQ(args[5], "3");
+    EXPECT_EQ(args[7], "__ruvia_sort_email");
+    EXPECT_EQ(args[8], "DESC");
+}
+
+TEST(Ruvia, redis_search_mapping_rejects_invalid_schema_and_query_fields_offline) {
+    using mapping_type = ruvia::redis_search_mapping;
+    for (const ruvia::redis_repository_config& config : {
+             ruvia::redis_repository_config{.indexes_ = {{.column_ = "missing"}}},
+             ruvia::redis_repository_config{.indexes_ = {{.column_ = "age", .kind_ = ruvia::redis_index_kind::tag}}},
+             ruvia::redis_repository_config{.indexes_ = {{.column_ = "email"}, {.column_ = "email"}}}}) {
+        EXPECT_THROW((void)mapping_type::create<redis_query_user>(config), std::invalid_argument);
+    }
+    const auto mapping = mapping_type::create<redis_query_user>(search_config);
+    EXPECT_THROW((void)mapping.compile_find({.where_ = redis_query_user::column<"id">() == "id"}), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.where_ = redis_signed_pk_entity::column<"id">() == 1}), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.where_ = redis_query_user::column<"age">() == true}), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.where_ = redis_query_user::column<"age">() == std::uint64_t{9007199254740992}}), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.order_ = ruvia::redis_find_order{.column_ = "missing"}}, ruvia::redis_search_mode::count), std::invalid_argument);
+    EXPECT_THROW((void)mapping.compile_find({.order_ = ruvia::redis_find_order{.column_ = "age"}}), std::invalid_argument);
+    const auto no_indexes = mapping_type::create<redis_query_user>();
+    EXPECT_THROW((void)no_indexes.compile_create_index(), std::invalid_argument);
+}
+
+TEST(Ruvia, redis_search_compilation_preserves_empty_tag_and_zero_first_page) {
+    const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(search_config);
+    const auto empty = mapping.compile_find({.where_ = redis_query_user::column<"email">() == ""});
+    const auto missing = mapping.compile_find({.where_ = redis_query_user::column<"email">().is_null()});
+    EXPECT_EQ(empty.arguments()[2], "@email:{x}");
+    EXPECT_EQ(missing.arguments()[2], "-@__ruvia_present_email:{1}");
+    const auto first = mapping.compile_find({.skip_ = 9, .take_ = 0}, ruvia::redis_search_mode::first);
+    EXPECT_EQ(first.arguments()[4], "9");
+    EXPECT_EQ(first.arguments()[5], "0");
+    const auto count = mapping.compile_find({.skip_ = 9, .take_ = 4}, ruvia::redis_search_mode::count);
+    EXPECT_EQ(count.arguments()[4], "0");
+    EXPECT_EQ(count.arguments()[5], "0");
+}
+
+TEST(Ruvia, redis_search_mapping_and_commands_support_copy_and_move_assignment) {
+    auto destination = ruvia::redis_search_mapping::create<redis_query_user>({});
+    auto command = destination.compile_drop_index();
+    {
+        auto source = ruvia::redis_search_mapping::create<redis_query_user>(search_config);
+        const auto copy = source;
+        const auto copied_command = copy.compile_create_index();
+        destination = source;
+        destination = std::move(source);
+        command = copied_command;
+        auto moved_command = copy.compile_create_index();
+        command = std::move(moved_command);
+    }
+    const auto recreated = destination.compile_create_index();
+    ASSERT_EQ(command.arguments().size(), recreated.arguments().size());
+    for (std::size_t i = 0; i != command.arguments().size(); ++i) {
+        EXPECT_EQ(command.arguments()[i], recreated.arguments()[i]);
+    }
+}
+
+TEST(Ruvia, redis_search_index_compilation_keeps_tag_shadows_and_documents) {
+    const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>({
+        .prefix_ = "a:b",
+        .indexes_ = {{.column_ = "email", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true}},
+    });
+    const auto create = mapping.compile_create_index();
+    const std::string_view expected[]{
+        "FT.CREATE",
+        "a:b:idx",
+        "ON",
+        "HASH",
+        "PREFIX",
+        "1",
+        "ruvia:orm:613a62:",
+        "SCHEMA",
+        "__ruvia_tag_email",
+        "AS",
+        "email",
+        "TAG",
+        "CASESENSITIVE",
+        "__ruvia_present_email",
+        "AS",
+        "__ruvia_present_email",
+        "TAG",
+        "CASESENSITIVE",
+        "email",
+        "AS",
+        "__ruvia_sort_email",
+        "TAG",
+        "SORTABLE",
+        "NOINDEX",
+    };
+    ASSERT_EQ(create.arguments().size(), std::size(expected));
+    for (std::size_t i = 0; i != std::size(expected); ++i) {
+        EXPECT_EQ(create.arguments()[i], expected[i]);
+    }
+    const auto drop = mapping.compile_drop_index();
+    ASSERT_EQ(drop.arguments().size(), std::size_t{2});
+    EXPECT_EQ(drop.arguments()[0], "FT.DROPINDEX");
+    EXPECT_EQ(drop.arguments()[1], "a:b:idx");
+}
+
+namespace {
+
+RUVIA_REDIS_ENTITY(redis_user, "user",
+    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, std::string),
+    RUVIA_REDIS_COLUMN(active, bool),
+    RUVIA_REDIS_COLUMN(age, std::int32_t, ruvia::redis_column_options{.nullable_ = true}),
+    RUVIA_REDIS_COLUMN(score, double, ruvia::redis_column_options{.nullable_ = true}));
+
+RUVIA_REDIS_ENTITY(nullable_redis_text, "text_value",
+    RUVIA_REDIS_COLUMN(id, std::int64_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(text, ruvia::string, ruvia::redis_column_options{.nullable_ = true}));
+
+RUVIA_REDIS_ENTITY(numeric_redis_entity, "numeric_input",
+    RUVIA_REDIS_COLUMN(id, std::int32_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(score, float, ruvia::redis_column_options{.nullable_ = true}));
+
+}  // namespace
+
+TEST(Ruvia, redis_entity_rejects_numeric_overflow_without_changing_identity_or_field_state) {
+    numeric_redis_entity value;
+    value.set<"id">(7);
+    const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
+    bool id_rejected = false;
+    try {
+        value.set<"id">(above_signed);
+    } catch (const std::out_of_range&) {
+        id_rejected = true;
+    }
+    EXPECT_TRUE(id_rejected);
+    EXPECT_EQ(value.get<"id">(), 7);
+    // 绑定层接受的有限 double，仍可能无法表示为实体的 float 字段。
+    const auto oversized = ruvia::from_json<ruvia::double_value>("1.7976931348623157e308");
+    EXPECT_EQ(oversized.value_, (std::numeric_limits<double>::max)());
+    for (int state = 0; state != 3; ++state) {
+        if (state == 1) {
+            value.set_null<"score">();
+        } else if (state == 2) {
+            value.set<"score">(1.5);
+        }
+        bool score_rejected = false;
+        try {
+            value.set<"score">(oversized);
+        } catch (const std::out_of_range&) {
+            score_rejected = true;
+        }
+        EXPECT_TRUE(score_rejected);
+        EXPECT_EQ(value.is_set<"score">(), state != 0);
+        EXPECT_EQ(value.is_null<"score">(), state == 1);
+        if (state == 2) {
+            EXPECT_EQ(value.get<"score">(), 1.5F);
+        }
+    }
+    value.set<"id">(ruvia::int64{(std::numeric_limits<std::int32_t>::min)()});
+    EXPECT_EQ(value.get<"id">(), (std::numeric_limits<std::int32_t>::min)());
+}
+
+TEST(Ruvia, redis_entity_tracks_unset_value_and_null_states) {
+    redis_user user_value;
+
+    EXPECT_EQ(redis_user::prefix(), std::string_view("user"));
+    EXPECT_TRUE(!user_value.is_set<"id">());
+    EXPECT_TRUE(!user_value.is_null<"id">());
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"id">(); }));
+
+    user_value.set<"id">("u-1");
+    user_value.set<"name">("Alice");
+    user_value.set<"active">(true);
+    user_value.set<"age">(32);
+    user_value.set<"score">(4.5);
+    EXPECT_TRUE(user_value.is_set<"id">());
+    EXPECT_EQ(user_value.get<"id">().view(), std::string_view("u-1"));
+    EXPECT_EQ(std::string_view(user_value.get<"name">()), std::string_view("Alice"));
+    EXPECT_TRUE(user_value.get<"active">());
+    EXPECT_EQ(user_value.get<"age">(), 32);
+    EXPECT_EQ(user_value.get<"score">(), 4.5);
+
+    user_value.set_null<"age">();
+    EXPECT_TRUE(user_value.is_set<"age">());
+    EXPECT_TRUE(user_value.is_null<"age">());
+    EXPECT_TRUE(ruvia::test::throws_on([&] { (void)user_value.get<"age">(); }));
+
+    user_value.reset<"age">();
+    EXPECT_TRUE(!user_value.is_set<"age">());
+    EXPECT_TRUE(!user_value.is_null<"age">());
+}
+
+TEST(Ruvia, redis_entity_move_preserves_owned_values_and_resource) {
+    {
+        redis_user source_value;
+        source_value.set<"id">(std::string(120, 'i'));
+        source_value.set<"name">(std::string(120, 'n'));
+        source_value.set<"active">(true);
+
+        redis_user moved(std::move(source_value));
+        EXPECT_EQ(moved.get<"id">().size(), std::size_t{120});
+        EXPECT_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
+        EXPECT_TRUE(moved.get<"active">());
+        source_value.set<"id">("reused");
+        source_value.set<"name">("new name");
+        EXPECT_EQ(moved.get<"id">().size(), std::size_t{120});
+        EXPECT_EQ(std::string_view(moved.get<"name">()).size(), std::size_t{120});
+    }
+}
+
+RUVIA_REDIS_ENTITY(redis_byte_numbers, "byte_numbers",
+    RUVIA_REDIS_COLUMN(id, std::int8_t, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(flags, std::uint8_t));
+
+TEST(Ruvia, redis_entity_supports_8bit_integers) {
+    redis_byte_numbers numbers;
+    numbers.set<"id">(std::int8_t{-12});
+    numbers.set<"flags">(std::uint8_t{250});
+    EXPECT_EQ(numbers.get<"id">(), std::int8_t{-12});
+    EXPECT_EQ(numbers.get<"flags">(), std::uint8_t{250});
+}
+
+TEST(Ruvia, redis_error_uses_runtime_error_message_and_stable_code) {
+    const ruvia::redis_error error(ruvia::redis_error::code_type::timeout, "redis timed out");
+    EXPECT_TRUE(error.code() == ruvia::redis_error::code_type::timeout);
+    EXPECT_EQ(std::string_view(error.what()), std::string_view("redis timed out"));
 }

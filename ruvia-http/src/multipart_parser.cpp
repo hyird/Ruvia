@@ -23,12 +23,9 @@
 #include <limits>
 #include <new>
 
-#include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/sse.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "http_wire_sink.h"
-
+#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool http_mime_token_char(char value) noexcept {

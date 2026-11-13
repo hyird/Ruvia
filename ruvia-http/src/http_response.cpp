@@ -16,12 +16,12 @@
 #include <utility>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/multipart_parser.h"
@@ -29,7 +29,6 @@
 
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"
-#include "http_wire_sink.h"
 #include "http_zlib_stream.h"
 
 namespace ruvia {

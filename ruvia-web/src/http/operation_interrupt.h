@@ -46,9 +46,8 @@
 #include "ruvia/http/ip_address.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/tls_config.h"
-
 namespace ruvia::detail {
 
 // Length-checked, data-independent (constant-time) byte comparison for secrets

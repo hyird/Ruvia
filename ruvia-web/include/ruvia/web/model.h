@@ -40,10 +40,9 @@
 
 #include <initializer_list>
 
-#include "ruvia/http/http_accept_encoding.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/integer.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia::detail {

@@ -43,7 +43,6 @@
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/tls_config.h"
 
 #include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"

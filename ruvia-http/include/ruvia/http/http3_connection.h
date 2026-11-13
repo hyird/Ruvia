@@ -19,11 +19,9 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_content_semantics.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"

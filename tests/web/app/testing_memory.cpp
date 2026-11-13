@@ -8,7 +8,7 @@
 #include <utility>
 
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"

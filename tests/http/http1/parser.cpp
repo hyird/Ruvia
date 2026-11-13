@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "ruvia/http/http1_server_request_parser.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"

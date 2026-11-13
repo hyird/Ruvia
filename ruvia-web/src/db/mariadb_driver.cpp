@@ -18,7 +18,7 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/borrowed_text.h"
 
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"

@@ -26,7 +26,6 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
@@ -34,9 +33,8 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/integer.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
-#include "ruvia/web/web_worker.h"
 namespace ruvia {
 
 class context;

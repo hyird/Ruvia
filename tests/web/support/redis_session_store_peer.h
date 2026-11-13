@@ -24,8 +24,7 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/web/integer.h"
-
+#include "ruvia/web/error.h"
 namespace ruvia::test {
 
 // Stateful, isolated RESP store. All map access and connection teardown run on

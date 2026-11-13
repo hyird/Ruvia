@@ -35,7 +35,7 @@
 #include <openssl/x509.h>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"

@@ -19,7 +19,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/db/db.h"

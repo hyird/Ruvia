@@ -46,7 +46,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/socket.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 
 #include "http/operation_interrupt.h"
 #include "server/app_state.h"

@@ -41,22 +41,22 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/socket.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/http_server.h"
 
 #include "http/context_access.h"
 #include "http/operation_interrupt.h"
-#include "http2/http2_sans_io_session.h"
 #include "server/app_state.h"
 #include "server/connection_lifecycle.h"
+#include "server/http2_sans_io_session.h"
 #include "server/route_table.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3/http3_session.h"
+#include "server/http3_session.h"
 #endif
 
 namespace ruvia::detail {

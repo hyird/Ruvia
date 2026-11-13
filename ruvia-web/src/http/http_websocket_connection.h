@@ -31,7 +31,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
@@ -40,10 +39,10 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/http_client_types.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/server_config.h"
-#include "ruvia/web/tls_config.h"
 
 #include "http/operation_interrupt.h"
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -67,9 +66,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/streaming.h"
 
 #include "http/context_access.h"

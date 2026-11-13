@@ -8,7 +8,6 @@
 #include <variant>
 
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
@@ -16,7 +15,6 @@
 
 #include "http/context_access.h"
 #include "http/operation_interrupt.h"
-#include "http/static_root_index.h"
 #include "server/route_table.h"
 
 // Shared admission for HTTP/1 and in-process subrequests. The HTTP/1 session
@@ -42,19 +40,17 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/http1_chunked_body_decoder.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/server_config.h"

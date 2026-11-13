@@ -16,7 +16,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http1_chunked_body_decoder.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -29,8 +29,6 @@
 
 #include "http/context_access.h"
 #include "http/http_websocket_connection.h"
-#include "http/static_root_index.h"
-
 namespace ruvia::detail {
 
 class router;

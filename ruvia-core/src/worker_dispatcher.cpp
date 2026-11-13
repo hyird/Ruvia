@@ -12,8 +12,8 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 
 #include "event_loop_state.h"

@@ -17,7 +17,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"

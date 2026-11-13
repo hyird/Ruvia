@@ -494,3 +494,472 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     EXPECT_TRUE(std::holds_alternative<std::string>(encoded));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(request_view).has_value());
 }
+
+#include <algorithm>
+#include <chrono>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <limits>
+#include <span>
+#include <stdexcept>
+#include <vector>
+
+#include "ruvia/http/multipart_parser.h"
+
+namespace {
+struct capture {
+    std::string body_;
+    std::uint64_t type_{0};
+    std::size_t ends_{0};
+};
+void capsule(void* context_value, ruvia::http_capsule_event event) {
+    auto& capture_value = *static_cast<capture*>(context_value);
+    capture_value.type_ = event.type_;
+    if (!event.payload_.empty()) {
+        capture_value.body_.append(event.payload_.data(), event.payload_.size());
+    }
+    capture_value.ends_ += event.end_capsule_;
+}
+}  // namespace
+TEST(Ruvia, http_capsule_protocol_byte_parameters_accept_optional_padding_and_validate_quartets) {
+    for (const auto value : {"?1;bytes=:YQ=:", "?1;bytes=:YQ==:", "?1;bytes=:YQ:", "?1;bytes=:YWJj:",
+             "?1;bytes=:YWJ:", "?1;bytes=:YWJ=:", "?1;bytes=:YR==:", "?1;bytes=::"}) {
+        const auto parsed_value = ruvia::parse_http_capsule_protocol(value);
+        EXPECT_TRUE(parsed_value.has_value());
+        if (parsed_value.has_value()) {
+            EXPECT_TRUE(*parsed_value);
+        }
+    }
+    const auto disabled = ruvia::parse_http_capsule_protocol("?0;bytes=:YQ=:");
+    EXPECT_TRUE(disabled.has_value());
+    if (disabled.has_value()) {
+        EXPECT_TRUE(!*disabled);
+    }
+    // RFC 8941 4.2 discards only SP around a top-level Item.
+    for (const auto value : {"?1;bytes=:Y:", "?1;bytes=:Y=:", "?1;bytes=:YWJj=:", "?1;bytes=:YWJ==:",
+             "?1;bytes=:YQ===:", "?1;bytes=:Y=Q:", "?1;bytes=:YQ$:", "?1;bytes=:YQ\n:", "?1;bytes=:YQ", "?1\t",
+             "?1 \t", "\t?1"}) {
+        EXPECT_TRUE(!ruvia::parse_http_capsule_protocol(value).has_value());
+    }
+    const auto padded = ruvia::parse_http_capsule_protocol(" ?1  ");
+    EXPECT_TRUE(padded.has_value() && *padded);
+}
+
+TEST(Ruvia, http_udp_datagram_context_prefix_roundtrips) {
+    std::array<char, 8> prefix{};
+    for (const auto id : {std::uint64_t{0}, std::uint64_t{63}, std::uint64_t{64}, std::uint64_t{16384}, (std::uint64_t{1} << 30), (std::uint64_t{1} << 62) - 1}) {
+        const auto encoded = ruvia::encode_http_udp_datagram_prefix(prefix, id);
+        EXPECT_TRUE(encoded.index() == 0);
+        const auto decoded = ruvia::decode_http_udp_datagram(std::span<const char>(prefix).first(std::get<0>(encoded)));
+        EXPECT_TRUE(decoded.has_value());
+        EXPECT_EQ(decoded->context_id_, id);
+        EXPECT_TRUE(decoded->payload_.empty());
+    }
+    EXPECT_TRUE(!ruvia::decode_http_udp_datagram({}).has_value());
+    EXPECT_TRUE(ruvia::encode_http_udp_datagram_prefix(prefix, std::uint64_t{1} << 62).index() != 0);
+}
+TEST(Ruvia, http_capsule_incremental_unknown_empty_and_datagram) {
+    std::array<char, 16> prefix{};
+    auto count = ruvia::encode_http_capsule_header(prefix, 0x1234, 5);
+    std::string wire(prefix.data(), std::get<0>(count));
+    wire += "hello";
+    auto empty = ruvia::encode_http_capsule_header(prefix, 0, 0);
+    wire.append(prefix.data(), std::get<0>(empty));
+    ruvia::http_capsule_decoder decoder;
+    capture capture_state;
+    for (const char& byte : wire) {
+        EXPECT_TRUE(decoder.feed({&byte, 1}, false, capsule, &capture_state) == ruvia::http_capsule_status::need_more_data);
+    }
+    EXPECT_EQ(capture_state.body_, std::string("hello"));
+    EXPECT_EQ(capture_state.ends_, 2u);
+    EXPECT_TRUE(decoder.feed({}, true, capsule, &capture_state) == ruvia::http_capsule_status::end);
+    ruvia::http_capsule_decoder lambda_decoder;
+    capture lambda_capture;
+    EXPECT_TRUE(lambda_decoder.feed(wire, true, [&](ruvia::http_capsule_event event) {
+        capsule(&lambda_capture, event);
+    }) == ruvia::http_capsule_status::end);
+    EXPECT_EQ(lambda_capture.body_, std::string("hello"));
+    EXPECT_EQ(lambda_capture.ends_, 2u);
+    ruvia::http_capsule_decoder pull_lambda_decoder;
+    capture pull_lambda_capture;
+    const auto pull_first = pull_lambda_decoder.feed_one(wire, true, [&](ruvia::http_capsule_event event) {
+        capsule(&pull_lambda_capture, event);
+    });
+    EXPECT_TRUE(pull_first.capsule_complete_);
+    EXPECT_EQ(pull_lambda_capture.body_, std::string("hello"));
+}
+TEST(Ruvia, http_capsule_truncated_and_length_limit_are_terminal) {
+    const std::array prefix{char(0), char(3)};
+    ruvia::http_capsule_decoder limit({.max_capsule_length_ = 2});
+    EXPECT_TRUE(limit.feed(prefix, false, nullptr, nullptr) == ruvia::http_capsule_status::limit);
+    ruvia::http_capsule_decoder truncated;
+    EXPECT_TRUE(truncated.feed(prefix, true, nullptr, nullptr) == ruvia::http_capsule_status::truncated);
+}
+
+TEST(Ruvia, http_capsule_pull_decoder_stops_at_each_capsule_and_commits_fin_after_the_suffix) {
+    std::array<char, 16> header;
+    std::string wire;
+    for (const auto& item : std::array<std::pair<std::uint64_t, std::string_view>, 3>{{{0x123456789ULL, "first"}, {0, ""}, {7, "last"}}}) {
+        const auto encoded = ruvia::encode_http_capsule_header(header, item.first, item.second.size());
+        wire.append(header.data(), std::get<0>(encoded));
+        wire.append(item.second);
+    }
+    for (std::size_t block : {std::size_t{1}, std::size_t{3}, wire.size()}) {
+        ruvia::http_capsule_decoder decoder;
+        capture captured;
+        std::size_t offset{}, complete_value{};
+        std::string all_payload;
+        while (offset != wire.size()) {
+            const auto count = std::min(block, wire.size() - offset);
+            const auto result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(), capsule, &captured);
+            EXPECT_TRUE(result_value.consumed_bytes_ > 0 && result_value.consumed_bytes_ <= count);
+            offset += result_value.consumed_bytes_;
+            if (result_value.capsule_complete_) {
+                const std::array<std::uint64_t, 3> expected_types{0x123456789ULL, 0, 7};
+                const std::array<std::string_view, 3> expected_payloads{"first", "", "last"};
+                EXPECT_TRUE(captured.type_ == expected_types[complete_value]);
+                EXPECT_TRUE(captured.body_ == expected_payloads[complete_value]);
+                captured.body_.clear();
+                ++complete_value;
+            }
+            EXPECT_TRUE(result_value.status_ == (offset == wire.size() ? ruvia::http_capsule_status::end : ruvia::http_capsule_status::need_more_data));
+        }
+        EXPECT_EQ(complete_value, std::size_t{3});
+        EXPECT_EQ(captured.ends_, std::size_t{3});
+        const auto ended = decoder.feed_one({}, true, capsule, &captured);
+        EXPECT_TRUE(ended.status_ == ruvia::http_capsule_status::end && !ended.capsule_complete_ && ended.consumed_bytes_ == 0);
+    }
+    ruvia::http_capsule_decoder truncated;
+    const std::array partial{char(0), char(3), char('a')};
+    const auto result_value = truncated.feed_one(partial, true, nullptr, nullptr);
+    EXPECT_TRUE(result_value.status_ == ruvia::http_capsule_status::truncated && !result_value.capsule_complete_ && result_value.consumed_bytes_ == partial.size());
+}
+
+// RFC 9297 section 3.2: capsules the reader does not keep are skipped at any
+// length; max_capsule_length_ bounds only kept capsules (for CONNECT-UDP, after
+// the RFC 9298 Context ID shows the datagram is kept).
+TEST(Ruvia, http_capsule_retention_skips_dropped_capsules_beyond_the_length_limit) {
+    std::array<char, 16> header;
+    const auto append_capsule = [&](std::string& wire, std::uint64_t type, std::string_view value) {
+        const auto encoded = ruvia::encode_http_capsule_header(header, type, value.size());
+        wire.append(header.data(), std::get<0>(encoded));
+        wire.append(value);
+    };
+    std::string wire;
+    append_capsule(wire, 0x17, std::string(200, 'u'));
+    append_capsule(wire, 0, std::string("\x03", 1) + std::string(200, 'c'));
+    append_capsule(wire, 0, std::string("\x40\x00", 2) + "two-byte-zero");
+    append_capsule(wire, 0, std::string("\0", 1) + "after");
+    append_capsule(wire, 0, std::string("\x41", 1));
+    for (const std::size_t block : {std::size_t{1}, std::size_t{7}, wire.size()}) {
+        ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+        capture captured;
+        std::vector<std::string> kept;
+        std::size_t offset{};
+        ruvia::http_capsule_feed_result result_value{};
+        while (offset != wire.size()) {
+            const auto count = std::min(block, wire.size() - offset);
+            result_value = decoder.feed_one(std::span<const char>(wire).subspan(offset, count), offset + count == wire.size(),
+                capsule, &captured, ruvia::http_capsule_retention::udp_payloads);
+            EXPECT_TRUE(result_value.status_ != ruvia::http_capsule_status::limit);
+            offset += result_value.consumed_bytes_;
+            if (result_value.capsule_complete_) {
+                EXPECT_EQ(captured.type_, std::uint64_t{0});
+                kept.push_back(std::exchange(captured.body_, {}));
+            }
+        }
+        EXPECT_TRUE(result_value.status_ == ruvia::http_capsule_status::end);
+        // Context ID 0 in either encoding, and a value too short for its
+        // Context ID (left to the reader as malformed), are kept.
+        EXPECT_TRUE(kept == (std::vector<std::string>{std::string("\x40\x00", 2) + "two-byte-zero",
+                                std::string("\0", 1) + "after", std::string("\x41", 1)}));
+        EXPECT_EQ(captured.ends_, std::size_t{3});
+    }
+
+    std::string datagrams;
+    append_capsule(datagrams, 0x17, std::string(200, 'u'));
+    append_capsule(datagrams, 0, "\x03kept");
+    ruvia::http_capsule_decoder decoder({.max_capsule_length_ = 100});
+    capture captured;
+    EXPECT_TRUE(decoder.feed(datagrams, true, capsule, &captured, ruvia::http_capsule_retention::datagrams) ==
+                ruvia::http_capsule_status::end);
+    EXPECT_EQ(captured.body_, std::string("\x03kept"));
+    EXPECT_EQ(captured.ends_, std::size_t{1});
+
+    // Kept capsules over the limit stay terminal: every type for a generic
+    // reader, and a CONNECT-UDP payload once its Context ID is known.
+    for (const auto retention : {ruvia::http_capsule_retention::all, ruvia::http_capsule_retention::udp_payloads}) {
+        std::string oversized;
+        append_capsule(oversized, retention == ruvia::http_capsule_retention::all ? 0x17 : 0,
+            std::string("\0", 1) + std::string(200, 'o'));
+        ruvia::http_capsule_decoder limited({.max_capsule_length_ = 100});
+        EXPECT_TRUE(limited.feed(oversized, false, nullptr, nullptr, retention) == ruvia::http_capsule_status::limit);
+    }
+}
+
+TEST(Ruvia, http_datagram_capsule_channel_frames_opaque_payloads_and_obeys_half_close) {
+    ruvia::http_datagram_session session;
+    const std::string_view opaque("\1\0\xff", 3);
+    const auto plan = session.prepare_datagram(std::span(opaque.data(), opaque.size()));
+    EXPECT_TRUE(plan.index() == 0);
+    const auto received = session.receive_datagram(std::get<0>(plan).payload());
+    EXPECT_TRUE(received.has_value());
+    EXPECT_TRUE(std::string_view(received->data(), received->size()) == opaque);
+    const auto empty = session.prepare_datagram({});
+    EXPECT_TRUE(empty.index() == 0);
+    const auto empty_received = session.receive_datagram(std::get<0>(empty).payload());
+    EXPECT_TRUE(empty_received.has_value() && empty_received->empty());
+    session.close_receive();
+    EXPECT_TRUE(!session.receive_datagram(opaque).has_value());
+    session.close_send();
+    EXPECT_TRUE(session.prepare_datagram({}).index() != 0);
+}
+
+namespace {
+
+std::string render(const ruvia::sse_message& message) {
+    const auto frame = ruvia::format_sse_message(message);
+    return std::string(frame.data(), frame.size());
+}
+
+struct parsed_event final {
+    std::string type_;
+    std::string data_;
+    std::string id_;
+
+    bool operator==(const parsed_event&) const = default;
+};
+
+// Feeds every chunk, re-offering each unconsumed suffix, until the parser
+// leaves the active state.
+std::vector<parsed_event> parse_chunks(ruvia::sse_parser& parser, std::initializer_list<std::string_view> chunks) {
+    std::vector<parsed_event> events;
+    for (auto chunk : chunks) {
+        while (!chunk.empty() && parser.state() == ruvia::sse_parser_state::active) {
+            const auto result = parser.parse(chunk);
+            EXPECT_LE(result.consumed_bytes_, chunk.size());
+            chunk.remove_prefix(result.consumed_bytes_);
+            if (result.event_) {
+                events.push_back({std::string(result.event_->type()), std::string(result.event_->data()),
+                    std::string(result.event_->last_event_id())});
+            } else if (parser.state() == ruvia::sse_parser_state::active) {
+                EXPECT_TRUE(chunk.empty());
+            }
+        }
+    }
+    return events;
+}
+
+std::vector<parsed_event> parse_stream(std::initializer_list<std::string_view> chunks) {
+    ruvia::sse_parser parser;
+    return parse_chunks(parser, chunks);
+}
+
+constexpr std::string_view whatwg_stream =
+    ": comment\n"
+    "event: update\n"
+    "id: 7\n"
+    "data: first\n"
+    "data:second\n"
+    "data\n"
+    "unknown: x\n"
+    "\n"
+    "data: next\n"
+    "\n"
+    "id\n"
+    "data:  spaced\n"
+    "\n";
+
+const std::vector<parsed_event> whatwg_events{
+    {"update", "first\nsecond\n", "7"},
+    {"message", "next", "7"},
+    {"message", " spaced", ""},
+};
+
+}  // namespace
+
+TEST(Ruvia, sse_formats_event_id_retry_and_multiline_data) {
+    EXPECT_EQ(render({.data_ = "line1\nline2",
+                  .event_ = "update",
+                  .id_ = "7",
+                  .retry_ = std::chrono::milliseconds{3000}}),
+        std::string("event: update\nid: 7\nretry: 3000\ndata: line1\ndata: line2\n\n"));
+}
+
+TEST(Ruvia, sse_distinguishes_absent_and_empty_data) {
+    EXPECT_EQ(render({.retry_ = std::chrono::milliseconds{3000}}), std::string("retry: 3000\n\n"));
+    EXPECT_EQ(render({.event_ = "ping"}), std::string("event: ping\n\n"));
+    EXPECT_EQ(render({}), std::string("\n"));
+    EXPECT_EQ(render({.data_ = ""}), std::string("data: \n\n"));
+    EXPECT_EQ(render({.id_ = std::string_view{}}), std::string("id:\n\n"));
+    EXPECT_EQ(render({.data_ = "hi"}), std::string("data: hi\n\n"));
+    EXPECT_TRUE(render({.retry_ = std::chrono::milliseconds{1}}).find("data:") == std::string::npos);
+}
+
+TEST(Ruvia, sse_splits_data_on_cr_crlf_and_lf_never_emitting_raw_cr) {
+    EXPECT_EQ(render({.data_ = "a\rb"}), std::string("data: a\ndata: b\n\n"));
+    EXPECT_EQ(render({.data_ = "a\nb"}), std::string("data: a\ndata: b\n\n"));
+    EXPECT_EQ(render({.data_ = "a\r\nb"}), std::string("data: a\ndata: b\n\n"));
+    EXPECT_EQ(render({.data_ = "a\r\rb"}), std::string("data: a\ndata: \ndata: b\n\n"));
+    EXPECT_TRUE(!(render({.data_ = "x\ry\r\rz"}).find('\r') != std::string_view::npos));
+}
+
+TEST(Ruvia, sse_rejects_newline_in_event_or_id_and_nul_in_id) {
+    const auto throws_for = [](ruvia::sse_message message) {
+        try {
+            (void)ruvia::format_sse_message(message);
+            return false;
+        } catch (const std::invalid_argument&) {
+            return true;
+        }
+    };
+
+    EXPECT_TRUE(throws_for({.data_ = "x", .event_ = "a\nb"}));
+    EXPECT_TRUE(throws_for({.data_ = "x", .event_ = "a\rb"}));
+    EXPECT_TRUE(throws_for({.id_ = "1\n2"}));
+    EXPECT_TRUE(throws_for({.id_ = std::string_view{"a\0b", 3}}));
+    EXPECT_TRUE(throws_for({.retry_ = std::chrono::milliseconds{-1}}));
+
+    // Every textual field is UTF-8; a stray byte or a surrogate never reaches the stream.
+    EXPECT_TRUE(throws_for({.data_ = std::string_view("\xff", 1)}));
+    EXPECT_TRUE(throws_for({.event_ = std::string_view("\xc3", 1)}));
+    EXPECT_TRUE(throws_for({.id_ = std::string_view("\xed\xa0\x80", 3)}));
+    EXPECT_EQ(render({.data_ = "caf\xc3\xa9", .event_ = "\xe2\x82\xac", .id_ = "\xf0\x9f\x98\x80"}), std::string("event: \xe2\x82\xac\nid: \xf0\x9f\x98\x80\ndata: caf\xc3\xa9\n\n"));
+}
+
+// WHATWG HTML "Interpreting an event stream": one optional space after the
+// colon, a colon-less line names a field with an empty value, the event type
+// resets after each dispatch while the last event ID persists, and comments and
+// unknown fields are ignored.
+TEST(Ruvia, sse_parser_interprets_fields_per_whatwg) {
+    ruvia::sse_parser parser;
+    EXPECT_EQ(parse_chunks(parser, {whatwg_stream}), whatwg_events);
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+    EXPECT_EQ(parser.last_event_id(), "");
+
+    // A block without data dispatches nothing but still commits its id.
+    EXPECT_TRUE(parse_chunks(parser, {"id: 9\nevent: ignored\n\n"}).empty());
+    EXPECT_EQ(parser.last_event_id(), "9");
+    EXPECT_EQ(parse_chunks(parser, {"data:\n\n"}), (std::vector<parsed_event>{{"message", "", "9"}}));
+}
+
+TEST(Ruvia, sse_parser_is_independent_of_chunk_boundaries) {
+    for (std::size_t split = 0; split <= whatwg_stream.size(); ++split) {
+        EXPECT_EQ(parse_stream({whatwg_stream.substr(0, split), whatwg_stream.substr(split)}), whatwg_events)
+            << "split at " << split;
+    }
+    ruvia::sse_parser parser;
+    std::vector<parsed_event> events;
+    for (std::size_t index = 0; index < whatwg_stream.size(); ++index) {
+        const auto chunk_events = parse_chunks(parser, {whatwg_stream.substr(index, 1)});
+        events.insert(events.end(), chunk_events.begin(), chunk_events.end());
+    }
+    EXPECT_EQ(events, whatwg_events);
+}
+
+TEST(Ruvia, sse_parser_returns_one_event_per_call_with_consumed_bytes) {
+    ruvia::sse_parser parser;
+    constexpr std::string_view input = "data: a\n\ndata: b\n\n: tail";
+    const auto first = parser.parse(input);
+    ASSERT_TRUE(first.event_.has_value());
+    EXPECT_EQ(first.consumed_bytes_, std::size_t{9});
+    EXPECT_EQ(first.event_->data(), "a");
+    const auto second = parser.parse(input.substr(first.consumed_bytes_));
+    ASSERT_TRUE(second.event_.has_value());
+    EXPECT_EQ(second.consumed_bytes_, std::size_t{9});
+    EXPECT_EQ(second.event_->data(), "b");
+    const auto rest = parser.parse(input.substr(18));
+    EXPECT_FALSE(rest.event_.has_value());
+    EXPECT_EQ(rest.consumed_bytes_, std::size_t{6});
+}
+
+TEST(Ruvia, sse_parser_ends_lines_at_crlf_lf_and_cr_across_chunks) {
+    EXPECT_EQ(parse_stream({"data: a\r\ndata: b\rdata: c\n\r\n"}),
+        (std::vector<parsed_event>{{"message", "a\nb\nc", ""}}));
+    // An LF opening the next chunk completes the CRLF the previous one began;
+    // it is not a blank line that would dispatch early.
+    EXPECT_EQ(parse_stream({"data: a\r", "\ndata: b\r", "\n\r", "\n"}),
+        (std::vector<parsed_event>{{"message", "a\nb", ""}}));
+    EXPECT_EQ(parse_stream({"data: a\r", "data: b\r\r"}), (std::vector<parsed_event>{{"message", "a\nb", ""}}));
+    EXPECT_EQ(parse_stream({"data: a\r", "\r"}), (std::vector<parsed_event>{{"message", "a", ""}}));
+}
+
+TEST(Ruvia, sse_parser_skips_one_leading_bom) {
+    EXPECT_EQ(parse_stream({"\xEF", "\xBB", "\xBF", "data: x\n\n"}), (std::vector<parsed_event>{{"message", "x", ""}}));
+    // Only one BOM is stripped; a second one starts the first field name.
+    EXPECT_EQ(parse_stream({"\xEF\xBB\xBF\xEF\xBB\xBF"
+                            "data: y\n\ndata: z\n\n"}),
+        (std::vector<parsed_event>{{"message", "z", ""}}));
+    // A partial BOM is ordinary input.
+    EXPECT_EQ(parse_stream({"\xEF\xBB", "data: y\n\ndata: z\n\n"}), (std::vector<parsed_event>{{"message", "z", ""}}));
+    EXPECT_EQ(parse_stream({"\xEF", "\n\ndata: z\n\n"}), (std::vector<parsed_event>{{"message", "z", ""}}));
+}
+
+TEST(Ruvia, sse_parser_accepts_only_ascii_digit_retry_values) {
+    ruvia::sse_parser parser;
+    EXPECT_EQ(parser.reconnection_time(), std::nullopt);
+    EXPECT_TRUE(parse_chunks(parser, {"retry: 3000\n"}).empty());
+    EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{3000});
+    for (const std::string_view invalid :
+        {"retry: 12a\n", "retry:\n", "retry\n", "retry: -5\n", "retry:  7\n", "retry: 1.5\n", "retry: +1\n"}) {
+        EXPECT_TRUE(parse_chunks(parser, {invalid}).empty());
+        EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{3000}) << invalid;
+    }
+    EXPECT_TRUE(parse_chunks(parser, {"retry: 12", "34\r\n"}).empty());
+    EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{1234});
+    EXPECT_TRUE(parse_chunks(parser, {"retry: 0\n"}).empty());
+    EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{0});
+    EXPECT_TRUE(parse_chunks(parser, {"retry: 99999999999999999999999999\n"}).empty());
+    EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds::max());
+}
+
+TEST(Ruvia, sse_parser_replaces_ill_formed_utf8_and_ignores_ids_with_nul) {
+    constexpr std::string_view input("id: a\0b\nevent: \xE2\x82\ndata: \xFF\xC3\ndata: caf\xC3\xA9\n\n", 40);
+    EXPECT_EQ(parse_stream({input}),
+        (std::vector<parsed_event>{{"\xEF\xBF\xBD", "\xEF\xBF\xBD\xEF\xBF\xBD\ncaf\xC3\xA9", ""}}));
+    // A truncated sequence at a line end is replaced; the LF stays a separator.
+    EXPECT_EQ(parse_stream({"data: \xE2\x82\ndata: \xAC\n\n"}),
+        (std::vector<parsed_event>{{"message", "\xEF\xBF\xBD\n\xEF\xBF\xBD", ""}}));
+}
+
+TEST(Ruvia, sse_parser_fails_an_event_over_its_limit_and_reset_reuses_it) {
+    ruvia::sse_parser parser({.event_limit_ = ruvia::protocol_byte_limit::limited(8)});
+    // Seven data bytes and their LF fill the limit exactly.
+    EXPECT_EQ(parse_chunks(parser, {"id: 1\ndata: 1234567\n\n"}), (std::vector<parsed_event>{{"message", "1234567", "1"}}));
+    // Comments and ignored fields buffer nothing, whatever their length.
+    EXPECT_TRUE(parse_chunks(parser, {": " + std::string(1000, 'c') + "\nignored: " + std::string(1000, 'i') + "\n"}).empty());
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+
+    const auto failed = parser.parse("data: 1234\ndata: 567\n\n");
+    EXPECT_FALSE(failed.event_.has_value());
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+    EXPECT_THROW((void)parser.parse("data: x\n\n"), std::logic_error);
+    parser.finish();
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+
+    parser.reset();
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::active);
+    EXPECT_EQ(parser.last_event_id(), "");
+    EXPECT_EQ(parse_chunks(parser, {"\xEF\xBB\xBF"
+                                    "data: ok\n\n"}),
+        (std::vector<parsed_event>{{"message", "ok", ""}}));
+
+    // A pending event type counts too.
+    EXPECT_TRUE(parse_chunks(parser, {"event: 123456789\n"}).empty());
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::failed);
+}
+
+TEST(Ruvia, sse_parser_finish_discards_an_incomplete_event) {
+    ruvia::sse_parser parser;
+    EXPECT_EQ(parse_chunks(parser, {"id: 9\n\nretry: 50\ndata: pending\n", "data: partial"}), std::vector<parsed_event>{});
+    parser.finish();
+    EXPECT_EQ(parser.state(), ruvia::sse_parser_state::finished);
+    EXPECT_EQ(parser.last_event_id(), "9");
+    EXPECT_EQ(parser.reconnection_time(), std::chrono::milliseconds{50});
+    EXPECT_THROW((void)parser.parse("\n"), std::logic_error);
+
+    parser.reset();
+    EXPECT_EQ(parser.reconnection_time(), std::nullopt);
+    EXPECT_EQ(parse_chunks(parser, {"data: fresh\n\n"}), (std::vector<parsed_event>{{"message", "fresh", ""}}));
+}

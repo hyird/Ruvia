@@ -19,7 +19,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_protocol_error.h"

@@ -27,7 +27,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/integer.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis/redis_session.h"
 #include "ruvia/web/redis/redis_types.h"

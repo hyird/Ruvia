@@ -30,8 +30,7 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "http_wire_sink.h"
-
+#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 // Borrowed field descriptors stay inline until their reserved or appended count

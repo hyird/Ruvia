@@ -19,7 +19,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_cors.h"
+#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
@@ -27,8 +27,6 @@
 #include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
-#include "ruvia/web/tls_config.h"
-
 namespace ruvia {
 
 class static_root;

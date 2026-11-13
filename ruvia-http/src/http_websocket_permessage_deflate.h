@@ -23,10 +23,8 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/http/websocket_protocol.h"
 
 #include "http_connection_fields.h"
-#include "http_wire_sink.h"
 #include "http_zlib_stream.h"
 
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
@@ -38,9 +36,6 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_field_section.h"
-#include "ruvia/http/http_priority.h"
-#include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"

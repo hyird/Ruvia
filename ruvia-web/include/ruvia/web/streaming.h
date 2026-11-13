@@ -21,8 +21,8 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_datagram.h"
@@ -30,8 +30,7 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/multipart_parser.h"
-#include "ruvia/http/sse.h"
-#include "ruvia/http/websocket_protocol.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/error.h"
 
 namespace ruvia {

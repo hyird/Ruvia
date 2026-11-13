@@ -13,10 +13,10 @@
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_target.h"
 
 #include "http3_relay.h"
 namespace {

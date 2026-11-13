@@ -23,7 +23,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 
 #include "worker_task_fixture.h"
 

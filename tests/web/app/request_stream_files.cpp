@@ -19,7 +19,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"

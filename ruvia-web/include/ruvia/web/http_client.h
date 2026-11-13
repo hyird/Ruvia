@@ -18,7 +18,6 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"

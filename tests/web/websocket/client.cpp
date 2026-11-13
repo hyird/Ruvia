@@ -34,7 +34,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_request.h"

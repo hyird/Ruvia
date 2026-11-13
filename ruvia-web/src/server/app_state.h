@@ -25,18 +25,17 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/web/web_worker.h"
+#include "ruvia/web/middleware.h"
 
 #include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 #include "server/route_table.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3/http3_session.h"
+#include "server/http3_session.h"
 #endif
 
 #include <condition_variable>
@@ -58,9 +57,7 @@
 
 #include "client/http_client_pool.h"
 #include "http/context_access.h"
-#include "http/static_root_index.h"
-#include "http3/http3_session.h"
-
+#include "server/http3_session.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_pool.h"
 #endif

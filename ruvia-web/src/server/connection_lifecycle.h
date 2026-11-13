@@ -50,7 +50,6 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"

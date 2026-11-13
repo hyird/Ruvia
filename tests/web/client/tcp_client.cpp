@@ -30,7 +30,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/timer.h"
+#include "ruvia/core/worker_signal.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "test_tls_identity.h"

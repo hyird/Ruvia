@@ -16,7 +16,6 @@
 
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_cors.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
@@ -25,8 +24,7 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
-#include "http_wire_sink.h"
-
+#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 // RFC 6265bis section 5.6 storage limits. The sender rejects anything the

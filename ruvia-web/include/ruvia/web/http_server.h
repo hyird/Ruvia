@@ -21,7 +21,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"

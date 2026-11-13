@@ -12,7 +12,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/tls_config.h"
+#include "ruvia/web/http_client_types.h"
 
 #include "environment.h"
 

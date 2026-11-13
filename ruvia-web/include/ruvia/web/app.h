@@ -30,11 +30,8 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/integer.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/server_config.h"
-#include "ruvia/web/web_worker.h"
-
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
 #endif

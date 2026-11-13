@@ -25,8 +25,6 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"
-#include "ruvia/web/web_worker.h"
-
 namespace ruvia {
 
 class request_stream;
