@@ -8,6 +8,8 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -15,7 +17,10 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/context.h"
@@ -31,6 +36,8 @@
 #endif
 
 #include "tcp_port_reservation.h"
+#include "test_tls_identity.h"
+#include "udp_port_reservation.h"
 
 namespace public_router_test {
 using namespace std::chrono_literals;
@@ -661,3 +668,131 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
     std::move(root).get();
 }
 #endif
+
+// A buffered body read through the router is bounded per call on every
+// protocol: a timeout or stop ends only that call, the bytes that arrived stay
+// buffered, and the next call returns the whole body.
+TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
+    using namespace std::chrono_literals;
+    asio::io_context io;
+    ruvia::blocking_pool preparation({.thread_count_ = 1});
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
+    ruvia::test::tcp_port_reservation plain(io), secure(io);
+    ruvia::test::udp_port_reservation udp(io);
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    const auto run = [&]() -> ruvia::task<void> {
+        unsigned phase = 0;
+        unsigned rejected = 0;
+        unsigned prestopped = 0;
+        unsigned interruptions = 0;
+        const auto code_of = [](auto operation) -> ruvia::task<std::error_code> {
+            try {
+                (void)co_await std::move(operation);
+            } catch (const std::system_error& error) {
+                co_return error.code();
+            }
+            co_return std::error_code{};
+        };
+        ruvia::router routes(attachment.loop().handle());
+        routes.add("POST", "/buffered", [&](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+            const auto request = context.req();
+            for (const auto attempt : {0, 1, 2}) {
+                try {
+                    if (attempt == 0) {
+                        (void)request.text({.timeout_ = 0ms});
+                    } else if (attempt == 1) {
+                        (void)request.bytes({.timeout_ = -1ms});
+                    } else {
+                        (void)request.discard_body({.timeout_ = 0ms});
+                    }
+                } catch (const std::invalid_argument&) {
+                    ++rejected;
+                }
+            }
+            ruvia::stop_source stopped;
+            stopped.request_stop();
+            prestopped += (co_await code_of(request.text({.stop_token_ = stopped.token()}))) == std::errc::operation_canceled;
+            interruptions += (co_await code_of(request.text({.timeout_ = 50ms}))) == std::errc::timed_out;
+            phase = 1;
+            ruvia::stop_source stop;
+            ruvia::task_scope stopper(context.worker());
+            const auto stop_later = [&]() -> ruvia::task<void> {
+                (void)co_await ruvia::sleep_for(context.worker(), 50ms);
+                std::thread([&stop] { stop.request_stop(); }).join();
+            };
+            stopper.spawn(stop_later());
+            interruptions += (co_await code_of(request.bytes({.stop_token_ = stop.token()}))) == std::errc::operation_canceled;
+            co_await stopper.join();
+            phase = 2;
+            co_return context.text(co_await request.text());
+        });
+        routes.freeze();
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+        server.listen({.address_ = "127.0.0.1", .http_ = plain.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        ruvia::listen_config tls{.address_ = "127.0.0.1", .https_ = secure.endpoint().port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}, .dispatch_ = ruvia::listener_dispatch::request_stream};
+#if defined(RUVIA_ENABLE_HTTP3)
+        tls.http3_ = udp.endpoint().port();
+#endif
+        server.listen(std::move(tls));
+        struct target final {
+            std::string base_url_;
+            ruvia::http_client_versions versions_;
+            std::string label_;
+        };
+        std::vector<target> targets{{"http://127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, "HTTP/1"}};
+#if defined(RUVIA_ENABLE_HTTP2)
+        targets.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false}, "HTTP/2"});
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+        targets.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, "HTTP/3"});
+#endif
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            for (const auto& entry : targets) {
+                ruvia::http_client_config config{.base_url_ = entry.base_url_, .versions_ = entry.versions_};
+                config.tls_.ca_file_ = identity.ca_file_;
+                config.request_timeout_ = 10s;
+                ruvia::http_client client(attachment.loop(), config);
+                std::exception_ptr exchange_failure;
+                try {
+                    const auto await_phase = [&](unsigned expected) -> ruvia::task<void> {
+                        for (unsigned count = 0; phase != expected && count != 5000; ++count) {
+                            (void)co_await ruvia::sleep_for(client.worker(), 1ms);
+                        }
+                        EXPECT_EQ(phase, expected) << entry.label_;
+                    };
+                    phase = 0;
+                    auto exchange = co_await client.client().post("/buffered").upload({});
+                    co_await exchange.body().write("abc");
+                    co_await await_phase(1);
+                    co_await exchange.body().write("def");
+                    co_await await_phase(2);
+                    co_await exchange.body().write("ghi");
+                    co_await exchange.body().end();
+                    auto response = co_await exchange.response();
+                    EXPECT_EQ(response.status(), ruvia::http_status::ok) << entry.label_;
+                    const auto content = co_await response.text();
+                    EXPECT_EQ(content.text(), "abcdefghi") << entry.label_;
+                } catch (...) {
+                    exchange_failure = std::current_exception();
+                }
+                co_await client.shutdown();
+                if (exchange_failure) std::rethrow_exception(exchange_failure);
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await server.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+        EXPECT_EQ(rejected, 3 * targets.size());
+        EXPECT_EQ(prestopped, targets.size());
+        EXPECT_EQ(interruptions, 2 * targets.size());
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+}

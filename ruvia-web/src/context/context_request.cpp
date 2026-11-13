@@ -39,6 +39,7 @@
 #include "http/request_query_values.h"
 #include "http/static_path_normalization.h"
 #include "http/unsupported_request_content_coding.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia {
 
@@ -231,7 +232,10 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     return parsed_coding;
 }
 
-task<std::string_view> read_request_text(const context& context_value) {
+task<std::string_view> read_request_text(const context& context_value, operation_options operation) {
+    if (operation.stop_token_.stop_requested()) {
+        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
+    }
     if (const auto decoded = detail::context_access::decoded_body(context_value)) {
         co_return *decoded;
     }
@@ -240,7 +244,7 @@ task<std::string_view> read_request_text(const context& context_value) {
     const auto& request = detail::context_access::request(context_value);
     std::string_view raw;
     if (const auto* lazy = body_source.lazy()) {
-        raw = co_await lazy->loader().read_all();
+        raw = co_await lazy->loader().read_all(std::move(operation));
     } else if (body_source.streaming() != nullptr) {
         throw std::logic_error("streaming request body cannot be buffered");
     } else {
@@ -273,25 +277,29 @@ task<std::string_view> read_request_text(const context& context_value) {
     co_return detail::context_access::store_decoded_body(context_value, std::move(*decoded_content));
 }
 
-task<std::span<const std::byte>> read_request_bytes(const context& context_value) {
-    const auto body = co_await context_value.req().text();
+task<std::span<const std::byte>> read_request_bytes(const context& context_value, operation_options operation) {
+    const auto body = co_await read_request_text(context_value, std::move(operation));
     co_return std::as_bytes(std::span(body));
 }
 
-task<std::pmr::vector<multipart_part>> read_request_multipart(const context& context_value) {
+task<std::pmr::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
-    const auto request_body = co_await context_value.req().text();
+    const auto request_body = co_await read_request_text(context_value, std::move(operation));
     co_return parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = context_value.arena()});
 }
 
-task<void> discard_request_body(const context& context_value) {
+task<void> discard_request_body(const context& context_value, operation_options operation) {
+    if (operation.stop_token_.stop_requested()) {
+        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "request body read");
+    }
     const auto& body_source = detail::context_access::request_body_source(context_value);
     if (const auto* lazy = body_source.lazy()) {
-        co_await lazy->loader().discard();
+        co_await lazy->loader().discard(std::move(operation));
         co_return;
     }
     if (const auto* streaming = body_source.streaming()) {
-        while (co_await streaming->reader().read()) {
+        const detail::operation_steps steps(std::move(operation));
+        while (co_await streaming->reader().read(steps.next("request body read"))) {
         }
     }
 }
@@ -551,12 +559,14 @@ std::optional<std::string_view> context_request::negotiate(
     return best;
 }
 
-task<std::string_view> context_request::text() const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_text(*context_));
+task<std::string_view> context_request::text(operation_options operation) const {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_text(*context_, std::move(operation)));
 }
 
-task<std::span<const std::byte>> context_request::bytes() const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_bytes(*context_));
+task<std::span<const std::byte>> context_request::bytes(operation_options operation) const {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_bytes(*context_, std::move(operation)));
 }
 
 std::optional<std::string_view> context_request::signed_cookie(
@@ -581,12 +591,15 @@ std::optional<std::string_view> context_request::signed_cookie(
     return value;
 }
 
-task<std::pmr::vector<multipart_part>> context_request::multipart() const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_multipart(*context_));
+task<std::pmr::vector<multipart_part>> context_request::multipart(operation_options operation) const {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(
+        context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
 }
 
-task<void> context_request::discard_body() const {
-    return ::ruvia::make_scoped_operation(context_->operation_scope_, discard_request_body(*context_));
+task<void> context_request::discard_body(operation_options operation) const {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(context_->operation_scope_, discard_request_body(*context_, std::move(operation)));
 }
 
 body_reader& context_request::body_reader() const {

@@ -3,15 +3,21 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string_view>
+#include <system_error>
 
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
+
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
 class request_body_loader final {
 public:
-    using read_all_type = task<std::string_view> (*)(void*);
-    using discard_type = task<void> (*)(void*);
+    // `operation` bounds the wait for body bytes; an interrupted call keeps what
+    // arrived so far and a later call resumes it.
+    using read_all_type = task<std::string_view> (*)(void*, operation_options);
+    using discard_type = task<void> (*)(void*, operation_options);
 
     constexpr request_body_loader(void* target, read_all_type read_all, discard_type discard) noexcept
         : target_(target),
@@ -21,7 +27,7 @@ public:
     request_body_loader(const request_body_loader&) = delete;
     request_body_loader& operator=(const request_body_loader&) = delete;
 
-    [[nodiscard]] task<std::string_view> read_all() {
+    [[nodiscard]] task<std::string_view> read_all(operation_options operation) {
         switch (state_) {
             case state_type::available:
                 state_ = state_type::consuming;
@@ -35,13 +41,18 @@ public:
             case state_type::failed:
                 throw std::logic_error("request body consumption previously failed");
         }
-        operation_guard_type operation(state_);
-        buffered_body_ = co_await read_all_(target_);
-        operation.commit(state_type::buffered);
+        const operation_steps steps(operation);
+        try {
+            buffered_body_ = co_await read_all_(target_, std::move(operation));
+        } catch (...) {
+            settle_failure(steps);
+            throw;
+        }
+        state_ = state_type::buffered;
         co_return buffered_body_;
     }
 
-    task<void> discard() {
+    task<void> discard(operation_options operation) {
         switch (state_) {
             case state_type::available:
                 state_ = state_type::consuming;
@@ -54,9 +65,14 @@ public:
             case state_type::failed:
                 throw std::logic_error("request body consumption previously failed");
         }
-        operation_guard_type operation(state_);
-        co_await discard_(target_);
-        operation.commit(state_type::discarded);
+        const operation_steps steps(operation);
+        try {
+            co_await discard_(target_, std::move(operation));
+        } catch (...) {
+            settle_failure(steps);
+            throw;
+        }
+        state_ = state_type::discarded;
     }
 
 private:
@@ -68,24 +84,20 @@ private:
         failed,
     };
 
-    class operation_guard_type final {
-    public:
-        explicit operation_guard_type(state_type& state_value) noexcept
-            : state_(state_value) {}
-
-        ~operation_guard_type() {
-            if (state_ == state_type::consuming) {
-                state_ = state_type::failed;
+    // Called while handling a consumption failure: an interruption by the
+    // operation's own bound returns the body to `available`, so a later call
+    // resumes it; any other failure is final.
+    void settle_failure(const operation_steps& steps) noexcept {
+        state_ = state_type::failed;
+        try {
+            throw;
+        } catch (const std::system_error& error) {
+            if (steps.interrupted(error)) {
+                state_ = state_type::available;
             }
+        } catch (...) {
         }
-
-        void commit(state_type state_value) noexcept {
-            state_ = state_value;
-        }
-
-    private:
-        state_type& state_;
-    };
+    }
 
     void* target_;
     read_all_type read_all_;

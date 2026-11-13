@@ -22,6 +22,8 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/request_memory.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -420,17 +422,24 @@ public:
     [[nodiscard]] std::optional<std::string_view> signed_cookie(signed_cookie_lookup_options options) const;
 
     // Buffered views borrow context storage; read the media type with header("Content-Type").
-    [[nodiscard]] task<std::string_view> text() const;
-    [[nodiscard]] task<std::span<const std::byte>> bytes() const;
-    task<void> discard_body() const;
+    // `operation` bounds the wait for body bytes in each of these reads, and
+    // in json_if(), form_if() and multipart(): a timeout or stop ends only
+    // that call with std::system_error (timed_out or operation_canceled),
+    // keeps what arrived, and a later call resumes; a stop requested before
+    // the call starts throws operation_canceled. A non-positive timeout throws
+    // std::invalid_argument. Server body timeouts still apply. This view is a
+    // copyable handle: the operations borrow the context, not the view.
+    [[nodiscard]] task<std::string_view> text(operation_options operation = {}) const;
+    [[nodiscard]] task<std::span<const std::byte>> bytes(operation_options operation = {}) const;
+    [[nodiscard]] task<void> discard_body(operation_options operation = {}) const;
 
     // Typed optional parsing with schema and field-rule validation. Only a
     // media-type mismatch yields nullopt; selected but malformed input throws
     // HTTP 400, and rule violations throw an http_error carrying the issues.
     template <typename t_type>
-    [[nodiscard]] task<std::optional<t_type>> json_if() const;
+    [[nodiscard]] task<std::optional<t_type>> json_if(operation_options operation = {}) const;
     template <typename t_type>
-    [[nodiscard]] task<std::optional<t_type>> form_if() const;
+    [[nodiscard]] task<std::optional<t_type>> form_if(operation_options operation = {}) const;
     template <typename t_type>
     [[nodiscard]] const t_type& validated() const;
 
@@ -439,7 +448,7 @@ public:
     // multipart() decodes a supported Content-Encoding; multipart_reader()
     // decodes none, so a coded body is refused with 415 and an invalid
     // Content-Encoding field with 400.
-    [[nodiscard]] task<std::pmr::vector<multipart_part>> multipart() const;
+    [[nodiscard]] task<std::pmr::vector<multipart_part>> multipart(operation_options operation = {}) const;
     [[nodiscard]] ::ruvia::body_reader& body_reader() const;
     [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
 
@@ -1018,28 +1027,31 @@ inline std::optional<bool> context_request::param(std::string_view name) const {
 namespace detail {
 
 template <validation_target target, typename model_type>
-[[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(const context& context_value) {
+[[nodiscard]] task<std::optional<model_type>> parse_optional_request_model(
+    const context& context_value, operation_options operation) {
     if (!request_has_body_media_type<target>(context_value.req().header("Content-Type"))) {
         co_return std::nullopt;
     }
-    const auto request_body = co_await context_value.req().text();
+    const auto request_body = co_await context_value.req().text(std::move(operation));
     co_return parse_and_validate_request_model<target, model_type>(request_body, context_value.arena());
 }
 
 }  // namespace detail
 
 template <typename t_type>
-task<std::optional<t_type>> context_request::json_if() const {
+task<std::optional<t_type>> context_request::json_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(
-        context_->operation_scope_, detail::parse_optional_request_model<validation_target::json, t_type>(*context_));
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(context_->operation_scope_,
+        detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>
-task<std::optional<t_type>> context_request::form_if() const {
+task<std::optional<t_type>> context_request::form_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
-    return ::ruvia::make_scoped_operation(
-        context_->operation_scope_, detail::parse_optional_request_model<validation_target::form, t_type>(*context_));
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(context_->operation_scope_,
+        detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
 }
 
 template <typename t_type>

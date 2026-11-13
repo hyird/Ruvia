@@ -52,6 +52,9 @@ struct body_lane_observation final {
     std::atomic<bool> multipart_rejected_{};
     std::atomic<bool> multipart_prestopped_{};
     std::atomic<bool> multipart_waiting_{};
+    std::atomic<unsigned> buffered_rejected_{};
+    std::atomic<unsigned> buffered_prestopped_{};
+    std::atomic<bool> buffered_waiting_{};
 };
 
 const auto body_lane_observed = std::make_shared<body_lane_observation>();
@@ -66,6 +69,7 @@ class body_lane_routes final {
     RUVIA_POST("/server-lazy-multipart-read", read_multipart, ruvia::stream_body);
     RUVIA_POST("/server-multipart-reader", read_multipart_reader, ruvia::stream_body);
     RUVIA_POST("/server-multipart-interrupted", read_interrupted_multipart, ruvia::stream_body);
+    RUVIA_POST("/server-buffered-interrupted", read_interrupted_buffered);
     RUVIA_POST("/server-truncated-body-reread", reread_truncated, ruvia::stream_body);
     RUVIA_POST("/server-small-chunk-body", read_small_chunks, ruvia::stream_body);
     RUVIA_GET("/server-small-chunk-next", small_chunk_next);
@@ -123,6 +127,34 @@ class body_lane_routes final {
             }
         }
         co_return context_value.text(std::move(body));
+    }
+
+    // A buffered read that times out keeps what arrived; the next read
+    // returns the whole body.
+    ruvia::task<ruvia::http_response> read_interrupted_buffered(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        const auto request = context_value.req();
+        try {
+            (void)request.text({.timeout_ = std::chrono::milliseconds(0)});
+        } catch (const std::invalid_argument&) {
+            ++observed.buffered_rejected_;
+        }
+        ruvia::stop_source stopped;
+        stopped.request_stop();
+        try {
+            (void)co_await request.text({.stop_token_ = stopped.token()});
+        } catch (const std::system_error& error) {
+            observed.buffered_prestopped_ += error.code() == std::errc::operation_canceled;
+        }
+        try {
+            (void)co_await request.text({.timeout_ = std::chrono::milliseconds(100)});
+        } catch (const std::system_error& error) {
+            if (error.code() != std::errc::timed_out) {
+                throw;
+            }
+            observed.buffered_waiting_ = true;
+        }
+        co_return context_value.text(co_await request.text());
     }
 
     ruvia::task<ruvia::http_response> read(ruvia::context& context_value) {
@@ -523,6 +555,49 @@ TEST(Ruvia, multipart_read_interrupted_by_its_operation_resumes_parsing) {
     EXPECT_TRUE(body_lane_observed->multipart_waiting_);
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(response.ends_with("\r\n\r\nvalue"));
+}
+
+TEST(Ruvia, buffered_body_read_interrupted_by_its_operation_resumes) {
+    for (const bool chunked : {false, true}) {
+        SCOPED_TRACE(chunked ? "chunked" : "known length");
+        body_lane_observed->buffered_rejected_ = 0;
+        body_lane_observed->buffered_prestopped_ = 0;
+        body_lane_observed->buffered_waiting_ = false;
+        std::string request = "POST /server-buffered-interrupted HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n";
+        std::string first;
+        std::string rest;
+        if (chunked) {
+            request.append("Transfer-Encoding: chunked\r\n\r\n");
+            first = "5\r\nhello\r\n";
+            rest = "5\r\nworld\r\n0\r\n\r\n";
+        } else {
+            request.append("Content-Length: 10\r\n\r\n");
+            first = "hello";
+            rest = "world";
+        }
+        request.append(first);
+        auto& io = ruvia::test::new_test_io_context();
+        ruvia::test::http_server_fixture server(io);
+        std::string response;
+        {
+            asio::ip::tcp::socket client(io);
+            client.connect(server.endpoint());
+            asio::write(client, asio::buffer(request));
+            ruvia::test::wait_until([] { return body_lane_observed->buffered_waiting_.load(); }, std::chrono::seconds(5));
+            asio::write(client, asio::buffer(rest));
+            std::array<char, 1024> buffer;
+            asio::error_code error;
+            while (!error) {
+                const auto count = client.read_some(asio::buffer(buffer), error);
+                response.append(buffer.data(), count);
+            }
+        }
+        server.finish();
+        EXPECT_EQ(body_lane_observed->buffered_rejected_.load(), 1U);
+        EXPECT_EQ(body_lane_observed->buffered_prestopped_.load(), 1U);
+        EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+        EXPECT_TRUE(response.ends_with("\r\n\r\nhelloworld"));
+    }
 }
 
 TEST(Ruvia, streamed_request_body_stays_failed_after_truncated_read) {

@@ -49,13 +49,13 @@ private:
 };
 
 template <typename loader_type>
-[[nodiscard]] task<std::string_view> request_body_loader_read_all_thunk(void* target) {
-    return static_cast<loader_type*>(target)->read_all();
+[[nodiscard]] task<std::string_view> request_body_loader_read_all_thunk(void* target, operation_options operation) {
+    return static_cast<loader_type*>(target)->read_all(std::move(operation));
 }
 
 template <typename loader_type>
-task<void> request_body_loader_discard_thunk(void* target) {
-    return static_cast<loader_type*>(target)->discard();
+task<void> request_body_loader_discard_thunk(void* target, operation_options operation) {
+    return static_cast<loader_type*>(target)->discard(std::move(operation));
 }
 
 template <typename loader_type>

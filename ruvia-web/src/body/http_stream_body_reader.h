@@ -254,13 +254,10 @@ public:
         require_not_failed();
         operation_interrupt interrupt(
             interrupts_, worker_, operation, &read_cancellation_, &wake_read, "request body read");
-        read_interrupt_ = &interrupt;
+        const read_interrupt_scope running(read_interrupt_, interrupt);
         try {
-            auto chunk = co_await read_next();
-            read_interrupt_ = nullptr;
-            co_return chunk;
+            co_return co_await read_next();
         } catch (...) {
-            read_interrupt_ = nullptr;
             if (interrupt.interrupted()) {
                 scanner_entry_.set_phase(connection_scanner::phase::idle);
             } else {
@@ -270,8 +267,13 @@ public:
         }
     }
 
-    task<std::string_view> read_all(std::pmr::string& body) {
+    // Like read(), an interruption keeps the bytes already appended to `body`
+    // and the decoder state; the next call resumes.
+    task<std::string_view> read_all(std::pmr::string& body, operation_options operation = {}) {
         require_not_failed();
+        operation_interrupt interrupt(
+            interrupts_, worker_, operation, &read_cancellation_, &wake_read, "request body read");
+        const read_interrupt_scope running(read_interrupt_, interrupt);
         try {
             if (const auto* known_length = body_plan_.known_length()) {
                 const auto content_length = known_length->content_length();
@@ -315,7 +317,11 @@ public:
             mark_finished();
             co_return std::string_view(body);
         } catch (...) {
-            state_ = state_type::failed;
+            if (interrupt.interrupted()) {
+                scanner_entry_.set_phase(connection_scanner::phase::idle);
+            } else {
+                state_ = state_type::failed;
+            }
             throw;
         }
     }
@@ -325,8 +331,34 @@ private:
         finished,
         failed };
 
+    // Publishes the running read's interrupt to the waits below it.
+    class read_interrupt_scope final {
+    public:
+        read_interrupt_scope(const operation_interrupt*& slot, const operation_interrupt& interrupt) noexcept
+            : slot_(slot) {
+            slot_ = &interrupt;
+        }
+        ~read_interrupt_scope() {
+            slot_ = nullptr;
+        }
+        read_interrupt_scope(const read_interrupt_scope&) = delete;
+        read_interrupt_scope& operator=(const read_interrupt_scope&) = delete;
+
+    private:
+        const operation_interrupt*& slot_;
+    };
+
     static void wake_read(void* raw) noexcept {
         static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
+    }
+
+    // The unread window never received bytes; an interrupted read keeps only
+    // the `filled` prefix for the next one.
+    void throw_if_read_interrupted_keeping(std::pmr::string& body, std::size_t filled) const {
+        if (read_interrupt_ != nullptr && read_interrupt_->interrupted()) {
+            body.resize(filled);
+            read_interrupt_->throw_if_interrupted();
+        }
     }
 
     void throw_if_read_interrupted() const {
@@ -513,12 +545,17 @@ private:
                 body.resize(std::min(final_size, body.capacity()));
             }
             const auto writable = std::min(remaining_body, body.size() - filled);
+            throw_if_read_interrupted_keeping(body, filled);
             auto read_completion =
                 co_await ruvia::async_asio<std::size_t>([this, &body, filled, writable](auto handler) mutable {
-                    stream_.async_read_some(asio::buffer(body.data() + filled, writable), std::move(handler));
+                    stream_.async_read_some(asio::buffer(body.data() + filled, writable),
+                        asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
                 });
             const auto ec = read_completion.error_code();
             const auto bytes_read = read_completion.result();
+            if (ec == asio::error::operation_aborted) {
+                throw_if_read_interrupted_keeping(body, filled);
+            }
             if (ec || bytes_read == 0) {
                 // The unread window never received bytes; it must not survive as body.
                 body.resize(filled);
@@ -740,12 +777,13 @@ public:
         return reader_.pipeline_size();
     }
 
-    [[nodiscard]] task<std::string_view> read_all() {
-        return reader_.read_all(body_);
+    [[nodiscard]] task<std::string_view> read_all(operation_options operation) {
+        return reader_.read_all(body_, std::move(operation));
     }
 
-    task<void> discard() {
-        while (co_await reader_.read()) {
+    task<void> discard(operation_options operation) {
+        const operation_steps steps(std::move(operation));
+        while (co_await reader_.read(steps.next("request body read"))) {
         }
     }
 

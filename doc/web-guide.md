@@ -739,11 +739,11 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `c.req().cookie(name)` / `c.req().signed_cookie({.name_ = ..., .secret_ = ...})` | 读取普通 Cookie 或验证 HMAC 签名并提取 Cookie 原值 |
 | `c.req().cookie_fields()` | 返回保留重复项与请求顺序的只读 `request_name_value_list`；名称区分大小写，`get(name)` 取最后一个同名值 |
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
-| `co_await c.req().text()` / `co_await c.req().bytes()` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
-| `co_await c.req().discard_body()` | 丢弃剩余请求体字节 |
-| `co_await c.req().multipart()` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
+| `co_await c.req().text(operation = {})` / `co_await c.req().bytes(operation = {})` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
+| `co_await c.req().discard_body(operation = {})` | 丢弃剩余请求体字节 |
+| `co_await c.req().multipart(operation = {})` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
 | `c.req().validated<T>()` | 获取由校验中间件（`json_body<T>` 等）已完成解析和校验的模型常量引用 |
-| `co_await c.req().json_if<T>()` / `co_await c.req().form_if<T>()` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
+| `co_await c.req().json_if<T>(operation = {})` / `co_await c.req().form_if<T>(operation = {})` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
 | `c.conn().remote()` / `c.conn().client()` | 直连对端地址端口（`.address()` / `.port()`）与经过 `trusted_proxies` 解析后的真实客户端地址 |
 | `c.conn().via_trusted_proxy()` / `c.conn().scheme()` / `c.conn().tls()` | 是否经过可信代理、连接有效 scheme（`http` / `https`）及 TLS 传输信息指针（`client_certificate_subject()`、协商的 `alpn()` 与客户端 `server_name()`，未协商或未发送时为空） |
 | `c.conn().id()` | 传输连接标识（`std::uint64_t`），规则见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
@@ -752,6 +752,8 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 
 HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接借用连接缓冲并同步完成该读取步骤，不创建额外的正文 I/O 协程；返回的视图仍只在当前请求内有效。
 
+- **逐次等待**：缓冲读取的 `operation`（`operation_options`）约束等待正文到达的时间；超时或停止只结束本次调用，抛 `std::system_error`（`timed_out` / `operation_canceled`），已到达字节保留，再次调用继续并返回完整正文。启动前已停止抛 `operation_canceled`；非正超时抛 `std::invalid_argument`；服务器正文超时继续生效。HTTP/2、HTTP/3 路由的缓冲正文在分派前已收齐，不再等待。
+- **视图句柄**：`c.req()` 返回的 `context_request` 是可复制句柄，操作借用 `context` 而非句柄本身，因此可直接在临时句柄上调用。
 - **HTTP/1 惰性正文互斥**：原始正文读取与丢弃共用消费状态；底层操作在途时，再启动完整读取或丢弃抛 `std::logic_error`。
 - **HTTP/1 惰性正文终态**：读取成功后复用缓冲，丢弃不清除已缓冲内容；完成丢弃后拒绝读取，原始正文消费失败后拒绝读取与丢弃，均抛 `std::logic_error`。
 

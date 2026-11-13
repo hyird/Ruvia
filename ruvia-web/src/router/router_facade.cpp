@@ -80,15 +80,18 @@ public:
         }
     }
 
-    task<std::string_view> read_all() {
-        while (auto chunk = co_await read()) {
+    // Chunks already appended stay in bytes_ when a read is interrupted.
+    task<std::string_view> read_all(operation_options operation) {
+        const operation_steps steps(std::move(operation));
+        while (auto chunk = co_await read(steps.next("request body read"))) {
             bytes_.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
         }
         co_return std::string_view(bytes_);
     }
 
-    task<void> discard() {
-        while (co_await read()) {
+    task<void> discard(operation_options operation) {
+        const operation_steps steps(std::move(operation));
+        while (co_await read(steps.next("request body read"))) {
         }
     }
 
