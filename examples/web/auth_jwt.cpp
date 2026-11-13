@@ -16,7 +16,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/jwt.h"
-#include "ruvia/web/middleware.h"
 
 namespace {
 

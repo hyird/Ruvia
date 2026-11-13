@@ -14,11 +14,10 @@
 #include <system_error>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 class streaming_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/streaming")

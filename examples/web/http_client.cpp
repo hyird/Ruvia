@@ -18,10 +18,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 
 #include "backend_config.h"
 namespace {

@@ -13,8 +13,8 @@
 #include <string_view>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/db.h"
-#include "ruvia/web/middleware.h"
 
 #include "backend_config.h"
 

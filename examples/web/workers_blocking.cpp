@@ -20,7 +20,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 namespace {
 
 // One instance per worker, touched only from that worker's thread: no locks.

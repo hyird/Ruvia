@@ -8,7 +8,6 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 class decorate_response final {
 public:
     ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {

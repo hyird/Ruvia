@@ -20,11 +20,10 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
 
 #include "route_table.h"
 
@@ -157,8 +156,8 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/model.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/http/http_header.h"
-#include "ruvia/web/middleware.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/redis.h"
 
 #include "route_table.h"

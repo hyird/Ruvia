@@ -285,7 +285,7 @@ ruvia::app().listen({
 
 ---
 
-### 1.4 错误处理与异常（`"ruvia/web/middleware.h"`, `"ruvia/web/app.h"`）
+### 1.4 错误处理与异常（`"ruvia/web/context.h"`, `"ruvia/web/app.h"`）
 
 - **抛出或构造业务错误**：
   - 在路由或中间件中可抛出 `ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "bad_input", .message_ = "..."})`，或直接 `co_return c.error({...});`。`http_error` 是唯一的拥有型应用错误：status / code / message / status_text 以及 `.validation_issues_` 全部深拷贝持有，`info()` 返回携带 issues 的 `http_error_info`。
@@ -301,7 +301,7 @@ ruvia::app().listen({
 
 ---
 
-### 1.5 Worker 状态与跨 Worker 任务投递（`"ruvia/web/middleware.h"`）
+### 1.5 Worker 状态与跨 Worker 任务投递（`"ruvia/web/context.h"`）
 
 每个业务 worker 可绑定无锁局部状态，并支持从任意线程或控制器向指定 worker 投递异步任务：
 
@@ -644,7 +644,7 @@ int main() {
 #include "ruvia/web/context.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/redis.h"
-#include "ruvia/web/middleware.h"
+#include "ruvia/web/context.h"
 
 // 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 redis 与 routes 存活。
 ruvia::redis_client redis(loop, {.host_ = "127.0.0.1", .port_ = 6379,
@@ -679,7 +679,7 @@ co_await server.start();
 - **借入能力**：借入任一客户端后，本 router 分发的客户端查找只在借入集合内解析；借入任一状态后，状态查找同理；未借入的类别沿用宿主注册。
 - **借入约束**：客户端须绑定 router 所属 worker，否则抛 `std::invalid_argument`；同类别别名重复同样抛出。客户端与状态须覆盖全部分发，在服务该 router 的宿主 `shutdown()` 完成后才能关闭或销毁。
 - **独立 Session**：借入 Redis 后 `session_middleware`、CSRF 等依赖 `c.redis()` 的内置中间件在 `http_server` 下直接可用，无需第二种会话来源。
-- **正文策略**：`body_limit<N>` 由 `middleware.h` 提供，可与 `stream_body` 组合；只收紧宿主预算。协议 I/O、取消、正文与响应输出继续借用请求流服务。
+- **正文策略**：`body_limit<N>` 由 `context.h` 提供，可与 `stream_body` 组合；只收紧宿主预算。协议 I/O、取消、正文与响应输出继续借用请求流服务。
 
 ---
 
@@ -851,7 +851,7 @@ auto digest = std::move(result).take_value();
 
 ## 4. 中间件与内置请求策略
 
-### 4.1 自定义中间件（`"ruvia/web/middleware.h"`）
+### 4.1 自定义中间件（`"ruvia/web/context.h"`）
 
 任何声明为 `final`、不继承基类，且提供 `ruvia::task<void> invoke(ruvia::context&, ruvia::next&)` 的类均满足 `ruvia::middleware` 概念；中间件自行产生响应时在返回前调用 `c.respond(...)`：
 
@@ -896,10 +896,10 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"ruvia/web/context.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/middleware.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
-| `ruvia::security_headers_middleware` (`"ruvia/web/middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
-| `ruvia::csrf_protection` (`"ruvia/web/middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"ruvia/web/middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/context.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
+| `ruvia::security_headers_middleware` (`"ruvia/web/context.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
+| `ruvia::csrf_protection` (`"ruvia/web/context.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
+| `ruvia::session_middleware` (`"ruvia/web/context.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。

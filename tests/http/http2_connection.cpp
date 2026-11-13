@@ -22,7 +22,7 @@
 #include <vector>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
 #include "content_decoding_fixture.h"

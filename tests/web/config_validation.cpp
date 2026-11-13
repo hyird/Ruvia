@@ -17,10 +17,9 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
@@ -149,12 +148,11 @@ RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
 #include "ruvia/http/http2_connection.h"
 #endif
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
 
 #include "content_decoding_fixture.h"
 #include "http_server_fixture.h"

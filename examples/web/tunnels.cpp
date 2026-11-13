@@ -12,7 +12,6 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/middleware.h"
 
 #include "backend_config.h"
 namespace {

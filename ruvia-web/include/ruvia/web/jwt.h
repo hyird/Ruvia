@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 namespace ruvia {
 
 namespace detail {

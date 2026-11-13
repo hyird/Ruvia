@@ -38,7 +38,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"

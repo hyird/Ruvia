@@ -55,12 +55,11 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/middleware.h"
 
 #if defined(__unix__)
 #include <fcntl.h>
