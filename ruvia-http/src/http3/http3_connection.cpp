@@ -28,6 +28,7 @@
 #include "field/http_lower_header_name.h"
 #include "field/http_origin_payload.h"
 #include "field/http_request_field_validation.h"
+#include "http1/http_client_response_head.h"
 #include "http3/http3_control_extension_output.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "request/http_binary_request_fields.h"
@@ -39,6 +40,7 @@
 #include "util/http_address_overlap.h"
 #include "util/http_c_library_memory.h"
 #include "util/quic_varint.h"
+#include "websocket/websocket_extended_connect_fields.h"
 #include "websocket/websocket_server_negotiation.h"
 
 namespace ruvia {
@@ -134,12 +136,100 @@ private:
 
 }  // namespace
 
-http3_field::http3_field(std::string_view name, std::string_view value,
-    std::pmr::memory_resource* resource)
-    : header_(name, value, detail::http_pmr_resource_or_default(resource)) {}
+namespace detail {
+
+// Where escaped DATA credits return. Intrusively reference-counted so a credit
+// can outlive the codec: the codec detaches the sink before it is destroyed,
+// after which returned credit is dropped.
+class http3_received_data_ledger final {
+public:
+    http3_received_data_ledger(std::pmr::memory_resource* resource, http3_received_data_credit_sink_type sink,
+        void* context) noexcept
+        : resource_(resource),
+          sink_(sink),
+          context_(context) {}
+    http3_received_data_ledger(const http3_received_data_ledger&) = delete;
+    http3_received_data_ledger& operator=(const http3_received_data_ledger&) = delete;
+
+    void retain() noexcept {
+        ++references_;
+    }
+
+    void release() noexcept {
+        if (references_ == 0) {
+            std::terminate();
+        }
+        if (--references_ == 0) {
+            destroy_http_pmr_object(this, resource_);
+        }
+    }
+
+    void return_credit(std::int64_t stream_id, std::size_t bytes) const noexcept {
+        if (sink_ != nullptr && bytes != 0) {
+            sink_(context_, stream_id, bytes);
+        }
+    }
+
+    void detach() noexcept {
+        sink_ = nullptr;
+        context_ = nullptr;
+    }
+
+private:
+    std::size_t references_{1};
+    std::pmr::memory_resource* resource_;
+    http3_received_data_credit_sink_type sink_;
+    void* context_;
+};
+
+}  // namespace detail
+
+http3_received_data_credit::http3_received_data_credit(
+    detail::http3_received_data_ledger* ledger, std::int64_t stream_id, std::size_t bytes) noexcept
+    : ledger_(ledger),
+      stream_id_(stream_id),
+      bytes_(bytes) {
+    ledger_->retain();
+}
+
+http3_received_data_credit::~http3_received_data_credit() {
+    if (ledger_ == nullptr) {
+        return;
+    }
+    ledger_->return_credit(stream_id_, bytes_);
+    ledger_->release();
+}
+
+http3_received_data_credit::http3_received_data_credit(http3_received_data_credit&& other) noexcept
+    : ledger_(std::exchange(other.ledger_, nullptr)),
+      stream_id_(std::exchange(other.stream_id_, -1)),
+      bytes_(std::exchange(other.bytes_, 0)) {}
+
+void http3_received_data_credit::merge(http3_received_data_credit&& other) {
+    if (this == &other || !valid() || !other.valid()) {
+        throw std::logic_error("invalid HTTP/3 received data credit");
+    }
+    if (ledger_ != other.ledger_ || stream_id_ != other.stream_id_) {
+        throw std::logic_error("HTTP/3 received data credits belong to different streams");
+    }
+    if (bytes_ > (std::numeric_limits<std::size_t>::max)() - other.bytes_) {
+        throw std::overflow_error("HTTP/3 received data credit overflow");
+    }
+    bytes_ += other.bytes_;
+    auto* ledger = std::exchange(other.ledger_, nullptr);
+    other.stream_id_ = -1;
+    other.bytes_ = 0;
+    ledger->release();
+}
+
+void http3_received_data_credit::swap(http3_received_data_credit& other) noexcept {
+    std::swap(ledger_, other.ledger_);
+    std::swap(stream_id_, other.stream_id_);
+    std::swap(bytes_, other.bytes_);
+}
 
 http3_headers_event::http3_headers_event(std::int64_t stream_id,
-    std::pmr::vector<http3_field> fields, bool stream_ended, bool trailers, bool early_data) noexcept
+    std::pmr::vector<http_header> fields, bool stream_ended, bool trailers, bool early_data) noexcept
     : stream_id_(stream_id),
       fields_(std::move(fields)),
       stream_ended_(stream_ended),
@@ -155,8 +245,6 @@ http3_headers_event::http3_headers_event(
       fields_(resource),
       stream_ended_(other.stream_ended_),
       trailers_(other.trailers_),
-      status_(other.status_),
-      content_length_(other.content_length_),
       early_data_(other.early_data_) {
     fields_.reserve(other.fields_.size());
     for (const auto& field : other.fields_) {
@@ -170,8 +258,6 @@ void http3_headers_event::swap(http3_headers_event& other) noexcept {
     std::swap(stream_ended_, other.stream_ended_);
     std::swap(trailers_, other.trailers_);
     std::swap(early_data_, other.early_data_);
-    std::swap(status_, other.status_);
-    std::swap(content_length_, other.content_length_);
 }
 
 http3_headers_event& http3_headers_event::operator=(const http3_headers_event& other) {
@@ -219,13 +305,13 @@ http3_datagram_event& http3_datagram_event::operator=(http3_datagram_event&& oth
     return *this;
 }
 
-http3_data_event::http3_data_event(std::int64_t stream_id,
-    std::string_view bytes, std::pmr::memory_resource* resource,
-    bool own_bytes)
+http3_data_event::http3_data_event(std::int64_t stream_id, std::string_view bytes,
+    std::pmr::memory_resource* resource, bool own_bytes, http3_received_data_credit credit)
     : stream_id_(stream_id),
       bytes_(bytes),
       owned_bytes_(detail::http_pmr_resource_or_default(resource)),
-      owns_bytes_(own_bytes) {
+      owns_bytes_(own_bytes),
+      credit_(std::move(credit)) {
     if (owns_bytes_) {
         owned_bytes_.assign(bytes);
         bytes_ = owned_bytes_;
@@ -236,7 +322,8 @@ http3_data_event::http3_data_event(http3_data_event&& other) noexcept
     : stream_id_(other.stream_id_),
       bytes_(other.bytes_),
       owned_bytes_(std::move(other.owned_bytes_)),
-      owns_bytes_(other.owns_bytes_) {
+      owns_bytes_(other.owns_bytes_),
+      credit_(std::move(other.credit_)) {
     if (owns_bytes_) {
         bytes_ = owned_bytes_;
     }
@@ -246,19 +333,22 @@ http3_data_event& http3_data_event::operator=(http3_data_event&& other) {
     if (this == &other) {
         return *this;
     }
-    const auto borrowed_bytes = other.bytes_;
-    if (!other.owns_bytes_ && detail::http_text_aliases_string(borrowed_bytes, owned_bytes_)) {
-        std::pmr::string snapshot(borrowed_bytes, owned_bytes_.get_allocator());
-        owned_bytes_.swap(snapshot);
-        stream_id_ = other.stream_id_;
-        owns_bytes_ = true;
-        bytes_ = owned_bytes_;
-        return *this;
+    // Owned bytes are prepared in the target's resource before anything
+    // changes; codec events never borrow another event's storage.
+    std::pmr::string owned(owned_bytes_.get_allocator());
+    if (other.owns_bytes_) {
+        if (owned.get_allocator() == other.owned_bytes_.get_allocator()) {
+            owned.swap(other.owned_bytes_);
+        } else {
+            owned.assign(other.owned_bytes_);
+        }
     }
-    owned_bytes_ = std::move(other.owned_bytes_);
-    stream_id_ = other.stream_id_;
+    owned_bytes_.swap(owned);
     owns_bytes_ = other.owns_bytes_;
-    bytes_ = owns_bytes_ ? std::string_view(owned_bytes_) : borrowed_bytes;
+    bytes_ = owns_bytes_ ? std::string_view(owned_bytes_) : other.bytes_;
+    stream_id_ = other.stream_id_;
+    http3_received_data_credit incoming(std::move(other.credit_));
+    credit_.swap(incoming);
     return *this;
 }
 
@@ -304,6 +394,8 @@ public:
         http_known_method request_method_{http_known_method::unknown};
         send_phase send_phase_{send_phase::head_pending};
         bool received_head_{false};
+        // Client: the request waits for 100 (Continue) (RFC 9110 §10.1.1).
+        bool continue_pending_{false};
         bool connect_{false};
         bool websocket_{false};
         bool early_data_{false};
@@ -326,6 +418,19 @@ public:
         http3_event event_;
         bool local_transport_action_{false};
     };
+    // The codec's reference to its credit ledger, released even when the
+    // constructor fails after acquiring it.
+    struct credit_ledger_reference final {
+        explicit credit_ledger_reference(detail::http3_received_data_ledger* ledger) noexcept
+            : ledger_(ledger) {}
+        credit_ledger_reference(const credit_ledger_reference&) = delete;
+        credit_ledger_reference& operator=(const credit_ledger_reference&) = delete;
+        ~credit_ledger_reference() {
+            ledger_->detach();
+            ledger_->release();
+        }
+        detail::http3_received_data_ledger* ledger_;
+    };
     impl(http3_role role, const http3_connection_options& options)
         : role_(role),
           resource_(detail::http_pmr_resource_or_default(options.resource_)),
@@ -335,6 +440,8 @@ public:
           max_stream_output_bytes_(options.max_stream_output_bytes_),
           own_data_events_(options.own_data_events_),
           enable_h3_datagram_(options.enable_h3_datagram_),
+          credit_ledger_(detail::construct_http_pmr_object<detail::http3_received_data_ledger>(
+              resource_, resource_, options.received_data_credit_sink_, options.received_data_credit_context_)),
           events_(resource_),
           streams_(resource_),
           initial_origin_payload_(resource_),
@@ -420,6 +527,9 @@ public:
     }
 
     ~impl() {
+        // Queued events still own credits; they are destroyed after the sink
+        // is detached, like every credit that outlives the codec.
+        credit_ledger_.ledger_->detach();
         nghttp3_conn_del(connection_);
     }
 
@@ -520,41 +630,43 @@ public:
             true});
     }
 
-    [[nodiscard]] bool validate_received_response(stream_state& stream, http3_headers_event& head) {
-        if (stream.read_aborted_) {
+    [[nodiscard]] bool validate_received_response_trailers(stream_state& stream, http3_headers_event& section) {
+        if (!stream.received_head_ || !stream.remote_content_.length_complete()) {
             return false;
         }
-        if (head.trailers_) {
-            if (!stream.received_head_ || !stream.remote_content_.length_complete()) {
+        auto budget = http_trailer_section_budget();
+        for (const auto& field : section.fields_) {
+            if (!detail::is_valid_binary_field_name(field.name()) ||
+                !is_valid_http_header_value(field.value()) ||
+                detail::is_forbidden_http_binary_response_field(field.name()) ||
+                !budget.add_field(field.name(), field.value())) {
                 return false;
             }
-            auto budget = http_trailer_section_budget();
-            for (const auto& field : head.fields_) {
-                if (!detail::is_valid_binary_field_name(field.name()) ||
-                    !is_valid_http_header_value(field.value()) ||
-                    detail::is_forbidden_http_binary_response_field(field.name()) ||
-                    !budget.add_field(field.name(), field.value())) {
-                    return false;
-                }
-            }
-            std::erase_if(head.fields_, [](const http3_field& field) {
-                return detail::is_forbidden_response_trailer_name(field.name());
-            });
-            return true;
         }
-        if (stream.received_head_ || head.fields_.empty() || head.fields_.front().name() != ":status") {
+        std::erase_if(section.fields_, [](const http_header& field) {
+            return detail::is_forbidden_response_trailer_name(field.name());
+        });
+        return true;
+    }
+
+    // Validates a received response head and queues its event. False rejects
+    // the response as malformed (RFC 9114 §4.1.2).
+    [[nodiscard]] bool publish_received_response_head(std::int64_t stream_id, stream_state& stream,
+        http3_headers_event& section) {
+        auto& fields = section.fields_;
+        if (stream.received_head_ || fields.empty() || fields.front().name() != ":status") {
             return false;
         }
-        const auto status = http_received_status::try_parse(head.fields_.front().value());
+        const auto status = http_received_status::try_parse(fields.front().value());
         if (!status || status->status() == http_status::switching_protocols ||
-            (status->status().is_informational() && head.stream_ended_)) {
+            (status->status().is_informational() && section.stream_ended_)) {
             return false;
         }
         const auto plan = plan_http_response_body(stream.request_method_, status->status());
         detail::http_content_length_state length;
         bool has_length = false;
-        for (std::size_t index = 1; index < head.fields_.size(); ++index) {
-            const auto& field = head.fields_[index];
+        for (std::size_t index = 1; index < fields.size(); ++index) {
+            const auto& field = fields[index];
             if (!detail::is_valid_binary_field_name(field.name()) ||
                 !is_valid_http_header_value(field.value()) ||
                 detail::is_forbidden_http_binary_response_field(field.name())) {
@@ -568,29 +680,47 @@ public:
                 has_length = true;
             }
         }
-        if (!status->status().is_informational()) {
-            auto content = stream.remote_content_;
-            if (plan.content_semantics() == http_response_content_semantics::connect_tunnel) {
-                content.begin_unbounded();
-            } else if (plan.body_suppressed()) {
-                content.begin_forbidden();
-            } else if (has_length) {
-                content.begin_known_length(*length.value());
-            } else {
-                content.begin_unbounded();
-            }
-            if (head.stream_ended_ && !content.length_complete()) {
-                return false;
-            }
-            stream.remote_content_ = content;
-            stream.received_head_ = true;
-            if (plan.content_semantics() == http_response_content_semantics::connect_tunnel) {
-                stream.local_content_.begin_unbounded();
-            }
+        auto head = detail::http_client_response_head_access::make(*status, http_protocol_version::http3, resource_);
+        fields.erase(fields.begin());
+        if (!fields.empty()) {
+            detail::http_client_response_head_access::headers(head) = std::move(fields);
         }
-        head.content_length_ = has_length ? length.value() : std::nullopt;
-        head.status_ = *status;
-        head.fields_.erase(head.fields_.begin());
+        if (status->status().is_informational()) {
+            std::optional<http_client_request_content_signal> signal;
+            if (status->status() == http_status::continue_value && stream.continue_pending_) {
+                signal = http_client_request_content_signal::continue_value;
+            }
+            events_.push_back({http3_informational_head_event(stream_id, std::move(head), signal)});
+            stream.continue_pending_ = stream.continue_pending_ && !signal;
+            return true;
+        }
+        auto content = stream.remote_content_;
+        if (plan.content_semantics() == http_response_content_semantics::connect_tunnel) {
+            content.begin_unbounded();
+        } else if (plan.body_suppressed()) {
+            content.begin_forbidden();
+        } else if (has_length) {
+            content.begin_known_length(*length.value());
+        } else {
+            content.begin_unbounded();
+        }
+        if (section.stream_ended_ && !content.length_complete()) {
+            return false;
+        }
+        if (has_length) {
+            detail::http_client_response_head_access::content_length(head, length.value());
+        }
+        // A final head while Expect still gates the content ends the exchange
+        // for it (RFC 9110 §10.1.1).
+        const auto signal = stream.continue_pending_ ? std::optional(http_client_request_content_signal::exchange_complete)
+                                                     : std::nullopt;
+        events_.push_back({http3_response_head_event(stream_id, std::move(head), signal, section.stream_ended_)});
+        stream.continue_pending_ = false;
+        stream.remote_content_ = content;
+        stream.received_head_ = true;
+        if (plan.content_semantics() == http_response_content_semantics::connect_tunnel) {
+            stream.local_content_.begin_unbounded();
+        }
         return true;
     }
 
@@ -667,9 +797,9 @@ public:
                 }
                 stream->remote_content_.commit(size);
             }
-            self.events_.push_back({http3_data_event{stream_id,
-                {reinterpret_cast<const char*>(data), size}, self.resource_,
-                self.own_data_events_}});
+            self.events_.push_back({http3_data_event(stream_id, {reinterpret_cast<const char*>(data), size},
+                self.resource_, self.own_data_events_,
+                http3_received_data_credit(self.credit_ledger_.ledger_, stream_id, size))});
         });
     }
 
@@ -694,7 +824,7 @@ public:
                 throw std::logic_error("failed to bind nghttp3 stream state");
             }
             stream.building_headers_.emplace(
-                stream_id, std::pmr::vector<http3_field>(self.resource_), false, trailers, stream.early_data_);
+                stream_id, std::pmr::vector<http_header>(self.resource_), false, trailers, stream.early_data_);
             stream.building_header_size_ = detail::binary_field_section_size(self.max_field_section_size_);
             ++self.active_header_blocks_;
         });
@@ -729,8 +859,9 @@ public:
         return callback_guard(self, [&] {
             stream->building_headers_->fields_.emplace_back(
                 name_view, value_view, self.resource_);
-            if (!stream->building_headers_->trailers_) {
+            if (!stream->building_headers_->trailers_ && self.role_ == http3_role::server) {
                 if (name_view == ":method") {
+                    stream->request_method_ = classify_http_method(value_view);
                     stream->connect_ = value_view == "CONNECT";
                 } else if (name_view == ":protocol") {
                     stream->websocket_ = value_view == "websocket";
@@ -747,17 +878,25 @@ public:
             if (stream == nullptr || !stream->building_headers_) {
                 throw std::logic_error("nghttp3 ended unknown field section");
             }
-            stream->building_headers_->stream_ended_ = fin != 0;
+            auto& section = *stream->building_headers_;
+            section.stream_ended_ = fin != 0;
             if (self.role_ == http3_role::client) {
-                if (!self.validate_received_response(*stream, *stream->building_headers_)) {
+                const bool valid = !stream->read_aborted_ &&
+                                   (section.trailers_ ? self.validate_received_response_trailers(*stream, section)
+                                                      : self.publish_received_response_head(stream_id, *stream, section));
+                if (!valid) {
                     self.reject_received_message(stream_id, *stream);
+                    self.abandon_header_block(*stream);
+                    return;
+                }
+                if (!section.trailers_) {
                     self.abandon_header_block(*stream);
                     return;
                 }
             } else {
                 stream->received_head_ = true;
             }
-            self.events_.push_back({std::move(*stream->building_headers_)});
+            self.events_.push_back({std::move(section)});
             self.abandon_header_block(*stream);
         });
     }
@@ -944,45 +1083,6 @@ public:
         return status_from(result);
     }
 
-    [[nodiscard]] http3_status submit_raw_head(std::int64_t stream_id,
-        std::span<const http3_field_view> fields, bool end_stream, bool request) {
-        const auto peer_limit = peer_settings_         ? peer_settings_->max_field_section_size_
-                                : remembered_settings_ ? remembered_settings_->max_field_section_size_
-                                                       : std::numeric_limits<std::uint64_t>::max();
-        detail::binary_field_section_size section_size((std::min)(max_field_section_size_, peer_limit));
-        for (const auto& field : fields) {
-            if (!section_size.add(field.name_, field.value_)) {
-                return http3_status::invalid_state;
-            }
-        }
-        detail::http_content_length_state content_length_state;
-        bool has_content_length = false;
-        detail::http_header_descriptor_storage<nghttp3_nv> native_fields(resource_);
-        native_fields.reserve(fields.size());
-        for (const auto& field : fields) {
-            if (http_ascii_equals_ignore_case(field.name_, "content-length")) {
-                if (content_length_state.parse_field(field.value_) !=
-                    detail::http_content_length_parse_status::ok) {
-                    return http3_status::invalid_state;
-                }
-                has_content_length = true;
-            }
-            native_fields.append(make_nv(field.name_, field.value_, field.sensitive_));
-        }
-        std::optional<std::uint64_t> content_length;
-        if (has_content_length) {
-            if (end_stream) {
-                if (request && *content_length_state.value() != 0) {
-                    return http3_status::invalid_state;
-                }
-            } else {
-                content_length = content_length_state.value();
-            }
-        }
-        return submit_head(
-            stream_id, native_fields.view().data(), native_fields.size(), end_stream, request, content_length);
-    }
-
     // A server request stream that exists and has no final head yet.
     [[nodiscard]] std::optional<http3_response_head_error> response_head_admission_error(
         std::int64_t stream_id) noexcept {
@@ -1048,18 +1148,30 @@ public:
         return std::nullopt;
     }
 
-    [[nodiscard]] std::variant<stream_state*, http3_status> validate_finish_stream(std::int64_t stream_id) {
+    // The stream whose open content may take DATA or end now. A gone or
+    // abandoned stream is an expected race (closed); content that is not open
+    // is a caller ordering error.
+    [[nodiscard]] std::variant<stream_state*, http3_status> open_content_stream(std::int64_t stream_id) {
         if (connection_error_) {
             return http3_status::closed;
         }
         auto* stream = find_stream(stream_id);
-        if (stream == nullptr || !stream->body_open()) {
-            return http3_status::invalid_state;
+        if (stream == nullptr || stream->write_aborted_) {
+            return http3_status::closed;
         }
-        if (!stream->local_content_.length_complete()) {
-            throw std::length_error("HTTP/3 content ended before the declared Content-Length");
+        if (!stream->body_open()) {
+            throw std::logic_error("HTTP/3 stream content is not open");
         }
         return stream;
+    }
+
+    [[nodiscard]] std::variant<stream_state*, http3_status> finishable_stream(std::int64_t stream_id) {
+        auto validated = open_content_stream(stream_id);
+        if (const auto* stream = std::get_if<stream_state*>(&validated);
+            stream != nullptr && !(*stream)->local_content_.length_complete()) {
+            return http3_status::invalid_message;
+        }
+        return validated;
     }
 
     [[nodiscard]] http3_status submit_trailer_nv(
@@ -1099,6 +1211,8 @@ public:
     std::size_t max_stream_output_bytes_;
     bool own_data_events_;
     bool enable_h3_datagram_;
+    // Declared before events_ so queued credits never outlive it.
+    credit_ledger_reference credit_ledger_;
     std::optional<http3_peer_settings> peer_settings_;
     std::optional<http3_peer_settings> remembered_settings_;
     nghttp3_conn* connection_{nullptr};
@@ -1299,47 +1413,37 @@ http3_status http3_connection::unblock_stream(std::int64_t stream_id) noexcept {
         nghttp3_conn_unblock_stream(impl_->connection_, stream_id));
 }
 
-http3_status http3_connection::submit_request(std::int64_t stream_id,
-    std::span<const http3_field_view> fields, bool end_stream) {
-    const auto status = impl_->submit_raw_head(stream_id, fields, end_stream, true);
-    if (status == http3_status::accepted) {
-        auto& stream = *impl_->find_stream(stream_id);
-        for (const auto& field : fields) {
-            if (field.name_ == ":method") {
-                stream.request_method_ = classify_http_method(field.value_);
-                stream.connect_ = stream.request_method_ == http_known_method::connect;
-            }
-        }
-    }
-    return status;
-}
-
 http3_status http3_connection::submit_request_head(std::int64_t stream_id,
     const http3_regular_request_head_view& request) {
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
-    if (impl_->role_ != http3_role::client || stream_id < 0 || (stream_id & 3) != 0 ||
-        (!request.streaming_ && request.content_length_.value_or(0) != 0)) {
+    if (impl_->role_ != http3_role::client || stream_id < 0 || (stream_id & 3) != 0) {
         return http3_status::invalid_state;
     }
+    const auto& content = request.content_;
+    const auto declared_length = content.declared_length();
+    const auto* known_length = content.known_length_content();
+    // The head ends the stream only when no content can follow it.
+    const bool end_stream = content.without_content() != nullptr ||
+                            (known_length != nullptr && known_length->length().value() == 0);
+    const auto content_indication = content.without_content() == nullptr &&
+                                            (!declared_length || declared_length->value() != 0)
+                                        ? http_request_content_indication::will_follow
+                                        : http_request_content_indication::no_content;
     const auto method = classify_http_method(request.method_);
-    const std::optional<std::string_view> authority = request.authority_.empty()
-                                                          ? std::nullopt
-                                                          : std::optional<std::string_view>(request.authority_);
+    const std::optional<std::string_view> authority =
+        request.authority_ ? std::optional<std::string_view>(*request.authority_) : std::nullopt;
     std::array<char, http_max_unsigned_decimal_size> length_bytes;
-    const auto length = request.content_length_ && request.method_ != "TRACE"
-                            ? http_format_unsigned(length_bytes, *request.content_length_)
+    const auto length = declared_length && request.method_ != "TRACE"
+                            ? http_format_unsigned(length_bytes, declared_length->value())
                             : std::string_view{};
-    const auto content = request.streaming_ && request.content_length_ != 0
-                             ? http_request_content_indication::will_follow
-                             : http_request_content_indication::no_content;
     const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
     if (!detail::http_binary_is_valid_outbound_regular_request_head(request.method_, method,
             request.scheme_, detail::http_uri_scheme_default_port(request.scheme_), authority,
-            request.target_, headers, content, length, request.expectation_, request.field_source_,
+            request.target_, headers, content_indication, length, request.expectation_, request.field_source_,
             impl_->outbound_field_limit())) {
-        return http3_status::invalid_state;
+        return http3_status::invalid_message;
     }
     std::size_t name_bytes = 0;
     for (const auto& header : headers) {
@@ -1361,10 +1465,12 @@ http3_status http3_connection::submit_request_head(std::int64_t stream_id,
     if (!length.empty()) {
         section.add("content-length", length);
     }
-    const auto status = impl_->submit_head(stream_id, section.data(), section.size(),
-        !request.streaming_, true, request.content_length_);
+    const auto status = impl_->submit_head(stream_id, section.data(), section.size(), end_stream, true,
+        declared_length ? std::optional<std::uint64_t>(declared_length->value()) : std::nullopt);
     if (status == http3_status::accepted) {
-        impl_->find_stream(stream_id)->request_method_ = method;
+        auto& stream = *impl_->find_stream(stream_id);
+        stream.request_method_ = method;
+        stream.continue_pending_ = request.expectation_ == http_client_request_expectation::continue_value;
     }
     return status;
 }
@@ -1385,7 +1491,7 @@ http3_status http3_connection::submit_request_head(std::int64_t stream_id,
         !budget.add(":method", "CONNECT") || !budget.add(":authority", request.authority_) ||
         !detail::http_binary_are_valid_outbound_request_headers(
             std::string_view(request.authority_), 0, headers, false, false, budget, fields, request.field_source_)) {
-        return http3_status::invalid_state;
+        return http3_status::invalid_message;
     }
     std::size_t name_bytes = 0;
     for (const auto& header : headers) {
@@ -1412,10 +1518,15 @@ http3_status http3_connection::submit_request_head(std::int64_t stream_id,
     if (impl_->connection_error_) {
         return http3_status::closed;
     }
-    const auto settings = impl_->peer_settings_ ? impl_->peer_settings_ : impl_->remembered_settings_;
-    if (impl_->role_ != http3_role::client || stream_id < 0 || (stream_id & 3) != 0 ||
-        !settings || !settings->enable_connect_protocol_) {
+    if (impl_->role_ != http3_role::client || stream_id < 0 || (stream_id & 3) != 0) {
         return http3_status::invalid_state;
+    }
+    const auto settings = impl_->peer_settings_ ? impl_->peer_settings_ : impl_->remembered_settings_;
+    if (!settings) {
+        return http3_status::peer_settings_pending;
+    }
+    if (!settings->enable_connect_protocol_) {
+        return http3_status::peer_capability_unavailable;
     }
     const bool websocket = http_ascii_equals_ignore_case(request.protocol_, "websocket");
     const auto protocol = websocket ? std::string_view("websocket") : std::string_view(request.protocol_);
@@ -1431,7 +1542,7 @@ http3_status http3_connection::submit_request_head(std::int64_t stream_id,
         !budget.add(":path", request.target_) ||
         !detail::http_binary_are_valid_outbound_request_headers(std::string_view(request.authority_),
             port, headers, !websocket, false, budget, fields, request.field_source_, websocket)) {
-        return http3_status::invalid_state;
+        return http3_status::invalid_message;
     }
     std::size_t name_bytes = 0;
     for (const auto& header : headers) {
@@ -1459,15 +1570,23 @@ http3_status http3_connection::submit_request_head(std::int64_t stream_id,
 
 http3_data_result http3_connection::submit_data(
     std::int64_t stream_id, std::span<const std::byte> bytes) {
-    if (impl_->connection_error_) {
-        return {http3_status::closed, 0};
+    const auto validated = impl_->open_content_stream(stream_id);
+    if (const auto* status = std::get_if<http3_status>(&validated)) {
+        return {*status, 0};
     }
-    auto* stream = impl_->find_stream(stream_id);
-    if (stream == nullptr || !stream->body_open() || bytes.empty()) {
-        return {http3_status::invalid_state, 0};
+    auto* stream = std::get<impl::stream_state*>(validated);
+    if (bytes.empty()) {
+        return {http3_status::accepted, 0};
     }
-    if (stream->local_content_.check_accept(bytes.size(), false) != detail::http_local_content_check::accepted) {
-        throw std::length_error("HTTP/3 DATA exceeds the declared Content-Length");
+    switch (stream->local_content_.check_accept(bytes.size(), false)) {
+        case detail::http_local_content_check::accepted:
+            break;
+        case detail::http_local_content_check::length_exceeded:
+        case detail::http_local_content_check::length_incomplete:
+            return {http3_status::invalid_message, 0};
+        case detail::http_local_content_check::not_started:
+        case detail::http_local_content_check::forbidden:
+            throw std::logic_error("HTTP/3 stream content is not allowed");
     }
     const auto budget = available_output_bytes(stream_id);
     const auto accepted = (std::min)(bytes.size(), budget);
@@ -1507,7 +1626,7 @@ std::size_t http3_connection::available_output_bytes(std::int64_t stream_id) con
 }
 
 http3_status http3_connection::finish_stream(std::int64_t stream_id) {
-    const auto validated = impl_->validate_finish_stream(stream_id);
+    const auto validated = impl_->finishable_stream(stream_id);
     if (const auto* status = std::get_if<http3_status>(&validated)) {
         return *status;
     }
@@ -1522,31 +1641,31 @@ http3_status http3_connection::finish_stream(std::int64_t stream_id) {
     return http3_status::accepted;
 }
 
-http3_status http3_connection::submit_trailers(std::int64_t stream_id,
-    std::span<const http3_field_view> fields) {
-    const auto validated = impl_->validate_finish_stream(stream_id);
+http3_status http3_connection::finish_request(std::int64_t stream_id,
+    std::span<const http_header_view> trailers) {
+    if (impl_->role_ != http3_role::client) {
+        throw std::logic_error("HTTP/3 server stream has no request to finish");
+    }
+    if (trailers.empty()) {
+        return finish_stream(stream_id);
+    }
+    const auto validated = impl_->finishable_stream(stream_id);
     if (const auto* status = std::get_if<http3_status>(&validated)) {
         return *status;
     }
     auto* stream = std::get<impl::stream_state*>(validated);
     detail::binary_field_section_size budget(impl_->outbound_field_limit());
     std::size_t name_bytes = 0;
-    for (const auto& field : fields) {
-        const auto name = std::string_view(field.name_);
-        const auto value = std::string_view(field.value_);
-        const bool forbidden = impl_->role_ == http3_role::client
-                                   ? detail::is_forbidden_http_request_trailer_name(name)
-                                   : detail::is_forbidden_response_trailer_name(name);
-        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value) ||
-            detail::is_forbidden_http_binary_response_field(name) || forbidden ||
-            !budget.add(name, value)) {
-            return http3_status::invalid_state;
+    for (const auto& field : trailers) {
+        if (!detail::http_binary_is_valid_outbound_regular_header(field.name(), field.value()) ||
+            detail::is_forbidden_http_request_trailer_name(field.name()) || !budget.add(field.name(), field.value())) {
+            return http3_status::invalid_message;
         }
-        name_bytes += name.size();
+        name_bytes += field.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, fields.size());
-    for (const auto& field : fields) {
-        section.add_lowercase(field.name_, field.value_, field.sensitive_);
+    outbound_field_section section(impl_->resource_, name_bytes, trailers.size());
+    for (const auto& field : trailers) {
+        section.add_lowercase(field.name(), field.value());
     }
     return impl_->submit_trailer_nv(stream_id, *stream, section.data(), section.size());
 }
@@ -1582,12 +1701,12 @@ http3_connection::submit_response_head(std::int64_t stream_id, const http_respon
 
 std::variant<http_response_stream_commit_plan, http3_response_head_error>
 http3_connection::submit_streaming_response_head(std::int64_t stream_id,
-    http_known_method request_method, http_response head, http_response_trailer_intent trailer_intent) {
+    http_response head, http_response_trailer_intent trailer_intent) {
     if (const auto error = impl_->response_head_admission_error(stream_id)) {
         return *error;
     }
-    auto commit_plan = plan_http_response_stream_commit(
-        http_response_stream_framing::http3_frames, request_method, head.status(), trailer_intent);
+    auto commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http3_frames,
+        impl_->find_stream(stream_id)->request_method_, head.status(), trailer_intent);
     if (!commit_plan.trailer_intent_allowed() ||
         detail::http_binary_final_response_control_plan(head).has_value()) {
         return http3_response_head_error::invalid_message;
@@ -1627,7 +1746,7 @@ http3_status http3_connection::submit_interim_response_head(
     }
     outbound_field_section section(impl_->resource_, name_bytes, headers.size() + 1);
     if (!detail::append_http_binary_interim_response_fields(section, response, impl_->outbound_field_limit())) {
-        throw std::invalid_argument("invalid HTTP/3 interim response field section");
+        return http3_status::invalid_message;
     }
     const int result = nghttp3_conn_submit_info(impl_->connection_, stream_id, section.data(), section.size());
     impl_->throw_if_no_memory(result);
@@ -1639,7 +1758,7 @@ http3_status http3_connection::finish_response(
     if (trailers.empty()) {
         return finish_stream(stream_id);
     }
-    const auto validated = impl_->validate_finish_stream(stream_id);
+    const auto validated = impl_->finishable_stream(stream_id);
     if (const auto* status = std::get_if<http3_status>(&validated)) {
         return *status;
     }
@@ -1649,7 +1768,7 @@ http3_status http3_connection::finish_response(
     detail::binary_field_section_size budget(impl_->outbound_field_limit());
     for (const auto& field : fields) {
         if (!budget.add(field.name(), field.value())) {
-            return http3_status::invalid_state;
+            return http3_status::invalid_message;
         }
         name_bytes += field.name().size();
     }
@@ -1660,26 +1779,29 @@ http3_status http3_connection::finish_response(
     return impl_->submit_trailer_nv(stream_id, *stream, section.data(), section.size());
 }
 
-std::optional<http3_response_head_error> http3_connection::submit_connect_response_head(
+http3_status http3_connection::submit_connect_response_head(
     std::int64_t stream_id, const http_response& response) {
     if (const auto error = impl_->response_head_admission_error(stream_id)) {
-        return error;
+        return *error == http3_response_head_error::closed ? http3_status::closed : http3_status::invalid_state;
     }
     const auto* stream = impl_->find_stream(stream_id);
     if (!stream->received_head_ || !stream->connect_) {
-        return http3_response_head_error::invalid_state;
+        return http3_status::invalid_state;
     }
     if (!detail::is_valid_http_binary_connect_response_head(response) ||
         detail::http_binary_final_response_control_plan(response).has_value()) {
-        return http3_response_head_error::invalid_message;
+        return http3_status::invalid_message;
     }
     const auto plan = detail::http_framed_connect_response_head_plan(
         plan_http_response_body(http_known_method::connect, response.status()));
     const auto* head = std::get_if<detail::http_framed_response_head_plan>(&plan);
     if (head == nullptr) {
-        return http3_response_head_error::invalid_message;
+        return http3_status::invalid_message;
     }
-    return impl_->submit_final_response(stream_id, response, *head, false, std::nullopt);
+    if (const auto error = impl_->submit_final_response(stream_id, response, *head, false, std::nullopt)) {
+        return *error == http3_response_head_error::closed ? http3_status::closed : http3_status::invalid_message;
+    }
+    return http3_status::accepted;
 }
 
 std::variant<websocket_extended_connect_negotiation, http3_response_head_error>
@@ -1942,6 +2064,37 @@ void http3_connection::set_max_client_streams_bidi(std::uint64_t max_streams) no
     if (impl_->role_ == http3_role::server) {
         nghttp3_conn_set_max_client_streams_bidi(impl_->connection_, max_streams);
     }
+}
+
+namespace {
+
+template <class header_type>
+http3_status submit_websocket_extended_connect(http3_connection& connection, std::int64_t stream_id,
+    const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
+    std::string_view target, std::span<const header_type> headers, http_request_field_source source) {
+    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers);
+    return connection.submit_request_head(stream_id, http3_extended_connect_request_head_view{
+                                                         .protocol_ = "websocket",
+                                                         .scheme_ = scheme,
+                                                         .authority_ = authority,
+                                                         .target_ = target,
+                                                         .headers_ = staged_headers.view(),
+                                                         .field_source_ = source,
+                                                     });
+}
+
+}  // namespace
+
+http3_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id,
+    const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
+    std::string_view target, std::span<const http_header> headers, http_request_field_source source) {
+    return submit_websocket_extended_connect(connection, stream_id, negotiation, scheme, authority, target, headers, source);
+}
+
+http3_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id,
+    const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
+    std::string_view target, std::span<const http_header_view> headers, http_request_field_source source) {
+    return submit_websocket_extended_connect(connection, stream_id, negotiation, scheme, authority, target, headers, source);
 }
 
 }  // namespace ruvia

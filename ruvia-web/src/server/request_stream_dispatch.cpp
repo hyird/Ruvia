@@ -258,12 +258,7 @@ task<http_response> request_stream::static_file(const static_root& root, static_
 void request_stream::respond(http_response response) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
         "response stream output operation is already in progress");
-    if (detail::context_access::services(context_).request_reset() ||
-        detail::context_access::services(context_).connection_aborted() ||
-        response_.committed() || detail::context_access::output_committed(context_) ||
-        detail::context_access::has_response(context_)) {
-        throw std::logic_error("the request's response is already selected or committed");
-    }
+    require_unselected_response();
     if (tunnel_requested() && request().known_method() == http_known_method::connect &&
         response.status().is_successful()) {
         throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
@@ -292,12 +287,7 @@ task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, h
     if (accept_tunnel_ == nullptr) {
         throw std::logic_error("accept_tunnel() requires a CONNECT or HTTP/1.1 Upgrade request");
     }
-    if (detail::context_access::services(context_).request_reset() ||
-        detail::context_access::services(context_).connection_aborted() ||
-        response_.committed() || detail::context_access::output_committed(context_) ||
-        detail::context_access::has_response(context_)) {
-        throw std::logic_error("the request's response is already committed");
-    }
+    require_unselected_response();
     if (request().known_method() == http_known_method::connect) {
         if (!status.is_successful()) {
             throw std::invalid_argument("a CONNECT tunnel is accepted with a 2xx status");
@@ -314,18 +304,28 @@ task<websocket*> request_stream::accept_websocket(websocket_route_config config)
 }
 
 task<websocket*> request_stream::accept_websocket_impl(websocket_route_config config) {
+    // Validated before any state check so an invalid configuration selects nothing.
+    const auto endpoint = detail::route_endpoint::websocket(process_resource(), nullptr, std::move(config));
+    co_return co_await accept_websocket_endpoint(*endpoint.websocket());
+}
+
+task<websocket*> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
         "response stream output operation is already in progress");
     if (accept_websocket_ == nullptr) {
         throw std::logic_error("accept_websocket() requires an Upgrade or extended CONNECT request");
     }
+    require_unselected_response();
+    co_return co_await (*accept_websocket_)(endpoint);
+}
+
+void request_stream::require_unselected_response() const {
     if (detail::context_access::services(context_).request_reset() ||
         detail::context_access::services(context_).connection_aborted() ||
         response_.committed() || detail::context_access::output_committed(context_) ||
         detail::context_access::has_response(context_)) {
         throw std::logic_error("the request's response is already selected or committed");
     }
-    co_return co_await (*accept_websocket_)(std::move(config));
 }
 
 ::ruvia::stop_token request_stream::stop_token() const noexcept {

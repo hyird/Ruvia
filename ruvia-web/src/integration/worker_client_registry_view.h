@@ -5,6 +5,7 @@
 
 namespace ruvia {
 
+class http_client;
 class http_client_handle;
 class stop_token;
 class operation_scope;
@@ -19,16 +20,18 @@ class redis_handle;
 
 namespace detail {
 
+class borrowed_clients;
 class db_registry;
 struct request_io_metrics;
 class http_client_registry;
 class redis_registry;
 
-// A copyable view of the complete client registry set owned by one worker.
-// The only states are fully attached and detached: partial registry graphs are
-// not representable. Detached views are only placeholders for contexts built
-// without worker capabilities; an attached view never outlives its worker,
-// which joins all posted work before destroying its registries.
+// A copyable view of the complete client registry set owned by one worker, or
+// of the clients a router borrows for its dispatches. The only other state is
+// detached: partial registry graphs are not representable. Detached views are
+// only placeholders for contexts built without worker capabilities; an
+// attached view never outlives its worker, which joins all posted work before
+// destroying its registries, nor a router's dispatch.
 class worker_client_registry_view final {
 public:
     [[nodiscard]] static constexpr worker_client_registry_view detached() noexcept {
@@ -57,8 +60,11 @@ public:
     {
     }
 
+    explicit constexpr worker_client_registry_view(const borrowed_clients& borrowed) noexcept
+        : borrowed_(&borrowed) {}
+
     [[nodiscard]] constexpr bool attached() const noexcept {
-        return http_clients_ != nullptr;
+        return http_clients_ != nullptr || borrowed_ != nullptr;
     }
 
     // `io_metrics` is the request's counter block, or null outside a request.
@@ -84,6 +90,9 @@ public:
 private:
     explicit constexpr worker_client_registry_view(std::nullptr_t) noexcept {}
 
+    [[nodiscard]] const http_client& borrowed_http_clients() const;
+
+    const borrowed_clients* borrowed_{nullptr};
     http_client_registry* http_clients_{nullptr};
 #ifdef RUVIA_ENABLE_DATABASE
     db_registry* databases_{nullptr};

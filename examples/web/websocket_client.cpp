@@ -29,20 +29,20 @@ ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::http_client_config con
     try {
         auto peer = co_await client.client().websocket("/features/ws").connect();
         // The owning session and each received payload stay on this owner loop.
-        co_await peer.send("hello", {}, {.timeout_ = std::chrono::seconds(5)});
-        auto text = co_await peer.receive({.timeout_ = std::chrono::seconds(5)});
+        co_await peer.text("hello", {}, {.timeout_ = std::chrono::seconds(5)});
+        auto text = co_await peer.read({.timeout_ = std::chrono::seconds(5)});
         if (!text || !text->text() || text->payload() != "hello") {
             throw std::runtime_error("unexpected text echo");
         }
         std::cout << "text=" << text->payload() << '\n';
-        co_await peer.send(std::as_bytes(std::span(std::string_view("\0\1\2", 3))));
-        auto binary = co_await peer.receive();
+        co_await peer.binary(std::as_bytes(std::span(std::string_view("\0\1\2", 3))));
+        auto binary = co_await peer.read();
         if (!binary || !binary->binary() || binary->payload() != std::string_view("\0\1\2", 3)) {
             throw std::runtime_error("unexpected binary echo");
         }
         std::cout << "binary bytes=" << binary->payload().size() << '\n';
-        // Control frames are handled by the client driver. Close must not
-        // overlap a read; all data operations above have already completed.
+        // Control frames are handled by the client driver. close() claims only
+        // the write lane: a read still pending here would end with nullopt.
         co_await peer.ping("alive");
         co_await peer.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "example complete"});
     } catch (...) {

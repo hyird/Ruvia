@@ -262,9 +262,8 @@ http2_data_submit_result http2_connection::submit_data(std::uint32_t stream_id,
         case http_local_content_check::forbidden:
             throw std::logic_error("HTTP/2 stream content is not allowed");
         case http_local_content_check::length_exceeded:
-            throw std::invalid_argument("HTTP/2 DATA exceeds declared Content-Length");
         case http_local_content_check::length_incomplete:
-            throw std::invalid_argument("HTTP/2 DATA ended before declared Content-Length");
+            return {0, http2_data_submit_status::invalid_message};
     }
     const auto window = send_window_state(stream_id);
     const std::size_t available = window.has_value() ? window->available_ : 0;
@@ -362,7 +361,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
         throw std::logic_error("HTTP/2 stream is not open for finishing request");
     }
     if (!stream->local_content().length_complete()) {
-        throw std::invalid_argument("HTTP/2 request ended before declared Content-Length");
+        return http2_finish_status::invalid_message;
     }
     if (trailers.empty()) {
         if (!can_send_empty_end_stream(stream_id)) {
@@ -373,7 +372,7 @@ http2_finish_status http2_connection::finish_request(std::uint32_t stream_id,
         for (const auto& field : trailers) {
             if (!http_binary_is_valid_outbound_regular_header(field.name(), field.value()) ||
                 is_forbidden_http_request_trailer_name(field.name()) || !size.add(field.name(), field.value())) {
-                throw std::invalid_argument("invalid HTTP/2 request trailer");
+                return http2_finish_status::invalid_message;
             }
         }
         fields_.clear();
@@ -394,7 +393,7 @@ http2_finish_status http2_connection::finish_response(
         throw std::logic_error("HTTP/2 stream is not open for finishing response");
     }
     if (!stream->local_content().length_complete()) {
-        throw std::invalid_argument("HTTP/2 response ended before declared Content-Length");
+        return http2_finish_status::invalid_message;
     }
     if (trailers.empty()) {
         if (!can_send_empty_end_stream(stream_id)) {

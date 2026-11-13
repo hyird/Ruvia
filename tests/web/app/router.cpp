@@ -7,7 +7,9 @@
 #include <memory>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
@@ -21,6 +23,12 @@
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/streaming.h"
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/session.h"
+
+#include "redis_session_store_peer.h"
+#endif
 
 #include "tcp_port_reservation.h"
 
@@ -75,6 +83,46 @@ struct counted_middleware final {
 
 ruvia::task<ruvia::http_response> parameter(ruvia::context& context) {
     co_return context.text(context.req().param("id").value_or("missing"));
+}
+
+struct upgrade_marker final {
+    static inline unsigned calls_{};
+    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next) {
+        ++calls_;
+        context.draft().header("X-Upgrade-Middleware", "ran");
+        co_await next();
+    }
+};
+
+struct visit_counter final {
+    unsigned visits_{};
+};
+
+ruvia::task<void> echo_websocket(ruvia::context& context) {
+    const auto room = context.req().param("room").value_or("missing");
+    while (auto message = co_await context.websocket().read()) {
+        std::pmr::string echoed(room, context.pool());
+        echoed.append(":");
+        echoed.append(message->payload());
+        co_await context.websocket().text(std::move(echoed));
+    }
+}
+
+ruvia::task<void> echo_tunnel(ruvia::context& context) {
+    auto& tunnel = context.tunnel();
+    while (auto chunk = co_await tunnel.read()) {
+        co_await tunnel.write(std::string_view(*chunk));
+    }
+    co_await tunnel.finish();
+}
+
+ruvia::task<void> echo_udp(ruvia::context& context) {
+    EXPECT_EQ(context.req().param("host").value_or(""), "echo.test");
+    auto channel = context.tunnel().udp();
+    while (auto datagram = co_await channel.read()) {
+        co_await channel.send(datagram->payload());
+    }
+    co_await channel.finish();
 }
 
 ruvia::task<void> check(ruvia::http_client& client, std::string_view method, std::string_view path,
@@ -320,3 +368,296 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
     attachment.run();
     std::move(root).get();
 }
+
+TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limit) {
+    using namespace public_router_test;
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto& worker = attachment.loop().handle();
+        {
+            ruvia::router invalid(worker);
+            EXPECT_THROW(invalid.rate_limit({.rule_ = {.max_requests_ = 0, .window_ = 1s}}), std::invalid_argument);
+            EXPECT_THROW(invalid.rate_limit({.rule_ = {.max_requests_ = 1, .window_ = 1s}, .capacity_per_worker_ = 3}), std::invalid_argument);
+        }
+        static const std::string text_body(4096, 'r');
+        ruvia::router routes(worker);
+        routes.rate_limit({.rule_ = {.max_requests_ = 4, .window_ = 60s}, .capacity_per_worker_ = 64});
+        routes.on_error([](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+            context.draft().status(error.status());
+            co_return context.text("router error");
+        });
+        routes.add("GET", "/text", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+            co_return context.text(text_body);
+        });
+        routes.stream("GET", "/stream", [](ruvia::context& context) -> ruvia::task<void> {
+            context.draft().header("Content-Type", "text/plain");
+            if (co_await context.stream().commit() == ruvia::stream_commit_result::body) {
+                co_await context.stream().write(std::string_view(text_body));
+            }
+        });
+        routes.freeze();
+        EXPECT_THROW(routes.rate_limit({.rule_ = {.max_requests_ = 1, .window_ = 1s}}), std::logic_error);
+
+        ruvia::http_server server(attachment.loop(),
+            {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
+            {.compression_ = ruvia::compression_config{.min_bytes_ = 16}, .cors_ = ruvia::cors_config{}});
+        server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            for (const auto path : {"/text", "/stream"}) {
+                auto response = co_await client.client()
+                                    .get(path)
+                                    .header("Origin", "https://site.test")
+                                    .header("Accept-Encoding", "gzip")
+                                    .decode_content(false)
+                                    .send();
+                EXPECT_EQ(response.status(), ruvia::http_status::ok) << path;
+                EXPECT_EQ(response.header("Content-Encoding").value_or(""), "gzip") << path;
+                EXPECT_EQ(response.header("Access-Control-Allow-Origin").value_or(""), "*") << path;
+                const auto encoded = co_await response.text();
+                EXPECT_LT(encoded.text().size(), text_body.size()) << path;
+            }
+            auto preflight = co_await client.client()
+                                 .request("OPTIONS", "/text")
+                                 .header("Origin", "https://site.test")
+                                 .header("Access-Control-Request-Method", "GET")
+                                 .send();
+            EXPECT_EQ(preflight.status(), ruvia::http_status::no_content);
+            EXPECT_EQ(preflight.header("Access-Control-Allow-Origin").value_or(""), "*");
+            (void)co_await preflight.text();
+            co_await check(client, "GET", "/text", ruvia::http_status::ok, text_body);
+            auto limited = co_await client.client().get("/missing").send();
+            EXPECT_EQ(limited.status(), ruvia::http_status::too_many_requests);
+            EXPECT_TRUE(limited.header("Retry-After").has_value());
+            const auto limited_body = co_await limited.text();
+            EXPECT_EQ(limited_body.text(), "router error");
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        co_await server.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_http2) {
+    using namespace public_router_test;
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        ruvia::router routes(attachment.loop().handle());
+        unsigned errors = 0;
+        routes.on_error([&](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
+            ++errors;
+            context.draft().status(error.status());
+            co_return context.text("router error");
+        });
+        routes.websocket<upgrade_marker>("/ws/:room", &echo_websocket);
+        routes.connect<upgrade_marker>("echo.test:443", &echo_tunnel);
+        routes.connect_protocol<upgrade_marker>("connect-udp", "/.well-known/masque/udp/:host/:port/", &echo_udp);
+        routes.freeze();
+
+        ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+        server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+        const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+        std::exception_ptr failure;
+        try {
+            co_await server.start();
+            for (const auto protocol : {ruvia::http_client_protocol::http1_only, ruvia::http_client_protocol::http2_only}) {
+                const std::string label = protocol == ruvia::http_client_protocol::http1_only ? "HTTP/1.1" : "h2c";
+                ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = protocol});
+                std::exception_ptr exchange_failure;
+                try {
+                    upgrade_marker::calls_ = 0;
+                    {
+                        auto session = co_await client.client().websocket("/ws/lobby").connect();
+                        co_await session.text(std::string_view("hello"));
+                        const auto message = co_await session.read();
+                        EXPECT_TRUE(message.has_value()) << label;
+                        if (message) {
+                            EXPECT_EQ(message->payload(), "lobby:hello") << label;
+                        }
+                        co_await session.close();
+                        EXPECT_FALSE(co_await session.read()) << label;
+                    }
+                    {
+                        auto opened = co_await client.client().connect("echo.test:443").open();
+                        auto* tunnel = opened.tunnel();
+                        EXPECT_TRUE(tunnel != nullptr) << label;
+                        if (tunnel != nullptr) {
+                            EXPECT_EQ(tunnel->status().value(), 200) << label;
+                            co_await tunnel->write(std::string_view("tunnel bytes"));
+                            co_await tunnel->finish();
+                            std::string echoed;
+                            while (auto chunk = co_await tunnel->text()) {
+                                echoed.append(*chunk);
+                            }
+                            EXPECT_EQ(echoed, "tunnel bytes") << label;
+                        }
+                    }
+                    {
+                        auto opened = co_await client.client().udp("/.well-known/masque/udp/echo.test/53/").open();
+                        auto* tunnel = opened.tunnel();
+                        EXPECT_TRUE(tunnel != nullptr) << label;
+                        if (tunnel != nullptr) {
+                            auto channel = std::move(*tunnel).udp();
+                            co_await channel.send(std::string_view("datagram"));
+                            const auto packet = co_await channel.read();
+                            EXPECT_TRUE(packet.has_value()) << label;
+                            if (packet) {
+                                EXPECT_EQ(packet->text(), "datagram") << label;
+                            }
+                            co_await channel.finish();
+                            EXPECT_FALSE((co_await channel.read()).has_value()) << label;
+                        }
+                    }
+                    EXPECT_EQ(upgrade_marker::calls_, 3U) << label;
+                    {
+                        auto refused = co_await client.client().connect("other.test:443").open();
+                        auto* response = refused.response();
+                        EXPECT_TRUE(response != nullptr) << label;
+                        if (response != nullptr) {
+                            EXPECT_FALSE(response->status().is_successful()) << label;
+                            (void)co_await response->text();
+                        }
+                    }
+                    const auto before = errors;
+                    auto plain = co_await client.client().get("/ws/lobby").send();
+                    EXPECT_EQ(plain.status(), ruvia::http_status::bad_request) << label;
+                    const auto plain_body = co_await plain.text();
+                    EXPECT_EQ(plain_body.text(), "router error") << label;
+                    EXPECT_EQ(errors, before + 1) << label;
+                } catch (...) {
+                    exchange_failure = std::current_exception();
+                }
+                co_await client.shutdown();
+                if (exchange_failure) {
+                    std::rethrow_exception(exchange_failure);
+                }
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await server.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+
+#ifdef RUVIA_ENABLE_REDIS
+TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware) {
+    using namespace public_router_test;
+    ruvia::test::redis_session_store_peer peer;
+    asio::io_context io;
+    auto attachment = ruvia::attach_event_loop(io);
+    ruvia::test::tcp_port_reservation port(io);
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto& worker = attachment.loop().handle();
+        const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
+        ruvia::redis_client redis(attachment.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = 2s, .command_timeout_ = 2s});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        visit_counter visits;
+        std::exception_ptr failure;
+        try {
+            co_await redis.connect();
+            ruvia::router routes(worker);
+            routes.bind_redis("default", redis).bind_http_client(client).bind_worker_state(visits);
+            EXPECT_THROW(routes.bind_redis("default", redis), std::invalid_argument);
+            EXPECT_THROW(routes.bind_http_client(client), std::invalid_argument);
+            EXPECT_THROW(routes.bind_worker_state(visits), std::invalid_argument);
+            routes.use<ruvia::session_middleware>(ruvia::session_config{.cookie_name_ = "sid"});
+            routes.add("GET", "/set", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+                ++context.worker_state<visit_counter>().visits_;
+                context.session().set("private");
+                co_return context.text("set");
+            });
+            routes.add("GET", "/read", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+                ++context.worker_state<visit_counter>().visits_;
+                auto value = context.session();
+                co_return context.text(value.data().empty() ? "empty" : value.data());
+            });
+            routes.add("GET", "/rotate", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+                context.session().regenerate();
+                co_return context.text("rotate");
+            });
+            routes.add("GET", "/plain", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+                co_return context.text("plain");
+            });
+            routes.add("GET", "/relay", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
+                auto upstream = co_await context.client().get("/plain").send();
+                const auto content = co_await upstream.text();
+                const auto stored = co_await context.redis().get("absent");
+                co_return context.text(std::string(content.text()) + (stored ? ":stored" : ":absent"));
+            });
+            routes.freeze();
+            EXPECT_THROW(routes.bind_redis("other", redis), std::logic_error);
+
+            ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }});
+            server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
+            std::exception_ptr serving_failure;
+            try {
+                co_await server.start();
+                const auto request = [&](std::string_view path, std::string_view cookie) -> ruvia::task<std::pair<std::string, std::string>> {
+                    auto builder = client.client().get(path);
+                    if (!cookie.empty()) {
+                        builder.header("Cookie", cookie);
+                    }
+                    auto response = co_await builder.send();
+                    EXPECT_EQ(response.status(), ruvia::http_status::ok) << path;
+                    std::string set_cookie(response.header("Set-Cookie").value_or(""));
+                    set_cookie = set_cookie.substr(0, set_cookie.find(';'));
+                    const auto content = co_await response.text();
+                    co_return std::pair<std::string, std::string>(std::string(content.text()), std::move(set_cookie));
+                };
+                const auto [created_body, created] = co_await request("/set", {});
+                EXPECT_EQ(created_body, "set");
+                EXPECT_TRUE(created.starts_with("sid="));
+                EXPECT_EQ(created.size(), std::size_t{4 + 48});
+                EXPECT_EQ((co_await request("/read", created)).first, "private");
+                const auto [rotated_body, rotated] = co_await request("/rotate", created);
+                EXPECT_EQ(rotated_body, "rotate");
+                EXPECT_TRUE(rotated.starts_with("sid="));
+                EXPECT_NE(rotated, created);
+                EXPECT_EQ((co_await request("/read", created)).first, "empty");
+                EXPECT_EQ((co_await request("/read", rotated)).first, "private");
+                EXPECT_EQ(visits.visits_, 4U);
+                EXPECT_EQ((co_await request("/relay", {})).first, "plain:absent");
+            } catch (...) {
+                serving_failure = std::current_exception();
+            }
+            co_await server.shutdown();
+            if (serving_failure) {
+                std::rethrow_exception(serving_failure);
+            }
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        co_await redis.shutdown();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+}
+#endif

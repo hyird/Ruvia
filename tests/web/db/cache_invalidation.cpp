@@ -366,7 +366,7 @@ void run_with_query_cache(redis_store_peer& redis_peer, const ruvia::db_config& 
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            const auto store = redis.handle();
+            const auto store = redis.redis();
             ruvia::db_client database(attachment.loop(), database_config, store, ruvia::db_cache_config{});
             try {
                 co_await database.connect();
@@ -427,11 +427,11 @@ TEST(Ruvia, db_query_result_cache_remove_invalidates_repository_result_shapes) {
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            const auto store = redis.handle();
+            const auto store = redis.redis();
             ruvia::db_client database(attachment.loop(), database_peer.config(), store, ruvia::db_cache_config{});
             try {
                 co_await database.connect();
-                const auto handle = database.handle();
+                const auto handle = database.db();
                 // First reads come from the database and fill the cache.
                 const std::pmr::vector<std::pmr::string> many({std::pmr::string("one", ruvia::process_resource()), std::pmr::string("two", ruvia::process_resource()), std::pmr::string("three", ruvia::process_resource())}, ruvia::process_resource());
                 EXPECT_TRUE(co_await read_many(handle) == many);
@@ -518,10 +518,10 @@ TEST(Ruvia, db_query_result_cache_distinguishes_sql_parameter_values) {
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.redis(), ruvia::db_cache_config{});
             try {
                 co_await database.connect();
-                const auto handle = database.handle();
+                const auto handle = database.db();
                 const std::pmr::string large_parameter(8192, 'x', ruvia::process_resource());
                 std::pmr::string different_parameter(large_parameter, ruvia::process_resource());
                 different_parameter.back() = 'y';
@@ -573,10 +573,10 @@ TEST(Ruvia, db_query_result_cache_preserves_empty_and_zero_column_results) {
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.redis(), ruvia::db_cache_config{});
             try {
                 co_await database.connect();
-                auto query = database.handle().repository<record>().query_builder();
+                auto query = database.db().repository<record>().query_builder();
                 query.cache(cache_id, cache_lifetime);
                 auto empty_rows = co_await query.get_raw_many();
                 EXPECT_TRUE(empty_rows.empty());
@@ -643,13 +643,13 @@ TEST(Ruvia, db_query_result_cache_rejects_corrupt_zero_column_entries) {
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            const auto store = redis.handle();
+            const auto store = redis.redis();
             ruvia::db_client database(
                 attachment.loop(), database_peer.config(), store, ruvia::db_cache_config{.ignore_errors_ = true});
             try {
                 co_await database.connect();
                 const std::pmr::vector<std::pmr::string> fresh({std::pmr::string("fresh", ruvia::process_resource())}, ruvia::process_resource());
-                EXPECT_TRUE(co_await read_many(database.handle()) == fresh);
+                EXPECT_TRUE(co_await read_many(database.db()) == fresh);
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -689,13 +689,13 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
         std::exception_ptr failure;
         try {
             co_await redis.connect();
-            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.handle(), ruvia::db_cache_config{});
+            ruvia::db_client database(attachment.loop(), database_peer.config(), redis.redis(), ruvia::db_cache_config{});
             try {
                 co_await database.connect();
                 redis_peer.stall_next_read([&database] { database.close(); });
                 bool cancelled = false;
                 try {
-                    (void)co_await read_sql_cached(database.handle(), "cancel-cache");
+                    (void)co_await read_sql_cached(database.db(), "cancel-cache");
                 } catch (const ruvia::redis_error& error) {
                     cancelled = error.code() == ruvia::redis_error::code_type::cancelled ||
                                 error.code() == ruvia::redis_error::code_type::closing;
@@ -705,7 +705,7 @@ TEST(Ruvia, db_client_shutdown_cancels_inflight_cache_without_closing_borrowed_r
                 failure = std::current_exception();
             }
             co_await database.shutdown();
-            EXPECT_TRUE(!(co_await redis.handle().get("still-open")));
+            EXPECT_TRUE(!(co_await redis.redis().get("still-open")));
         } catch (...) {
             if (!failure) {
                 failure = std::current_exception();
@@ -737,7 +737,7 @@ TEST(Ruvia, db_query_result_cache_skips_entries_beyond_the_redis_reply_limit) {
     peer_type database_peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
         std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(large, ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(larger, ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("small", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle&) -> ruvia::task<void> {
-        const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         EXPECT_EQ(co_await read_sql_cached(handle, "large"), large);
         EXPECT_EQ(redis_peer.key_count(), std::size_t{0});
         EXPECT_EQ(co_await read_sql_cached(handle, "large"), larger);
@@ -757,7 +757,7 @@ TEST(Ruvia, db_query_result_cache_coalesces_concurrent_misses_of_one_key) {
         std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource()), .deferred_ = true}}, ruvia::process_resource()));
     std::array<query_cache_test::read_outcome, 3> outcomes;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {
-        const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::task_scope readers(database.worker());
         for (auto& outcome : outcomes) {
             readers.spawn(query_cache_test::read_sql_into(handle, "same", outcome));
@@ -790,7 +790,7 @@ TEST(Ruvia, db_query_result_cache_waiter_takes_over_from_a_cancelled_leader) {
     query_cache_test::read_outcome leader;
     query_cache_test::read_outcome waiter;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {
-        const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::stop_source stop;
         ruvia::task_scope readers(database.worker());
         readers.spawn(query_cache_test::read_sql_into(
@@ -823,7 +823,7 @@ TEST(Ruvia, db_query_result_cache_waiter_is_bounded_by_its_own_timeout) {
     query_cache_test::read_outcome waiter;
     bool waiter_finished_first = false;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle&) -> ruvia::task<void> {
-        const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::task_scope readers(database.worker());
         readers.spawn(query_cache_test::read_sql_into(handle, "same", leader));
         readers.spawn(query_cache_test::read_sql_into(
@@ -852,7 +852,7 @@ TEST(Ruvia, db_query_result_cache_remove_detaches_inflight_fills) {
     query_cache_test::read_outcome before;
     query_cache_test::read_outcome after;
     auto scenario = [&](ruvia::db_client& database, const ruvia::redis_handle& store) -> ruvia::task<void> {
-        const auto handle = database.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = database.db().with_options({.timeout_ = std::chrono::seconds(5)});
         ruvia::task_scope readers(database.worker());
         readers.spawn(query_cache_test::read_many_into(handle, before));
         co_await query_cache_test::wait_until(

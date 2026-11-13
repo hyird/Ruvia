@@ -85,7 +85,7 @@ TEST(Ruvia, redis_blocking_commands_ignore_the_ordinary_pool_timeout_and_honor_o
     ruvia::redis_config config;
     config.command_timeout_ = std::chrono::milliseconds(1);
     ruvia::test::with_connected_redis_client(worker, config, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        auto redis = client.handle();
+        auto redis = client.redis();
         const std::array<std::string_view, 1> keys{"queue"};
         const std::array streams{ruvia::redis_stream_read_view{.stream_ = "events", .id_ = ">"}};
         const auto timeout = std::chrono::milliseconds(20);
@@ -172,7 +172,7 @@ TEST(Ruvia, redis_stream_read_options_route_claim_as_blocking_and_reject_unknown
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        auto redis = client.handle();
+        auto redis = client.redis();
         auto pipeline = redis.pipeline();
         // CLAIM (Redis 8.4) takes a value; a BLOCK after it still blocks, so the
         // command cannot join a pipeline.
@@ -202,7 +202,7 @@ TEST(Ruvia, redis_batch_builders_own_cold_payload_and_reject_reuse) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        auto handle = client.handle();
+        auto handle = client.redis();
         const auto throws_logic_error = [](auto&& operation) {
             try {
                 operation();
@@ -282,7 +282,7 @@ TEST(Ruvia, redis_expire_rejects_non_positive_ttl_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        auto redis = client.handle();
+        auto redis = client.redis();
 
         bool zero_rejected = false;
         try {
@@ -307,7 +307,7 @@ TEST(Ruvia, redis_multi_key_commands_reject_empty_key_spans_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     auto worker = ruvia::attach_event_loop(io_context);
     ruvia::test::with_connected_redis_client(worker, {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        auto redis = client.handle();
+        auto redis = client.redis();
         const std::span<const std::string_view> no_keys;
 
         EXPECT_TRUE(throws_invalid_argument([&] { (void)redis.mget(no_keys); }));
@@ -597,7 +597,7 @@ TEST(Ruvia, redis_typed_commands_preserve_arguments_across_direct_pipeline_and_t
     constexpr auto minimum = std::numeric_limits<std::int64_t>::min();
     constexpr auto maximum = std::numeric_limits<std::int64_t>::max();
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         EXPECT_EQ(co_await redis.incr_by(key, minimum), std::int64_t{1});
         EXPECT_EQ(co_await redis.decr_by(key, maximum), std::int64_t{2});
         const auto list = co_await redis.lrange(key, minimum, maximum);
@@ -669,7 +669,7 @@ TEST(Ruvia, redis_sorted_set_replies_and_arguments_round_trip_infinite_scores) {
     config.tls_ = {.mode_ = ruvia::client_tls_mode::disabled};
     ruvia::redis_client client(worker.loop(), config);
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         constexpr auto infinity = std::numeric_limits<double>::infinity();
         EXPECT_EQ(co_await redis.zadd("scores", infinity, "b"), std::int64_t{1});
 
@@ -742,7 +742,7 @@ TEST(Ruvia, redis_composite_results_rebind_equivalent_resource_owners) {
     config.tls_ = {.mode_ = ruvia::client_tls_mode::disabled};
     ruvia::redis_client client(worker.loop(), config);
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         const auto value = co_await redis.command("TEST", "nested");
         const auto value_seed = co_await redis.command("TEST", "integer");
         const std::array streams{ruvia::redis_stream_read_view{.stream_ = stream_name, .id_ = "0"}};
@@ -863,7 +863,7 @@ TEST(Ruvia, redis_string_array_replies_reject_nil_elements) {
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         const auto rejects_protocol = [&](auto&& operation) -> ruvia::task<void> {
             bool rejected = false;
             try {
@@ -891,7 +891,7 @@ TEST(Ruvia, redis_set_result_copy_inherits_previous_value_resource) {
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         ruvia::test::rejecting_memory_resource unrelated;
         unrelated.reject_allocations();
         for (int index = 0; index != 3; ++index) {
@@ -936,8 +936,8 @@ TEST(Ruvia, redis_set_result_assignment_retains_destination_resource_across_abse
     ruvia::redis_client destination(worker.loop(), {.host_ = "127.0.0.1", .port_ = destination_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::redis_client source(worker.loop(), {.host_ = "127.0.0.1", .port_ = source_peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     auto verify = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto destination_redis = destination.handle();
-        auto source_redis = connected.handle();
+        auto destination_redis = destination.redis();
+        auto source_redis = connected.redis();
         const ruvia::redis_set_options return_previous{
             .condition_ = ruvia::redis_set_condition::if_absent,
             .previous_value_ = ruvia::redis_set_previous_value_policy::return_value};
@@ -1037,7 +1037,7 @@ TEST(Ruvia, redis_typed_replies_retain_binary_payloads_and_recover_from_invalid_
     auto worker = ruvia::attach_event_loop(io);
     ruvia::redis_client client(worker.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1});
     ruvia::test::drive_backend_client(worker, client, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-        auto redis = connected.handle();
+        auto redis = connected.redis();
         const auto scalar = co_await redis.get(key);
         const auto status = co_await redis.ping(payload);
         const auto previous = co_await redis.set(key, "new", {.previous_value_ = ruvia::redis_set_previous_value_policy::return_value});

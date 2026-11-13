@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -252,36 +251,6 @@ http_request http3_request_head::build_request(std::pmr::memory_resource* resour
             http_header_view{fields_[field.index_].name(), fields_[field.index_].value()},
             field.kind_};
     });
-}
-
-std::optional<http_request_trailer_error> append_http3_request_trailers(
-    http_request_trailers& trailers, std::span<const http3_field> fields) {
-    auto budget = http_trailer_section_budget();
-    for (const auto& existing : trailers.fields()) {
-        if (!budget.add_field(existing.name(), existing.value())) {
-            return http_request_trailer_error::section_too_large;
-        }
-    }
-    std::array<http_header_view, max_http_header_fields> retained{};
-    std::size_t retained_count = 0;
-    for (const auto& field : fields) {
-        const auto name = field.name();
-        const auto value = field.value();
-        if (name.empty() || name.front() == ':' || !detail::is_valid_binary_field_name(name) ||
-            !is_valid_http_header_value(value)) {
-            return http_request_trailer_error::invalid_field;
-        }
-        if (!budget.add_field(name, value)) {
-            return http_request_trailer_error::section_too_large;
-        }
-        if (!detail::is_forbidden_http_request_trailer_name(name)) {
-            retained[retained_count++] = http_header_view{name, value};
-        }
-    }
-    if (retained_count == 0) {
-        return std::nullopt;
-    }
-    return trailers.append(std::span<const http_header_view>(retained.data(), retained_count));
 }
 
 }  // namespace ruvia

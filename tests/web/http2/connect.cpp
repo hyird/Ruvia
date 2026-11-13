@@ -590,7 +590,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
             EXPECT_EQ(tunnel_consumed, payload_value.size());
             EXPECT_TRUE(tunnel_reply == expected);
 
-            const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http2_request_content::streaming()});
+            const auto upload = peer.submit_request_head(ruvia::http2_regular_request_head_view{.method_ = "POST", .scheme_ = "http", .authority_ = "proxy.test", .target_ = "/slow-upload", .content_ = ruvia::http_request_content_plan::streaming()});
             const auto* upload_id_ptr = std::get_if<std::uint32_t>(&upload);
             if (upload_id_ptr == nullptr) {
                 throw std::runtime_error("slow upload request submission rejected");

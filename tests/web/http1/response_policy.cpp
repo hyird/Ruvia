@@ -57,8 +57,16 @@ struct access_entry final {
 std::mutex access_mutex;
 std::pmr::vector<access_entry> access_entries{ruvia::process_resource()};
 
+// Every fixture passes the same configuration: whichever case runs first
+// fixes the shared application's server_config.
+[[nodiscard]] ruvia::server_config cors_server() {
+    return {.worker_count_ = 1,
+        .connection_scan_interval_ = std::chrono::milliseconds(5),
+        .cors_ = ruvia::cors_config{}};
+}
+
 [[maybe_unused]] const bool policy_configured = [] {
-    ruvia::app().cors(ruvia::cors_config{}).on_access([](const ruvia::access_log_record& record) noexcept {
+    ruvia::app().on_access([](const ruvia::access_log_record& record) noexcept {
         try {
             std::lock_guard lock(access_mutex);
             access_entries.push_back(
@@ -307,7 +315,7 @@ class response_policy_routes final {
 
 TEST(Ruvia, http1_response_stream_head_carries_the_application_cors_policy) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto response = exchange(server.endpoint(),
         "GET /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\nConnection: close\r\n\r\n");
     server.finish();
@@ -319,7 +327,7 @@ TEST(Ruvia, http1_response_stream_head_carries_the_application_cors_policy) {
 }
 TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     std::pmr::string names{ruvia::process_resource()};
     for (unsigned i = 0; i != 128; ++i) {
         if (!names.empty()) {
@@ -348,7 +356,7 @@ TEST(Ruvia, http1_cors_reflection_preserves_many_requested_names_in_one_field) {
 
 TEST(Ruvia, http1_cors_requires_options_origin_and_requested_method_for_preflight) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     for (const auto& [method, fields] : {
              std::array<std::string_view, 2>{"OPTIONS", "Origin: https://client.test\r\n"},
              {"OPTIONS", "Access-Control-Request-Method: GET\r\n"},
@@ -369,7 +377,7 @@ TEST(Ruvia, http1_cors_requires_options_origin_and_requested_method_for_prefligh
 
 TEST(Ruvia, http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     for (const auto& [origin, method, names] : {
              std::array<std::string_view, 3>{"https://client.test/path", "GET", "x-good"},
              {"https://client.test", "BAD METHOD", "x-good"},
@@ -392,7 +400,7 @@ TEST(Ruvia, http1_cors_invalid_metadata_never_reflects_a_valid_prefix) {
 // Trailer field and the trailer section instead of failing with 500.
 TEST(Ruvia, http1_response_stream_discards_trailers_it_cannot_frame) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto http10 = exchange(server.endpoint(), "GET /policy-trailer-stream HTTP/1.0\r\nHost: localhost\r\n\r\n");
     const auto http11 = exchange(server.endpoint(),
         "GET /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
@@ -413,7 +421,7 @@ TEST(Ruvia, http1_response_stream_discards_trailers_it_cannot_frame) {
 // websocket GET route is an upgrade, not a representation, so HEAD stays 405.
 TEST(Ruvia, http1_head_falls_back_to_response_stream_get_routes) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto pipelined = exchange(server.endpoint(),
         "HEAD /policy-stream HTTP/1.1\r\nHost: localhost\r\nOrigin: https://client.test\r\n\r\n"
         "HEAD /policy-trailer-stream HTTP/1.1\r\nHost: localhost\r\n\r\n"
@@ -443,7 +451,7 @@ TEST(Ruvia, http1_head_falls_back_to_response_stream_get_routes) {
 // 完成头后不生产正文；非法写/等待明确失败，正常完成仍不是 abort。
 TEST(Ruvia, http1_head_only_stream_completes_without_cancellation) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto output = exchange(server.endpoint(),
         "HEAD /policy-head-loop HTTP/1.1\r\nHost: localhost\r\n\r\n"
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
@@ -464,7 +472,7 @@ TEST(Ruvia, http1_head_only_stream_completes_without_cancellation) {
 
 TEST(Ruvia, http1_not_modified_stream_commit_completes_without_abort) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto output = exchange(server.endpoint(),
         "GET /policy-head-loop?not-modified HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
@@ -478,7 +486,7 @@ TEST(Ruvia, http1_not_modified_stream_commit_completes_without_abort) {
 
 TEST(Ruvia, http1_security_policy_covers_stream_head_and_precommit_error) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     for (const auto request : {
              "GET /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
              "HEAD /policy-secure-stream HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
@@ -494,7 +502,7 @@ TEST(Ruvia, http1_security_policy_covers_stream_head_and_precommit_error) {
 // HEAD 在提交时完成，不等待客户端断开，也不启动无限正文循环。
 TEST(Ruvia, http1_head_only_producer_finishes_at_commit) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     for (const std::string_view request : {
              std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\n\r\n"),
              std::string_view("HEAD /policy-head-naive HTTP/1.1\r\nHost: localhost\r\nContent-Length: 5\r\n\r\nhello"),
@@ -554,7 +562,7 @@ TEST(Ruvia, http1_head_only_producer_finishes_at_commit) {
 // the connection stays usable for the pipelined GET.
 TEST(Ruvia, http1_head_only_stream_is_a_success_for_error_converting_middleware) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto output = exchange(server.endpoint(),
         "HEAD /policy-head-convert HTTP/1.1\r\nHost: localhost\r\n\r\n"
         "GET /policy-plain HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
@@ -570,7 +578,7 @@ TEST(Ruvia, http1_head_only_stream_is_a_success_for_error_converting_middleware)
 
 TEST(Ruvia, http1_stream_failure_after_commit_is_not_converted_to_buffered_response_by_middleware) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto output = exchange(server.endpoint(),
         "GET /policy-stream-fail-after-commit HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
@@ -585,7 +593,7 @@ TEST(Ruvia, http1_stream_failure_after_commit_is_not_converted_to_buffered_respo
 // the tunnel are never parsed as another request (RFC 9110 9.3.6).
 TEST(Ruvia, http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     for (const std::string_view authority : {"unrouted-target.test:443", "denied-target.test:443"}) {
         const std::pmr::string request(std::pmr::string("CONNECT ", ruvia::process_resource()) + std::pmr::string(authority, ruvia::process_resource()) + " HTTP/1.1\r\nHost: " +
                                            std::pmr::string(authority, ruvia::process_resource()) + "\r\n\r\nGET /policy-plain HTTP/1.1\r\nHost: smuggled\r\n\r\n",
@@ -604,7 +612,7 @@ TEST(Ruvia, http1_failed_connect_closes_instead_of_parsing_tunnel_bytes) {
 // request itself is served.
 TEST(Ruvia, http1_te_without_connection_option_is_ignored) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto output = exchange(server.endpoint(),
         "GET /policy-plain HTTP/1.1\r\nTE: trailers\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     server.finish();
@@ -614,7 +622,7 @@ TEST(Ruvia, http1_te_without_connection_option_is_ignored) {
 
 TEST(Ruvia, http1_successful_upgrades_are_access_logged_once_with_their_handshake_status) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     static_cast<void>(take_access_entries());
 
     const auto tunnel = exchange(server.endpoint(),
@@ -649,7 +657,7 @@ TEST(Ruvia, http1_successful_upgrades_are_access_logged_once_with_their_handshak
 // exactly one record, in request order, with its own method, path and status.
 TEST(Ruvia, http1_pipelined_responses_are_access_logged_in_order) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     static_cast<void>(take_access_entries());
 
     const auto output = exchange(server.endpoint(),
@@ -683,7 +691,7 @@ TEST(Ruvia, http1_pipelined_responses_are_access_logged_in_order) {
 #ifdef RUVIA_ENABLE_REDIS
 TEST(Ruvia, http1_connect_handshake_carries_the_committed_session_cookie) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     const auto tunnel = exchange(server.endpoint(),
         "CONNECT session-target.test:443 HTTP/1.1\r\nHost: session-target.test:443\r\n\r\n");
     server.finish();
@@ -697,7 +705,7 @@ TEST(Ruvia, http1_connect_handshake_carries_the_committed_session_cookie) {
 
 TEST(Ruvia, http_server_fixture_reservations_stay_bound_without_accepting_clients) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, cors_server());
     ruvia::test::tcp_port_reservation first(io);
     ruvia::test::tcp_port_reservation second(io);
     EXPECT_TRUE(first.endpoint() != second.endpoint());

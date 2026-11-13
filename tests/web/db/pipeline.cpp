@@ -54,7 +54,7 @@ TEST(Ruvia, db_postgresql_exhausted_stream_preserves_buffered_results_and_connec
         config.pool_size_per_worker_ = 1;
         db_client client(attachment.loop(), config);
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             for (int iteration = 0; iteration < 3; ++iteration) {
                 auto stream = co_await handle.query_stream("SELECT v FROM streamed WHERE id > $1", iteration);
                 const auto names = stream.column_names();
@@ -112,7 +112,7 @@ TEST(Ruvia, db_postgresql_rejected_stream_transaction_does_not_reach_the_next_ow
         config.pool_size_per_worker_ = 1;
         db_client client(attachment.loop(), config);
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             // Second use creates a named statement owned by this session.
             for (int iteration = 0; iteration < 2; ++iteration) {
                 const auto rows = co_await handle.query(cached_sql, 1);
@@ -166,7 +166,7 @@ TEST(Ruvia, db_postgresql_rejected_idle_stream_preserves_cached_results_and_conn
     config.pool_size_per_worker_ = 1;
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (int iteration = 0; iteration < 2; ++iteration) {
             const auto rows = co_await handle.query(cached_sql, iteration);
             EXPECT_EQ(rows.size(), std::size_t{1});
@@ -208,7 +208,7 @@ TEST(Ruvia, db_postgresql_exhausted_stream_allows_concurrent_pipeline_reuse) {
     db_client client(attachment.loop(), config);
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         auto stream = co_await handle.query_stream("SELECT v FROM streamed");
         const auto row = co_await stream.read();
         EXPECT_TRUE(row && (*row)["v"].as<std::string_view>() == "stream");
@@ -244,7 +244,7 @@ TEST(Ruvia, db_postgresql_concurrent_statements_are_pipelined_on_one_connection)
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         // A client that waited for each reply would time out instead.
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
@@ -278,7 +278,7 @@ TEST(Ruvia, db_postgresql_failed_pipelined_statement_does_not_fail_the_others) {
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         statements.spawn(pipeline_test::execute(handle, "INSERT INTO jobs (key) VALUES ('a')", outcomes[1]));
@@ -315,7 +315,7 @@ TEST(Ruvia, db_postgresql_abandoned_pipelined_statement_does_not_affect_the_othe
             db_client client(attachment.loop(), peer.config());
             std::array<pipeline_test::outcome, 4> outcomes;
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-                const auto handle = connected.handle();
+                const auto handle = connected.db();
                 stop_source stop;
                 const auto abandoning = cancel ? handle.with_options({.stop_token_ = stop.token()})
                                                : handle.with_options({.timeout_ = std::chrono::milliseconds(100)});
@@ -362,7 +362,7 @@ TEST(Ruvia, db_postgresql_connection_is_closed_when_every_pipelined_statement_is
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle();
+        const auto handle = connected.db();
         stop_source stop;
         const auto stoppable = handle.with_options({.stop_token_ = stop.token()});
         task_scope statements(connected.worker());
@@ -394,7 +394,7 @@ TEST(Ruvia, db_postgresql_waiting_transaction_is_not_starved_by_pipelined_statem
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope work(connected.worker());
         work.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         work.spawn(pipeline_test::begin_and_commit(handle, outcomes[4]));
@@ -431,7 +431,7 @@ TEST(Ruvia, db_postgresql_statements_keep_their_order_against_later_transactions
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 6> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope work(connected.worker());
         work.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         work.spawn(pipeline_test::begin_and_commit(handle, outcomes[3]));
@@ -472,7 +472,7 @@ TEST(Ruvia, db_postgresql_lost_connection_fails_every_pipelined_statement) {
         db_client client(attachment.loop(), peer.config());
         std::array<pipeline_test::outcome, 3> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             task_scope statements(connected.worker());
             statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
             statements.spawn(pipeline_test::execute(handle, "UPDATE b SET v = 1", outcomes[1]));
@@ -504,7 +504,7 @@ TEST(Ruvia, db_postgresql_protocol_failure_fails_the_pipelined_statements_after_
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         statements.spawn(pipeline_test::query(handle, "COPY records FROM STDIN", outcomes[1]));
@@ -537,7 +537,7 @@ TEST(Ruvia, db_postgresql_statements_beyond_pipeline_depth_are_sent_in_arrival_o
     db_client client(attachment.loop(), peer.config());
     std::pmr::vector<pipeline_test::outcome> outcomes(statement_count, ruvia::process_resource());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
         for (std::size_t index = 0; index < statement_count; ++index) {
             statements.spawn(pipeline_test::query(handle, sql[index], outcomes[index]));
@@ -572,7 +572,7 @@ TEST(Ruvia, db_postgresql_statement_waiting_for_pipeline_room_times_out_like_an_
     db_client client(attachment.loop(), config);
     std::pmr::vector<pipeline_test::outcome> outcomes(statement_count, ruvia::process_resource());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle();
+        const auto handle = connected.db();
         task_scope statements(connected.worker());
         for (std::size_t index = 0; index < statement_count; ++index) {
             statements.spawn(pipeline_test::query(handle, sql[index], outcomes[index]));
@@ -612,7 +612,7 @@ TEST(Ruvia, db_postgresql_stale_pipelined_statement_is_retried_behind_the_others
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         // Unnamed on its first use, parsed as a named statement on its second.
         co_await pipeline_test::query_id(handle, cached_sql, 1, outcomes[0]);
         co_await pipeline_test::query_id(handle, cached_sql, 1, outcomes[1]);
@@ -647,7 +647,7 @@ TEST(Ruvia, db_postgresql_failed_parse_makes_later_binds_of_its_name_run_again) 
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query_id(handle, cached_sql, 1, outcomes[0]);
         // The second use parses the named statement; the third binds it.
         task_scope statements(connected.worker());
@@ -678,7 +678,7 @@ TEST(Ruvia, db_postgresql_close_ends_pipelined_statements_in_every_phase) {
     db_client client(attachment.loop(), peer.config());
     std::pmr::vector<pipeline_test::outcome> outcomes(statement_count, ruvia::process_resource());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle();
+        const auto handle = connected.db();
         task_scope statements(connected.worker());
         for (auto& result : outcomes) {
             statements.spawn(pipeline_test::query(handle, "SELECT v FROM t", result));
@@ -705,7 +705,7 @@ TEST(Ruvia, db_postgresql_read_timeout_fails_every_pipelined_statement) {
     db_client client(attachment.loop(), config);
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle();
+        const auto handle = connected.db();
         task_scope statements(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM b", outcomes[1]));
@@ -734,7 +734,7 @@ TEST(Ruvia, db_postgresql_cancelled_waiting_transaction_lets_later_statements_jo
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         stop_source stop;
         task_scope work(connected.worker());
         work.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
@@ -767,7 +767,7 @@ TEST(Ruvia, db_postgresql_cancelled_statement_waiting_behind_a_transaction_leave
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         stop_source stop;
         task_scope work(connected.worker());
         work.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
@@ -807,7 +807,7 @@ TEST(Ruvia, db_postgresql_served_transaction_lets_a_later_statement_join_the_oth
     db_client client(attachment.loop(), config);
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         task_scope statements(connected.worker());
         task_scope transactions(connected.worker());
         statements.spawn(pipeline_test::query(handle, "SELECT v FROM a", outcomes[0]));
@@ -839,7 +839,7 @@ TEST(Ruvia, db_postgresql_statement_is_not_sent_behind_an_abandoned_one) {
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle();
+        const auto handle = connected.db();
         const auto short_lived = handle.with_options({.timeout_ = std::chrono::milliseconds(100)});
         task_scope statements(connected.worker());
         {
@@ -876,7 +876,7 @@ TEST(Ruvia, db_postgresql_connection_left_inside_a_transaction_block_is_closed) 
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 2> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::execute(handle, "BEGIN", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
     });
@@ -903,7 +903,7 @@ TEST(Ruvia, db_postgresql_connection_released_after_a_waiting_transaction_stops_
     db_client client(attachment.loop(), peer.config());
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         std::optional<db_transaction> held;
         held.emplace(co_await handle.begin_transaction());
         stop_source stop;

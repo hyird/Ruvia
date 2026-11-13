@@ -45,10 +45,13 @@
 
 namespace {
 
-[[maybe_unused]] const bool compression_configured = [] {
-    ruvia::app().compression({.min_bytes_ = 16, .sync_bytes_ = 64 * 1024});
-    return true;
-}();
+// Every fixture passes the same configuration: whichever case runs first
+// fixes the shared application's server_config.
+[[nodiscard]] ruvia::server_config compressing_server() {
+    return {.worker_count_ = 1,
+        .connection_scan_interval_ = std::chrono::milliseconds(5),
+        .compression_ = ruvia::compression_config{.min_bytes_ = 16, .sync_bytes_ = 64 * 1024}};
+}
 
 [[nodiscard]] std::pmr::string make_body(std::size_t size, unsigned seed) {
     std::pmr::string body(size, '\0', ruvia::process_resource());
@@ -352,7 +355,7 @@ private:
 
 TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::identity,
         ruvia::http_content_coding::gzip, ruvia::http_content_coding::deflate,
         ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
@@ -399,7 +402,7 @@ TEST(Ruvia, http1_streaming_head_preserves_coding_before_following_encoded_get) 
 
 TEST(Ruvia, http1_compressed_stream_peer_reset_allows_following_response) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const auto failures_before = ruvia::app().http_stats().connection_failures_;
     {
         asio::ip::tcp::socket client(io);
@@ -438,7 +441,7 @@ TEST(Ruvia, http1_compression_failure_preserves_identity_or_returns_typed_error)
         GTEST_SKIP() << "noexcept debug iterator metadata prevents allocation failure injection";
     }
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const struct {
         std::string_view failing_target_;
         std::string_view following_target_;
@@ -492,7 +495,7 @@ TEST(Ruvia, http1_head_compression_publication_failure_preserves_identity_or_ret
         GTEST_SKIP() << "noexcept debug iterator metadata prevents allocation failure injection";
     }
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     for (const bool identity_accepted : {true, false}) {
         const auto response = fetch_response(server.endpoint(), head_request("/compression-failure",
                                                                     identity_accepted ? "Accept-Encoding: gzip\r\n" : "Accept-Encoding: gzip, identity;q=0\r\n"));
@@ -513,7 +516,7 @@ TEST(Ruvia, http1_head_compression_publication_failure_preserves_identity_or_ret
 
 TEST(Ruvia, http1_inline_compression_reuses_worker_encoders_with_identical_bytes) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     constexpr ruvia::http_content_coding codings[]{ruvia::http_content_coding::gzip,
         ruvia::http_content_coding::deflate, ruvia::http_content_coding::brotli, ruvia::http_content_coding::zstd};
     // Each encoder serves several responses of alternating sizes in a row.
@@ -563,7 +566,7 @@ TEST(Ruvia, http1_file_representations_are_not_runtime_compressed) {
         });
 
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     for (const std::string_view path : {"/compression-file", "/compression-static"}) {
         const auto fetch = [&](std::string_view method) {
             return fetch_response(server.endpoint(), std::pmr::string(method, ruvia::process_resource()) + " " + std::pmr::string(path, ruvia::process_resource()) +
@@ -599,7 +602,7 @@ TEST(Ruvia, http1_file_representations_are_not_runtime_compressed) {
 // body whose integrity fields the application already computed.
 TEST(Ruvia, http1_compression_keeps_responses_with_integrity_fields_identity) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     for (const std::string_view field : {"Content-Digest", "Repr-Digest", "Content-MD5"}) {
         const auto text = fetch_response(server.endpoint(),
             get_request("/compression-digest?field=" + std::pmr::string(field, ruvia::process_resource()), "Accept-Encoding: gzip\r\n"))
@@ -617,7 +620,7 @@ TEST(Ruvia, http1_compression_keeps_responses_with_integrity_fields_identity) {
 // body below min_bytes_ is encoded instead of answered with 406.
 TEST(Ruvia, http1_compression_encodes_small_bodies_when_identity_is_refused) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const auto refused = fetch_response(server.endpoint(),
         get_request("/compression-tiny", "Accept-Encoding: gzip, identity;q=0\r\n"))
                              .value_or(std::pmr::string{ruvia::process_resource()});
@@ -641,7 +644,7 @@ TEST(Ruvia, http1_compression_encodes_small_bodies_when_identity_is_refused) {
 // a value that is not an entity-tag, and stops advertising identity ranges.
 TEST(Ruvia, http1_compression_rewrites_validators_and_range_support) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const struct {
         std::string_view query_;
         std::optional<std::string_view> expected_;
@@ -679,7 +682,7 @@ TEST(Ruvia, http1_compression_rewrites_validators_and_range_support) {
 // types, and a response without Content-Type, stay identity.
 TEST(Ruvia, http1_compression_encodes_only_compressible_media_types) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const struct {
         std::string_view query_;
         bool encoded_;
@@ -710,7 +713,7 @@ TEST(Ruvia, http1_compression_encodes_only_compressible_media_types) {
 // depending on Accept-Encoding, so the 200 varies on it like a framework coding.
 TEST(Ruvia, http1_application_encoded_responses_vary_on_accept_encoding) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     for (const std::string_view path :
         {std::string_view("/compression-custom-coding"), std::string_view("/compression-stream-custom")}) {
         const auto text = fetch_response(server.endpoint(), get_request(path, "Accept-Encoding: x-custom\r\n"))
@@ -740,7 +743,7 @@ TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
         });
 
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     const auto multi = fetch_response(server.endpoint(),
         get_request("/compression-coded-static", "Accept-Encoding: gzip\r\nRange: bytes=0-1,4-5\r\n"))
                            .value_or(std::pmr::string{ruvia::process_resource()});
@@ -791,7 +794,7 @@ TEST(Ruvia, http1_precompressed_variant_answers_multiple_ranges_in_full) {
 // get GET's coding without the encoded length of its own empty body.
 TEST(Ruvia, http1_explicit_head_route_matches_get_coding_without_false_length) {
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
     for (const std::string_view fields : {"Accept-Encoding: gzip\r\n", "Accept-Encoding: gzip, identity;q=0\r\n"}) {
         const auto get = fetch_response(server.endpoint(), get_request("/compression-head", fields)).value_or(std::pmr::string{ruvia::process_resource()});
         EXPECT_TRUE(has_field(head_fields(get), "content-encoding: gzip"));
@@ -840,7 +843,7 @@ TEST(Ruvia, http1_head_fallback_on_empty_get_files_and_redirects_matches_get_hea
         });
 
     auto& io = ruvia::test::new_test_io_context();
-    ruvia::test::http_server_fixture server(io);
+    ruvia::test::http_server_fixture server(io, compressing_server());
 
     // 1. HEAD fallback on 0-byte GET route matches GET under both identity and refused identity.
     for (const std::string_view fields :

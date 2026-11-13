@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <stdexcept>
@@ -70,6 +71,20 @@ public:
         definition.destroy_instance_ = [](void* instance) noexcept {
             destroy_pmr_object(static_cast<t_type*>(instance), process_resource());
         };
+        return definition;
+    }
+
+    // A caller-owned instance lent to one worker's registry: initialize()
+    // adopts it and shutdown() leaves it to its owner.
+    template <typename t_type>
+    [[nodiscard]] static worker_state_definition borrow(t_type& instance) noexcept {
+        static_assert(!std::is_const_v<t_type>, "a borrowed worker state must be mutable");
+        worker_state_definition definition;
+        definition.type_key_ = detail::type_key<t_type>();
+        definition.factory_ = std::addressof(instance);
+        definition.destroy_factory_ = [](void*) noexcept {};
+        definition.create_instance_ = [](void* borrowed) -> void* { return borrowed; };
+        definition.destroy_instance_ = [](void*) noexcept {};
         return definition;
     }
 

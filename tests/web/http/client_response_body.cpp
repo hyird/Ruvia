@@ -1281,7 +1281,7 @@ TEST(Ruvia, http_client_preserves_large_unsigned_timeout_bounds) {
         auto first = co_await client.client().get("/large-config").send();
         auto first_body = co_await first.stream().read_all();
         EXPECT_EQ(first_body.text(), std::string_view("first"));
-        auto second = co_await client.with_options({.timeout_ = large}).get("/large-operation").send();
+        auto second = co_await client.client().with_options({.timeout_ = large}).get("/large-operation").send();
         auto second_body = co_await second.stream().read_all();
         EXPECT_EQ(second_body.text(), std::string_view("second"));
         co_await server.wait();
@@ -1303,7 +1303,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         server.start();
 
         auto operation = [&]() -> ruvia::task<void> {
-            auto handle = client.with_options({.timeout_ = std::chrono::seconds(2)});
+            auto handle = client.client().with_options({.timeout_ = std::chrono::seconds(2)});
             auto cold = handle.get("/pool-timeout-override").send();
             (void)co_await ruvia::sleep_for(worker.handle_, std::chrono::milliseconds(250));
             const auto start = std::chrono::steady_clock::now();
@@ -1330,7 +1330,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
         server.start();
 
         auto operation = [&]() -> ruvia::task<void> {
-            auto base = client.with_options({.timeout_ = std::chrono::seconds(5)});
+            auto base = client.client().with_options({.timeout_ = std::chrono::seconds(5)});
             auto shortened = base.with_options({.timeout_ = std::chrono::milliseconds(100)});
             auto extended = shortened.with_options({.timeout_ = std::chrono::seconds(5)});
             auto cold = extended.get("/successive-minimum").send();
@@ -1375,7 +1375,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
                 (stop_base ? base_stop : derived_stop).request_stop();
             });
             ruvia::stop_group cancellation{base_stop.token(), derived_stop.token()};
-            auto base = client.with_options({.stop_token_ = base_stop.token()});
+            auto base = client.client().with_options({.stop_token_ = base_stop.token()});
             auto copied = base;
             auto derived = copied.with_options({.stop_token_ = cancellation.token()});
             bool cancelled = false;
@@ -1433,7 +1433,7 @@ TEST(Ruvia, http_client_handle_options_override_pool_timeout_and_start_when_oper
 
         auto operation = [&]() -> ruvia::task<void> {
             server.on_request([&client] { client.close(); });
-            auto cold = client.with_options({}).get("/active-close").send();
+            auto cold = client.client().get("/active-close").send();
             bool closing = false;
             try {
                 (void)co_await std::move(cold);
@@ -1465,7 +1465,7 @@ TEST(Ruvia, http1_full_response_queue_cancellation_and_deadline_finish_without_r
         server.start();
 
         auto operation = [&]() -> ruvia::task<void> {
-            auto handle = client.with_options({
+            auto handle = client.client().with_options({
                 .timeout_ = deadline ? std::optional(std::chrono::milliseconds(40)) : std::nullopt,
                 .stop_token_ = stop.token(),
             });
@@ -1542,7 +1542,7 @@ TEST(Ruvia, http1_transfer_gzip_full_queue_cancel_and_deadline_without_reading) 
         peer.start();
 
         auto operation = [&]() -> ruvia::task<void> {
-            auto handle = client.with_options({
+            auto handle = client.client().with_options({
                 .timeout_ = deadline ? std::optional(std::chrono::milliseconds(200)) : std::nullopt,
                 .stop_token_ = stop.token(),
             });
@@ -2451,7 +2451,7 @@ void exercise_tls_response_retirement(bool join_before_reuse) {
     auto operation = [&]() -> ruvia::task<void> {
         ruvia::stop_source cancellation;
         {
-            auto response = co_await client.with_options({.stop_token_ = cancellation.token()}).get("/partial").send();
+            auto response = co_await client.client().with_options({.stop_token_ = cancellation.token()}).get("/partial").send();
             const auto first = co_await response.stream().text();
             EXPECT_TRUE(first.has_value());
             EXPECT_TRUE(!first->empty());
@@ -3996,7 +3996,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
     const auto send_second = [](ruvia::http_client& c, ruvia::stop_token token,
                                  bool& cancelled_out) -> ruvia::task<void> {
         try {
-            (void)co_await c.with_options({.stop_token_ = std::move(token)}).get("/second").send();
+            (void)co_await c.client().with_options({.stop_token_ = std::move(token)}).get("/second").send();
         } catch (const ruvia::http_client_error& error) {
             cancelled_out = error.code() == ruvia::http_client_error::code_type::cancelled;
         }
@@ -5001,7 +5001,7 @@ TEST(Ruvia, http2_client_draining_session_bounds_a_new_request_by_acquire_timeou
             const auto started = std::chrono::steady_clock::now();
             std::optional<ruvia::http_client_error::code_type> code;
             try {
-                (void)co_await client.with_options({.timeout_ = std::chrono::seconds(5)}).get("/next").send();
+                (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/next").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }
@@ -5192,7 +5192,7 @@ TEST(Ruvia, http2_client_stream_capacity_wait_is_an_acquisition) {
             const auto started = std::chrono::steady_clock::now();
             std::optional<ruvia::http_client_error::code_type> code;
             try {
-                (void)co_await client.with_options({.timeout_ = std::chrono::seconds(5)}).get("/blocked").send();
+                (void)co_await client.client().with_options({.timeout_ = std::chrono::seconds(5)}).get("/blocked").send();
             } catch (const ruvia::http_client_error& error) {
                 code = error.code();
             }

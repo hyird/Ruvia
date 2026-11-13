@@ -4,6 +4,7 @@
 #include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "field/http_header_lookup.h"
+#include "field/http_request_field_validation.h"
 
 namespace ruvia {
 namespace {
@@ -106,6 +107,43 @@ std::optional<http_request_trailer_error> http_request_trailers::append_http1(st
     }
     roll_back();
     return http_request_trailer_error::invalid_field;
+}
+
+std::optional<http_request_trailer_error> http_request_trailers::append_received(std::span<const http_header> fields) {
+    auto budget = budget_;
+    std::size_t retained_count = 0;
+    for (const auto& field : fields) {
+        const auto name = field.name();
+        const auto value = field.value();
+        if (name.empty() || name.front() == ':' || !detail::is_valid_binary_field_name(name) ||
+            !is_valid_http_header_value(value)) {
+            return http_request_trailer_error::invalid_field;
+        }
+        if (!budget.add_field(name, value)) {
+            return http_request_trailer_error::section_too_large;
+        }
+        if (!detail::is_forbidden_http_request_trailer_name(name)) {
+            ++retained_count;
+        }
+    }
+    if (retained_count == 0) {
+        budget_ = budget;
+        return std::nullopt;
+    }
+    auto* const resource = fields_.get_allocator().resource();
+    std::pmr::vector<http_header> staged(resource);
+    staged.reserve(retained_count);
+    for (const auto& field : fields) {
+        if (!detail::is_forbidden_http_request_trailer_name(field.name())) {
+            staged.emplace_back(field.name(), field.value(), resource);
+        }
+    }
+    fields_.reserve(fields_.size() + staged.size());
+    for (auto& field : staged) {
+        fields_.push_back(std::move(field));
+    }
+    budget_ = budget;
+    return std::nullopt;
 }
 
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {

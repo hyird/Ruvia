@@ -4,6 +4,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "ruvia/core/operation_timeout.h"
@@ -13,6 +14,8 @@
 
 #include "client/http_client_registry.h"
 #include "context/context_services.h"
+#include "integration/borrowed_clients.h"
+#include "integration/named_capability.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_handle.h"
@@ -133,11 +136,96 @@ const worker_state_registry& worker_capabilities::worker_states() const noexcept
     return worker_states_;
 }
 
+namespace {
+
+void require_borrowed_client_worker(const worker_handle& router_worker, const worker_handle& client_worker) {
+    if (client_worker.id() != router_worker.id()) {
+        throw std::invalid_argument("a router borrows only clients bound to its own worker");
+    }
+}
+
+template <typename entry_type, typename client_type>
+void bind_borrowed_alias(std::pmr::vector<entry_type>& entries, std::string_view alias, const client_type& client) {
+    validate_capability_alias(alias, "borrowed client alias must not be empty");
+    for (const auto& entry : entries) {
+        if (std::string_view(entry.alias_) == alias) {
+            throw std::invalid_argument("borrowed client alias is already bound");
+        }
+    }
+    entries.push_back(entry_type{std::pmr::string(alias, process_resource()), &client});
+}
+
+template <typename entry_type>
+[[nodiscard]] auto find_borrowed_alias(const std::pmr::vector<entry_type>& entries, std::string_view alias) noexcept
+    -> decltype(entries.front().client_) {
+    for (const auto& entry : entries) {
+        if (std::string_view(entry.alias_) == alias) {
+            return entry.client_;
+        }
+    }
+    return nullptr;
+}
+
+}  // namespace
+
+borrowed_clients::borrowed_clients()
+#if defined(RUVIA_ENABLE_DATABASE) && defined(RUVIA_ENABLE_REDIS)
+    : databases_(process_resource()),
+      redis_(process_resource())
+#elif defined(RUVIA_ENABLE_DATABASE)
+    : databases_(process_resource())
+#elif defined(RUVIA_ENABLE_REDIS)
+    : redis_(process_resource())
+#endif
+{
+}
+
+bool borrowed_clients::empty() const noexcept {
+    return http_clients_ == nullptr
+#ifdef RUVIA_ENABLE_DATABASE
+           && databases_.empty()
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+           && redis_.empty()
+#endif
+        ;
+}
+
+void borrowed_clients::bind_http_client(const worker_handle& worker, const http_client& clients) {
+    require_borrowed_client_worker(worker, clients.worker());
+    if (http_clients_ != nullptr) {
+        throw std::invalid_argument("a router borrows at most one http_client");
+    }
+    http_clients_ = &clients;
+}
+
+#ifdef RUVIA_ENABLE_DATABASE
+void borrowed_clients::bind_database(const worker_handle& worker, std::string_view alias, const db_client& client) {
+    require_borrowed_client_worker(worker, client.worker());
+    bind_borrowed_alias(databases_, alias, client);
+}
+
+const db_client* borrowed_clients::database(std::string_view alias) const noexcept {
+    return find_borrowed_alias(databases_, alias);
+}
+#endif
+
+#ifdef RUVIA_ENABLE_REDIS
+void borrowed_clients::bind_redis(const worker_handle& worker, std::string_view alias, const redis_client& client) {
+    require_borrowed_client_worker(worker, client.worker());
+    bind_borrowed_alias(redis_, alias, client);
+}
+
+const redis_client* borrowed_clients::redis(std::string_view alias) const noexcept {
+    return find_borrowed_alias(redis_, alias);
+}
+#endif
+
 void* worker_context_capabilities::worker_state_instance(const void* type_key) const {
     auto* instance = worker_states_ == nullptr ? nullptr : worker_states_->instance(type_key);
     if (instance == nullptr) {
         throw std::logic_error(
-            "worker state type is not registered: call application::use_worker_state<state_type>() before application::run()");
+            "worker state type is not registered: call application::use_worker_state<state_type>() or router::bind_worker_state()");
     }
     return instance;
 }
@@ -145,6 +233,9 @@ void* worker_context_capabilities::worker_state_instance(const void* type_key) c
 #ifdef RUVIA_ENABLE_DATABASE
 db_handle worker_client_registry_view::db(::ruvia::operation_scope& operation_scope,
     request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        return db(default_capability_alias, operation_scope, io_metrics, stop_token_value);
+    }
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
@@ -154,6 +245,13 @@ db_handle worker_client_registry_view::db(::ruvia::operation_scope& operation_sc
 
 db_handle worker_client_registry_view::db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
     request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        const auto* client = borrowed_->database(alias);
+        if (client == nullptr) {
+            throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
+        }
+        return client->db().with_options(context_operation_options(stop_token_value));
+    }
     if (!attached()) {
         throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
     }
@@ -165,14 +263,25 @@ db_handle worker_client_registry_view::db(std::string_view alias, ::ruvia::opera
 #ifdef RUVIA_ENABLE_REDIS
 redis_handle worker_client_registry_view::redis(::ruvia::operation_scope& operation_scope,
     request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        return redis(default_capability_alias, operation_scope, io_metrics, stop_token_value);
+    }
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
-    return redis_->get(operation_scope, io_metrics).with_options(context_operation_options(stop_token_value));
+    return redis_->get(operation_scope, io_metrics)
+        .with_options(context_operation_options(stop_token_value));
 }
 
 redis_handle worker_client_registry_view::redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
     request_io_metrics* io_metrics, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        const auto* client = borrowed_->redis(alias);
+        if (client == nullptr) {
+            throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
+        }
+        return client->redis().with_options(context_operation_options(stop_token_value));
+    }
     if (!attached()) {
         throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
     }
@@ -183,6 +292,9 @@ redis_handle worker_client_registry_view::redis(std::string_view alias, ::ruvia:
 
 http_client_handle worker_client_registry_view::client(
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        return borrowed_http_clients().client().with_options({.stop_token_ = stop_token_value});
+    }
     if (!attached()) {
         throw http_client_error(
             http_client_error::code_type::not_configured, "http client is not configured");
@@ -192,11 +304,23 @@ http_client_handle worker_client_registry_view::client(
 
 http_client_handle worker_client_registry_view::client(std::string_view alias,
     ::ruvia::operation_scope& operation_scope, const stop_token& stop_token_value) const {
+    if (borrowed_ != nullptr) {
+        return borrowed_http_clients().client(alias).with_options({.stop_token_ = stop_token_value});
+    }
     if (!attached()) {
         throw http_client_error(
             http_client_error::code_type::not_configured, "http client is not configured");
     }
     return http_clients_->get(alias, operation_scope, stop_token_value);
+}
+
+const http_client& worker_client_registry_view::borrowed_http_clients() const {
+    const auto* clients = borrowed_->http_clients();
+    if (clients == nullptr) {
+        throw http_client_error(
+            http_client_error::code_type::not_configured, "http client is not configured");
+    }
+    return *clients;
 }
 
 }  // namespace ruvia::detail

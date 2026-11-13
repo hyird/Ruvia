@@ -678,9 +678,8 @@ public:
 
     // Handles and operations borrow this client's open lifecycle. Starting one
     // from a temporary would immediately run the client destructor and begin
-    // shutdown, so only lvalue clients may create them.
-    [[nodiscard]] http_client_handle with_options(operation_options options) const&;
-    http_client_handle with_options(operation_options) const&& = delete;
+    // shutdown, so only lvalue clients may create them. Like context::client(),
+    // a handle carries no operation options; derive them with with_options().
     // client() selects the sole configuration, or alias "default" in a set.
     // 默认重定向仅可到达已注册 origin；请求策略可显式扩充集合。
     [[nodiscard]] http_client_handle client() const&;

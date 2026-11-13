@@ -40,6 +40,12 @@ public:
         return worker_states_;
     }
 
+    // A router serving the request substitutes its own registry for the
+    // duration of its dispatch.
+    void bind_worker_states(const worker_state_registry* worker_states) noexcept {
+        worker_states_ = worker_states;
+    }
+
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
         return *static_cast<state_type*>(worker_state_instance(type_key<state_type>()));

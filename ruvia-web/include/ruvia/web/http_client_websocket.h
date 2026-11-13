@@ -24,11 +24,14 @@ class http_client_websocket_state;
 // Extended CONNECT. Moving preserves cold and running operations. Destruction
 // aborts the tunnel; all use and destruction remain on the origin's worker.
 // Origin TLS, cookies, protocol choice, transport limits and operation options
-// are inherited. One receive may overlap one send; close requires both lanes,
-// and failure aborts the tunnel.
+// are inherited. Operations mirror the server websocket: one read may overlap
+// one output operation, and close() claims only the write lane.
 // HTTP request deadlines stop at the accepted handshake. An established
 // WebSocket has no total lifetime cap; explicit operation_options bound each
 // operation, alongside active-read/write and close/heartbeat inactivity limits.
+// A per-operation timeout may only tighten inherited bounds; a supplied
+// cancellation token replaces inherited user cancellation, while an empty
+// token inherits it.
 class http_client_websocket final {
 public:
     http_client_websocket(const http_client_websocket&) = delete;
@@ -37,62 +40,85 @@ public:
     http_client_websocket& operator=(http_client_websocket&&) noexcept;
     ~http_client_websocket();
 
-    // Inputs are copied before returning a cold operation; string sends text,
-    // byte spans send binary, and messages retain their opcode. A per-operation
-    // timeout may only tighten inherited bounds; a supplied cancellation token
-    // replaces inherited user cancellation, while an empty token inherits it.
-    [[nodiscard]] task<void> send(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> send(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(std::span<const std::byte> payload, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> send(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &;
-    task<void> send(websocket_message&&, websocket_send_options = {}, operation_options = {}) && = delete;
+    // Only nullopt is EOF: a close handshake completed by either side, or any
+    // end once this side's close() has sent its Close. Other failures abort
+    // the session and throw http_client_error. The message view lasts until
+    // the next read() or close(). A stop request or timeout in `operation`
+    // ends only this read with http_client_error (cancelled or timeout);
+    // buffered input, the read lane and the session stay usable. Once the
+    // peer Close has arrived the read finishes the handshake first.
+    [[nodiscard]] task<std::optional<websocket_message>> read(operation_options operation = {}) &;
+    task<std::optional<websocket_message>> read(operation_options = {}) && = delete;
+
+    // Inputs are copied before returning a cold operation; messages retain
+    // their opcode. Output operations share one write lane. A stop request,
+    // timeout or failure aborts the session (a partly written frame cannot be
+    // withdrawn); an already-stopped token fails before any output.
+    [[nodiscard]] task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> text(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> send(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
+    [[nodiscard]] task<void> text(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
         return write_owned(websocket_opcode::text, std::move(payload), options, std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
-    task<void> send(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
-    // Only nullopt is EOF. The message view lasts until the next receive or close.
-    [[nodiscard]] task<std::optional<websocket_message>> receive(operation_options operation = {}) &;
-    task<std::optional<websocket_message>> receive(operation_options = {}) && = delete;
-    [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
-    task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
-    task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
+    task<void> text(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> binary(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> binary(std::span<const std::byte> payload, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> binary(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
-    [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
-        return write_owned(websocket_opcode::ping, std::move(payload), {}, std::move(operation));
+    [[nodiscard]] task<void> binary(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::binary, std::move(payload), options, std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
-    task<void> ping(string_type&&, operation_options = {}) && = delete;
+    task<void> binary(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
     template <std::same_as<std::pmr::string> string_type>
     [[nodiscard]] task<void> pong(string_type&& payload, operation_options operation = {}) & {
         return write_owned(websocket_opcode::pong, std::move(payload), {}, std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
     task<void> pong(string_type&&, operation_options = {}) && = delete;
-    // Close and automatic heartbeat use the builder's lifecycle policy, further
+    [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
+    task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
+    template <std::same_as<std::pmr::string> string_type>
+    [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
+        return write_owned(websocket_opcode::ping, std::move(payload), {}, std::move(operation));
+    }
+    template <std::same_as<std::pmr::string> string_type>
+    task<void> ping(string_type&&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &;
+    task<void> send(websocket_message&&, websocket_send_options = {}, operation_options = {}) && = delete;
+    // Claims the write lane only, so it may start while a read is pending:
+    // that read returns nullopt once the handshake ends. Without a pending
+    // read, close() itself reads until the peer Close and a read started
+    // meanwhile throws std::logic_error. The builder's lifecycle policy bounds
+    // the handshake (its timeout throws http_client_error timeout), further
     // tightened by inherited and per-operation deadlines.
     [[nodiscard]] task<void> close(websocket_close_options options = {}, operation_options operation = {}) &;
     task<void> close(websocket_close_options = {}, operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
-    [[nodiscard]] std::string_view subprotocol() const& RUVIA_LIFETIMEBOUND;
+
+    // Session state, read like the server websocket's accessors: use on the
+    // origin's worker only (other workers terminate); a moved-from owner
+    // reports an empty subprotocol, no peer Close, none, zero and false.
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view subprotocol() const&& = delete;
-    [[nodiscard]] http_protocol_version protocol_version() const;
-    [[nodiscard]] const http_client_connection_info& connection_info() const& RUVIA_LIFETIMEBOUND;
-    const http_client_connection_info& connection_info() const&& = delete;
-    [[nodiscard]] bool connected() const;
-    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const;
-    [[nodiscard]] std::string_view peer_close_reason() const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] bool connected() const noexcept;
+    [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const noexcept;
+    [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view peer_close_reason() const&& = delete;
-    // The server websocket's termination() and wire byte counts, with the same
-    // meaning; a moved-from owner reports none and zero. Use on the origin's
-    // worker only.
     [[nodiscard]] websocket_termination termination() const noexcept;
     [[nodiscard]] std::uint64_t bytes_received() const noexcept;
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
+
+    // Transport metadata of a live owner; a moved-from owner or another
+    // worker throws std::logic_error.
+    [[nodiscard]] http_protocol_version protocol_version() const;
+    [[nodiscard]] const http_client_connection_info& connection_info() const& RUVIA_LIFETIMEBOUND;
+    const http_client_connection_info& connection_info() const&& = delete;
     [[nodiscard]] const worker_handle& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 

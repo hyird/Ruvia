@@ -204,15 +204,9 @@ struct http_server_options final {
     std::optional<rate_limit_rule> default_rate_limit_per_worker_{};
     std::size_t rate_limit_capacity_per_worker_{default_rate_limit_capacity_per_worker};
 
+    // Validates the whole aggregate, including its compression and CORS
+    // policies, before publishing any of it.
     void set_server(const server_config& config);
-    void set_compression(compression_config config);
-    void clear_compression() noexcept {
-        compression_.reset();
-    }
-    void set_cors(const cors_config& config);
-    void clear_cors() noexcept {
-        cors_.reset();
-    }
     void set_rate_limit(const rate_limit_config& config);
     void clear_rate_limit() noexcept {
         default_rate_limit_per_worker_.reset();

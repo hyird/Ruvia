@@ -1218,7 +1218,7 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
         if (auto* const conn = find_http3_connection(state_value)) {
             conn->release_data(state_value);
         } else {
-            state_value.http3_data_credit_ = 0;
+            state_value.http3_data_credit_.reset();
         }
         return;
     }

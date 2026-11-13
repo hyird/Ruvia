@@ -70,8 +70,8 @@ struct worker_data final {
 
     task<void> read() {
         // Both operations explicitly use ORM; no raw SQL/Redis escape hatch.
-        auto devices = db_.handle().repository<device>();
-        auto cached = redis_.handle().repository<cached_device>({.prefix_ = "ruvia:example:devices"});
+        auto devices = db_.db().repository<device>();
+        auto cached = redis_.redis().repository<cached_device>({.prefix_ = "ruvia:example:devices"});
         auto device = co_await devices.find_one({.where_ = device::column<"id">() == 1});
         auto cache = co_await cached.find_one({.where_ = cached_device::column<"id">() == "1"});
         // Results stay in this coroutine on the owner loop and die before

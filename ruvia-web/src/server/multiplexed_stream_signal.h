@@ -14,6 +14,8 @@
 #include <type_traits>
 #include <utility>
 
+#include <asio/cancellation_signal.hpp>
+
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
@@ -680,6 +682,25 @@ class multiplexed_tunnel_transport_base {
 public:
     template <typename buffer_type>
     [[nodiscard]] task<bool> read_more(buffer_type& buffer) {
+        return read_more(buffer, []() noexcept {}, asio::cancellation_slot{});
+    }
+
+    // A cancellation emitted on `slot` wakes the wait; `check` runs before
+    // every wait and may throw to abandon it. Input that has not been
+    // consumed stays queued for the next read_more().
+    template <typename buffer_type, typename check_type>
+    [[nodiscard]] task<bool> read_more(buffer_type& buffer, check_type check, asio::cancellation_slot slot) {
+        struct slot_assignment final {
+            asio::cancellation_slot slot_;
+            ~slot_assignment() {
+                if (slot_.is_connected()) {
+                    slot_.clear();
+                }
+            }
+        } assignment{slot};
+        if (slot.is_connected()) {
+            slot.assign([&signal = signal_](asio::cancellation_type) noexcept { signal.wake(); });
+        }
         for (;;) {
             derived().require_live();
             if (derived().consume_tunnel_chunk(buffer)) {
@@ -689,6 +710,7 @@ public:
                 co_return false;
             }
             derived().require_live();
+            check();
             co_await signal_.wait();
         }
     }

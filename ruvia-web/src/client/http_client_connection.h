@@ -141,8 +141,10 @@ public:
     // waiting for each batch to reach the transport and for send window.
     // An empty input ending the stream is still one DATA frame, sent only
     // while both send windows are positive (RFC 9113 section 6.9).
-    // `stop()` is checked before each submission and after each wait.
-    // Exceptions other than the core's std::logic_error rejection propagate.
+    // `stop()` is checked before each submission and after each wait. Input
+    // beyond the declared Content-Length is rejected (invalid_message), as is
+    // a stream that no longer sends (std::logic_error); other exceptions
+    // propagate.
     template <typename stop_type>
     [[nodiscard]] task<http2_client_data_status> send_data(std::uint32_t stream_id, std::string_view bytes,
         http2_end_stream end_stream, std::size_t chunk_bytes, stop_type stop, bool* end_submitted = nullptr) {
@@ -169,7 +171,8 @@ public:
                 end_pending = false;
             }
             wake_writer();
-            if (submitted.status_ == http2_data_submit_status::closed) {
+            if (submitted.status_ == http2_data_submit_status::closed ||
+                submitted.status_ == http2_data_submit_status::invalid_message) {
                 co_return http2_client_data_status::rejected;
             }
             if (submitted.status_ == http2_data_submit_status::expectation_pending) {
@@ -187,8 +190,8 @@ public:
 
     // Ends a request stream with `trailers`, or without them with an empty
     // END_STREAM DATA frame, which waits for positive send windows like
-    // send_data(). Rejected when the stream no longer sends or the content is
-    // incomplete (std::logic_error).
+    // send_data(). Rejected when the stream no longer sends (std::logic_error),
+    // the content is incomplete or a trailer is invalid (invalid_message).
     template <typename stop_type>
     [[nodiscard]] task<http2_client_data_status> finish_request(
         std::uint32_t stream_id, std::span<const http_header_view> trailers, stop_type stop) {

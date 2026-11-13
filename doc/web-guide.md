@@ -29,7 +29,7 @@ int main() {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限与请求 Arena 参数 |
+| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限、请求 Arena 参数及响应压缩与 CORS 策略 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验；`inherited_sockets_` 接管已绑定的 socket） |
 | `task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config)` | 异步替换 HTTPS 监听器及其 HTTP/3 服务的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
 | `task<void> add_listener(worker_handle caller, listen_config config)` | 异步新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
@@ -44,8 +44,6 @@ int main() {
 | `template <typename S, typename... Args> application& use_worker_state(Args&&... args)` | 注册 per-worker 状态类型 `S`，在每个 worker 启动时独立构造一份实例 |
 | `application& load_dotenv(dotenv_options options = {})` | 从可执行文件旁 `.env`（或指定 `std::filesystem::path`）加载实例环境变量 |
 | `const ruvia::env& env() const noexcept` | 获取应用环境变量只读视图 |
-| `application& compression(compression_config config)` / `compression(std::nullptr_t)` | 启用或禁用响应内容协商压缩（gzip / deflate / br / zstd） |
-| `application& cors(cors_config config)` / `cors(std::nullptr_t)` | 启用或禁用全局 CORS 策略与自动预检处理 |
 | `application& document_root(document_root_config config)` / `document_root(std::nullptr_t)` | 启用或禁用后台定时刷新的静态文档根目录服务 |
 | `application& trusted_proxies(trusted_proxy_config config)` / `trusted_proxies(std::nullptr_t)` | 配置可信反向代理 CIDR 列表与 `X-Forwarded-Proto` 信任策略 |
 | `application& rate_limit(rate_limit_config config)` / `rate_limit(std::nullptr_t)` | 启用或禁用全局按客户端 IP 限流 |
@@ -101,6 +99,8 @@ int main() {
 | `max_stream_body_bytes_` | `std::optional<std::size_t>`（默认无上限） | 流式路由请求体总字节上限 |
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
 | `request_arena_initial_bytes_` | `std::size_t`（默认 4 KiB） | 请求 Arena 初始字节数，须大于零；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存资源) |
+| `compression_` | `std::optional<compression_config>`（默认不启用） | 宿主级响应内容协商压缩（gzip / deflate / br / zstd）与预压缩静态变体协商，见下文“压缩、CORS 与可信代理配置” |
+| `cors_` | `std::optional<cors_config>`（默认不启用） | 宿主级 CORS 策略，含路由引擎 `OPTIONS` 预检回答 |
 
 连接关闭遵循 [RFC 9112 §9.6/§9.8](https://www.rfc-editor.org/rfc/rfc9112.html#section-9.6)：
 
@@ -232,6 +232,8 @@ ruvia::app().listen({
 
 #### 压缩、CORS 与可信代理配置
 
+- **单一配置位置**：`server_config::compression_` / `cors_` 随 `application::server()`、`test_app::server()`、`http_server` / `http_server_group` 构造参数整体校验发布；非法阈值或 CORS 字段使整次配置失败，原配置不变。
+- **适用范围**：作用于宿主准备的每个 HTTP 响应，包括路由、`router::dispatch()` 与 `request_stream` 回调；隧道与 WebSocket 升级不选择响应表示。
 - **`compression_config`**：`min_bytes_`（默认 `1024`）、`sync_bytes_`（默认 `64 KiB`）、`max_bytes_`（默认 `64 MiB`）。
   - **小正文**：`min_bytes_` 只控制压缩是否划算；请求以 `identity;q=0` 等方式拒绝 identity 时，小缓冲体同样压缩，结果不必小于原文，不因此返回 `406`。
   - **固定表示**：响应已有 `Content-Encoding`、`Content-Range`、`Cache-Control: no-transform` 或完整性字段 `Content-Digest` / `Repr-Digest` / `Content-MD5` 时不再压缩；RFC 9530 的摘要随内容编码而变。
@@ -469,7 +471,7 @@ ruvia::app()
 | `advertise_origins(origins)` / `advertise_alternative_service(value)` | 复用连接的 ORIGIN / ALTSVC 输出能力及协议限制 |
 | `worker()` / `worker_state<T>()` | 所属核心 worker 与其注册状态，不依赖路由分发 |
 | `run_blocking(...)` | 绑定请求取消的阻塞卸载；参数及结果契约同 `context::run_blocking()` |
-| `client(alias)` / `db(alias)` / `redis(alias)` | 借用当前 worker 注册的出站能力；支持无参默认别名，后两者受构建特性控制 |
+| `client(alias)` / `db(alias)` / `redis(alias)` | 借用当前 worker 注册的出站能力（`router::dispatch()` 期间为该 router 借入的客户端）；支持无参默认别名，后两者受构建特性控制 |
 | `arena()` / `pool()` / `env()` | 请求内存、进程 PMR 与宿主环境视图 |
 | `draft()` | 编辑下一次文件工厂、流式提交或隧道/WebSocket 接受使用的响应元数据 |
 | `response()` | 流式响应（`response_stream_writer`）：提交、写正文、以可选 Trailer 结束 |
@@ -482,7 +484,8 @@ ruvia::app()
 | `reset()` / `reset(http2_error_code)` / `reset(http3_error_code)` | 提交前即可终结当前流；HTTP/1 关闭连接，HTTP/2、HTTP/3 默认分别为 CANCEL、H3_REQUEST_CANCELLED |
 
 - **保留的服务器语义**：分帧与目标校验、`421`（RFC 9110 §7.4）、不支持的 `Expect` 回 `417`、`max_stream_body_bytes_` 正文上限（声明长度超限回 `413`，读取超限时 `read()` 抛出）、流控信用、各阶段超时、请求数上限与 HTTP/3 0-RTT 的 `425` 照常生效；这些回答使用框架默认错误表示。
-- **跳过的应用层**：不经过路由、中间件、`document_root`、CORS、响应压缩、限流与 `on_error` / `on_not_found`；`Accept-Encoding` 不参与协商，响应表示完全由处理器决定。
+- **宿主表示策略**：`server_config::cors_` / `compression_` 同样作用于回调选择的响应，范围见 [1.2](#压缩cors-与可信代理配置)。
+- **跳过的应用层**：不经过路由、中间件、`document_root`、应用级限流与 `on_error` / `on_not_found`。
 - **路由隔离**：仅有 `connection` / `request_stream` 的应用不构造控制器或中间件、不编译或封存全局路由；首次动态添加 `routes` 监听器时才准备并采纳路由与路由限流，失败保留原服务。
 - **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在请求所属 worker 线程上有效；多个 worker 并发调用同一目标，目标须线程安全。
 - **正文快照**：`request_body_framing` 区分 `none`、`known_length`、`chunked`、`multiplexed`。`initial_end_stream_` 在 HTTP/2 保存初始 HEADERS 的 END_STREAM，在 HTTP/3 保存初始首部结束时的 FIN；HTTP/1 与服务端推送为 `nullopt`，后续数据不改写快照。
@@ -540,7 +543,9 @@ ruvia::task<void> serve(ruvia::event_loop loop, ruvia::stop_token stop) {
 
 - **线程归属**：除 `close()`、析构与 `stats()` 外，操作均在绑定循环执行；`server_config` 的调度字段由外部循环负责，其余限额作用于该宿主的单 worker。
 - **原生接管**：外部服务不接收 HTTP/3、继承监听 socket 或自动重定向配置；Windows 的接管 socket 不得已绑定其他 IOCP，绑定监听仍复用独立原生 Acceptor。
-- **销毁边界**：析构仅请求关闭；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。出站 `http_client`、`db_client`、`redis_client` 可独立绑定同一循环并捕获到处理器，无须全局注册。
+- **销毁边界**：析构仅请求关闭；调用方须继续驱动循环，直到 `shutdown()` 完成或循环自身的停止回调完成 join。
+- **出站与状态**：同循环的 `http_client`、`db_client`、`redis_client` 及 per-worker 状态由调用方拥有，经 `router` 的 `bind_*` 入口借给路由请求，使 `c.redis()` / `c.db()` / `c.client()` / `c.worker_state<T>()` 及 `session_middleware`、CSRF 等内置中间件可用，见 [1.11](#111-显式路由组合ruviawebrouterh)。
+- **表示策略**：构造参数 `server_config` 的 `compression_` / `cors_` 生效，范围见 [1.2](#压缩cors-与可信代理配置)。
 - **异步准备**：TLS 凭据、CA 与上下文准备需要所属循环显式借用 `blocking_pool`；缺池或拒绝准入时传播失败，不退回 worker 同步执行。纯明文服务不要求池。冷任务返回前拥有配置、敏感输入与继承 socket；丢弃未等待的任务也会释放它们。
 - **Windows Acceptor**：启动、退役与关闭异步等待原生线程完成；退出等待不占阻塞池，因此池已满或已停止也不妨碍清理。
 
@@ -613,7 +618,14 @@ int main() {
 | --- | --- |
 | `add<Modifiers...>(method, path, handler)` | 拥有缓冲响应处理器 `task<http_response>(context&)`，同步复制路径 |
 | `stream<Modifiers...>(method, path, handler)` | 拥有流式响应处理器 `task<void>(context&)` |
+| `websocket<Modifiers...>(path, handler, websocket_route_config = {})` | WebSocket 路由：HTTP/1.1 Upgrade 与扩展 CONNECT（RFC 8441 / RFC 9220），对应 `RUVIA_GET_WS` |
+| `connect<Modifiers...>(authority, handler, http_tunnel_route_config = {})` | 普通 CONNECT 隧道：精确 `host:port` 或 `"*"`，对应 `RUVIA_CONNECT` |
+| `connect_protocol<Modifiers...>(protocol, path, handler, config = {})` | 扩展 CONNECT 协议隧道；`"connect-udp"` 同时接受 HTTP/1.1 Upgrade，对应 `RUVIA_CONNECT_PROTOCOL` |
 | `use<T>(args...)` / `use_at<T>(options, args...)` | 注册 worker-local 中间件；前缀按完整路径段匹配 |
+| `rate_limit(rate_limit_config)` | 本 router 的按客户端地址限流规则，与 `application::rate_limit()` 同形，含 `capacity_per_worker_`；未命中路由的请求同样计数，路由级 `rate_limit<>` 叠加生效 |
+| `bind_redis(alias, client)` / `bind_database(alias, client)` | 借入调用方拥有的同 worker `redis_client` / `db_client`，按别名供 `c.redis()` / `c.db()` 查找；受构建特性控制 |
+| `bind_http_client(clients)` | 借入一个 `http_client`，`c.client()` / `c.client(alias)` 使用其自身别名集合 |
+| `bind_worker_state<T>(state)` | 借入调用方拥有的 per-worker 状态，供 `c.worker_state<T>()` 查找；每类型一份 |
 | `on_error(...)` / `on_not_found(...)` | 注册全局或路径作用域的错误处理器 |
 | `freeze()` | 原子编译并构造中间件；失败保留可编辑配置，成功后拒绝注册及再次封存 |
 | `co_await dispatch(stream)` | 在 `request_stream` 回调中执行；每请求仅一次，且须早于其他输出选择 |
@@ -621,25 +633,43 @@ int main() {
 ```cpp
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
+#include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/router.h"
+#include "ruvia/web/session.h"
 
-// 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 routes 存活。
+// 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 redis 与 routes 存活。
+ruvia::redis_client redis(loop, {.host_ = "127.0.0.1", .port_ = 6379,
+    .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
+co_await redis.connect();
 ruvia::router routes(loop.handle());
+routes.bind_redis("default", redis)
+    .rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}});
+routes.use<ruvia::session_middleware>();
 routes.add("GET", "/items/:id", [](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
     co_return c.text(c.req().param("id").value());
 });
-routes.freeze();
-ruvia::http_server server(loop, {
-    .request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); },
+routes.websocket("/ws", [](ruvia::context& c) -> ruvia::task<void> {
+    while (auto message = co_await c.websocket().read()) {
+        co_await c.websocket().send(std::move(*message));
+    }
 });
+routes.freeze();
+ruvia::http_server server(loop,
+    {.request_stream_ = [&](ruvia::request_stream& stream) { return routes.dispatch(stream); }},
+    {.compression_ = ruvia::compression_config{}, .cors_ = ruvia::cors_config{}});
 server.listen({.address_ = "127.0.0.1", .http_ = 8080,
     .dispatch_ = ruvia::listener_dispatch::request_stream});
 co_await server.start();
-// 服务寿命与 shutdown() 的完整驱动见 1.9。
+// 服务寿命与 shutdown() 的完整驱动见 1.9；redis.shutdown() 在 server.shutdown() 之后。
 ```
 
 - **线程与寿命**：配置、封存和分发均在绑定 worker 上执行；多 worker 各自拥有 router。处理器捕获的引用须覆盖全部请求，冷 dispatch 保留路由状态但不能脱离请求作用域。
 - **共享语义**：参数、HEAD 回退、OPTIONS／405／501、single-shot 中间件、限流、错误处理、URL 生成与缓冲子请求使用原主链；提交后的异常仍关闭连接或重置流。
+- **升级路由**：中间件链之后的终端经 `request_stream::accept_websocket()` / `accept_tunnel()` 完成握手（CONNECT 回 `200`，HTTP/1.1 Upgrade 回 `101`），再以 `c.websocket()` / `c.tunnel()` 运行处理器；会话收尾、Capsule 与 Datagram 语义同 [1.8](#18-请求流分发ruviawebrequest_streamh)。
+- **升级拒绝**：未提供对应升级的请求（普通 `GET`、携带正文的 Upgrade）经 `on_error` 回答 `400`；握手被拒绝时不运行处理器并回答 `400`，中间件后处理仍可见该响应。
+- **借入能力**：借入任一客户端后，本 router 分发的客户端查找只在借入集合内解析；借入任一状态后，状态查找同理；未借入的类别沿用宿主注册。
+- **借入约束**：客户端须绑定 router 所属 worker，否则抛 `std::invalid_argument`；同类别别名重复同样抛出。客户端与状态须覆盖全部分发，在服务该 router 的宿主 `shutdown()` 完成后才能关闭或销毁。
+- **独立 Session**：借入 Redis 后 `session_middleware`、CSRF 等依赖 `c.redis()` 的内置中间件在 `http_server` 下直接可用，无需第二种会话来源。
 - **正文策略**：`body_limit<N>` 由 `middleware.h` 提供，可与 `stream_body` 组合；只收紧宿主预算。协议 I/O、取消、正文与响应输出继续借用请求流服务。
 
 ---
@@ -858,7 +888,7 @@ const auto& user = c.request_state<current_user>();
 | `ruvia::rate_limit<MaxReqs, WindowMs>` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数）；全局限流使用 `app().rate_limit({...})`；两者的拒绝都经 `on_error` 应答为 `429` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/security_headers.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"ruvia/web/csrf.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话 |
+| `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
@@ -996,7 +1026,7 @@ Ruvia 提供三种静态文件服务方式：
 2. **不可变目录快照 `ruvia::static_root`**：启动前构造 `ruvia::static_root assets("public/", {.cache_control_ = "public, max-age=3600"})`，在路由中调用 `co_return co_await c.static_file(assets, {.relative_path_ = c.req().param("*").value_or("")})`。
 3. **托管自动刷新的 `app().document_root({...})`**：后台按 `refresh_interval_` 重建并发布不可变目录快照。
    - **单一刷新者**：首个登记的 Worker 负责目录扫描、驻留读取与预压缩，其他 Worker 只采用发布快照。
-   - **预压缩**：启用 `app().compression(compression_config{})` 后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成的表示；仅设置预压缩开关不会生成这些表示。
+   - **预压缩**：`server_config::compression_` 启用后，`precompress_gzip_` / `precompress_brotli_` / `precompress_zstd_` 控制启动及刷新时生成的表示；仅设置预压缩开关不会生成这些表示。
    - **失败保留**：重建或采用失败时继续服务上一份完整快照，`http_stats().document_root_refresh_failures_` 计数加一；原因经限流的未处理故障通道（`ruvia: document root refresh failed: ...`，写入 stderr）报告。
    - **等价跳过**：指纹只作预筛选；随后比较完整规范化策略、目录索引及文件元数据，等价时不发布替换快照。
    - **无锁切换**：启动期固定各 Worker 的邮箱；发布者通过无锁原子指针交换移交快照所有权，各 Worker 在请求间隙采用，不获取发布者互斥锁。

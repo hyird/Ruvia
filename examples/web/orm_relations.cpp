@@ -91,7 +91,7 @@ auto migrations() {
 }
 
 task<void> query_example(db_client& db) {
-    auto employees = db.handle().repository<employee>();
+    auto employees = db.db().repository<employee>();
     const std::array<borrowed_text, 2> employee_relations{"department", "department.employees"};
     const std::array<db_find_order, 1> employee_order{{{"id", db_order_direction::asc}}};
     const db_find_options employee_options{
@@ -127,12 +127,12 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
     std::exception_ptr failure;
     try {
         co_await db.connect();
-        auto departments = db.handle().repository<department>();
-        auto employees = db.handle().repository<employee>();
-        auto profiles = db.handle().repository<profile>();
-        auto users = db.handle().repository<user>();
-        auto courses = db.handle().repository<course>();
-        auto students = db.handle().repository<student>();
+        auto departments = db.db().repository<department>();
+        auto employees = db.db().repository<employee>();
+        auto profiles = db.db().repository<profile>();
+        auto users = db.db().repository<user>();
+        auto courses = db.db().repository<course>();
+        auto students = db.db().repository<student>();
         for (const auto [id, name] : {std::pair{1LL, "North"}, std::pair{2LL, "South"}}) {
             department row;
             row.set<"id">(id);
@@ -168,7 +168,7 @@ task<void> run(db_client& db, event_loop_attachment& attachment) {
             student.set<"name">("Learner");
             co_await students.upsert(student, {.conflict_paths_ = conflict_paths});
         }
-        auto memberships = db.handle().repository<student_course>();
+        auto memberships = db.db().repository<student_course>();
         const borrowed_text membership_conflict_paths[]{"student_id", "course_id"};
         for (const auto [student_id, course_id] : {std::pair{1LL, 1LL}, std::pair{1LL, 2LL}, std::pair{2LL, 2LL}}) {
             student_course membership;

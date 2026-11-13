@@ -209,10 +209,6 @@ public:
     }
 
     test_app& server(server_config config);
-    test_app& compression(compression_config config);
-    test_app& compression(std::nullptr_t);
-    test_app& cors(cors_config config);
-    test_app& cors(std::nullptr_t);
     test_app& rate_limit(rate_limit_config config);
     test_app& rate_limit(std::nullptr_t);
     test_app& trusted_proxies(trusted_proxy_config config);

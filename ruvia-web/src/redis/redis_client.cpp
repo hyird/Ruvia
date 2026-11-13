@@ -140,7 +140,7 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] redis_handle handle(operation_options options);
+    [[nodiscard]] redis_handle redis();
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
@@ -170,16 +170,13 @@ void redis_client_state::throw_not_ready() {
     throw std::logic_error("redis client is not connected");
 }
 
-redis_handle redis_client_state::handle(operation_options options) {
+redis_handle redis_client_state::redis() {
     lifecycle_.require_ready();
     // Unbounded blocking commands/subscriptions require an explicit lifetime.
     // Use the client's lifetime as the default, not as an extra user source.
-    // A user override replaces it; runtime_.close_now() independently cancels
-    // all command pools and subscriptions during client shutdown.
-    if (!options.stop_token_.has_state()) {
-        options.stop_token_ = lifecycle_.token();
-    }
-    return runtime_.handle(lifecycle_.operation_scope(), std::move(options));
+    // A with_options() token replaces it; runtime_.close_now() independently
+    // cancels all command pools and subscriptions during client shutdown.
+    return runtime_.handle(lifecycle_.operation_scope(), {.stop_token_ = lifecycle_.token()});
 }
 
 }  // namespace ruvia::detail
@@ -201,8 +198,8 @@ task<void> redis_client::connect() & {
     return state_->connect();
 }
 
-redis_handle redis_client::handle(operation_options options) const& {
-    return state_->handle(std::move(options));
+redis_handle redis_client::redis() const& {
+    return state_->redis();
 }
 
 void redis_client::close() noexcept {

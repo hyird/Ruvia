@@ -588,22 +588,12 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
     auto& state_value = *stream.state_;
     const auto request_content_signal = event.request_content_signal();
     const bool stream_ended = event.stream_ended();
-    auto head = std::move(event).take_head();
-    const auto headers = head.headers();
-    state_value.headers_.clear();
-    state_value.headers_.reserve(headers.size());
-    for (const auto& header : headers) {
-        state_value.headers_.emplace_back(header.name(), header.value(), state_value.resource_);
-    }
-    state_value.content_length_ = head.content_length();
-    const auto body_plan = plan_http_response_body(state_value.request_method_, head.status());
-    state_value.framing_ = body_plan.content_semantics() == http_response_content_semantics::connect_tunnel
-                               ? http_client_response_framing::tunnel
-                           : body_plan.body_suppressed() ? http_client_response_framing::none
-                                                         : http_client_response_framing::stream;
+    const auto received_status = event.head().received_status();
+    const auto protocol_version = event.head().protocol_version();
+    retain_http_client_binary_response_head(state_value, std::move(event).take_head());
     if (auto* websocket = stream.websocket_) {
-        accept_extended_connect_websocket_response(
-            *websocket, head.status(), state_value.headers_, stream_ended, "invalid HTTP/2 WebSocket handshake response");
+        accept_extended_connect_websocket_response(*websocket, received_status.status(), state_value.headers_,
+            stream_ended, "invalid HTTP/2 WebSocket handshake response");
         // HTTP request lifetime ends at the accepted handshake. WebSocket
         // operations own their deadlines; the session itself has no total cap.
         static const operation_timeout websocket_lifetime(std::nullopt);
@@ -613,13 +603,13 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
         schedule_http2_stream_timer(stream);
     }
     publish_http_client_final_head(state_value, pool_.policy(),
-        {.status_ = head.received_status(),
-            .protocol_version_ = head.protocol_version(),
+        {.status_ = received_status,
+            .protocol_version_ = protocol_version,
             .request_content_signal_ = request_content_signal,
             .origin_target_ = stream.addresses_origin_ ? std::optional(stream.request_target_) : std::nullopt,
             // RFC 9110 section 9.3.6 and RFC 8441 section 5: a 2xx to CONNECT,
             // plain or extended, opens the tunnel.
-            .opens_tunnel_ = state_value.tunnel_.has_value() && head.received_status().status().is_successful()});
+            .opens_tunnel_ = state_value.tunnel_.has_value() && received_status.status().is_successful()});
     // The upload loop waits for tunnel acceptance.
     stream.signal_.notify();
     restart_http2_stream_read(stream);
@@ -1005,9 +995,9 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
     auto* const resource = process_resource();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
     const auto content = request.upload() != nullptr
-                             ? ::ruvia::http2_request_content::streaming(request.upload()->config_.content_length_)
-                         : request.has_body() ? ::ruvia::http2_request_content::known_length(request.body().size())
-                                              : ::ruvia::http2_request_content::none();
+                             ? ::ruvia::http_request_content_plan::streaming(request.upload()->config_.content_length_)
+                         : request.has_body() ? ::ruvia::http_request_content_plan::known_length(request.body().size())
+                                              : ::ruvia::http_request_content_plan::none();
 
     for (int attempt_value = 0; attempt_value < 2; ++attempt_value) {
         // Each attempt acquires its stream like a connection slot: the slot's

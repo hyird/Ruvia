@@ -221,7 +221,7 @@ void http_client_response_state::detach_transport_bindings() noexcept {
     http2_data_credit_.reset();
 #endif
 #ifdef RUVIA_ENABLE_HTTP3
-    http3_data_credit_ = 0;
+    http3_data_credit_.reset();
 #endif
     connection_index_ = 0;
     connection_serial_ = 0;

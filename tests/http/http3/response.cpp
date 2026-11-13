@@ -6,6 +6,7 @@
 #include <initializer_list>
 #include <memory_resource>
 #include <new>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,6 +24,7 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/websocket_client_negotiation.h"
 
 #include "failing_memory_resource.h"
 #include "http3_relay.h"
@@ -83,7 +85,13 @@ void append_http3_wire_frame(std::pmr::string& bytes, unsigned type, std::string
     bytes.append(payload);
 }
 
-void append_http3_wire_headers(std::pmr::string& bytes, std::span<const ruvia::http3_field_view> fields) {
+// One field line exactly as the wire carries it.
+struct http3_wire_field final {
+    std::string_view name_;
+    std::string_view value_;
+};
+
+void append_http3_wire_headers(std::pmr::string& bytes, std::span<const http3_wire_field> fields) {
     std::pmr::string section(2, '\0');  // Required Insert Count = 0; Delta Base = 0.
     for (const auto& field : fields) {
         append_qpack_integer(section, field.name_.size(), 3, 0x20);
@@ -94,7 +102,7 @@ void append_http3_wire_headers(std::pmr::string& bytes, std::span<const ruvia::h
     append_http3_wire_frame(bytes, 1, section);
 }
 
-void append_http3_wire_headers(std::pmr::string& bytes, std::initializer_list<ruvia::http3_field_view> fields) {
+void append_http3_wire_headers(std::pmr::string& bytes, std::initializer_list<http3_wire_field> fields) {
     append_http3_wire_headers(bytes, std::span(fields.begin(), fields.size()));
 }
 
@@ -219,7 +227,7 @@ TEST(Ruvia, http3_field_sections_keep_interleaved_names_and_values_after_submiss
                 response.header_stable_view(field.name(), field.value());
             }
             const auto submitted = peers.server_.submit_streaming_response_head(
-                0, ruvia::http_known_method::get, std::move(response), ruvia::http_response_trailer_intent::present);
+                0, std::move(response), ruvia::http_response_trailer_intent::present);
             EXPECT_TRUE(std::holds_alternative<ruvia::http_response_stream_commit_plan>(submitted));
             const auto data = peers.server_.submit_data(0, ruvia::test::http3_bytes("payload"));
             EXPECT_TRUE(data.status_ == ruvia::http3_status::accepted && data.accepted_bytes_ == 7);
@@ -300,10 +308,10 @@ TEST(Ruvia, http3_buffered_response_head_to_head_request_ends_with_head) {
     EXPECT_TRUE(!plan.send_body());
     EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
         peers.server_.submit_response_head(0, response, plan)));
-    // The head ended the stream: no content can follow.
-    EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes("x")).status_ ==
-                ruvia::http3_status::invalid_state);
-    EXPECT_TRUE(peers.server_.finish_stream(0) == ruvia::http3_status::invalid_state);
+    // The head ended the stream: content after it is a caller ordering error.
+    EXPECT_TRUE(throws_as<std::logic_error>(
+        [&] { (void)peers.server_.submit_data(0, ruvia::test::http3_bytes("x")); }));
+    EXPECT_TRUE(throws_as<std::logic_error>([&] { (void)peers.server_.finish_stream(0); }));
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
@@ -331,7 +339,7 @@ TEST(Ruvia, http3_response_head_rejects_connection_specific_fields) {
 
     ruvia::http_response streamed(&resource);
     streamed.header("Keep-Alive", "timeout=5");
-    EXPECT_TRUE(rejected_with(peers.server_.submit_streaming_response_head(0, ruvia::http_known_method::get,
+    EXPECT_TRUE(rejected_with(peers.server_.submit_streaming_response_head(0,
                                   std::move(streamed), ruvia::http_response_trailer_intent::none),
         ruvia::http3_response_head_error::invalid_message));
 
@@ -352,8 +360,9 @@ TEST(Ruvia, http3_response_head_rejects_connection_specific_fields) {
 }
 
 // The planned Content-Length binds the DATA total exactly: excess is refused
-// before anything is copied and an early end leaves the stream open.
-TEST(Ruvia, http3_response_content_length_mismatch_throws_length_error) {
+// before anything is copied and an early end leaves the stream open, both as
+// invalid_message values a forwarding caller can answer.
+TEST(Ruvia, http3_response_content_length_mismatch_is_invalid_message) {
     ruvia::test::http3_peers peers;
     EXPECT_TRUE(peers.bind());
     ruvia::test::http3_event_log request;
@@ -369,16 +378,16 @@ TEST(Ruvia, http3_response_content_length_mismatch_throws_length_error) {
     EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
         peers.server_.submit_response_head(4, response, plan)));
 
-    EXPECT_TRUE(throws_as<std::length_error>(
-        [&] { (void)peers.server_.submit_data(0, ruvia::test::http3_bytes("hello!")); }));
+    EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes("hello!")).status_ ==
+                ruvia::http3_status::invalid_message);
     EXPECT_EQ(peers.server_.pending_output_bytes(0), std::size_t{0});
     EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes("hello")).accepted_bytes_ == 5);
-    EXPECT_TRUE(throws_as<std::length_error>(
-        [&] { (void)peers.server_.submit_data(0, ruvia::test::http3_bytes("!")); }));
+    EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes("!")).status_ ==
+                ruvia::http3_status::invalid_message);
     EXPECT_TRUE(peers.server_.finish_stream(0) == ruvia::http3_status::accepted);
 
     EXPECT_TRUE(peers.server_.submit_data(4, ruvia::test::http3_bytes("hel")).accepted_bytes_ == 3);
-    EXPECT_TRUE(throws_as<std::length_error>([&] { (void)peers.server_.finish_stream(4); }));
+    EXPECT_TRUE(peers.server_.finish_stream(4) == ruvia::http3_status::invalid_message);
     EXPECT_TRUE(peers.server_.submit_data(4, ruvia::test::http3_bytes("lo")).accepted_bytes_ == 2);
     EXPECT_TRUE(peers.server_.finish_stream(4) == ruvia::http3_status::accepted);
 
@@ -402,7 +411,7 @@ TEST(Ruvia, http3_streaming_response_head_sends_trailers_after_data) {
     ruvia::http_response head(&resource);
     head.header("Content-Type", "text/plain");
     const auto submitted = peers.server_.submit_streaming_response_head(
-        0, ruvia::http_known_method::get, std::move(head), ruvia::http_response_trailer_intent::present);
+        0, std::move(head), ruvia::http_response_trailer_intent::present);
     const auto* commit = std::get_if<ruvia::http_response_stream_commit_plan>(&submitted);
     EXPECT_TRUE(commit != nullptr);
     if (commit == nullptr) {
@@ -419,8 +428,8 @@ TEST(Ruvia, http3_streaming_response_head_sends_trailers_after_data) {
                                                      std::span<const ruvia::http_header_view>(trailer_fields))) ==
                 ruvia::http3_status::accepted);
     // The trailer section was the last thing the stream may carry.
-    EXPECT_TRUE(peers.server_.submit_data(0, ruvia::test::http3_bytes("late")).status_ ==
-                ruvia::http3_status::invalid_state);
+    EXPECT_TRUE(throws_as<std::logic_error>(
+        [&] { (void)peers.server_.submit_data(0, ruvia::test::http3_bytes("late")); }));
 
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
@@ -492,7 +501,7 @@ TEST(Ruvia, http3_submit_data_is_bounded_by_unacknowledged_output) {
     ruvia::http_response head(&resource);
     EXPECT_TRUE(std::holds_alternative<ruvia::http_response_stream_commit_plan>(
         peers.server_.submit_streaming_response_head(
-            0, ruvia::http_known_method::get, std::move(head), ruvia::http_response_trailer_intent::none)));
+            0, std::move(head), ruvia::http_response_trailer_intent::none)));
 
     constexpr std::string_view payload = "abcdefghijklmnopqrst";
     const auto first = peers.server_.submit_data(0, ruvia::test::http3_bytes(payload));
@@ -542,11 +551,10 @@ TEST(Ruvia, http3_connect_response_has_no_content_framing_and_preserves_half_clo
     ruvia::http_response response;
     response.status(ruvia::http_status::ok);
     response.header("content-length", "0");
-    EXPECT_TRUE(peers.server_.submit_connect_response_head(0, response) ==
-                ruvia::http3_response_head_error::invalid_message);
+    EXPECT_TRUE(peers.server_.submit_connect_response_head(0, response) == ruvia::http3_status::invalid_message);
     ruvia::http_response accepted;
     accepted.status(ruvia::http_status::ok);
-    EXPECT_TRUE(!peers.server_.submit_connect_response_head(0, accepted));
+    EXPECT_TRUE(peers.server_.submit_connect_response_head(0, accepted) == ruvia::http3_status::accepted);
     ruvia::test::http3_event_log client;
     EXPECT_TRUE(peers.to_client(client));
     EXPECT_TRUE(client.headers_.size() == 1 && !client.headers_[0].stream_ended_ &&
@@ -644,7 +652,7 @@ TEST(Ruvia, http3_official_nghttp3_rejects_000_to_099_before_publishing_client_h
 }
 
 TEST(Ruvia, http3_client_rejects_invalid_response_heads_before_publication) {
-    const std::pmr::vector<std::pmr::vector<ruvia::http3_field_view>> invalid_heads{
+    const std::pmr::vector<std::pmr::vector<http3_wire_field>> invalid_heads{
         {{":status", "101"}},
         {{":status", "20"}},
         {{":status", "2000"}},
@@ -713,7 +721,7 @@ TEST(Ruvia, http3_client_validates_interim_final_and_retained_trailer_fields_on_
 }
 
 TEST(Ruvia, http3_client_rejects_invalid_trailer_sections_without_publishing_partial_fields) {
-    const std::pmr::vector<std::pmr::vector<ruvia::http3_field_view>> invalid_trailers{
+    const std::pmr::vector<std::pmr::vector<http3_wire_field>> invalid_trailers{
         {{"x-checksum", "valid"}, {":status", "200"}},
         {{"x-checksum", "valid"}, {":path", "/"}},
         {{"x-checksum", "valid"}, {"te", "trailers"}},
@@ -782,4 +790,136 @@ TEST(Ruvia, http3_core_response_validation_resets_only_the_malformed_stream) {
     EXPECT_TRUE(receive_http3_wire_response(peers, 4, wire, true, client).status_ == ruvia::http3_status::accepted);
     EXPECT_EQ(client.data(4), "ok");
     EXPECT_TRUE(client.ended(4));
+}
+
+// RFC 9114 §4.1: a 1xx field section larger than the peer's
+// SETTINGS_MAX_FIELD_SECTION_SIZE is a value the caller can answer, and the
+// stream can still take its final response.
+TEST(Ruvia, http3_interim_response_over_the_peer_field_limit_is_invalid_message) {
+    ruvia::test::http3_peers peers({}, {.max_field_section_size_ = 256});
+    ASSERT_TRUE(peers.bind());
+    ruvia::test::http3_event_log request;
+    ASSERT_TRUE(peers.send_request(0, get_request_head, true, request));
+    const std::pmr::string large(512, 'x');
+    const std::array fields{ruvia::http_header_view{"link", large}};
+    const ruvia::http_interim_response_head hints(
+        ruvia::http_status::early_hints, std::span<const ruvia::http_header_view>(fields));
+    EXPECT_EQ(peers.server_.submit_interim_response_head(0, hints), ruvia::http3_status::invalid_message);
+    ruvia::http_response response;
+    response.status(ruvia::http_status::no_content);
+    ASSERT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(peers.server_.submit_response_head(
+        0, response, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, response))));
+    ruvia::test::http3_event_log client;
+    ASSERT_TRUE(peers.to_client(client));
+    ASSERT_EQ(client.headers_.size(), std::size_t{1});
+    EXPECT_TRUE(client.headers_[0].status_ && client.headers_[0].status_->value() == 204);
+}
+
+// The streaming head applies the method the stream received: a HEAD
+// response ends the stream with its head.
+TEST(Ruvia, http3_streaming_response_head_uses_the_received_request_method) {
+    ruvia::test::http3_peers peers;
+    ASSERT_TRUE(peers.bind());
+    ruvia::test::http3_event_log request;
+    ASSERT_TRUE(peers.send_request(0, head_request_head, true, request));
+    ruvia::http_response head;
+    head.header("content-length", "5");
+    const auto submitted = peers.server_.submit_streaming_response_head(0, std::move(head));
+    const auto* plan = std::get_if<ruvia::http_response_stream_commit_plan>(&submitted);
+    ASSERT_NE(plan, nullptr);
+    EXPECT_TRUE(plan->head_disposition() == ruvia::http_response_stream_head_disposition::message_ended);
+    ruvia::test::http3_event_log client;
+    ASSERT_TRUE(peers.to_client(client));
+    ASSERT_EQ(client.headers_.size(), std::size_t{1});
+    EXPECT_TRUE(client.headers_[0].stream_ended_);
+    EXPECT_TRUE(client.headers_[0].field("content-length") == "5");
+    EXPECT_TRUE(client.ended(0));
+}
+
+// RFC 9110 §10.1.1: the first 100 releases content held for
+// Expect: 100-continue; a final head while it still waits ends the exchange.
+TEST(Ruvia, http3_client_response_heads_carry_request_content_signals) {
+    for (const bool continue_first : {true, false}) {
+        SCOPED_TRACE(continue_first);
+        ruvia::test::http3_peers peers;
+        ASSERT_TRUE(peers.bind());
+        ruvia::test::http3_event_log request;
+        ASSERT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{
+                                                             .method_ = "POST", .authority_ = "example.test", .target_ = "/upload", .content_ = ruvia::http_request_content_plan::streaming(3), .expectation_ = ruvia::http_client_request_expectation::continue_value}) == ruvia::http3_status::accepted);
+        ASSERT_TRUE(peers.to_server(request));
+        if (continue_first) {
+            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_value)),
+                ruvia::http3_status::accepted);
+            ASSERT_EQ(peers.server_.submit_interim_response_head(0, ruvia::http_interim_response_head(ruvia::http_status::continue_value)),
+                ruvia::http3_status::accepted);
+        }
+        ruvia::http_response response;
+        response.status(ruvia::http_status::no_content);
+        ASSERT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(peers.server_.submit_response_head(
+            0, response, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::post, response))));
+        std::pmr::vector<std::optional<ruvia::http_client_request_content_signal>> interim_signals;
+        std::optional<ruvia::http_client_request_content_signal> final_signal;
+        bool final_ended = false;
+        ASSERT_TRUE(peers.to_client([&](ruvia::http3_event& event) {
+            if (const auto* interim = std::get_if<ruvia::http3_informational_head_event>(&event)) {
+                EXPECT_EQ(interim->head().protocol_version(), ruvia::http_protocol_version::http3);
+                interim_signals.push_back(interim->request_content_signal());
+            } else if (auto* head = std::get_if<ruvia::http3_response_head_event>(&event)) {
+                final_signal = head->request_content_signal();
+                final_ended = head->stream_ended();
+                const auto taken = std::move(*head).take_head();
+                EXPECT_EQ(taken.status(), ruvia::http_status::no_content);
+            }
+        }));
+        EXPECT_TRUE(final_ended);
+        if (continue_first) {
+            ASSERT_EQ(interim_signals.size(), std::size_t{2});
+            EXPECT_TRUE(interim_signals[0] == ruvia::http_client_request_content_signal::continue_value);
+            EXPECT_FALSE(interim_signals[1].has_value());
+            EXPECT_FALSE(final_signal.has_value());
+        } else {
+            EXPECT_TRUE(interim_signals.empty());
+            EXPECT_TRUE(final_signal == ruvia::http_client_request_content_signal::exchange_complete);
+        }
+    }
+}
+
+// RFC 9220: the HTTP/3 convenience entry sends the negotiation's fields and
+// the protocol-neutral validator accepts the server's selection.
+TEST(Ruvia, http3_websocket_client_request_round_trips_the_negotiation) {
+    std::pmr::unsynchronized_pool_resource resource;
+    ruvia::test::http3_peers peers({.enable_connect_protocol_ = true});
+    ASSERT_TRUE(peers.bind());
+    constexpr std::array<std::string_view, 1> subprotocols{"chat.v1"};
+    const ruvia::websocket_client_negotiation negotiation({.subprotocols_ = subprotocols}, &resource);
+    EXPECT_EQ(ruvia::submit_http3_websocket_client_request(peers.client_, 0, negotiation, "https", "example.test", "/ws"),
+        ruvia::http3_status::peer_settings_pending);
+    ruvia::test::http3_event_log settings;
+    ASSERT_TRUE(peers.to_client(settings));
+    ASSERT_EQ(ruvia::submit_http3_websocket_client_request(peers.client_, 0, negotiation, "https", "example.test", "/ws"),
+        ruvia::http3_status::accepted);
+    std::optional<ruvia::http3_request_head> head;
+    ASSERT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
+        if (auto* headers = std::get_if<ruvia::http3_headers_event>(&event)) {
+            if (auto parsed = ruvia::http3_request_head::parse(std::move(*headers), &resource)) {
+                head.emplace(std::move(*parsed));
+            }
+        }
+    }));
+    ASSERT_TRUE(head.has_value());
+    const auto request = head->build_request(&resource);
+    const auto validation = ruvia::validate_http3_websocket_handshake(*head, request);
+    ASSERT_NE(validation.accepted(), nullptr);
+    ASSERT_TRUE(std::holds_alternative<ruvia::websocket_extended_connect_negotiation>(
+        peers.server_.submit_websocket_handshake(0, request, validation, {.supported_subprotocols_ = subprotocols})));
+    bool validated = false;
+    ASSERT_TRUE(peers.to_client([&](ruvia::http3_event& event) {
+        if (const auto* response = std::get_if<ruvia::http3_response_head_event>(&event)) {
+            const auto selection = ruvia::validate_extended_connect_websocket_client_response(
+                negotiation, response->head(), !response->stream_ended());
+            const auto* selected = std::get_if<ruvia::websocket_client_negotiation_result_view>(&selection);
+            validated = selected != nullptr && selected->selected_subprotocol_ == "chat.v1";
+        }
+    }));
+    EXPECT_TRUE(validated);
 }

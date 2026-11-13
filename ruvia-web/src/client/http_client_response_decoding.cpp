@@ -148,6 +148,26 @@ void accept_extended_connect_websocket_response(http_client_websocket_handshake&
     websocket.compression_ = selected->compression_;
 }
 
+void retain_http_client_binary_response_head(http_client_response_state& state_value, http_client_response_head&& head) {
+    const auto status = head.status();
+    state_value.content_length_ = head.content_length();
+    auto fields = std::move(head).take_headers();
+    if (fields.get_allocator().resource() == state_value.resource_) {
+        state_value.headers_.swap(fields);
+    } else {
+        state_value.headers_.clear();
+        state_value.headers_.reserve(fields.size());
+        for (const auto& field : fields) {
+            state_value.headers_.emplace_back(field.name(), field.value(), state_value.resource_);
+        }
+    }
+    const auto body_plan = plan_http_response_body(state_value.request_method_, status);
+    state_value.framing_ = body_plan.content_semantics() == http_response_content_semantics::connect_tunnel
+                               ? http_client_response_framing::tunnel
+                           : body_plan.body_suppressed() ? http_client_response_framing::none
+                                                         : http_client_response_framing::stream;
+}
+
 void publish_http_client_final_head(
     http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
     if (state_value.upload_ && !state_value.upload_->output_.ended_ &&

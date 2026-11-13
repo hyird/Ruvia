@@ -30,32 +30,6 @@ namespace {
 
 }  // namespace
 
-application& application::compression(compression_config config) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change compression config while app is running",
-        [config = std::move(config)](detail::app_state& state_value) mutable {
-            state_value.options_.set_compression(std::move(config));
-        });
-}
-
-application& application::compression(std::nullptr_t) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change compression config while app is running",
-        [](detail::app_state& state_value) { state_value.options_.clear_compression(); });
-}
-
-application& application::cors(cors_config config) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change CORS config while app is running", [&config](detail::app_state& state_value) {
-            state_value.options_.set_cors(config);
-        });
-}
-application& application::cors(std::nullptr_t) {
-    return detail::mutate_stopped_app(*this, *state_,
-        "cannot change CORS config while app is running",
-        [](detail::app_state& state_value) { state_value.options_.clear_cors(); });
-}
-
 application& application::document_root(document_root_config config) {
     std::optional<detail::app_document_root_config> retired;
     return detail::mutate_stopped_app(*this, *state_,

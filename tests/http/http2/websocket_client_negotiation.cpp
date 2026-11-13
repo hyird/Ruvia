@@ -39,13 +39,13 @@ ruvia::http_client_response_head accepted_head(std::string_view fields) {
 // The server's selection on an open Extended CONNECT stream.
 std::variant<ruvia::websocket_client_negotiation_result_view, ruvia::websocket_client_handshake_error> open_stream_selection(
     const ruvia::websocket_client_negotiation& negotiation, const ruvia::http_client_response_head& head) {
-    return ruvia::validate_http2_websocket_client_response(negotiation, head, true);
+    return ruvia::validate_extended_connect_websocket_client_response(negotiation, head, true);
 }
 
 template <typename head_type>
 concept ws_client_negotiation_accepts_response_head =
     requires(const ruvia::websocket_client_negotiation& negotiation, head_type&& head) {
-        ruvia::validate_http2_websocket_client_response(negotiation, std::forward<head_type>(head), true);
+        ruvia::validate_extended_connect_websocket_client_response(negotiation, std::forward<head_type>(head), true);
     };
 
 static_assert(ws_client_negotiation_accepts_response_head<const ruvia::http_client_response_head&>);
@@ -95,7 +95,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         const auto* head = event ? event->response_head() : nullptr;
         EXPECT_TRUE(head != nullptr);
         if (head != nullptr) {
-            EXPECT_TRUE(ruvia::validate_http2_websocket_client_response(negotiation, head->head(), true).index() == 0);
+            EXPECT_TRUE(ruvia::validate_extended_connect_websocket_client_response(negotiation, head->head(), true).index() == 0);
         }
     }
     {
@@ -188,7 +188,7 @@ TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_heade
         }
         EXPECT_EQ(head->stream_ended(), end_on_headers);
         const auto negotiated =
-            ruvia::validate_http2_websocket_client_response(negotiation, head->head(), !head->stream_ended());
+            ruvia::validate_extended_connect_websocket_client_response(negotiation, head->head(), !head->stream_ended());
         if (end_on_headers) {
             EXPECT_TRUE(std::holds_alternative<ruvia::websocket_client_handshake_error>(negotiated) &&
                         std::get<ruvia::websocket_client_handshake_error>(negotiated) ==

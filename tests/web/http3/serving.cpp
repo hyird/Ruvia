@@ -54,6 +54,7 @@
 #include "ruvia/web/websocket.h"
 
 #include "app_run.h"
+#include "http3_raw_request_client.h"
 #include "http3_test_client.h"
 #include "test_tls_identity.h"
 #include "udp_port_reservation.h"
@@ -594,8 +595,8 @@ ruvia::task<void> run_protocol_lane(ruvia::http_client_handle client,
                                                "-ws-" + std::pmr::string(std::to_string(loop_idx), ruvia::process_resource()) + "-" +
                                                std::pmr::string(std::to_string(lane), ruvia::process_resource()) + "-" + std::pmr::string(std::to_string(msg_idx), ruvia::process_resource()),
                     ruvia::process_resource());
-                co_await ws.send(msg, {.compress_ = (msg_idx % 2 == 0)});
-                auto reply = co_await ws.receive();
+                co_await ws.text(msg, {.compress_ = (msg_idx % 2 == 0)});
+                auto reply = co_await ws.read();
                 EXPECT_TRUE(reply.has_value());
                 if (reply) {
                     EXPECT_EQ(reply->payload(), msg);
@@ -1103,6 +1104,11 @@ ruvia::test::http3_test_client connect(std::uint16_t port, const ruvia::test::tl
         {asio::ip::address_v4::loopback(), port}, identity.ca_file_, "localhost", client_timeout);
 }
 
+ruvia::test::http3_raw_request_client connect_raw(std::uint16_t port, const ruvia::test::tls_identity& identity) {
+    return ruvia::test::http3_raw_request_client(
+        {asio::ip::address_v4::loopback(), port}, identity.ca_file_, "localhost", client_timeout);
+}
+
 }  // namespace http3_serving_test
 
 using namespace http3_serving_test;
@@ -1187,12 +1193,16 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
         // RFC 9114 §4.3.1: :authority and Host must agree. The malformed
         // request is a stream error of type H3_MESSAGE_ERROR (§4.1.2); the
         // connection keeps serving.
-        const auto malformed_stream = client.start_raw_request({{":method", "GET"}, {":scheme", "https"},
-            {":authority", "localhost:" + std::pmr::string(std::to_string(port), ruvia::process_resource())}, {":path", "/hello"}, {"host", "attacker.example"}});
-        const auto malformed = client.finish_response(malformed_stream);
-        EXPECT_EQ(malformed.reset_error_.value_or(0), std::uint64_t{NGHTTP3_H3_MESSAGE_ERROR});
-        EXPECT_EQ(malformed.status_, 0);
-        EXPECT_EQ(client.request("GET", "/hello").status_, 200);
+        {
+            auto raw = connect_raw(port, identity);
+            const auto authority = "localhost:" + std::pmr::string(std::to_string(port), ruvia::process_resource());
+            const auto malformed = raw.request({{":method", "GET"}, {":scheme", "https"}, {":authority", authority},
+                {":path", "/hello"}, {"host", "attacker.example"}});
+            EXPECT_EQ(malformed.reset_error_.value_or(0), std::uint64_t{NGHTTP3_H3_MESSAGE_ERROR});
+            EXPECT_EQ(malformed.status_, 0);
+            const auto served = raw.request({{":method", "GET"}, {":scheme", "https"}, {":authority", authority}, {":path", "/hello"}});
+            EXPECT_EQ(served.status_, 200);
+        }
     }
 
     {
@@ -1337,10 +1347,11 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
     // origin-form target) as a connection error of type H3_MESSAGE_ERROR, as
     // RFC 9114 §8 permits.
     {
-        auto client = connect(port, identity);
-        (void)client.start_raw_request({{":method", "GET"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "hello"}});
-        EXPECT_TRUE(client.wait_until([&client] { return client.closed(); }, client_timeout));
-        const auto* close_error = ngtcp2_conn_get_ccerr2(client.native_handle());
+        auto raw = connect_raw(port, identity);
+        EXPECT_THROW((void)raw.request({{":method", "GET"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "hello"}}),
+            std::runtime_error);
+        EXPECT_TRUE(raw.closed());
+        const auto* close_error = ngtcp2_conn_get_ccerr2(raw.native_handle());
         EXPECT_TRUE(close_error != nullptr && close_error->error_code == NGHTTP3_H3_MESSAGE_ERROR);
     }
 

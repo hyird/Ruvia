@@ -181,11 +181,11 @@ void exercise_client(bool reset_peer, bool secure = false) {
             auto websocket = co_await client.client().websocket("/").headers(headers).deflate({.compression_ = {.enabled_ = true}}).connect();
             auto& client_handle = websocket;
             if (reset_peer) {
-                (void)co_await client_handle.receive();
+                (void)co_await client_handle.read();
             } else {
                 for (const bool compress : {false, true}) {
-                    co_await client_handle.send(std::as_bytes(std::span(std::string_view(large))), {.compress_ = compress});
-                    const auto echo = co_await client_handle.receive();
+                    co_await client_handle.binary(std::as_bytes(std::span(std::string_view(large))), {.compress_ = compress});
+                    const auto echo = co_await client_handle.read();
                     EXPECT_TRUE(echo.has_value());
                     if (echo) {
                         EXPECT_EQ(echo->payload(), std::string_view(large));
@@ -502,7 +502,7 @@ void exercise_handshake_end(handshake_end mode) {
             auto websocket = co_await client.client().websocket("/").lifecycle({.close_handshake_timeout_ = std::chrono::milliseconds(50)}).connect();
             connected = true;
             auto& client_handle = websocket;
-            closed_by_peer = !(co_await client_handle.receive()) &&
+            closed_by_peer = !(co_await client_handle.read()) &&
                              client_handle.peer_close_code() == std::uint16_t{1000} &&
                              client_handle.peer_close_reason() == std::string_view("bye") &&
                              websocket.peer_close_code() == std::uint16_t{1000} &&

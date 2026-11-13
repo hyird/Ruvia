@@ -79,6 +79,10 @@ struct http3_quic_connection_options final {
     std::size_t max_pending_datagram_bytes_{64 * 1024};
     void* callback_user_data_{nullptr};
     std::pmr::memory_resource* resource_{nullptr};
+    // The connection installs its own received_data_credit_sink_: a returned
+    // http3_received_data_credit extends the stream and connection receive
+    // windows (RFC 9000 §4.1), so DATA credit returns only as the application
+    // consumes it. Framing bytes are credited at once.
     http3_connection_options http3_{};
 };
 
@@ -154,9 +158,6 @@ public:
     [[nodiscard]] http3_quic_result handle_expiry(ngtcp2_tstamp timestamp);
     [[nodiscard]] ngtcp2_tstamp expiry() const noexcept;
 
-    // Returns receive flow-control credit for DATA payload the application
-    // consumed (RFC 9000 §4.1). nghttp3 credits framing bytes itself.
-    void consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept;
     // Abandons both directions of a request stream with RESET_STREAM and
     // STOP_SENDING carrying `application_error_code` (RFC 9114 §4.1.1).
     void reset_stream(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;

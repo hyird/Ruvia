@@ -32,7 +32,7 @@ TEST(Ruvia, db_public_mapping_owns_values_and_rejects_missing_or_ambiguous_colum
     db_client client(attachment.loop(), peer.config());
     test::counting_memory_resource resource;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         std::optional<mapped_user> owned;
         {
             const auto rows = co_await handle.query("SELECT name, id, ignored FROM users");

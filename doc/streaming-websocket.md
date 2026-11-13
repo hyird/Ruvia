@@ -234,17 +234,23 @@ private:
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<std::optional<websocket_message>> read() &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；收到对端 Close 帧或连接结束时返回 `std::nullopt`，原因由 `termination()` 区分 |
-| `task<void> text(std::string_view payload, websocket_send_options options = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
-| `task<void> binary(std::string_view payload, websocket_send_options options = {}) &` | 发送二进制消息（另有 `std::pmr::string&&` 重载） |
-| `task<void> send(websocket_message&& message, websocket_send_options options = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前会占用读缓冲） |
-| `task<void> ping(std::string_view payload = {}) &` / `pong(std::string_view payload = {}) &` | 发送显式 `Ping` 或 `Pong` 控制帧 |
-| `task<void> close(websocket_close_options options = {}) &` | 发起或完成关闭握手；启动后独占读写通道，并发读、写或再次关闭抛 `std::logic_error`（默认 `code_ = websocket_close_status::normal_closure`） |
+| `task<std::optional<websocket_message>> read(operation_options operation = {}) &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；会话结束（对端或本端关闭握手完成、EOF、拒收帧、`abort()`、心跳或关闭超时）时返回 `std::nullopt`，原因由 `termination()` 区分 |
+| `task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
+| `task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送二进制消息（另有 `std::span<const std::byte>` 与 `std::pmr::string&&` 重载） |
+| `task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前占用读通道） |
+| `task<void> ping(std::string_view payload = {}, operation_options operation = {}) &` / `pong(…)` | 发送显式 `Ping` 或 `Pong` 控制帧（另有 `std::pmr::string&&` 重载） |
+| `task<void> close(websocket_close_options options = {}, operation_options operation = {}) &` | 发起或完成关闭握手，只占写通道（默认 `code_ = websocket_close_status::normal_closure`） |
+| `void abort() & noexcept` | 立即中止底层传输而不执行关闭握手 |
 | `std::string_view subprotocol() const& noexcept` | 获取握手协商选中的 WebSocket 子协议（未选中时为空视图） |
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` / `std::string_view peer_close_reason() const& noexcept` | 读取对端发送的 Close 帧状态码与 UTF-8 原因（收到对端 Close 帧后可用） |
-| `void abort() noexcept` | 立即中止底层传输而不执行关闭握手 |
 | `websocket_termination termination() const noexcept` | 会话结束原因；活动中为 `none`，首个原因胜出，`read()` 返回 `std::nullopt` 后稳定可读 |
 | `std::uint64_t bytes_received() const noexcept` / `bytes_sent() const noexcept` | 双向线上 WebSocket 帧字节，会话结束后仍可读 |
+
+- **通道**：同一时刻最多运行一个读取与一个输出操作，同方向重叠抛 `std::logic_error`；未启动的冷操作可共存。
+- **读取中断**：`read()` 的 `operation` 超时或停止请求只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`）；已缓冲输入、读通道与会话保持可用，可继续读取。
+- **输出中断**：输出操作或 `close()` 的 `operation` 超时、停止请求中止会话（已部分写出的帧无法撤回），记为 `timeout` / `aborted` 并抛同类 `std::system_error`；令牌在启动前已停止时不产生任何输出。
+- **优雅关闭**：`close()` 可与挂起的 `read()` 并发，Close 发出后由该读取继续解析输入；对端应答后读取返回 `std::nullopt`、记为 `local_close`，关闭握手超时则读取返回 `std::nullopt`、记为 `timeout`，`close()` 抛 `timed_out`。
+- **自行排空**：没有挂起读取时 `close()` 自己读到对端 Close，期间启动的 `read()` 抛 `std::logic_error`；未完成的 `send(websocket_message&&)` 借用读缓冲，此时 `close()` 抛 `std::logic_error`。
 
 `websocket_termination`（`"ruvia/http/websocket_protocol.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
 
@@ -257,8 +263,8 @@ private:
 | `protocol_error` | 对端帧或消息违反 RFC 6455（如未掩码、保留 opcode、非法分片或控制帧），本端已发 `1002` |
 | `invalid_payload_data` | 文本消息或 Close 原因不是 UTF-8，本端已发 `1007` |
 | `message_too_large` | 帧声明、分片累计或解压后超过接收上限，本端已发 `1009` |
-| `timeout` | 心跳 Pong 或关闭握手超时；客户端另含读取与逐次操作超时 |
-| `aborted` | 本端 `abort()`、处理器结束拆除会话或本地故障 |
+| `timeout` | 心跳 Pong、关闭握手或输出操作超时；客户端另含读取无活动超时（`read_timeout_`）。`read()` 的逐次超时不结束会话 |
+| `aborted` | 本端 `abort()`、输出操作被取消、处理器结束拆除会话或本地故障 |
 | `io_error` | 传输读写失败，含连接或 HTTP/2、HTTP/3 流被重置；服务端 `write_timeout_` 由连接扫描器直接关闭套接字，同样记为 `io_error` |
 
 - **计数口径**：RFC 6455 帧线上字节，即帧头、掩码键与负载，含 Ping/Pong/Close 控制帧；`permessage-deflate` 下为压缩后负载。
@@ -393,21 +399,26 @@ co_return c.text(body.text());
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |
 | `client.migrate(local_address, port)` | 对已有 HTTP/3 连接发起本地地址迁移，保留连接与流状态 |
-| `client.websocket(path).connect()` | 返回拥有型 WebSocket 连接；`send()` / `receive()` 收发消息，`close()` 执行关闭握手 |
+| `client.websocket(path).connect()` | 返回拥有型 WebSocket 连接；读写、关闭、逐次中断与访问器的名称和限定同服务端 `websocket`（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)） |
 
 `text()`、`bytes()`、`json<T>()` 与 `stream()` 消费同一条线性正文流，不缓存可重复读取的副本。结果收集同时受调用方 `max_bytes`、客户端响应上限和 worker 共享结果预算约束。Header/Trailer 视图借用响应对象；拥有型收集结果可独立保留。
 
 - **双向异常归属**：上传失败不追溯撤销已验证完整的响应；响应尚未完成时，导致交换失败的传输或解码异常仍由响应消费入口报告。
 
-WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。`receive()` 返回 `nullopt` 表示结束；返回消息借用连接的接收存储，视图在下一次 `receive()` 或 `close()` 前有效。连接不能跨 worker 使用。`termination()`、`bytes_received()` / `bytes_sent()` 与服务端同名访问器同口径（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)）；已移出的连接返回 `none` 与 `0`。
+WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。返回消息借用连接的接收存储，视图在下一次 `read()` 或 `close()` 前有效。连接不能跨 worker 使用。
 
-出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。WebSocket 的 `receive`、`send`、`ping`、`pong`、`close` 接受逐次操作选项，收紧超时或附加取消。
+- **结束与失败**：`read()` 在任一方完成关闭握手、或本端 `close()` 已发出 Close 后会话以任何方式结束时返回 `nullopt`；其余失败中止会话并抛 `http_client_error`，读取中断为 `cancelled` / `timeout`。
+- **选项继承**：逐次 `operation_options` 继承所属句柄的选项，超时只能收紧，提供的令牌替换继承的用户取消。
+- **消息转发**：`send(websocket_message&&)` 在返回冷操作前复制负载，不占读通道。
+- **访问器**：会话状态访问器与服务端同为 `noexcept`，跨 worker 使用终止进程，已移出的连接返回空值、`none`、`0` 与 `false`；传输元数据 `protocol_version()`、`connection_info()`、`worker()` 对已移出或跨 worker 的调用抛 `std::logic_error`。
+
+出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
 - **Upgrade 协议选择**：`negotiate` 的 HTTPS origin 上，`upgrade()` 复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；`http2_only`、`http3_only` 返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
 
-句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样只返回句柄（取句柄规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_handle)）；句柄的 `with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
 ### 5.2 源站、转发与连接控制
 

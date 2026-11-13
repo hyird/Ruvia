@@ -18,13 +18,18 @@
 namespace ruvia {
 namespace {
 
-[[nodiscard]] http3_connection_options resolve_http3_options(
-    const http3_quic_connection_options& options) {
+[[nodiscard]] http3_connection_options resolve_http3_options(const http3_quic_connection_options& options,
+    http3_received_data_credit_sink_type sink, void* context) {
+    if (options.http3_.received_data_credit_sink_ != nullptr || options.http3_.received_data_credit_context_ != nullptr) {
+        throw std::invalid_argument("HTTP/3 QUIC connection owns the received DATA credit sink");
+    }
     auto http_options = options.http3_;
     if (http_options.resource_ == nullptr) {
         http_options.resource_ = detail::http_pmr_resource_or_default(options.resource_);
     }
     http_options.own_data_events_ = true;
+    http_options.received_data_credit_sink_ = sink;
+    http_options.received_data_credit_context_ = context;
     return http_options;
 }
 
@@ -60,7 +65,7 @@ public:
           max_pending_datagram_bytes_(options.max_pending_datagram_bytes_),
           memory_(detail::http_pmr_resource_or_default(options.resource_)),
           memory_table_(detail::make_c_library_mem_table<ngtcp2_mem>(memory_)),
-          http3_options_(resolve_http3_options(options)),
+          http3_options_(resolve_http3_options(options, return_received_data_credit, this)),
           http3_(role == http3_role::client ? http3_connection::client(http3_options_) : http3_connection::server(http3_options_)) {
         ngtcp2_ccerr_default(&close_error_);
         const bool server = role == http3_role::server;
@@ -208,8 +213,22 @@ public:
 
     ~impl() {
         if (connection_ != nullptr) {
-            ngtcp2_conn_del(connection_);
+            ngtcp2_conn_del(std::exchange(connection_, nullptr));
         }
+    }
+
+    // Returns receive flow-control credit for stream bytes no longer held
+    // (RFC 9000 §4.1); a closing connection grants none.
+    void extend_receive_windows(std::int64_t stream_id, std::size_t bytes) noexcept {
+        if (bytes == 0 || state_ != close_state::open || connection_ == nullptr) {
+            return;
+        }
+        ngtcp2_conn_extend_max_stream_offset(connection_, stream_id, bytes);
+        ngtcp2_conn_extend_max_offset(connection_, bytes);
+    }
+
+    static void return_received_data_credit(void* context, std::int64_t stream_id, std::size_t bytes) noexcept {
+        static_cast<impl*>(context)->extend_receive_windows(stream_id, bytes);
     }
 
     impl(const impl&) = delete;
@@ -907,15 +926,6 @@ ngtcp2_tstamp http3_quic_connection::expiry() const noexcept {
     return ngtcp2_conn_get_expiry(impl_->connection_);
 }
 
-void http3_quic_connection::consume_stream_data(
-    std::int64_t stream_id, std::size_t bytes) noexcept {
-    if (bytes == 0 || impl_->state_ != impl::close_state::open) {
-        return;
-    }
-    ngtcp2_conn_extend_max_stream_offset(impl_->connection_, stream_id, bytes);
-    ngtcp2_conn_extend_max_offset(impl_->connection_, bytes);
-}
-
 void http3_quic_connection::reset_stream(
     std::int64_t stream_id, std::uint64_t application_error_code) noexcept {
     if (impl_->state_ != impl::close_state::open) {
@@ -970,7 +980,7 @@ std::optional<http3_event> http3_quic_connection::next_event() {
         }
         if (const auto* deferred =
                 std::get_if<http3_deferred_consume_event>(&*event)) {
-            consume_stream_data(deferred->stream_id_, deferred->bytes_);
+            impl_->extend_receive_windows(deferred->stream_id_, deferred->bytes_);
             continue;
         }
         if (const auto* action =

@@ -281,8 +281,8 @@ public:
         return lifecycle_.shutdown();
     }
 
-    [[nodiscard]] http_client_handle handle(operation_options options);
-    [[nodiscard]] http_client_handle alias_handle(std::string_view alias);
+    [[nodiscard]] http_client_handle client();
+    [[nodiscard]] http_client_handle client(std::string_view alias);
     [[nodiscard]] task<void> upsert(const http_client_config& config, operation_options options) {
         lifecycle_.require_ready();
         return registry_.upsert(config, std::move(options));
@@ -325,13 +325,12 @@ void http_client_state::throw_not_ready() {
     throw http_client_error(http_client_error::code_type::closing, "HTTP client is closing");
 }
 
-http_client_handle http_client_state::handle(operation_options options) {
+http_client_handle http_client_state::client() {
     lifecycle_.require_ready();
-    validate_operation_options(options);
-    return registry_.get_single_or_default(lifecycle_.operation_scope(), lifecycle_.token()).with_options(std::move(options));
+    return registry_.get_single_or_default(lifecycle_.operation_scope(), lifecycle_.token());
 }
 
-http_client_handle http_client_state::alias_handle(std::string_view alias) {
+http_client_handle http_client_state::client(std::string_view alias) {
     lifecycle_.require_ready();
     return registry_.get(alias, lifecycle_.operation_scope(), lifecycle_.token());
 }
@@ -355,16 +354,12 @@ http_client::~http_client() {
     state_->request_close();
 }
 
-http_client_handle http_client::with_options(operation_options options) const& {
-    return state_->handle(std::move(options));
-}
-
 http_client_handle http_client::client() const& {
-    return state_->handle({});
+    return state_->client();
 }
 
 http_client_handle http_client::client(std::string_view alias) const& {
-    return state_->alias_handle(alias);
+    return state_->client(alias);
 }
 
 task<void> http_client::upsert(const http_client_config& config, operation_options options) & {

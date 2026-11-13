@@ -184,12 +184,6 @@ public:
     [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(
         worker_handle caller, const listener_endpoint& endpoint) const;
 #endif
-    // Disabled by default. A config enables response coding and precompressed
-    // static variant negotiation; nullptr disables both.
-    application& compression(compression_config config);
-    application& compression(std::nullptr_t);
-    application& cors(cors_config config);
-    application& cors(std::nullptr_t);
     application& document_root(document_root_config config);
     application& document_root(std::nullptr_t);
     // Configures the process-wide ordinary-thread pool every worker's event

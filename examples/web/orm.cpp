@@ -63,7 +63,7 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db) {
-    auto handle = db.handle();
+    auto handle = db.db();
     auto devices = handle.repository<device>();
     device input;
     input.set<"id">(1);
@@ -154,7 +154,7 @@ task<void> demonstrate(db_client& db) {
 
 #ifdef RUVIA_ENABLE_REDIS
 task<void> demonstrate_cache(db_client& db) {
-    auto handle = db.handle();
+    auto handle = db.db();
     auto devices = handle.repository<device>();
     const std::array<db_find_order, 1> cache_order{{{"id"}}};
     const db_find_options options{.order_ = cache_order, .take_ = 20, .cache_ = db_cache_options{.id_ = "device-page", .duration_ = std::chrono::seconds(30)}};
@@ -181,7 +181,7 @@ task<void> run(const db_config& settings, event_loop_attachment& attachment, con
             auto config = example::redis_config(env, "RUVIA_ORM_CACHE_REDIS");
             redis = std::make_unique<redis_client>(attachment.loop(), config);
             co_await redis->connect();
-            auto store_value = redis->handle();
+            auto store_value = redis->redis();
             db = std::make_unique<db_client>(attachment.loop(), settings, store_value,
                 db_cache_config{.key_prefix_ = "orm-demo"});
 #else

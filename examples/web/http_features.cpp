@@ -144,9 +144,9 @@ int main() {
             };
         }
         app.server({.worker_count_ = 2,
-                       .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+                       .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                       .compression_ = ruvia::compression_config{.min_bytes_ = 16}})
             .listen(std::move(listener_value))
-            .compression({.min_bytes_ = 16})
             .run();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

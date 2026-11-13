@@ -36,7 +36,8 @@ struct context_access final {
               names_(value.param_names_),
               values_(value.param_values_),
               count_(value.param_count_),
-              scope_(value.route_rate_limit_scope_) {
+              scope_(value.route_rate_limit_scope_),
+              worker_states_(value.capabilities_.worker_states()) {
             value.route_path_ = path;
             value.param_names_ = names.data();
             value.param_values_ = values.data();
@@ -54,6 +55,13 @@ struct context_access final {
             context_.param_values_ = values_;
             context_.param_count_ = count_;
             context_.route_rate_limit_scope_ = scope_;
+            context_.capabilities_.bind_worker_states(worker_states_);
+        }
+
+        // Points the context's worker-state lookups at the registry its
+        // services now name; the destructor restores the previous one.
+        void bind_worker_states() noexcept {
+            context_.capabilities_.bind_worker_states(context_.services().worker_states());
         }
 
     private:
@@ -64,6 +72,7 @@ struct context_access final {
         const std::string_view* values_;
         std::size_t count_;
         std::uintptr_t scope_;
+        const worker_state_registry* worker_states_;
     };
 
     [[nodiscard]] static context make(

@@ -14,8 +14,8 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_request_content_writer.h"
-#include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_content_plan.h"
 
 #include "test_exceptions.h"
 
@@ -239,8 +239,8 @@ TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existi
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
         EXPECT_TRUE(!ruvia::http_content_length::try_from_value(invalid).has_value());
         EXPECT_TRUE(ruvia::test::throws_on([&] { request.content_length_ = invalid; }));
-        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http2_request_content::known_length(invalid); }));
-        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http2_request_content::streaming(invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http_request_content_plan::known_length(invalid); }));
+        EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::http_request_content_plan::streaming(invalid); }));
     }
     std::array<char, 256> head{};
     const auto prepared = ruvia::http1_client_request_writer{}.prepare_streaming(
@@ -252,8 +252,8 @@ TEST(Ruvia, http_content_length_rejects_negative_sources_without_mutating_existi
         EXPECT_TRUE(retained->head().find("Content-Length: 3\r\n") != std::string_view::npos);
     }
     const auto maximum = std::numeric_limits<std::uint64_t>::max();
-    const auto h2_known = ruvia::http2_request_content::known_length(maximum);
-    const auto h2_streaming = ruvia::http2_request_content::streaming(maximum);
+    const auto h2_known = ruvia::http_request_content_plan::known_length(maximum);
+    const auto h2_streaming = ruvia::http_request_content_plan::streaming(maximum);
     EXPECT_TRUE(h2_known.known_length_content() && h2_known.known_length_content()->length() == maximum);
     EXPECT_TRUE(h2_streaming.streaming_content() && h2_streaming.streaming_content()->expected_length() == maximum);
 }

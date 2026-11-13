@@ -40,7 +40,7 @@ ruvia::app().database({
     .config_ = config,
 });
 
-// 2. 或在独立 event_loop 上使用 db_client（通过 client.handle(options) 获取句柄）。
+// 2. 或在独立 event_loop 上使用 db_client（通过 client.db() 获取句柄）。
 //    host_ 不是 IP 字面量时，事件循环须借用执行 DNS 查询的阻塞池，否则构造抛出
 //    std::invalid_argument；db_migrator 为 DNS 主机自建临时查询池：
 // ruvia::blocking_pool lookups({.thread_count_ = 1});  // 比事件循环存活更久
@@ -48,7 +48,7 @@ ruvia::app().database({
 // auto loop = loops.loop(0);
 // ruvia::db_client client(loop, config);
 // co_await client.connect();
-// auto db = client.handle({.timeout_ = std::chrono::seconds(5)});
+// auto db = client.db().with_options({.timeout_ = std::chrono::seconds(5)});
 // ...
 // co_await client.shutdown();
 ```
@@ -69,6 +69,9 @@ ruvia::app().database({
 ### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_handle`）
 
 在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_handle`。ORM 与直接查询保持独立公开路线，均可直接在 `db_handle` 或 `db_transaction` 上调用。
+
+- **句柄获取**：出站拥有者与 `context` 同名取句柄：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
+- **逐次选项**：取得的句柄不带操作选项；超时与取消只经句柄的 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
 
 | `ruvia::db_handle` 方法 | 说明 |
 | --- | --- |
@@ -391,7 +394,8 @@ ruvia::app()
 ```
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.handle(options = {})` 获取 `redis_handle`；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_handle`（取句柄规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_handle)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebrouterh)。
 - 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还所属 PMR。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。

@@ -210,6 +210,9 @@ private:
             if (result_value == http2_finish_status::accepted) {
                 co_return;
             }
+            if (result_value == http2_finish_status::invalid_message) {
+                throw std::invalid_argument("HTTP/2 response ended before its declared Content-Length");
+            }
             if (result_value == http2_finish_status::backpressured &&
                 co_await await_http2_send_window(connection_, stream_id_, &signal_) ==
                     http2_send_window_wait_status::ready) {
@@ -1227,7 +1230,7 @@ void http2_sans_io_session_engine::on_message_end(const http2_message_end_event&
         return;
     }
     stream_runtimes_.mark_request_body_closed(stream_id);
-    if (stream_runtime->trailers().append(message_end.trailers()).has_value()) {
+    if (stream_runtime->trailers().append_received(message_end.trailers()).has_value()) {
         throw std::logic_error("HTTP/2 decoder published invalid request trailers");
     }
     if (stream_runtime->route_selected() && stream_runtime->body_mode() == request_body_mode::stream) {

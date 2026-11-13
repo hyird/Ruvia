@@ -70,7 +70,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
     std::exception_ptr failure;
     try {
         const auto origin = client.client();
-        auto bounded = client.with_options({.timeout_ = std::chrono::seconds(5)});
+        auto bounded = client.client().with_options({.timeout_ = std::chrono::seconds(5)});
         {
             const std::array<ruvia::http_header_view, 1> headers{{
                 {"content-type", "application/octet-stream"},

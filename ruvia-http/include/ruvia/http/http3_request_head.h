@@ -12,7 +12,6 @@
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_trailers.h"
 
 namespace ruvia {
 
@@ -87,7 +86,7 @@ private:
 
     static constexpr std::uint32_t absent = 0xffffffffU;
 
-    std::pmr::vector<http3_field> fields_;
+    std::pmr::vector<http_header> fields_;
     std::pmr::vector<regular_field> regular_;
     std::pmr::string cookie_;
     std::int64_t stream_id_{-1};
@@ -103,12 +102,6 @@ private:
     bool stream_ended_{false};
     bool early_data_{false};
 };
-
-// Appends a received request trailer section. Fields not permitted in a
-// trailer section are discarded (RFC 9110 §6.5.1); pseudo-header fields are
-// malformed (RFC 9114 §4.3) and leave `trailers` unchanged.
-[[nodiscard]] std::optional<http_request_trailer_error> append_http3_request_trailers(
-    http_request_trailers& trailers, std::span<const http3_field> fields);
 
 // RFC 9220 uses the extended CONNECT request in place of the HTTP/1 key exchange.
 [[nodiscard]] websocket_handshake_validation_result validate_http3_websocket_handshake(

@@ -907,11 +907,12 @@ public:
     // Lazy, single-start and worker-affine, like ordinary commands.
     [[nodiscard]] task<void> connect() &;
     task<void> connect() && = delete;
-    // Returns a handle with the supplied options. Each call registers one allocation-free
-    // capability with the client operation scope, so keep the returned handle for
-    // a sequence of commands instead of calling handle() per command.
-    [[nodiscard]] redis_handle handle(operation_options options = {}) const&;
-    redis_handle handle(operation_options = {}) const&& = delete;
+    // Each call registers one allocation-free capability with the client
+    // operation scope, so keep the returned handle for a sequence of commands
+    // instead of calling redis() per command. Like context::redis(), the
+    // handle carries no operation options; derive them with with_options().
+    [[nodiscard]] redis_handle redis() const&;
+    redis_handle redis() const&& = delete;
 
     // Thread-safe close request; sockets are closed only on the bound loop.
     void close() noexcept;

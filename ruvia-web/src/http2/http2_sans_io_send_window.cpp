@@ -66,9 +66,10 @@ http2_stream_data_submit_result submit_http2_stream_data(
             stream_id, bytes, end_stream, http2_data_output_credit_bytes);
         output_budget.note_data_submitted(stream_id, progress.consumed_bytes_);
         completion.release_credit_ = !bytes.empty() && progress.consumed_bytes_ == 0;
+        if (progress.status_ == http2_data_submit_status::invalid_message) {
+            return {.failure_ = http2_stream_data_write_status::content_length_exceeded};
+        }
         return {.progress_ = progress};
-    } catch (const std::invalid_argument&) {
-        return {.failure_ = http2_stream_data_write_status::content_length_exceeded};
     } catch (const std::logic_error&) {
         return {.failure_ = http2_stream_data_write_status::invalid_state};
     }

@@ -119,14 +119,19 @@ class http3_event_log final {
 public:
     void operator()(const http3_event& event) {
         if (const auto* headers = std::get_if<http3_headers_event>(&event)) {
-            http3_headers_record record{headers->stream_id_, {}, headers->stream_ended_, headers->status_, headers->trailers_};
+            http3_headers_record record{headers->stream_id_, {}, headers->stream_ended_, std::nullopt, headers->trailers_};
             for (const auto& field : headers->fields_) {
                 record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
             }
             headers_.push_back(std::move(record));
             sequence_.push_back('H');
+        } else if (const auto* interim = std::get_if<http3_informational_head_event>(&event)) {
+            record_response_head(interim->stream_id(), interim->head(), false);
+        } else if (const auto* head = std::get_if<http3_response_head_event>(&event)) {
+            record_response_head(head->stream_id(), head->head(), head->stream_ended());
+            content_lengths_.emplace_back(head->stream_id(), head->head().content_length());
         } else if (const auto* data = std::get_if<http3_data_event>(&event)) {
-            data_.emplace_back(data->stream_id_, std::pmr::string(data->bytes_));
+            data_.emplace_back(data->stream_id(), std::pmr::string(data->bytes()));
             if (sequence_.empty() || sequence_.back() != 'D') {
                 sequence_.push_back('D');
             }
@@ -151,6 +156,17 @@ public:
             origins_.push_back(std::move(list));
             sequence_.push_back('O');
         }
+    }
+
+    // Client response heads are recorded like field sections, with their
+    // status and without the :status pseudo-header.
+    void record_response_head(std::int64_t stream_id, const http_client_response_head& head, bool stream_ended) {
+        http3_headers_record record{stream_id, {}, stream_ended, head.received_status(), false};
+        for (const auto& field : head.headers()) {
+            record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+        }
+        headers_.push_back(std::move(record));
+        sequence_.push_back('H');
     }
 
     [[nodiscard]] std::pmr::string data(std::int64_t stream_id) const {
@@ -178,6 +194,7 @@ public:
 
     std::pmr::vector<http3_headers_record> headers_;
     std::pmr::vector<std::pair<std::int64_t, std::pmr::string>> data_;
+    std::pmr::vector<std::pair<std::int64_t, std::optional<std::uint64_t>>> content_lengths_;
     std::pmr::vector<std::int64_t> ends_;
     std::pmr::vector<http3_stream_close_event> closes_;
     std::pmr::vector<std::int64_t> goaways_;
@@ -214,7 +231,9 @@ public:
     // Submits a request head on `stream_id` and delivers it to the server.
     [[nodiscard]] bool send_request(std::int64_t stream_id, http3_regular_request_head_view head,
         bool end_stream, http3_event_log& server_log) {
-        head.streaming_ = !end_stream;
+        if (!end_stream && head.content_.without_content() != nullptr) {
+            head.content_ = http_request_content_plan::streaming();
+        }
         return client_.submit_request_head(stream_id, head) == http3_status::accepted &&
                to_server(server_log);
     }

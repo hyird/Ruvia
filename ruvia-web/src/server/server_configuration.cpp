@@ -5,6 +5,7 @@
 #include <exception>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
@@ -13,6 +14,7 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 
+#include "ratelimit/rate_limiter.h"
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
 #include "server/inbound_transport_error.h"
@@ -55,43 +57,28 @@ void connection_failure_sink::invoke(std::string_view remote_address, std::excep
 
 void http_server_options::set_server(const server_config& config) {
     validate_server_limits(config);
+    if (const auto& compression = config.compression_) {
+        ensure_positive_size(compression->min_bytes_, "compression minimum size must be greater than zero");
+        if (compression->sync_bytes_ < compression->min_bytes_) {
+            throw std::invalid_argument(
+                "compression synchronous size must not be smaller than the minimum size");
+        }
+        if (compression->max_bytes_ < compression->sync_bytes_) {
+            throw std::invalid_argument(
+                "compression maximum size must not be smaller than the synchronous size");
+        }
+    }
+    std::optional<cors_options> cors;
+    if (config.cors_) {
+        cors.emplace(make_cors_options(*config.cors_, process_resource()));
+    }
     server_ = config;
-}
-
-void http_server_options::set_compression(compression_config config) {
-    ensure_positive_size(
-        config.min_bytes_, "compression minimum size must be greater than zero");
-    if (config.sync_bytes_ < config.min_bytes_) {
-        throw std::invalid_argument(
-            "compression synchronous size must not be smaller than the minimum size");
-    }
-    if (config.max_bytes_ < config.sync_bytes_) {
-        throw std::invalid_argument(
-            "compression maximum size must not be smaller than the synchronous size");
-    }
-    compression_ = std::move(config);
-}
-
-void http_server_options::set_cors(const cors_config& config) {
-    cors_ = make_cors_options(config, process_resource());
+    compression_ = config.compression_;
+    cors_ = std::move(cors);
 }
 
 void http_server_options::set_rate_limit(const rate_limit_config& config) {
-    const auto& rule = config.rule_;
-    if (rule.max_requests_ == 0) {
-        throw std::invalid_argument("rate limit max requests must be greater than zero");
-    }
-    if (rule.window_.count() <= 0) {
-        throw std::invalid_argument("rate limit window must be greater than zero");
-    }
-    if (rule.overflow_policy_ != rate_limit_overflow_policy::deny &&
-        rule.overflow_policy_ != rate_limit_overflow_policy::allow) {
-        throw std::invalid_argument("rate limit overflow policy is invalid");
-    }
-    if (!std::has_single_bit(config.capacity_per_worker_)) {
-        throw std::invalid_argument(
-            "rate-limit capacity per worker must be a power of two");
-    }
+    validate_rate_limit_config(config);
     default_rate_limit_per_worker_ = config.rule_;
     rate_limit_capacity_per_worker_ = config.capacity_per_worker_;
 }

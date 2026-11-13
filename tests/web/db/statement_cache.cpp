@@ -46,7 +46,7 @@ TEST(Ruvia, db_postgresql_repeated_statement_is_parsed_once_per_connection) {
     db_client client(attachment.loop(), peer.config());
     std::pmr::vector<std::pmr::string> values{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         for (const std::int64_t id : {1, 2, 3}) {
             values.push_back(co_await first_value(handle, id));
         }
@@ -93,7 +93,7 @@ TEST(Ruvia, db_postgresql_stale_cached_statement_is_retried) {
         db_client client(attachment.loop(), peer.config());
         std::pmr::vector<std::pmr::string> values{ruvia::process_resource()};
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            auto handle = connected.handle();
+            auto handle = connected.db();
             for (int use = 0; use < 3; ++use) {
                 values.push_back(co_await first_value(handle, std::int64_t{1}));
             }
@@ -123,7 +123,7 @@ TEST(Ruvia, db_postgresql_stale_statement_in_transaction_fails_and_is_parsed_aga
     bool transaction_failed = false;
     std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         auto transaction = co_await handle.begin_transaction();
         for (int use = 0; use < 2; ++use) {
             (void)co_await transaction.query(cached_sql, std::int64_t{1});
@@ -163,7 +163,7 @@ TEST(Ruvia, db_postgresql_stale_sql_state_raised_by_the_statement_is_not_retried
     std::optional<db_error::code_type> code;
     std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         for (int use = 0; use < 2; ++use) {
             (void)co_await first_value(handle, std::int64_t{1});
         }

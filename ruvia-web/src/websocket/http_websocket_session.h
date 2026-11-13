@@ -17,18 +17,19 @@
 namespace ruvia::detail {
 
 template <typename connection_type>
-[[nodiscard]] task<std::optional<websocket_message>> websocket_read_thunk(void* target) {
-    return static_cast<connection_type*>(target)->read();
+[[nodiscard]] task<std::optional<websocket_message>> websocket_read_thunk(void* target, operation_options options) {
+    return static_cast<connection_type*>(target)->read(std::move(options));
 }
 
 template <typename connection_type>
-task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress) {
-    return static_cast<connection_type*>(target)->write(opcode, payload_value, compress);
+task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress,
+    operation_options options) {
+    return static_cast<connection_type*>(target)->write(opcode, payload_value, compress, std::move(options));
 }
 
 template <typename connection_type>
-task<void> websocket_close_thunk(void* target, ::ruvia::websocket_close_options options) {
-    return static_cast<connection_type*>(target)->close(options);
+task<void> websocket_close_thunk(void* target, ::ruvia::websocket_close_options options, operation_options operation) {
+    return static_cast<connection_type*>(target)->close(options, std::move(operation));
 }
 
 template <typename connection_type>

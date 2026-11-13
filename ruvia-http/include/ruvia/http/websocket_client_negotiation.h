@@ -9,6 +9,7 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -18,11 +19,12 @@ struct websocket_client_negotiation_config_view final {
     websocket_client_deflate_offer deflate_{};
 };
 // The one failure shape of a client opening handshake over HTTP/1.1 Upgrade
-// (RFC 6455 section 4.1) or RFC 8441 Extended CONNECT.
+// (RFC 6455 section 4.1) or Extended CONNECT (RFC 8441 over HTTP/2, RFC 9220
+// over HTTP/3).
 enum class websocket_client_handshake_error : std::uint8_t {
-    // Not 101 over HTTP/1.1, not 2xx over HTTP/2.
+    // Not 101 over HTTP/1.1, not 2xx over Extended CONNECT.
     response_status,
-    // HTTP/2: the 2xx HEADERS ended the stream.
+    // Extended CONNECT: the 2xx HEADERS ended the stream.
     stream_closed,
     // HTTP/1.1: Sec-WebSocket-Accept is missing, repeated or wrong.
     accept,
@@ -32,7 +34,8 @@ enum class websocket_client_handshake_error : std::uint8_t {
     connection,
     subprotocol,
     extensions,
-    // HTTP/2: a connection-specific response field (RFC 9113 section 8.2.2).
+    // Extended CONNECT: a connection-specific response field (RFC 9113
+    // section 8.2.2, RFC 9114 section 4.2).
     forbidden_field,
 };
 struct websocket_client_negotiation_result_view final {
@@ -130,4 +133,14 @@ validate_http1_websocket_client_response(std::span<const char, 24> encoded_key,
 std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
 validate_http1_websocket_client_response(std::span<const char, 24>,
     const websocket_client_negotiation&, const http1_parsed_client_response_head&&) = delete;
+
+// Extended CONNECT over HTTP/2 or HTTP/3: validates the server's 2xx final
+// head on a still-open stream, then its selection against the negotiation.
+// The result view borrows the response head.
+[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+validate_extended_connect_websocket_client_response(
+    const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
+std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
+validate_extended_connect_websocket_client_response(
+    const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
 }  // namespace ruvia

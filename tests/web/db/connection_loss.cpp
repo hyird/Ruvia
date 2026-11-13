@@ -54,7 +54,7 @@ void check_session_ended_while_idle(
     std::optional<db_error::code_type> code;
     std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         const auto first = co_await handle.query("SELECT v FROM before");
         before = first.front()["v"].as<std::string_view>().value_or("");
         peer.wait_for_idle_close();
@@ -97,7 +97,7 @@ TEST(Ruvia, db_connection_lost_mid_result_is_an_io_error) {
             test::with_connected_db_client(attachment, db_config{.driver_ = driver},
                 test::backend_startup_peer::after_startup::drop_mid_result,
                 [&](db_client& client) -> task<void> {
-                    auto handle = client.handle();
+                    auto handle = client.db();
                     try {
                         co_await run_statement(handle, kind);
                     } catch (const db_error& error) {
@@ -149,7 +149,7 @@ TEST(Ruvia, db_rejected_statement_keeps_the_pooled_connection) {
     std::pmr::string sql_state{ruvia::process_resource()};
     std::pmr::string kept{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         try {
             (void)co_await handle.execute("INSERT INTO jobs (key) VALUES ('a')");
         } catch (const db_error& error) {
@@ -183,7 +183,7 @@ TEST(Ruvia, db_rejected_transaction_statement_rolls_back_on_the_kept_connection)
     bool transaction_failed = false;
     std::pmr::string after{ruvia::process_resource()};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         auto transaction = co_await handle.begin_transaction();
         try {
             (void)co_await transaction.query("SELEC v FROM records");
@@ -220,7 +220,7 @@ TEST(Ruvia, db_copy_result_fails_the_statement_and_closes_the_connection) {
             std::optional<db_error::code_type> code;
             std::pmr::string fresh{ruvia::process_resource()};
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-                auto handle = connected.handle();
+                auto handle = connected.db();
                 const auto sql = copy == direction::input ? "COPY records FROM STDIN" : "COPY records TO STDOUT";
                 try {
                     if (kind == statement_kind::query) {

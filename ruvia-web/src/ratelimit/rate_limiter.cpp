@@ -10,6 +10,7 @@
 #include <limits>
 #include <random>
 #include <span>
+#include <stdexcept>
 #include <string_view>
 #include <utility>
 
@@ -278,6 +279,24 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
 }
 
 }  // namespace
+
+void validate_rate_limit_config(const rate_limit_config& config) {
+    const auto& rule = config.rule_;
+    if (rule.max_requests_ == 0) {
+        throw std::invalid_argument("rate limit max requests must be greater than zero");
+    }
+    if (rule.window_.count() <= 0) {
+        throw std::invalid_argument("rate limit window must be greater than zero");
+    }
+    if (rule.overflow_policy_ != rate_limit_overflow_policy::deny &&
+        rule.overflow_policy_ != rate_limit_overflow_policy::allow) {
+        throw std::invalid_argument("rate limit overflow policy is invalid");
+    }
+    if (!std::has_single_bit(config.capacity_per_worker_)) {
+        throw std::invalid_argument(
+            "rate-limit capacity per worker must be a power of two");
+    }
+}
 
 rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
     route_rate_limit_presence route_rules, std::size_t capacity_value)

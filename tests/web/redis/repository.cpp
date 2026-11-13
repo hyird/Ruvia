@@ -340,7 +340,7 @@ TEST(Ruvia, redis_repository_owns_input_before_entity_is_destroyed) {
     redis_test_worker worker(io_context);
     ruvia::test::tracking_resource input_resource;
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto repository = client.handle().repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = client.redis().repository<test_redis_user>(test_redis_repository_config);
 
         std::optional<test_redis_user> input;
         input.emplace(&input_resource);
@@ -371,7 +371,7 @@ TEST(Ruvia, redis_repository_insert_owns_input_through_async_handoff) {
 
         std::uint64_t affected_entities = 0;
         exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository = connected.handle().repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
             std::optional<test_redis_user> input;
             input.emplace(&input_resource);
             input->set<"id">(input_id);
@@ -416,7 +416,7 @@ TEST(Ruvia, redis_repository_scripts_run_by_digest_and_reload_on_noscript) {
         {
             ruvia::redis_client client(worker.loop(), server_config(server));
             exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-                const auto repository = connected.handle().repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().repository<test_redis_user>(test_redis_repository_config);
                 const auto user = make_user(ruvia::process_resource());
                 inserted = (co_await repository.insert(user)).affected_entities();
                 removed = (co_await repository.remove(user)).affected_entities();
@@ -463,7 +463,7 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
         {
             redis_client client(worker.loop(), config);
             auto exercise = [&](redis_client& connected) -> task<void> {
-                const auto repository = connected.handle({.timeout_ = 1s}).repository<test_redis_user>(test_redis_repository_config);
+                const auto repository = connected.redis().with_options({.timeout_ = 1s}).repository<test_redis_user>(test_redis_repository_config);
                 const auto user = make_user(ruvia::process_resource());
                 try {
                     if (remove) {
@@ -505,7 +505,7 @@ TEST(Ruvia, redis_repository_find_without_take_rejects_a_truncated_page) {
             ruvia::redis_client client(worker.loop(), server_config(server));
             exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
                 const auto repository =
-                    connected.handle().repository<test_redis_user>(test_redis_repository_config);
+                    connected.redis().repository<test_redis_user>(test_redis_repository_config);
                 ruvia::redis_find_options options;
                 if (paged) {
                     options.take_ = ruvia::redis_find_default_take;
@@ -539,7 +539,7 @@ TEST(Ruvia, redis_repository_search_consumes_expired_documents_without_truncatio
         ruvia::redis_client client(worker.loop(), server_config(server));
         exercise_with_server(worker, client, server, [&](ruvia::redis_client& connected) -> ruvia::task<void> {
             const auto repository =
-                connected.handle().repository<test_redis_user>(test_redis_repository_config);
+                connected.redis().repository<test_redis_user>(test_redis_repository_config);
             // A returned null document occupies the complete search page even
             // though the expired entity is omitted from the decoded rows.
             const auto rows = co_await repository.find();
@@ -558,7 +558,7 @@ TEST(Ruvia, redis_repository_pre_cancelled_operations_report_cancellation) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto handle = client.handle();
+        const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
         const auto repository = handle.with_options({.stop_token_ = cancellation.token()})
@@ -587,7 +587,7 @@ TEST(Ruvia, redis_repository_input_may_die_before_a_cancelled_await) {
     redis_test_worker worker(io_context);
     ruvia::test::tracking_resource input_resource;
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto handle = client.handle();
+        const auto handle = client.redis();
         ruvia::stop_source cancellation;
         cancellation.request_stop();
         const auto repository = handle.with_options({.stop_token_ = cancellation.token()})
@@ -628,8 +628,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
 
         std::optional<ruvia::redis_error::code_type> observed_error;
         auto exercise = [&](ruvia::redis_client& connected) -> ruvia::task<void> {
-            const auto repository = connected.handle({.stop_token_ = cancellation.token()})
-                                        .repository<test_redis_user>(test_redis_repository_config);
+            const auto repository = connected.redis().with_options({.stop_token_ = cancellation.token()}).repository<test_redis_user>(test_redis_repository_config);
             try {
                 auto operation = repository.exists(
                     {.where_ = test_redis_user::column<"name">() == "Alice"});
@@ -665,7 +664,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
     auto& io_context = ruvia::test::new_test_io_context();
     redis_test_worker worker(io_context);
     ruvia::test::with_connected_redis_client(worker.attachment(), {}, [&](ruvia::redis_client& client) -> ruvia::task<void> {
-        const auto repository = client.handle().repository<test_redis_user>(test_redis_repository_config);
+        const auto repository = client.redis().repository<test_redis_user>(test_redis_repository_config);
 
         test_redis_user missing_id;
         missing_id.set<"name">("Alice");
@@ -701,7 +700,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
                 {.column_ = "age", .kind_ = redis_index_kind::numeric},
             },
         };
-        const auto indexed_users = client.handle().repository<test_redis_user>(indexed_user_config);
+        const auto indexed_users = client.redis().repository<test_redis_user>(indexed_user_config);
         EXPECT_TRUE(throws_invalid_argument([&] {
             (void)indexed_users.find({.where_ = test_redis_user::column<"age">() == true});
         }));
@@ -715,7 +714,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)indexed_users.find({.where_ = test_redis_user::column<"id">().in({"u-1", ""})});
         }));
 
-        const auto unsigned_repo = client.handle().repository<test_redis_unsigned_pk_user>(
+        const auto unsigned_repo = client.redis().repository<test_redis_unsigned_pk_user>(
             {.prefix_ = "upk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_unsigned_pk_user unsigned_changes;
         unsigned_changes.set<"name">("Alice");
@@ -729,7 +728,7 @@ TEST(Ruvia, redis_repository_rejects_invalid_input_before_io) {
             (void)unsigned_repo.update(test_redis_unsigned_pk_user::column<"id">() == -1, unsigned_changes);
         }));
 
-        const auto signed_repo = client.handle().repository<test_redis_signed_pk_user>(
+        const auto signed_repo = client.redis().repository<test_redis_signed_pk_user>(
             {.prefix_ = "spk_users", .indexes_ = {{.column_ = "id", .kind_ = redis_index_kind::numeric}}});
         test_redis_signed_pk_user signed_changes;
         signed_changes.set<"name">("Bob");

@@ -40,6 +40,15 @@ public:
     // trailers are discarded rather than retained (RFC 9112 section 7.1.2), so
     // only invalid_field and section_too_large are reported.
     [[nodiscard]] std::optional<http_request_trailer_error> append_http1(std::string_view block);
+    // Appends a received HTTP/2 or HTTP/3 trailer section all-or-nothing.
+    // Every field must be a valid regular field with a lowercase name; a
+    // pseudo-header field makes the section malformed (RFC 9113 section 8.1,
+    // RFC 9114 section 4.3) and reports invalid_field. Every received field
+    // is charged to the byte budget; fields not permitted in request trailers
+    // are discarded rather than retained (RFC 9110 section 6.5.1).
+    [[nodiscard]] std::optional<http_request_trailer_error> append_received(std::span<const http_header> fields);
+    template <detail::http_temporary_owning_range<http_header> fields_type>
+    std::optional<http_request_trailer_error> append_received(fields_type&&) = delete;
     [[nodiscard]] std::pmr::vector<http_header> take_fields() && noexcept {
         budget_ = http_trailer_section_budget();
         return std::move(fields_);

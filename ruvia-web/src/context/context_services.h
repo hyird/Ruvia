@@ -44,6 +44,7 @@ class route_table;
 struct connection_failure_sink;
 class tls_served_certificate;
 class worker_state_registry;
+class borrowed_clients;
 
 struct context_worker_services final {
     std::reference_wrapper<const worker_handle> worker_;
@@ -80,6 +81,10 @@ struct context_connection_services final {
     // goes to this callback instead of the routes.
     request_stream_callback_ref request_stream_{};
     connection_lifecycle* lifecycle_{};
+    // A router's borrowed clients and worker states, bound for its dispatches
+    // like routes_; null keeps the worker's own.
+    const borrowed_clients* router_clients_{};
+    const worker_state_registry* router_states_{};
 };
 
 struct request_stream_control final {
@@ -131,7 +136,15 @@ public:
     context_services(const context_worker_services&, stop_token&&) = delete;
 
     [[nodiscard]] constexpr worker_client_registry_view client_registries() const noexcept {
-        return worker_services_->clients_;
+        return connection_services_.router_clients_ != nullptr
+                   ? worker_client_registry_view(*connection_services_.router_clients_)
+                   : worker_services_->clients_;
+    }
+
+    // Either argument may be null to keep the worker's own capability.
+    void bind_router_capabilities(const borrowed_clients* clients, const worker_state_registry* states) noexcept {
+        connection_services_.router_clients_ = clients;
+        connection_services_.router_states_ = states;
     }
 
     [[nodiscard]] detail::rate_limiter* rate_limiter() const noexcept {
@@ -317,6 +330,8 @@ public:
         services.connection_services_.routes_ = connection_services_.routes_;
         services.connection_services_.route_rate_limiter_ = connection_services_.route_rate_limiter_;
         services.connection_services_.lifecycle_ = connection_services_.lifecycle_;
+        services.connection_services_.router_clients_ = connection_services_.router_clients_;
+        services.connection_services_.router_states_ = connection_services_.router_states_;
         services.request_services_.dispatch_depth_ = request_services_.dispatch_depth_ + 1;
         services.request_services_.io_metrics_ = request_services_.io_metrics_;
         services.request_services_.early_data_ = request_services_.early_data_;
@@ -360,7 +375,8 @@ public:
     }
 
     [[nodiscard]] const worker_state_registry* worker_states() const noexcept {
-        return worker_services_->states_;
+        return connection_services_.router_states_ != nullptr ? connection_services_.router_states_
+                                                              : worker_services_->states_;
     }
 
     [[nodiscard]] constexpr const conn_info& get_conn_info() const noexcept {

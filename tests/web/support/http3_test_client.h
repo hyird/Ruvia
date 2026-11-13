@@ -193,6 +193,14 @@ public:
         connection.set_tls_native_handle(crypto_.get());
     }
 
+    // Attaches this session to a native connection owned by `owner`, which
+    // `get_connection` resolves; for clients that drive ngtcp2 themselves.
+    void bind(ngtcp2_crypto_get_conn get_connection_of, void* owner, ngtcp2_conn* connection) noexcept {
+        reference_.get_conn = get_connection_of;
+        reference_.user_data = owner;
+        ngtcp2_conn_set_tls_native_handle(connection, crypto_.get());
+    }
+
     [[nodiscard]] bool h3_selected() const noexcept {
         const unsigned char* protocol = nullptr;
         unsigned int protocol_size = 0;
@@ -394,18 +402,18 @@ public:
         return open_request(method, path, headers, body, false);
     }
 
-    // Raw field sections are reserved for malformed-request wire regressions.
-    // Leave the send half open for malformed extended CONNECT bootstraps.
-    [[nodiscard]] std::int64_t start_raw_request(std::initializer_list<std::pair<std::string_view, std::string_view>> headers,
-        bool end_stream = true) {
+    // Sends a request head whose content the caller streams afterwards with
+    // send_stream_data(); `length` becomes its Content-Length.
+    [[nodiscard]] std::int64_t start_streaming_request(std::string_view method, std::string_view path,
+        std::optional<http_content_length> length = std::nullopt) {
         const auto stream_id = open_stream(false);
-        std::pmr::vector<http3_field_view> fields{ruvia::process_resource()};
-        fields.reserve(headers.size());
-        for (const auto& [name, value] : headers) {
-            fields.push_back({name, value});
-        }
-        if (connection_->http3().submit_request(stream_id, fields, end_stream) != http3_status::accepted) {
-            throw std::runtime_error("HTTP/3 malformed wire request was not accepted");
+        const auto request_authority = authority();
+        const http3_regular_request_head_view head{.method_ = method,
+            .authority_ = std::optional<borrowed_text>(request_authority),
+            .target_ = path,
+            .content_ = http_request_content_plan::streaming(length)};
+        if (connection_->http3().submit_request_head(stream_id, head) != http3_status::accepted) {
+            throw std::runtime_error("HTTP/3 test client cannot submit the streaming request head");
         }
         flush();
         return stream_id;
@@ -588,7 +596,7 @@ public:
             return std::nullopt;
         }
         auto chunk = std::exchange(stream.unread_body_, std::pmr::string{ruvia::process_resource()});
-        connection_->consume_stream_data(stream_id, chunk.size());
+        stream.unread_credit_.reset();
         flush();
         return chunk;
     }
@@ -600,7 +608,7 @@ public:
         stream.consume_on_arrival_ = true;
         if (!stream.unread_body_.empty()) {
             stream.response_.body_ += stream.unread_body_;
-            connection_->consume_stream_data(stream_id, stream.unread_body_.size());
+            stream.unread_credit_.reset();
             stream.unread_body_.clear();
         }
         wait_or_throw([&] { return response_complete(stream); }, "HTTP/3 response did not complete");
@@ -663,6 +671,8 @@ private:
     struct stream_state final {
         http3_test_response response_;
         std::pmr::string unread_body_{ruvia::process_resource()};
+        // Receive credit of unread_body_, returned as the test takes it.
+        std::optional<http3_received_data_credit> unread_credit_;
         std::pmr::vector<std::pmr::string> datagrams_{ruvia::process_resource()};
         bool consume_on_arrival_{false};
         bool ended_{false};
@@ -816,8 +826,11 @@ private:
         for (const auto& [name, value] : headers) {
             fields.emplace_back(name, value);
         }
-        const http3_regular_request_head_view head{
-            .method_ = method, .authority_ = request_authority, .target_ = request_path, .headers_ = fields, .content_length_ = body.empty() ? std::nullopt : std::optional<std::uint64_t>(body.size()), .streaming_ = !body.empty()};
+        const http3_regular_request_head_view head{.method_ = method,
+            .authority_ = std::optional<borrowed_text>(request_authority),
+            .target_ = request_path,
+            .headers_ = fields,
+            .content_ = body.empty() ? http_request_content_plan::none() : http_request_content_plan::known_length(body.size())};
         if (connection_->http3().submit_request_head(stream_id, head) != http3_status::accepted) {
             throw std::runtime_error("HTTP/3 test client cannot submit the request head");
         }
@@ -965,16 +978,39 @@ private:
             goaway_ids_.push_back(goaway->id_);
             return;
         }
-        if (const auto* data = std::get_if<http3_data_event>(&event)) {
-            const auto found = streams_.find(data->stream_id_);
+        if (auto* data = std::get_if<http3_data_event>(&event)) {
+            // A released stream's late DATA returns its credit with the event.
+            const auto found = streams_.find(data->stream_id());
             if (found == streams_.end()) {
-                // A released stream's late DATA still returns its credit.
-                connection_->consume_stream_data(data->stream_id_, data->bytes_.size());
-            } else if (found->second.consume_on_arrival_) {
-                found->second.response_.body_.append(data->bytes_);
-                connection_->consume_stream_data(data->stream_id_, data->bytes_.size());
-            } else {
-                found->second.unread_body_.append(data->bytes_);
+                return;
+            }
+            auto& stream = found->second;
+            if (stream.consume_on_arrival_) {
+                stream.response_.body_.append(data->bytes());
+                return;
+            }
+            stream.unread_body_.append(data->bytes());
+            if (auto credit = data->take_credit(); credit.valid()) {
+                if (stream.unread_credit_) {
+                    stream.unread_credit_->merge(std::move(credit));
+                } else {
+                    stream.unread_credit_.emplace(std::move(credit));
+                }
+            }
+            return;
+        }
+        if (const auto* interim = std::get_if<http3_informational_head_event>(&event)) {
+            if (const auto found = streams_.find(interim->stream_id()); found != streams_.end()) {
+                found->second.response_.interim_statuses_.push_back(interim->head().received_status().value());
+            }
+            return;
+        }
+        if (const auto* head = std::get_if<http3_response_head_event>(&event)) {
+            if (const auto found = streams_.find(head->stream_id()); found != streams_.end()) {
+                auto& stream = found->second;
+                stream.response_.status_ = head->head().status().value();
+                stream.response_.headers_ = copy_fields(head->head().headers());
+                stream.ended_ = stream.ended_ || head->stream_ended();
             }
             return;
         }
@@ -1009,25 +1045,23 @@ private:
             event);
     }
 
+    [[nodiscard]] static http3_test_fields copy_fields(std::span<const http_header> source) {
+        http3_test_fields fields{ruvia::process_resource()};
+        fields.reserve(source.size());
+        for (const auto& field : source) {
+            fields.emplace_back(field.name(), field.value());
+        }
+        return fields;
+    }
+
+    // A client receives only trailer sections as field-section events.
     void apply_headers(const http3_headers_event& event) {
         const auto found = streams_.find(event.stream_id_);
         if (found == streams_.end()) {
             return;
         }
         auto& stream = found->second;
-        http3_test_fields fields{ruvia::process_resource()};
-        fields.reserve(event.fields_.size());
-        for (const auto& field : event.fields_) {
-            fields.emplace_back(field.name(), field.value());
-        }
-        if (event.trailers_) {
-            stream.response_.trailers_ = std::move(fields);
-        } else if (event.status_ && event.status_->status().is_informational()) {
-            stream.response_.interim_statuses_.push_back(event.status_->value());
-        } else if (event.status_) {
-            stream.response_.status_ = event.status_->status().value();
-            stream.response_.headers_ = std::move(fields);
-        }
+        stream.response_.trailers_ = copy_fields(event.fields_);
         if (event.stream_ended_) {
             stream.ended_ = true;
         }

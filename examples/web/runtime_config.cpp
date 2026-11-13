@@ -88,6 +88,21 @@ int main() {
 
         const auto http_port = env_value.get<std::uint16_t>("RUVIA_HTTP_PORT")
                                    .value_or(env_value.get<std::uint16_t>("RUVIA_PORT").value_or(8087));
+        std::optional<ruvia::compression_config> compression;
+        if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
+            compression.emplace();
+        }
+        std::optional<ruvia::cors_config> cors;
+        if (env_value.get<bool>("RUVIA_CORS").value_or(false)) {
+            cors = ruvia::cors_config{
+                .request_headers_ =
+                    {
+                        .mode_ = ruvia::cors_request_headers_mode::fixed,
+                        .names_ = {"content-type", "authorization"},
+                    },
+                .max_age_ = std::chrono::seconds(600),
+            };
+        }
         app.server({
             .worker_count_ = env_value.get<std::uint32_t>("RUVIA_WORKERS").value_or(2),
             .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
@@ -101,20 +116,9 @@ int main() {
             .max_buffered_body_bytes_ = 16 * 1024 * 1024,
             .max_websocket_message_bytes_ = 16 * 1024 * 1024,
             .request_arena_initial_bytes_ = 4096,
+            .compression_ = std::move(compression),
+            .cors_ = std::move(cors),
         });
-        if (env_value.get<bool>("RUVIA_GZIP").value_or(false)) {
-            app.compression(ruvia::compression_config{});
-        }
-        if (env_value.get<bool>("RUVIA_CORS").value_or(false)) {
-            app.cors({
-                .request_headers_ =
-                    {
-                        .mode_ = ruvia::cors_request_headers_mode::fixed,
-                        .names_ = {"content-type", "authorization"},
-                    },
-                .max_age_ = std::chrono::seconds(600),
-            });
-        }
 
         const auto cert = env_value.path("RUVIA_TLS_CERT");
         const auto key = env_value.path("RUVIA_TLS_KEY");

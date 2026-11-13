@@ -117,9 +117,9 @@ private:
     }
 
     [[nodiscard]] std::string_view pop_chunk() noexcept {
-        const auto [chunk, consumed] = stream_.pop();
-        if (consumed != 0) {
-            session_.consume_stream_data(stream_.id(), consumed);
+        const auto [chunk, returned] = stream_.pop();
+        if (returned) {
+            session_.wake_writer();
         }
         return chunk;
     }
@@ -168,7 +168,7 @@ private:
     [[nodiscard]] http_response_stream_commit_plan submit_streaming_head(
         http_response&& response, http_response_trailer_intent trailer_intent) {
         const auto head_result = session_.codec().submit_streaming_response_head(
-            stream_.id(), request_method_, std::move(response), trailer_intent);
+            stream_.id(), std::move(response), trailer_intent);
         const auto* submitted_head = std::get_if<http_response_stream_commit_plan>(&head_result);
         if (submitted_head != nullptr) {
             return *submitted_head;
@@ -201,6 +201,9 @@ private:
             throw;
         }
         session_.wake_writer();
+        if (finished == http3_status::invalid_message) {
+            throw std::invalid_argument("HTTP/3 response ended before its declared Content-Length");
+        }
         if (finished != http3_status::accepted) {
             throw inbound_transport_error(
                 std::make_error_code(std::errc::connection_reset), reset_error_message);
@@ -224,9 +227,10 @@ public:
             require_live();
             // Reliable input is not starved by a native datagram flood.
             auto chunk = stream_.take_tunnel_bytes();
-            if (!chunk.empty()) {
-                session_.consume_stream_data(stream_.id(), chunk.size());
-                co_return http_tunnel_input{std::move(chunk), false};
+            if (!chunk.bytes_.empty()) {
+                chunk.credit_.reset();
+                session_.wake_writer();
+                co_return http_tunnel_input{std::move(chunk.bytes_), false};
             }
             if (auto payload = stream_.pop_datagram()) {
                 co_return http_tunnel_input{std::move(*payload), true};
@@ -288,13 +292,13 @@ private:
     template <typename buffer_type>
     [[nodiscard]] bool consume_tunnel_chunk(buffer_type& buffer) {
         auto chunk = stream_.take_tunnel_bytes();
-        if (chunk.empty()) {
+        if (chunk.bytes_.empty()) {
             return false;
         }
-        const auto consumed = chunk.size();
-        buffer.append(chunk);
-        std::pmr::string(chunk.get_allocator()).swap(chunk);
-        session_.consume_stream_data(stream_.id(), consumed);
+        buffer.append(chunk.bytes_);
+        std::pmr::string(chunk.bytes_.get_allocator()).swap(chunk.bytes_);
+        chunk.credit_.reset();
+        session_.wake_writer();
         return true;
     }
 
@@ -553,19 +557,11 @@ void http3_session::reset_stream(std::int64_t stream_id, http3_error_code error)
         stream->mark_aborted();
         if (!stream->dispatched() || stream->handler_done()) {
             stream->mark_request_body_closed();
-            consume_stream_data(stream_id, stream->unconsumed_bytes());
-            stream->discard_body();
+            (void)stream->discard_body();
             remove_stream_if_done(stream_id);
         }
     }
     wake_writer();
-}
-
-void http3_session::consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept {
-    if (bytes != 0 && lifecycle_ == lifecycle_type::open) {
-        connection_->consume_stream_data(stream_id, bytes);
-        wake_writer();
-    }
 }
 
 http3_quic_status http3_session::submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload) {
@@ -624,7 +620,7 @@ void http3_session::drain_events() {
     while (auto event = connection_->next_event()) {
         if (auto* headers = std::get_if<http3_headers_event>(&*event)) {
             on_headers(*headers);
-        } else if (const auto* data = std::get_if<http3_data_event>(&*event)) {
+        } else if (auto* data = std::get_if<http3_data_event>(&*event)) {
             on_data(*data);
         } else if (auto* datagram = std::get_if<http3_datagram_event>(&*event)) {
             on_datagram(*datagram);
@@ -712,7 +708,7 @@ void http3_session::on_headers(http3_headers_event& event) {
     if (stream == nullptr || stream->aborted() || stream->handler_done()) {
         return;
     }
-    if (append_http3_request_trailers(stream->trailers(), event.fields_).has_value()) {
+    if (stream->trailers().append_received(event.fields_).has_value()) {
         // RFC 9114 §4.1.2: a malformed trailer section makes the request
         // malformed.
         reset_stream(stream_id, http3_error_code::message_error);
@@ -798,9 +794,13 @@ void http3_session::on_request_head(http3_headers_event& event) {
     }
 }
 
-void http3_session::on_data(const http3_data_event& event) {
-    const auto stream_id = event.stream_id_;
-    const auto size = event.bytes_.size();
+void http3_session::on_data(http3_data_event& event) {
+    const auto stream_id = event.stream_id();
+    // Credit the stream does not keep returns when this scope ends.
+    auto credit = event.take_credit();
+    if (credit.valid()) {
+        wake_writer();
+    }
     auto* stream = find_stream(stream_id);
     // Content nobody will read -- of a stream already answered or abandoned,
     // a failed body, or a buffered body dispatched early -- returns
@@ -809,21 +809,19 @@ void http3_session::on_data(const http3_data_event& event) {
     if (stream == nullptr || stream->aborted() || stream->handler_done() ||
         reject_early_request(stream->head()) || stream->body_failure().has_value() ||
         (stream->body_mode() == request_body_mode::buffered && stream->dispatched())) {
-        consume_stream_data(stream_id, size);
         return;
     }
     stream->note_request_body_progress(scanner_entry_.last_active_ms());
     const auto total_limit = stream->head().connect() ? protocol_byte_limit::unlimited()
                                                       : http_request_body_limit(stream->resolution(), stream->body_mode(), admission_policy_);
-    const auto status = stream->store(event.bytes_, total_limit, services_.options_.server_.max_buffered_body_bytes_);
+    const auto status = stream->store(event.bytes(), std::move(credit), total_limit,
+        services_.options_.server_.max_buffered_body_bytes_);
     if (status == http3_body_store_status::backlog_overflow) {
-        consume_stream_data(stream_id, size);
         reset_stream(stream_id, http3_error_code::request_cancelled);
         return;
     }
     if (status == http3_body_store_status::too_large) {
         stream->mark_body_failure(http_request_body_failure::too_large);
-        consume_stream_data(stream_id, size);
         if (stream->response_committed()) {
             reset_stream(stream_id, http3_error_code::request_cancelled);
             return;
@@ -835,11 +833,10 @@ void http3_session::on_data(const http3_data_event& event) {
         }
         return;
     }
-    if (stream->body_mode() == request_body_mode::buffered) {
-        // Buffered content is consumed as it is stored.
-        consume_stream_data(stream_id, size);
-    } else if (auto* signal = stream->signal()) {
-        signal->wake();
+    if (stream->body_mode() == request_body_mode::stream) {
+        if (auto* signal = stream->signal()) {
+            signal->wake();
+        }
     }
 }
 
@@ -899,8 +896,9 @@ void http3_session::remove_stream_if_done(std::int64_t stream_id) noexcept {
     if (stream.dispatched() ? !stream.handler_done() : (!stream.closed() && !stream.aborted())) {
         return;
     }
-    consume_stream_data(stream_id, stream.unconsumed_bytes());
-    stream.discard_body();
+    if (stream.discard_body()) {
+        wake_writer();
+    }
     if (stream.tunnel()) {
         --tunnel_streams_;
     }
@@ -923,10 +921,8 @@ void http3_session::finish_stream_handler(std::int64_t stream_id) noexcept {
         connection_->stop_receiving(stream_id, error_value(http3_error_code::no_error));
     }
     // Content that arrived but was never read holds connection credit.
-    const auto unconsumed = stream->unconsumed_bytes();
     stream->mark_request_body_closed();
-    consume_stream_data(stream_id, unconsumed);
-    stream->discard_body();
+    (void)stream->discard_body();
     remove_stream_if_done(stream_id);
     wake_writer();
 }
@@ -1117,7 +1113,7 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                 case http_request_endpoint::tunnel: {
                     auto commit = [this, stream, signal, &admission, &options](
                                       context& context_value, const http_response& head_response) {
-                        if (codec().submit_connect_response_head(stream->id(), head_response)) {
+                        if (codec().submit_connect_response_head(stream->id(), head_response) != http3_status::accepted) {
                             throw std::invalid_argument("HTTP/3 CONNECT response head rejected");
                         }
                         if (!stream->tunnel()) {

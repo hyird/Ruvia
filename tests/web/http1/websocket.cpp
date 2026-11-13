@@ -42,7 +42,6 @@ struct websocket_eof_observation {
     std::atomic<bool> eof_{};
     std::atomic<bool> read_overlap_rejected_{};
     std::atomic<bool> write_overlap_rejected_{};
-    std::atomic<bool> close_overlap_rejected_{};
     std::atomic<bool> failed_{};
     std::atomic<bool> inform_rejected_{};
     std::atomic<bool> send_read_rejected_{};
@@ -265,7 +264,6 @@ class http1_websocket_routes final {
             std::pmr::string payload("ready", ruvia::process_resource());
             auto first_write = websocket_value.text(payload);
             auto last_write = websocket_value.text("ack");
-            auto close = websocket_value.close();
             payload.assign("changed");
             {
                 auto discarded = websocket_value.text("discarded");
@@ -282,11 +280,6 @@ class http1_websocket_routes final {
                 static_cast<void>(co_await std::move(overlap));
             } catch (const std::logic_error&) {
                 observed_value.read_overlap_rejected_ = true;
-            }
-            try {
-                co_await std::move(close);
-            } catch (const std::logic_error&) {
-                observed_value.close_overlap_rejected_ = true;
             }
             ruvia::task_scope writes(context_value.worker());
             const auto send = [&]() -> ruvia::task<void> {
@@ -500,7 +493,6 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
     websocket_eof_observed->eof_ = false;
     websocket_eof_observed->read_overlap_rejected_ = false;
     websocket_eof_observed->write_overlap_rejected_ = false;
-    websocket_eof_observed->close_overlap_rejected_ = false;
     websocket_eof_observed->failed_ = false;
     websocket_eof_observed->inform_rejected_ = false;
     ruvia::test::http_server_fixture server(io);
@@ -572,7 +564,6 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
     EXPECT_TRUE(websocket_eof_observed->eof_);
     EXPECT_TRUE(websocket_eof_observed->read_overlap_rejected_);
     EXPECT_TRUE(websocket_eof_observed->write_overlap_rejected_);
-    EXPECT_TRUE(websocket_eof_observed->close_overlap_rejected_);
     EXPECT_TRUE(!websocket_eof_observed->failed_);
     EXPECT_TRUE(websocket_eof_observed->inform_rejected_);
 }

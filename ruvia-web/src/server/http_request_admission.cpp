@@ -112,12 +112,11 @@ void http_response_tail::defer_access(const access_log_sink& access_log, http1_d
 http_request_admission admit_http_request(const http_request_admission_input& input,
     const http_request_admission_policy& policy, const context_services& services) {
     const auto& request = input.request_;
-    // A request stream callback owns its response representation: the server
-    // negotiates no coding for it and applies no CORS policy or rate limit.
+    // The host's compression and CORS policies cover request stream responses
+    // too; the application-wide rate limit belongs to the routes alone, and a
+    // router applies its own.
     const bool request_stream = static_cast<bool>(services.request_stream());
-    const auto coding = request_stream ? http_response_coding_selection::select(
-                                             http_response_coding_qualities{}, http_response_coding_candidates::identity_only())
-                                       : input.coding_;
+    const auto coding = input.coding_;
     // Negotiate against every coding. A document root or context::static_file
     // may serve an indexed precompressed sidecar even when this worker has no
     // runtime encoder; the encoder capability travels to representation
@@ -140,9 +139,6 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     admission.tail_.bind_addresses(remote_address, client_address);
     admission.tail_.bind_alternative_service(services.alternative_service());
     admission.services_.bind_response_coding(coding);
-    if (request_stream) {
-        admission.tail_.disable_cors();
-    }
     if (input.pinned_arrival_.has_value()) {
         admission.services_.pin_arrival(*input.pinned_arrival_);
     }

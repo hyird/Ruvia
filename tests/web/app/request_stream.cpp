@@ -422,13 +422,13 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
     {
         auto response = co_await client.post("/echo")
                             .header("origin", "https://site.test")
-                            .header("accept-encoding", "gzip")
+                            .header("accept-encoding", "identity")
                             .body(payload)
                             .send();
         EXPECT_EQ(response.status().value(), 200) << label;
         EXPECT_TRUE(response.protocol_version() == version) << label;
         EXPECT_FALSE(response.header("x-middleware").has_value()) << label;
-        EXPECT_FALSE(response.header("access-control-allow-origin").has_value()) << label;
+        EXPECT_EQ(response.header("access-control-allow-origin").value_or(""), "*") << label;
         EXPECT_FALSE(response.header("content-encoding").has_value()) << label;
         EXPECT_EQ(response.header("x-not-a-tunnel").value_or(""), "yes") << label;
         const auto id = response.header("x-connection-id");
@@ -747,9 +747,9 @@ TEST(Ruvia, request_stream_configuration_is_validated) {
 // CONNECT, failures before commit, which answer 500 and reach
 // on_connection_failure, an http_error, which answers its own status
 // unreported, and a failure after commit, which aborts the response and is
-// reported. An HTTP/1.1 Upgrade becomes a tunnel after 101. The routes
-// listener of the same application keeps its middleware, CORS and
-// compression policy; none of them, nor on_error, touches a request stream.
+// reported. An HTTP/1.1 Upgrade becomes a tunnel after 101. The host's
+// server_config CORS and compression policies cover both listeners; the routes
+// listener's middleware and on_error never touch a request stream.
 TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
     asio::io_context io;
@@ -779,14 +779,12 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         failures().clear();
     }
     auto& app = ruvia::app();
-    app.server({.worker_count_ = 2})
+    app.server({.worker_count_ = 2, .compression_ = ruvia::compression_config{}, .cors_ = ruvia::cors_config{}})
         .listen({stream_listener, routes_listener})
         .blocking_pool({.thread_count_ = 2})
         .use_worker_state<runtime_state>()
         .client({.base_url_ = registered_client_url})
         .use<marking_middleware>()
-        .cors(ruvia::cors_config{})
-        .compression(ruvia::compression_config{})
         .on_error(&answer_error)
         .on_start(nullptr)
         .on_start([] { started().release(); })
@@ -837,11 +835,11 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         EXPECT_EQ(initial.request("GET", "/early").header("x-early-data").value_or(std::pmr::string{}), "no");
         for (const auto path : {"/state-none", "/state-zero", "/state-unknown"}) {
             const bool ended = std::string_view(path) == "/state-none";
-            const auto stream = std::string_view(path) == "/state-zero"
-                                    ? initial.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"},
-                                                                    {":path", path}, {"content-length", "0"}},
-                                          false)
-                                    : initial.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", path}}, ended);
+            const auto stream = ended ? initial.start_request("POST", path)
+                                      : initial.start_streaming_request("POST", path,
+                                            std::string_view(path) == "/state-zero"
+                                                ? std::optional<ruvia::http_content_length>(0)
+                                                : std::nullopt);
             if (!ended) {
                 initial.send_stream_data(stream, bytes_of(std::string_view(path) == "/state-zero" ? "" : "x"), true);
             }

@@ -139,7 +139,7 @@ void check_peer_exchange(bool reply_close,
         std::optional<ruvia::http_client_websocket> websocket;
         try {
             websocket.emplace(co_await client.client().websocket("/").connect());
-            const auto greeting = co_await websocket->receive();
+            const auto greeting = co_await websocket->read();
             if (truncated_frame) {
                 returned_eof = !greeting.has_value();
             } else {
@@ -152,9 +152,9 @@ void check_peer_exchange(bool reply_close,
                     ruvia::task_scope closing(client.worker());
                     closing.spawn(websocket_client_test::await_output(std::move(close_operation)));
                     const bool read_rejected = co_await websocket_client_test::rejects_running_operation(
-                        websocket->receive());
+                        websocket->read());
                     const bool write_rejected = co_await websocket_client_test::rejects_running_operation(
-                        websocket->send("overlap"));
+                        websocket->text("overlap"));
                     const bool close_rejected = co_await websocket_client_test::rejects_running_operation(
                         websocket->close({}));
                     co_await closing.join();
@@ -274,7 +274,7 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
             if (client_initiates) {
                 co_await handle.close({});
             } else {
-                const auto message = co_await handle.receive();
+                const auto message = co_await handle.read();
                 EXPECT_TRUE(!message.has_value());
             }
             EXPECT_TRUE(!handle.connected());
@@ -371,16 +371,16 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
         auto websocket = co_await client.client().websocket("/").deflate({.compression_ = {.enabled_ = true}}).connect();
         auto& handle = websocket;
         {
-            auto first_write = handle.send("discarded");
-            auto second_write = handle.send(std::as_bytes(std::span(std::string_view("discarded"))));
-            auto byte_write = handle.send(std::as_bytes(std::span("discarded", 9)));
-            auto pmr_text = handle.send(std::pmr::string("discarded", ruvia::process_resource()));
+            auto first_write = handle.text("discarded");
+            auto second_write = handle.binary(std::as_bytes(std::span(std::string_view("discarded"))));
+            auto byte_write = handle.binary(std::as_bytes(std::span("discarded", 9)));
+            auto pmr_text = handle.text(std::pmr::string("discarded", ruvia::process_resource()));
             auto pmr_binary = [&] {
                 const std::pmr::string source("discarded", ruvia::process_resource());
-                return handle.send(std::as_bytes(std::span(source)));
+                return handle.binary(std::as_bytes(std::span(source)));
             }();
-            auto first_read = handle.receive();
-            auto second_read = handle.receive();
+            auto first_read = handle.read();
+            auto second_read = handle.read();
             auto first_close = handle.close();
             auto second_close = handle.close({});
             auto ping = handle.ping("discarded");
@@ -393,32 +393,33 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
         }
 
         std::pmr::string mutable_payload(payload_value, ruvia::process_resource());
-        auto first = handle.send(mutable_payload);
-        auto second = handle.send(std::pmr::string(payload_value, ruvia::process_resource()), {.compress_ = false});
+        auto first = handle.text(mutable_payload);
+        auto second = handle.text(std::pmr::string(payload_value, ruvia::process_resource()), {.compress_ = false});
         mutable_payload.assign("changed before starting the write");
-        auto first_read = handle.receive();
-        auto second_read = handle.receive();
+        auto first_read = handle.read();
+        auto second_read = handle.read();
         std::pmr::string first_payload{ruvia::process_resource()};
         {
             ruvia::task_scope writing(client.worker());
             writing.spawn(websocket_client_test::await_output(std::move(first)));
             const bool write_rejected = co_await websocket_client_test::rejects_running_operation(
-                handle.send("overlap"));
+                handle.text("overlap"));
             const bool close_rejected = co_await websocket_client_test::rejects_running_operation(
                 handle.close({}));
             // A failed close releases its read claim and leaves the running write claimed.
             const bool write_still_rejected = co_await websocket_client_test::rejects_running_operation(
-                handle.send("overlap"));
+                handle.text("overlap"));
             ruvia::task_scope reading(client.worker());
             reading.spawn(websocket_client_test::receive_payload(std::move(first_read), first_payload));
             const bool read_rejected = co_await websocket_client_test::rejects_running_operation(
-                handle.receive());
-            const bool close_during_read_rejected = co_await websocket_client_test::rejects_running_operation(
+                handle.read());
+            // close() may overlap the running read, but not the running write.
+            const bool close_during_write_rejected = co_await websocket_client_test::rejects_running_operation(
                 handle.close({}));
             co_await writing.join();
             co_await reading.join();
             EXPECT_TRUE(write_rejected && close_rejected && write_still_rejected && read_rejected &&
-                        close_during_read_rejected);
+                        close_during_write_rejected);
         }
         EXPECT_EQ(first_payload, payload_value);
         co_await std::move(second);
@@ -434,10 +435,10 @@ TEST(Ruvia, websocket_client_negotiates_deflate_and_can_skip_individual_messages
                     return handle.send(
                         ruvia::websocket_message::borrow(ruvia::websocket_opcode::text, source));
                 }
-                return handle.send(std::as_bytes(std::span(std::string_view(source))));
+                return handle.binary(std::as_bytes(std::span(std::string_view(source))));
             }();
             co_await std::move(operation);
-            const auto message = co_await handle.receive();
+            const auto message = co_await handle.read();
             EXPECT_TRUE(message.has_value());
             if (message) {
                 EXPECT_EQ(message->payload(), payload_value);
@@ -696,7 +697,7 @@ TEST(Ruvia, websocket_client_event_loop_stop_joins_connected_heartbeat_and_pendi
                              .connect();
         connected = websocket.connected();
         try {
-            (void)co_await websocket.receive();
+            (void)co_await websocket.read();
         } catch (const ruvia::http_client_error&) {
             read_cancelled = true;
         }
@@ -803,10 +804,10 @@ TEST(Ruvia, websocket_client_heartbeat_pings_after_a_blocked_message_write) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(20), .pong_timeout_ = std::chrono::seconds(5)}}).connect();
         const std::pmr::string payload(payload_size, 'x', ruvia::process_resource());
-        co_await websocket.send(std::as_bytes(std::span(std::string_view(payload))));
+        co_await websocket.binary(std::as_bytes(std::span(std::string_view(payload))));
         wrote = true;
         try {
-            (void)co_await websocket.receive();
+            (void)co_await websocket.read();
         } catch (const ruvia::http_client_error&) {
         }
         co_await client.shutdown();
@@ -870,7 +871,7 @@ TEST(Ruvia, websocket_client_heartbeat_aborts_a_write_stalled_by_a_non_reading_p
         auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_size).lifecycle({.heartbeat_ = {.ping_interval_ = std::chrono::milliseconds(50), .pong_timeout_ = std::chrono::milliseconds(100)}}).connect();
         const std::pmr::string payload(payload_size, 'x', ruvia::process_resource());
         try {
-            co_await websocket.send(std::as_bytes(std::span(std::string_view(payload))));
+            co_await websocket.binary(std::as_bytes(std::span(std::string_view(payload))));
         } catch (const ruvia::http_client_error& error) {
             write_error = error.code();
         }
@@ -954,7 +955,7 @@ TEST(Ruvia, websocket_client_reads_frame_above_default_message_limit) {
         std::exception_ptr failure;
         try {
             auto websocket = co_await client.client().websocket("/").max_message_bytes(payload_value.size()).connect();
-            const auto message = co_await websocket.receive();
+            const auto message = co_await websocket.read();
             matched = message.has_value() && message->payload() == payload_value;
             co_await websocket.close({});
         } catch (...) {
@@ -1148,14 +1149,14 @@ void check_heartbeat_policy(bool enabled) {
                 (void)co_await ruvia::sleep_for(websocket.worker(), std::chrono::milliseconds(200));
                 EXPECT_TRUE(websocket.connected());
             }
-            co_await websocket.send("check");
-            const auto ready = co_await websocket.receive();
+            co_await websocket.text("check");
+            const auto ready = co_await websocket.read();
             EXPECT_TRUE(ready && ready->payload() == "ready");
             if (enabled) {
                 bool timed_out = false;
                 const auto started = std::chrono::steady_clock::now();
                 try {
-                    (void)co_await websocket.receive();
+                    (void)co_await websocket.read();
                 } catch (const ruvia::http_client_error& error) {
                     timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
                 }
@@ -1248,7 +1249,7 @@ void check_client_failure_termination(client_failure_scenario scenario) {
                 websocket.abort();
             } else {
                 try {
-                    (void)co_await websocket.receive();
+                    (void)co_await websocket.read();
                 } catch (const ruvia::http_client_error& error) {
                     error_code = error.code();
                 }
@@ -1359,7 +1360,7 @@ TEST(Ruvia, websocket_client_keeps_a_peer_whose_pong_waits_for_the_next_read) {
             // The answered Ping's Pong stays unread far past its timeout.
             (void)co_await ruvia::sleep_for(client.worker(), std::chrono::milliseconds(300));
             connected_before_read = websocket.connected();
-            const auto message = co_await websocket.receive();
+            const auto message = co_await websocket.read();
             received = message.has_value() && message->payload() == std::string_view("ready");
             co_await websocket.close({});
         } catch (...) {
@@ -1421,13 +1422,13 @@ TEST(Ruvia, websocket_client_read_progresses_between_back_to_back_writes) {
             auto websocket = co_await client.client().websocket("/").connect();
             ruvia::task_scope reader(client.worker());
             const auto receive = [&]() -> ruvia::task<void> {
-                const auto message = co_await websocket.receive();
+                const auto message = co_await websocket.read();
                 writes_before_read = writes;
                 received = message.has_value() && message->payload() == std::string_view("hello");
             };
             reader.spawn(receive());
             for (; writes != write_count; ++writes) {
-                co_await websocket.send(std::as_bytes(std::span(std::string_view("x"))));
+                co_await websocket.binary(std::as_bytes(std::span(std::string_view("x"))));
             }
             co_await reader.join();
             co_await websocket.close({});

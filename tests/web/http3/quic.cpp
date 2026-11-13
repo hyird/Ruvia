@@ -336,8 +336,20 @@ std::optional<ruvia::http3_headers_event> take_headers(std::pmr::vector<ruvia::h
     return std::nullopt;
 }
 
-std::optional<std::string_view> field(const ruvia::http3_headers_event& headers, std::string_view name) {
-    for (const auto& entry : headers.fields_) {
+std::optional<ruvia::http3_response_head_event> take_response_head(
+    std::pmr::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
+    for (auto& event : events) {
+        if (auto* head = std::get_if<ruvia::http3_response_head_event>(&event); head != nullptr && head->stream_id() == stream_id) {
+            std::optional<ruvia::http3_response_head_event> taken(std::move(*head));
+            event = ruvia::http3_stream_end_event{-1};
+            return taken;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<std::string_view> field(const ruvia::http3_response_head_event& event, std::string_view name) {
+    for (const auto& entry : event.head().headers()) {
         if (entry.name() == name) {
             return entry.value();
         }
@@ -345,12 +357,13 @@ std::optional<std::string_view> field(const ruvia::http3_headers_event& headers,
     return std::nullopt;
 }
 
-std::pmr::string take_body(std::pmr::vector<ruvia::http3_event>& events, ruvia::http3_quic_connection& connection, std::int64_t stream_id) {
+// Takes the DATA of `stream_id` and returns its receive credit at once.
+std::pmr::string take_body(std::pmr::vector<ruvia::http3_event>& events, std::int64_t stream_id) {
     std::pmr::string body{ruvia::process_resource()};
-    for (const auto& event : events) {
-        if (const auto* data = std::get_if<ruvia::http3_data_event>(&event); data != nullptr && data->stream_id_ == stream_id) {
-            body.append(data->bytes_);
-            connection.consume_stream_data(stream_id, data->bytes_.size());
+    for (auto& event : events) {
+        if (auto* data = std::get_if<ruvia::http3_data_event>(&event); data != nullptr && data->stream_id() == stream_id) {
+            body.append(data->bytes());
+            (void)data->take_credit();
         }
     }
     return body;
@@ -399,7 +412,7 @@ bool submit_buffered_response(ruvia::http3_connection& codec, std::int64_t strea
 struct served_get final {
     bool request_parsed_{false};
     bool response_submitted_{false};
-    std::optional<ruvia::http3_headers_event> response_head_;
+    std::optional<ruvia::http3_response_head_event> response_head_;
     std::pmr::string response_body_{ruvia::process_resource()};
     bool response_ended_{false};
 };
@@ -435,8 +448,10 @@ served_get serve_get(in_memory_h3_pair& pair, std::int64_t stream_id, std::strin
     result.response_submitted_ = submit_buffered_response(pair.server().http3(), stream_id, ruvia::http_known_method::get, response);
     pair.exchange();
 
-    result.response_head_ = take_headers(pair.client_events_, stream_id);
-    result.response_body_ = take_body(pair.client_events_, pair.client(), stream_id);
+    if (auto head = take_response_head(pair.client_events_, stream_id)) {
+        result.response_head_.emplace(std::move(*head));
+    }
+    result.response_body_ = take_body(pair.client_events_, stream_id);
     result.response_ended_ = stream_ended(pair.client_events_, stream_id);
     return result;
 }
@@ -560,7 +575,7 @@ TEST(Ruvia, http3_quic_server_accepts_a_client_initial_and_serves_a_request_in_m
     EXPECT_TRUE(served.response_submitted_);
     EXPECT_TRUE(served.response_head_.has_value());
     if (served.response_head_) {
-        EXPECT_TRUE(served.response_head_->status_ && served.response_head_->status_->status() == ruvia::http_status::ok);
+        EXPECT_TRUE(served.response_head_->head().status() == ruvia::http_status::ok);
         EXPECT_TRUE(field(*served.response_head_, "content-length") == std::pmr::string(std::to_string(body.size()), ruvia::process_resource()));
         EXPECT_TRUE(field(*served.response_head_, "x-served-by") == std::string_view("ruvia-http3"));
         EXPECT_TRUE(field(*served.response_head_, "date").has_value());
@@ -816,9 +831,9 @@ private:
                     respond(stream_id, stream);
                 }
             } else if (const auto* data = std::get_if<ruvia::http3_data_event>(&*event)) {
-                connection.consume_stream_data(data->stream_id_, data->bytes_.size());
-                if (const auto found = streams_.find(data->stream_id_); found != streams_.end()) {
-                    found->second.request_body_.append(data->bytes_);
+                // The event's credit returns as it is destroyed.
+                if (const auto found = streams_.find(data->stream_id()); found != streams_.end()) {
+                    found->second.request_body_.append(data->bytes());
                 }
             } else if (const auto* end = std::get_if<ruvia::http3_stream_end_event>(&*event)) {
                 if (const auto found = streams_.find(end->stream_id_); found != streams_.end() && !found->second.responding_) {
@@ -994,6 +1009,13 @@ TEST(Ruvia, http3_test_client_rejects_a_certificate_for_another_server_name) {
     }));
     // The client's CONNECTION_CLOSE ends the server's only connection.
     EXPECT_TRUE(server.join().empty());
+}
+
+// The QUIC owner alone decides where DATA credit returns: its receive windows.
+TEST(Ruvia, http3_quic_connection_rejects_a_caller_credit_sink) {
+    constexpr ruvia::http3_received_data_credit_sink_type sink = [](void*, std::int64_t, std::size_t) noexcept {};
+    EXPECT_THROW((void)ruvia::http3_quic_connection::client({.http3_ = {.received_data_credit_sink_ = sink}}),
+        std::invalid_argument);
 }
 
 TEST(Ruvia, http3_test_client_fails_within_its_timeout_without_a_server) {

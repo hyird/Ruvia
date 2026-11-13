@@ -103,9 +103,6 @@ public:
     // Abandons both directions of a request stream (RFC 9114 §4.1.1) and
     // stops every wait of its handler.
     void reset_stream(std::int64_t stream_id, http3_error_code error) noexcept;
-    // Returns receive flow-control credit for request content the application
-    // consumed (RFC 9000 §4.1).
-    void consume_stream_data(std::int64_t stream_id, std::size_t bytes) noexcept;
     [[nodiscard]] const worker_handle& worker() const noexcept;
     [[nodiscard]] std::string_view remote_address() const& noexcept RUVIA_LIFETIMEBOUND {
         return remote_address_;
@@ -140,7 +137,7 @@ private:
     void start_application();
     void on_headers(http3_headers_event& event);
     void on_request_head(http3_headers_event& event);
-    void on_data(const http3_data_event& event);
+    void on_data(http3_data_event& event);
     void on_datagram(http3_datagram_event& event);
     void on_stream_end(std::int64_t stream_id);
     void on_stream_abort(std::int64_t stream_id) noexcept;

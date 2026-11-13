@@ -34,7 +34,12 @@ struct http_client_final_head final {
     bool opens_tunnel_{false};
 };
 
-// The final-head publication shared by HTTP/1 and HTTP/2: stops an upload the
+// Stores a received HTTP/2 or HTTP/3 final head in the state: its fields
+// (moved when they already use the state's resource), Content-Length and the
+// framing its status implies for the request method.
+void retain_http_client_binary_response_head(http_client_response_state& state_value, http_client_response_head&& head);
+
+// The final-head publication shared by HTTP/1, HTTP/2 and HTTP/3: stops an upload the
 // response completed, records status, version and body plan, retains origin
 // cookies, settles tunnel acceptance (rejecting an invalid CONNECT-UDP head),
 // selects collection of an encoded body, then wakes the head consumer.

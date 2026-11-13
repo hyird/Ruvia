@@ -367,7 +367,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client) {
         duplicate_rejected = true;
     }
     EXPECT_TRUE(duplicate_rejected);
-    auto redis = client.handle();
+    auto redis = client.redis();
     // A rejected second connect must not tear down the successful first one.
     co_await redis.ping();
     auto retained = co_await redis.get("retained");
@@ -411,7 +411,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client) {
 
 ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     const std::array<std::string_view, 1> keys{"filled"};
     const auto wait = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(100));
     // The lazy blocking connection spends longer in SELECT than the wait plus
@@ -429,7 +429,7 @@ ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& clien
 ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
     bool arrays = false) {
     co_await client.connect();
-    auto pipeline = client.handle().pipeline();
+    auto pipeline = client.redis().pipeline();
     pipeline.command("PING").command("PING");
     bool accepted = false;
     try {
@@ -454,7 +454,7 @@ ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client) {
     std::pmr::string binary_value(64 * 1024, 'v', ruvia::process_resource());
     binary_value[5] = '\0';
     auto cold = [&] {
-        auto pipeline = client.handle().pipeline();
+        auto pipeline = client.redis().pipeline();
         auto key = decltype(binary_key)(binary_key, ruvia::process_resource());
         auto value = decltype(binary_value)(binary_value, ruvia::process_resource());
         pipeline.get(key).set(key, value).incr_by(key, std::numeric_limits<std::int64_t>::min()).zadd(key, 1.5, "member");
@@ -468,7 +468,7 @@ ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client) {
     EXPECT_TRUE(retained[1].string() == std::string_view(binary_value));
     EXPECT_TRUE(retained[2].string() == "-9223372036854775808");
     EXPECT_TRUE(retained[3].string() == "member");
-    auto next_value = client.handle().pipeline();
+    auto next_value = client.redis().pipeline();
     next_value.get(std::pmr::string(256, 'n', ruvia::process_resource()));
     const auto replies = co_await std::move(next_value).exec();
     EXPECT_EQ(replies.size(), std::size_t{1});
@@ -483,7 +483,7 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
     std::pmr::string binary_value(64 * 1024, 'v', ruvia::process_resource());
     binary_value[5] = '\0';
     auto cold = [&] {
-        auto transaction = client.handle().transaction();
+        auto transaction = client.redis().transaction();
         auto key = decltype(binary_key)(binary_key, ruvia::process_resource());
         auto value = decltype(binary_value)(binary_value, ruvia::process_resource());
         transaction.set(key, value).get(key);
@@ -498,7 +498,7 @@ ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_pee
         EXPECT_EQ(retained.size(), std::size_t{2});
         EXPECT_TRUE(retained[0].string() == std::string_view(binary_value));
         EXPECT_TRUE(retained[1].string() == std::string_view(binary_key));
-        co_await client.handle().ping();
+        co_await client.redis().ping();
         co_await client.shutdown();
         EXPECT_TRUE(retained[0].string() == std::string_view(binary_value));
         accepted = true;
@@ -521,7 +521,7 @@ ruvia::task<void> check_oversized_reply(ruvia::redis_client& client) {
     co_await client.connect();
     bool rejected = false;
     try {
-        (void)co_await client.handle().get("large");
+        (void)co_await client.redis().get("large");
     } catch (const ruvia::redis_error& error) {
         rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
     }
@@ -533,7 +533,7 @@ ruvia::task<void> check_huge_declared_array(ruvia::redis_client& client) {
     co_await client.connect();
     bool rejected = false;
     try {
-        co_await client.handle().ping();
+        co_await client.redis().ping();
     } catch (const ruvia::redis_error& error) {
         rejected = error.code() == ruvia::redis_error::code_type::protocol_error;
     }
@@ -544,7 +544,7 @@ ruvia::task<void> check_huge_declared_array(ruvia::redis_client& client) {
 ruvia::task<void> check_nested_array_at_depth_limit(ruvia::redis_client& client) {
     co_await client.connect();
     const std::string_view command[]{"PING"};
-    const auto reply = co_await client.handle().command(std::span<const std::string_view>(command));
+    const auto reply = co_await client.redis().command(std::span<const std::string_view>(command));
     const ruvia::redis_value* value = &reply;
     bool valid = true;
     for (int index = 0; index < 4; ++index) {
@@ -561,7 +561,7 @@ ruvia::task<void> check_nested_array_at_depth_limit(ruvia::redis_client& client)
 
 ruvia::task<void> check_reconnect_after_budget_rejection(ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     bool rejected = false;
     try {
         co_await redis.ping();
@@ -575,7 +575,7 @@ ruvia::task<void> check_reconnect_after_budget_rejection(ruvia::redis_client& cl
 
 ruvia::task<void> blocked_command(ruvia::redis_client& client, ruvia::stop_token stop = {}) {
     co_await client.connect();
-    auto handle = client.handle({.stop_token_ = std::move(stop)});
+    auto handle = client.redis().with_options({.stop_token_ = std::move(stop)});
     auto copied = handle;
     (void)co_await copied.with_options({}).command("STALL");
 }
@@ -591,7 +591,7 @@ ruvia::task<void> connect_until_stopped(ruvia::redis_client& client, bool& cance
 ruvia::task<void> check_expiration(ruvia::redis_client& client,
     std::chrono::system_clock::time_point expires_at) {
     co_await client.connect();
-    const bool applied = co_await client.handle().expire_at("session", expires_at);
+    const bool applied = co_await client.redis().expire_at("session", expires_at);
     EXPECT_TRUE(applied);
     co_await client.shutdown();
 }
@@ -601,7 +601,7 @@ ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::re
     auto worker_value = loop.handle();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
-    auto handle = client.handle({.timeout_ = std::chrono::seconds(5)});
+    auto handle = client.redis().with_options({.timeout_ = std::chrono::seconds(5)});
     auto copied = handle;
     auto inherited = copied.with_options({});
     auto shortened = inherited.with_options({.timeout_ = std::chrono::milliseconds(100)});
@@ -630,7 +630,7 @@ ruvia::task<void> check_runtime_handle_cancellation_group(ruvia::event_loop loop
     ruvia::redis_client client(loop, config);
     co_await client.connect();
     ruvia::stop_group group{base_stop.token(), override_stop.token()};
-    auto configured = client.handle({.stop_token_ = base_stop.token()});
+    auto configured = client.redis().with_options({.stop_token_ = base_stop.token()});
     auto copied = configured;
     auto derived = copied.with_options({.stop_token_ = group.token()});
     bool cancelled = false;
@@ -686,7 +686,7 @@ TEST(Ruvia, redis_client_accepts_many_user_sources_and_replaces_old_handle_cance
         old.request_stop();
         auto run = [&]() -> ruvia::task<void> {
             co_await client.connect();
-            auto original = client.handle({.stop_token_ = old.token()});
+            auto original = client.redis().with_options({.stop_token_ = old.token()});
             auto copied = original;
             auto configured = copied.with_options({.stop_token_ = group.token()}).with_options({});
             auto cold = configured.command("STALL");
@@ -718,7 +718,7 @@ TEST(Ruvia, redis_client_cold_operation_retains_explicit_group_after_handle_dest
         ruvia::stop_source second;
         ruvia::stop_group cancellation{first.token(), second.token()};
         auto cold = [&] {
-            auto configured = client.handle({.stop_token_ = cancellation.token()});
+            auto configured = client.redis().with_options({.stop_token_ = cancellation.token()});
             auto copied = configured;
             return copied.with_options({}).command("PING");
         }();
@@ -730,7 +730,7 @@ TEST(Ruvia, redis_client_cold_operation_retains_explicit_group_after_handle_dest
             cancelled = error.code() == ruvia::redis_error::code_type::cancelled;
         }
         EXPECT_TRUE(cancelled);
-        co_await client.handle().ping();
+        co_await client.redis().ping();
         co_await client.shutdown();
     };
     pool.start();
@@ -781,7 +781,7 @@ TEST(Ruvia, redis_client_needs_a_loop_with_a_blocking_pool_to_look_up_a_dns_host
 
 ruvia::task<void> check_self_nested_copy(ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     const auto reply = co_await redis.command("NESTED");
     ruvia::test::poisoned_retirement_resource memory;
     {
@@ -810,7 +810,7 @@ TEST(Ruvia, redis_value_copy_assignment_from_its_own_subtree) {
 ruvia::task<void> check_reconnect_after_peer_close(
     ruvia::redis_client& client, redis_peer& peer) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     EXPECT_TRUE(co_await redis.ping("first") == "first");
     peer.wait_for_closed_connection();
     // The idle connection the peer closed must be replaced, not written to.
@@ -855,7 +855,7 @@ TEST(Ruvia, redis_pipeline_barriers_follow_writes_on_the_same_connection_and_dra
         ruvia::redis_client client(pool.loop(0), peer.config());
         auto exercise = [&]() -> ruvia::task<void> {
             co_await client.connect();
-            auto pipeline = client.handle({.timeout_ = std::chrono::seconds(1)}).pipeline();
+            auto pipeline = client.redis().with_options({.timeout_ = std::chrono::seconds(1)}).pipeline();
             pipeline.set("barrier-key", "value").command("WAIT", "1", "100").command("WAITAOF", "1", "1", "100");
             const auto replies = co_await std::move(pipeline).exec();
             EXPECT_EQ(replies.size(), std::size_t{3});
@@ -873,7 +873,7 @@ TEST(Ruvia, redis_pipeline_barriers_follow_writes_on_the_same_connection_and_dra
                     EXPECT_EQ(fsynced[1].integer(), std::int64_t{1});
                 }
             }
-            co_await client.handle().ping();
+            co_await client.redis().ping();
             co_await client.shutdown();
         };
         pool.start();
@@ -924,7 +924,7 @@ TEST(Ruvia, redis_pipeline_preserves_large_and_following_coalesced_replies) {
     ruvia::redis_client client(pool.loop(0), peer.config());
     auto exercise = [&]() -> ruvia::task<void> {
         co_await client.connect();
-        auto pipeline = client.handle().pipeline();
+        auto pipeline = client.redis().pipeline();
         pipeline.command("PING").command("PING");
         const auto replies = co_await std::move(pipeline).exec();
         EXPECT_EQ(replies.size(), std::size_t{2});
@@ -1036,7 +1036,7 @@ ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client
     co_await client.connect();
     std::exception_ptr failure;
     try {
-        auto pipeline = client.handle(std::move(options)).pipeline();
+        auto pipeline = client.redis().with_options(std::move(options)).pipeline();
         if (barrier.empty()) {
             pipeline.command("STALL");
         } else {
@@ -1056,8 +1056,8 @@ ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client
         EXPECT_TRUE(rejected);
         // The failed pipeline must return its only slot and retire the partial
         // exchange before a fresh command establishes a new connection.
-        co_await client.handle().ping();
-        auto next = client.handle().pipeline();
+        co_await client.redis().ping();
+        auto next = client.redis().pipeline();
         next.command("PING");
         const auto replies = co_await std::move(next).exec();
         EXPECT_EQ(replies.size(), std::size_t{1});

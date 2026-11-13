@@ -29,7 +29,7 @@ ruvia::task<bool> can_create_operation(ruvia::db_client& client) {
     try {
         // A cold operation exercises the public connected-client contract
         // without requiring the startup peer to implement query execution.
-        auto operation = client.handle().query("SELECT 1");
+        auto operation = client.db().query("SELECT 1");
         (void)operation;
         co_return true;
     } catch (const std::logic_error&) {

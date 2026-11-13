@@ -36,6 +36,65 @@ enum class process_signal_handler_policy : std::uint8_t {
     install,
 };
 
+struct compression_config final {
+    // Only text-like media types are encoded (text/*, JSON, XML and their +json
+    // / +xml suffixes, JavaScript, WebAssembly, SVG, icons, uncompressed fonts);
+    // a missing or other Content-Type, or one naming a zip container, stays
+    // identity. A streamed response whose head declares Content-Length follows
+    // the same min_bytes_ / max_bytes_ rule as a buffered body.
+    // Buffered in-memory responses below this size remain identity, unless the
+    // request refuses identity (e.g. "gzip, identity;q=0"): then any size is
+    // encoded rather than answered with 406. File responses (context::file,
+    // context::static_file) are never encoded at request time, whether their
+    // bytes are read from disk or memory, so GET and HEAD describe the same
+    // representation.
+    std::size_t min_bytes_{1024};
+    // Eligible bodies through this size are encoded synchronously on the
+    // worker. It is the inline ceiling: larger bodies are offloaded to the
+    // bounded blocking pool when it is enabled, and otherwise stay identity
+    // (406 when the request refuses identity).
+    std::size_t sync_bytes_{std::size_t{64} * 1024};
+    // Buffered bodies above this size remain identity. Static files use their
+    // own document-root precompression thresholds and still prefer checked-in
+    // precompressed sidecars when present.
+    std::size_t max_bytes_{std::size_t{64} * 1024 * 1024};
+};
+
+enum class cors_origin_mode : std::uint8_t {
+    any,
+    exact,
+    credentialed_exact,
+};
+
+struct cors_origin_config final {
+    cors_origin_mode mode_{cors_origin_mode::any};
+    // Required for exact modes. "null" represents the serialized opaque
+    // origin; wildcard mode requires this field to remain empty.
+    borrowed_text value_{};
+};
+
+enum class cors_request_headers_mode : std::uint8_t {
+    reflect,
+    fixed,
+};
+
+struct cors_request_headers_config final {
+    cors_request_headers_mode mode_{cors_request_headers_mode::reflect};
+    // Required in fixed mode and empty in reflect mode.
+    std::pmr::vector<std::pmr::string> names_{process_resource()};
+};
+
+// CORS metadata does not establish HTTP message framing. Invalid origin,
+// requested-method or requested-header syntax generates no policy headers;
+// the application still receives the request. Reflected header names are
+// serialized as one comma-delimited field, including repeated request lines.
+struct cors_config final {
+    cors_origin_config origin_{};
+    cors_request_headers_config request_headers_{};
+    std::pmr::vector<std::pmr::string> expose_headers_{process_resource()};
+    std::optional<std::chrono::seconds> max_age_{};
+};
+
 // The complete always-present Web server runtime configuration. application consumes
 // this aggregate atomically, validates it as one unit, and publishes the same
 // normalized values to every worker. Optional fields disable only the policy
@@ -144,6 +203,13 @@ struct server_config final {
     std::size_t request_arena_initial_bytes_{request_arena_initial_bytes};
     // Shared by all registered outbound HTTP client aliases on each worker.
     http_client_result_budget_config http_client_result_budget_{};
+    // Host-wide representation policies applied to every HTTP response this
+    // host prepares: routes, router::dispatch() and request_stream callbacks
+    // alike. Absence disables the policy. compression_ also enables
+    // negotiation of indexed precompressed static variants; CORS headers
+    // also follow the route engine's OPTIONS preflight answer.
+    std::optional<compression_config> compression_{};
+    std::optional<cors_config> cors_{};
 };
 
 struct trusted_proxy_config final {
@@ -301,68 +367,6 @@ struct listener_remove_options final {
     // 按稳定监听身份立即关闭所有既有连接（包括 TLS、多路复用与升级）。
     // 默认只停止新接入；相同端点后来新增的监听不受影响。
     bool close_connections_{false};
-};
-
-// Canonical startup values shared by application configuration and every worker's
-// server options. They stay top-level so configuration is not copied between
-// models.
-struct compression_config final {
-    // Only text-like media types are encoded (text/*, JSON, XML and their +json
-    // / +xml suffixes, JavaScript, WebAssembly, SVG, icons, uncompressed fonts);
-    // a missing or other Content-Type, or one naming a zip container, stays
-    // identity. A streamed response whose head declares Content-Length follows
-    // the same min_bytes_ / max_bytes_ rule as a buffered body.
-    // Buffered in-memory responses below this size remain identity, unless the
-    // request refuses identity (e.g. "gzip, identity;q=0"): then any size is
-    // encoded rather than answered with 406. File responses (context::file,
-    // context::static_file) are never encoded at request time, whether their
-    // bytes are read from disk or memory, so GET and HEAD describe the same
-    // representation.
-    std::size_t min_bytes_{1024};
-    // Eligible bodies through this size are encoded synchronously on the
-    // worker. It is the inline ceiling: larger bodies are offloaded to the
-    // bounded blocking pool when it is enabled, and otherwise stay identity
-    // (406 when the request refuses identity).
-    std::size_t sync_bytes_{std::size_t{64} * 1024};
-    // Buffered bodies above this size remain identity. Static files use their
-    // own document-root precompression thresholds and still prefer checked-in
-    // precompressed sidecars when present.
-    std::size_t max_bytes_{std::size_t{64} * 1024 * 1024};
-};
-
-enum class cors_origin_mode : std::uint8_t {
-    any,
-    exact,
-    credentialed_exact,
-};
-
-struct cors_origin_config final {
-    cors_origin_mode mode_{cors_origin_mode::any};
-    // Required for exact modes. "null" represents the serialized opaque
-    // origin; wildcard mode requires this field to remain empty.
-    borrowed_text value_{};
-};
-
-enum class cors_request_headers_mode : std::uint8_t {
-    reflect,
-    fixed,
-};
-
-struct cors_request_headers_config final {
-    cors_request_headers_mode mode_{cors_request_headers_mode::reflect};
-    // Required in fixed mode and empty in reflect mode.
-    std::pmr::vector<std::pmr::string> names_{process_resource()};
-};
-
-// CORS metadata does not establish HTTP message framing. Invalid origin,
-// requested-method or requested-header syntax generates no policy headers;
-// the application still receives the request. Reflected header names are
-// serialized as one comma-delimited field, including repeated request lines.
-struct cors_config final {
-    cors_origin_config origin_{};
-    cors_request_headers_config request_headers_{};
-    std::pmr::vector<std::pmr::string> expose_headers_{process_resource()};
-    std::optional<std::chrono::seconds> max_age_{};
 };
 
 // Runtime behavior belongs to the server's document-root binding, not to the

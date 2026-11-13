@@ -35,7 +35,7 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] db_handle handle(operation_options options);
+    [[nodiscard]] db_handle db();
 
     [[nodiscard]] const worker_handle& worker() const noexcept {
         return worker_;
@@ -74,9 +74,9 @@ void db_client_state::throw_not_ready() {
     throw std::logic_error("database client is not connected");
 }
 
-db_handle db_client_state::handle(operation_options options) {
+db_handle db_client_state::db() {
     lifecycle_.require_ready();
-    return databases_.get(lifecycle_.operation_scope(), nullptr).with_options(std::move(options));
+    return databases_.get(lifecycle_.operation_scope(), nullptr);
 }
 
 }  // namespace ruvia::detail
@@ -108,8 +108,8 @@ task<void> db_client::connect() & {
     return state_->connect();
 }
 
-db_handle db_client::handle(operation_options options) const& {
-    return state_->handle(std::move(options));
+db_handle db_client::db() const& {
+    return state_->db();
 }
 
 void db_client::close() noexcept {

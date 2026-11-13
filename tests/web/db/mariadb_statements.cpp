@@ -183,7 +183,7 @@ TEST(Ruvia, db_mariadb_repeated_statement_runs_prepared_from_its_second_use) {
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : outcomes) {
             co_await pipeline_test::query_id(handle, "SELECT v FROM t WHERE id = ?", 7, result);
         }
@@ -209,7 +209,7 @@ TEST(Ruvia, db_mariadb_prepared_parameters_keep_their_types) {
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<std::pmr::string, 2> results{std::pmr::string(ruvia::process_resource()), std::pmr::string(ruvia::process_resource())};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : results) {
             const auto rows = co_await handle.query(
                 "SELECT v FROM t WHERE a = ? AND b = ? AND c = ? AND d <=> ? "
@@ -269,7 +269,7 @@ TEST(Ruvia, db_mariadb_prepared_reals_read_as_the_text_protocol_sends_them) {
     std::optional<db_rows> text_rows;
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        co_await twice(connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals",
+        co_await twice(connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT d, f FROM reals",
             text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
@@ -321,7 +321,7 @@ TEST(Ruvia, db_mariadb_prepared_values_read_as_the_text_protocol_sends_them) {
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         co_await twice(
-            connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
+            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM typed", text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
     EXPECT_TRUE((values(*prepared_rows) == expected));
@@ -345,7 +345,7 @@ TEST(Ruvia, db_mariadb_statement_the_server_will_not_prepare_runs_as_text) {
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : outcomes) {
             co_await pipeline_test::query(handle, "SHOW v", result);
         }
@@ -371,7 +371,7 @@ TEST(Ruvia, db_mariadb_stale_prepared_statement_is_prepared_again_once) {
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : outcomes) {
             co_await pipeline_test::query(handle, "SELECT v FROM t", result);
         }
@@ -405,7 +405,7 @@ TEST(Ruvia, db_mariadb_cached_statements_arriving_together_run_as_pipelined_text
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
         task_scope together(connected.worker());
@@ -437,7 +437,7 @@ TEST(Ruvia, db_mariadb_transaction_statement_runs_prepared_from_its_second_use) 
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<std::pmr::string, 2> results{std::pmr::string(ruvia::process_resource()), std::pmr::string(ruvia::process_resource())};
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto transaction = co_await connected.handle({.timeout_ = std::chrono::seconds(5)}).begin_transaction();
+        auto transaction = co_await connected.db().with_options({.timeout_ = std::chrono::seconds(5)}).begin_transaction();
         for (auto& result : results) {
             const auto rows = co_await transaction.query("SELECT v FROM t WHERE id = ?", std::int64_t{3});
             result = std::pmr::string(rows.front()["v"].value().value_or(""), ruvia::process_resource());
@@ -465,7 +465,7 @@ TEST(Ruvia, db_mariadb_least_recently_used_prepared_statement_is_closed_for_a_ne
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::size_t failures = 0;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (std::size_t index = 0; index < statements; ++index) {
             const auto sql = "SELECT v FROM t" + std::pmr::string(std::to_string(index), ruvia::process_resource());
             for (int use = 0; use < 2; ++use) {
@@ -502,7 +502,7 @@ TEST(Ruvia, db_mariadb_prepared_server_error_above_the_client_range_is_the_state
     db_client client(attachment.loop(), mariadb_statement_test::config(peer));
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : outcomes) {
             co_await pipeline_test::execute(handle, "INSERT INTO t (v) VALUES (1)", result);
         }
@@ -536,7 +536,7 @@ TEST(Ruvia, db_mariadb_parameters_read_otherwise_than_their_literals_run_as_text
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 10> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await query_with(handle, sql, outcomes[0], std::int64_t{5});
         co_await query_with(handle, sql, outcomes[1], std::int64_t{6});
         co_await query_with(handle, sql, outcomes[2], std::int64_t{-1});
@@ -577,7 +577,7 @@ TEST(Ruvia, db_mariadb_integer_only_placeholders_run_prepared_only_with_integers
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 19> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         auto* result = outcomes.data();
         co_await query_with(handle, limit, *result++, std::int64_t{2});
         co_await query_with(handle, limit, *result++, std::int64_t{3});
@@ -640,7 +640,7 @@ TEST(Ruvia, db_mariadb_statements_the_binary_protocol_runs_otherwise_are_never_p
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 11> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         auto* result = outcomes.data();
         for (const auto sql : text_only) {
             for (int use = 0; use < 2; ++use) {
@@ -694,7 +694,7 @@ TEST(Ruvia, db_mariadb_prepared_values_without_a_fixed_scale_read_as_the_text_pr
     std::optional<db_rows> prepared_rows;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         co_await twice(
-            connected.handle({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
+            connected.db().with_options({.timeout_ = std::chrono::seconds(5)}), "SELECT * FROM auto", text_rows, prepared_rows);
     });
     EXPECT_TRUE(prepared_rows.has_value());
     EXPECT_TRUE((values(*prepared_rows) == expected));
@@ -721,7 +721,7 @@ TEST(Ruvia, db_mariadb_statement_with_a_year_column_runs_as_text) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 6> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (std::size_t index = 0; index < 3; ++index) {
             co_await query_with(handle, "SELECT y FROM t UNION ALL SELECT y FROM u", outcomes[index]);
         }
@@ -771,7 +771,7 @@ TEST(Ruvia, db_mariadb_year_column_appearing_at_execution_reads_padded_or_fails_
     std::optional<db_rows> padded_rows;
     std::array<pipeline_test::outcome, 3> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         std::optional<db_rows> text_rows;
         co_await twice(handle, "SELECT y FROM t", text_rows, padded_rows);
         co_await query_with(handle, "SELECT y FROM u", outcomes[0]);
@@ -810,7 +810,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_once_and_is_pr
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         for (auto& result : outcomes) {
             co_await query_with(handle, "SELECT NEXTVAL(s), t.* FROM t", result);
         }
@@ -848,7 +848,7 @@ TEST(Ruvia, db_mariadb_statement_whose_result_changed_shape_fails_inside_a_trans
     std::optional<db_error::code_type> failure;
     pipeline_test::outcome after;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         try {
             auto transaction = co_await handle.begin_transaction();
             for (int use = 0; use < 3; ++use) {
@@ -890,7 +890,7 @@ TEST(Ruvia, db_mariadb_abandoned_prepare_is_finished_from_the_cached_statement_t
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 4> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(20)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(20)});
         co_await pipeline_test::query(handle, sql, outcomes[0]);
         stop_source stop;
         const auto stoppable = handle.with_options({.stop_token_ = stop.token()});
@@ -940,7 +940,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_failing_in_its_rows_leaves_the_others_
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT v * 3 FROM t", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v * 3 FROM t", outcomes[1]);
         for (std::size_t index = 2; index < outcomes.size(); ++index) {
@@ -982,7 +982,7 @@ TEST(Ruvia, db_mariadb_prepared_statement_runs_again_after_its_rows_failed) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT (SELECT v FROM t)", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT (SELECT v FROM t)", outcomes[1]);
         task_scope together(connected.worker());
@@ -1022,7 +1022,7 @@ TEST(Ruvia, db_mariadb_session_change_drops_the_cached_statements) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
         co_await pipeline_test::execute(
@@ -1061,7 +1061,7 @@ TEST(Ruvia, db_mariadb_rowless_stream_preserves_session_changes_and_invalidates_
     std::array<pipeline_test::outcome, 4> outcomes;
     bool refused = false;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT 'a' || 'b' AS v", outcomes[1]);
         try {
@@ -1106,7 +1106,7 @@ TEST(Ruvia, db_mariadb_statements_run_as_text_while_the_client_character_set_dif
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 7> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::execute(handle, "SET NAMES gbk", outcomes[0]);
         for (std::size_t index = 1; index < 4; ++index) {
             co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[index]);
@@ -1142,7 +1142,7 @@ TEST(Ruvia, db_mariadb_set_and_use_run_as_text) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 8> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
         co_await pipeline_test::execute(handle, "USE other", outcomes[2]);
@@ -1186,7 +1186,7 @@ TEST(Ruvia, db_mariadb_one_character_set_variable_off_utf8mb4_runs_statements_as
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 5> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             pipeline_test::outcome ignored;
             co_await pipeline_test::query(handle, "SELECT v FROM t", ignored);
             co_await pipeline_test::query(handle, "SELECT v FROM t", ignored);
@@ -1231,7 +1231,7 @@ TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 3> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             for (auto& result : outcomes) {
                 co_await pipeline_test::query(handle, "SELECT v FROM t", result);
             }
@@ -1251,7 +1251,7 @@ TEST(Ruvia, db_mariadb_untracked_session_runs_nothing_prepared) {
         db_client client(attachment.loop(), config(peer));
         std::array<pipeline_test::outcome, 5> outcomes;
         test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-            const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+            const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
             co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
             co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
             co_await pipeline_test::execute(handle, "SET SESSION session_track_system_variables = ''", outcomes[2]);
@@ -1288,7 +1288,7 @@ TEST(Ruvia, db_mariadb_statements_that_run_as_text_take_no_cache_places) {
     std::size_t failures = 0;
     const auto select = [](std::size_t index) { return "SELECT v FROM t" + std::pmr::string(std::to_string(index), ruvia::process_resource()); };
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         const auto run = [&](std::pmr::string sql) -> task<void> {
             pipeline_test::outcome result;
             co_await pipeline_test::query(handle, sql, result);
@@ -1335,7 +1335,7 @@ TEST(Ruvia, db_mariadb_reports_of_other_variables_keep_the_cached_statements) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 5> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
         co_await pipeline_test::execute(handle, "INSERT INTO t (v) VALUES ('w')", outcomes[2]);
@@ -1366,7 +1366,7 @@ TEST(Ruvia, db_mariadb_call_has_the_tracked_variables_read_back) {
     db_client client(attachment.loop(), config(peer));
     std::array<pipeline_test::outcome, 7> outcomes;
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+        const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[0]);
         co_await pipeline_test::query(handle, "SELECT v FROM t", outcomes[1]);
         co_await pipeline_test::execute(handle, "CALL p()", outcomes[2]);

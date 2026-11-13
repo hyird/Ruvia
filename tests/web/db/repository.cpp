@@ -83,7 +83,7 @@ TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         for (int i = 0; i < 8; ++i) {
             {
                 auto builder = repository.query_builder("i");
@@ -116,7 +116,7 @@ TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
 TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_independent) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto items = client.handle().repository<entity_type>();
+        auto items = client.db().repository<entity_type>();
         const auto condition = entity_type::column<"id">() == 1;
         const entity_type empty_changes;
         auto builder = items.update_builder();
@@ -125,7 +125,7 @@ TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_indepen
         EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, empty_changes); }));
         EXPECT_TRUE(testing::throws_on([&] { (void)items.update(condition, std::span<const db_assignment>{}); }));
 
-        auto parents = client.handle().repository<parent>();
+        auto parents = client.db().repository<parent>();
         auto hydrated = parents.query_builder("p");
         hydrated.left_join_and_select("children", "c");
         auto read_source = parents.query_builder("read");
@@ -144,7 +144,7 @@ TEST(Ruvia, db_repository_write_validation_and_cte_rules_are_entry_point_indepen
 TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_dialects) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("samples");
         {
             db_query source;
@@ -199,7 +199,7 @@ TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<entity_type>();
+        auto repository = connected.db().repository<entity_type>();
         auto read = repository.query_builder("i");
         read.select({"name"});
         const auto one = co_await read.get_scalar<std::pmr::string>();
@@ -264,7 +264,7 @@ TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_proje
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<array_entity>();
+        auto repository = connected.db().repository<array_entity>();
         auto read = repository.query_builder("a");
         read.select({"values"});
         const auto one = co_await read.get_scalar<nullable_text_array>();
@@ -351,7 +351,7 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<entity_type>();
+        auto repository = connected.db().repository<entity_type>();
         auto make_projection = [&] {
             db_query source;
             source.select(source.star()).from("measurements");
@@ -422,7 +422,7 @@ TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) 
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<entity_type>();
+        auto repository = connected.db().repository<entity_type>();
         auto one_operation = [&] {
             auto builder = repository.query_builder("i");
             db_query expressions;
@@ -469,7 +469,7 @@ TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_dupli
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<entity_type>();
+        auto repository = connected.db().repository<entity_type>();
 
         auto explicit_qb = repository.query_builder("i");
         explicit_qb.select({"id"})
@@ -502,7 +502,7 @@ TEST(Ruvia, db_repository_relation_query_reports_missing_mapped_columns_as_conve
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
-        auto builder = connected.handle().repository<parent>().query_builder("p");
+        auto builder = connected.db().repository<parent>().query_builder("p");
         builder.inner_join_and_select("children", "c");
         bool missing = false;
         try {
@@ -517,7 +517,7 @@ TEST(Ruvia, db_repository_relation_query_reports_missing_mapped_columns_as_conve
 TEST(Ruvia, db_repository_relation_joins_validate_source_and_target_aliases) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto parents = client.handle().repository<parent>();
+        auto parents = client.db().repository<parent>();
         auto qb = parents.query_builder("p");
         EXPECT_TRUE(testing::throws_on([&] { qb.left_join("bogus.children", "c"); }));
         EXPECT_TRUE(testing::throws_on([&] { qb.inner_join("bogus.children", "c"); }));
@@ -534,7 +534,7 @@ TEST(Ruvia, db_repository_relation_joins_validate_source_and_target_aliases) {
 TEST(Ruvia, db_repository_relation_path_rejects_alias_and_relation_name_ambiguity) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto qb = client.handle().repository<parent>().query_builder("p");
+        auto qb = client.db().repository<parent>().query_builder("p");
         qb.left_join_and_select("children", "c");
         qb.left_join_and_select("c.parent", "children");
         // "children" is both a root relation and the alias of children.parent.
@@ -543,7 +543,7 @@ TEST(Ruvia, db_repository_relation_path_rejects_alias_and_relation_name_ambiguit
         qb.left_join_and_select("c.parent.children", "siblings");
 
         // A root alias that also names a root relation is ambiguous too.
-        auto shadowed = client.handle().repository<parent>().query_builder("children");
+        auto shadowed = client.db().repository<parent>().query_builder("children");
         EXPECT_TRUE(testing::throws_on([&] { shadowed.left_join_and_select("children.parent", "owner"); }));
         co_return;
     });
@@ -553,7 +553,7 @@ TEST(Ruvia, db_repository_update_builder_owns_complex_conditions_and_cross_table
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto update = repository.update_builder("i");
         {
             db_query x(&source);
@@ -611,8 +611,8 @@ TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
-        auto archive = client.handle().repository<archive_type>();
+        auto repository = client.db().repository<entity_type>();
+        auto archive = client.db().repository<archive_type>();
         for (int i = 0; i < 8; ++i) {
             {
                 auto insert = archive.insert_builder();
@@ -658,7 +658,7 @@ TEST(Ruvia, db_repository_write_builder_cancelled_operations_release_input_snaps
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         stop_source stop;
         stop.request_stop();
-        auto repository = client.handle({.stop_token_ = stop.token()}).repository<entity_type>();
+        auto repository = client.db().with_options({.stop_token_ = stop.token()}).repository<entity_type>();
         for (int i = 0; i < 8; ++i) {
             bool cancelled = false;
             auto exercise = [&]() -> task<void> {
@@ -690,7 +690,7 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
     repository_runtime runtime;
     test::counting_memory_resource source_resource;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto read = repository.query_builder("i");
         auto write = repository.update_builder("i");
         write.set("name", "changed").update_from_cte("incoming", "n").where(entity_type::column<"id">() > 8);
@@ -745,7 +745,7 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
 TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query_ctes) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         db_query outer;
         {
             entity_type entity;
@@ -804,7 +804,7 @@ TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query
 TEST(Ruvia, db_repository_composes_entity_joins_lateral_cte_and_grouped_queries) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("i");
         {
             db_query x;
@@ -837,7 +837,7 @@ TEST(Ruvia, db_repository_composes_entity_joins_lateral_cte_and_grouped_queries)
 TEST(Ruvia, db_repository_grouped_projection_reuses_imported_parameters) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto builder = client.handle().repository<entity_type>().query_builder("i");
+        auto builder = client.db().repository<entity_type>().query_builder("i");
         {
             db_query x;
             const auto bucket = x.binary(x.column("id", "i"), db_binary_operator::add, x.value(3));
@@ -855,7 +855,7 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
     repository_runtime runtime;
     test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         entity_type entity;
         entity.set<"id">(8);
         entity.set<"name">("initial");
@@ -911,7 +911,7 @@ TEST(Ruvia, db_repository_builder_binds_entity_predicates_to_join_alias) {
     repository_runtime runtime;
     const auto config = database_config();
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("i");
         builder.where(entity_type::column<"id">() >= 7).and_where(entity_type::column<"name">() == std::pmr::string("temporary", ruvia::process_resource()));
         builder.order_by("id").limit(3);
@@ -929,7 +929,7 @@ TEST(Ruvia, db_repository_builder_binds_entity_predicates_to_join_alias) {
 TEST(Ruvia, db_repository_rejects_unbounded_writes_and_missing_primary_key) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         entity_type changes;
         changes.set<"name">("new");
         EXPECT_TRUE(testing::throws_on([&] { (void)repository.update({}, changes); }));
@@ -953,7 +953,7 @@ TEST(Ruvia, db_repository_rejects_unbounded_writes_and_missing_primary_key) {
 TEST(Ruvia, db_repository_rejects_writes_that_only_target_computed_columns) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<computed_entity_type>();
+        auto repository = client.db().repository<computed_entity_type>();
         computed_entity_type changes;
         changes.set<"name_length">(3);
         auto predicate = computed_entity_type::column<"id">() == 1;
@@ -988,7 +988,7 @@ TEST(Ruvia, db_repository_conditional_upsert_owns_options_and_releases_cold_stor
         repository_runtime runtime;
         const db_config config{.driver_ = driver};
         test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-            auto repository = client.handle().repository<entity_type>();
+            auto repository = client.db().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
             input.set<"name">(std::pmr::string(400, 'n', ruvia::process_resource()));
@@ -1005,7 +1005,7 @@ TEST(Ruvia, db_repository_conditional_upsert_owns_options_and_releases_cold_stor
                     EXPECT_TRUE(testing::throws_on([&] { (void)repository.upsert(input, {.any_unique_key_ = true, .index_predicate_ = entity_type::column<"name">().is_not_null()}); }));
                 }
             }
-            auto keys = client.handle().repository<key_only_type>();
+            auto keys = client.db().repository<key_only_type>();
             key_only_type key;
             key.set<"id">(1);
             {
@@ -1030,7 +1030,7 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
     repository_runtime runtime;
     const auto config = database_config();
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("i");
         builder.where(entity_type::column<"id">() >= 1)
             .and_where(entity_type::column<"name">().is_not_null())
@@ -1064,7 +1064,7 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
         } else {
             EXPECT_TRUE(lock_statement.sql().find("LOCK IN SHARE MODE") != std::string_view::npos);
         }
-        auto relation = client.handle().repository<parent>().query_builder("p");
+        auto relation = client.db().repository<parent>().query_builder("p");
         relation.inner_join_and_select("children", "c");
         const auto relation_statement = relation.get_query_and_parameters();
         EXPECT_TRUE(relation_statement.sql().find("INNER JOIN") != std::string_view::npos);
@@ -1085,7 +1085,7 @@ TEST(Ruvia, db_repository_builder_orders_entity_fields_and_owns_predicates) {
 TEST(Ruvia, db_repository_write_inputs_cover_default_sparse_nullable_and_composite_keys) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
 
         // A single entity with no explicit values uses DEFAULT VALUES. Bulk
         // default-only input is rejected because there is no row width to encode.
@@ -1102,7 +1102,7 @@ TEST(Ruvia, db_repository_write_inputs_cover_default_sparse_nullable_and_composi
             (void)repository.insert(std::span<const entity_type>(defaults));
         }));
 
-        auto nullable_repository = client.handle().repository<nullable_entity_type>();
+        auto nullable_repository = client.db().repository<nullable_entity_type>();
         nullable_entity_type nullable;
         nullable.set<"id">(7);
         nullable.set_null<"name">();
@@ -1116,7 +1116,7 @@ TEST(Ruvia, db_repository_write_inputs_cover_default_sparse_nullable_and_composi
         (void)decrement;
         (void)deleted;
 
-        auto composite = client.handle().repository<composite_entity_type>();
+        auto composite = client.db().repository<composite_entity_type>();
         composite_entity_type key;
         key.set<"tenant_id">(10);
         key.set<"item_id">(20);
@@ -1131,7 +1131,7 @@ TEST(Ruvia, db_repository_write_inputs_cover_default_sparse_nullable_and_composi
 TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_rows) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         std::array<entity_type, 2> entities;
         entities[0].set<"id">(17);
         entities[1].set<"name">("second");
@@ -1176,7 +1176,7 @@ TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_ro
 TEST(Ruvia, db_repository_numeric_arrays_preserve_floating_precision_and_range) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<numeric_array_entity>();
+        auto repository = client.db().repository<numeric_array_entity>();
         for (const auto input : {std::nextafter(1.0L, 2.0L), std::numeric_limits<long double>::max(),
                  std::numeric_limits<long double>::lowest()}) {
             numeric_array_entity entity;
@@ -1205,7 +1205,7 @@ TEST(Ruvia, db_repository_numeric_arrays_preserve_floating_precision_and_range) 
 TEST(Ruvia, db_repository_nonfinite_array_elements_preserve_prior_insert_rows) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<numeric_array_entity>();
+        auto repository = client.db().repository<numeric_array_entity>();
         numeric_array_entity entity;
         entity.set<"samples">(std::pmr::vector<long double>({2.0L}, ruvia::process_resource()));
         auto builder = repository.insert_builder(entity);
@@ -1224,7 +1224,7 @@ TEST(Ruvia, db_repository_nonfinite_array_elements_preserve_prior_insert_rows) {
 TEST(Ruvia, db_repository_insert_defaults_and_rejected_batches_preserve_existing_rows) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         std::array<entity_type, 3> entities;
         entities[1].set<"name">("explicit");
         auto appended = repository.insert_builder(entities[0]);
@@ -1264,7 +1264,7 @@ TEST(Ruvia, db_repository_insert_defaults_and_rejected_batches_preserve_existing
 TEST(Ruvia, db_repository_insert_sources_cannot_replace_or_append_value_rows) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<entity_type>();
+        auto repository = client.db().repository<entity_type>();
         entity_type entity;
         entity.set<"name">("retained");
         auto source = repository.query_builder();
@@ -1307,7 +1307,7 @@ TEST(Ruvia, db_repository_insert_sources_cannot_replace_or_append_value_rows) {
 TEST(Ruvia, db_repository_batch_set_rejects_invalid_suffix_without_publishing_prefix) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
-        auto repository = client.handle().repository<computed_entity_type>();
+        auto repository = client.db().repository<computed_entity_type>();
         auto update = repository.update_builder("i");
         update.set("name", "original").where(computed_entity_type::column<"id">() == 7);
         const std::array invalid{
@@ -1361,7 +1361,7 @@ TEST(Ruvia, db_repository_upsert_option_families_validate_paths_and_driver_rules
     for (const auto driver : drivers) {
         repository_runtime runtime;
         test::with_connected_db_client(runtime.attachment_, db_config{.driver_ = driver}, [&](db_client& client) -> task<void> {
-            auto repository = client.handle().repository<entity_type>();
+            auto repository = client.db().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
             input.set<"name">("Ada");
@@ -1421,7 +1421,7 @@ TEST(Ruvia, db_repository_save_compiles_returning_on_every_driver_but_update_ret
     for (const auto driver : drivers) {
         repository_runtime runtime;
         test::with_connected_db_client(runtime.attachment_, db_config{.driver_ = driver}, [&](db_client& client) -> task<void> {
-            auto repository = client.handle().repository<entity_type>();
+            auto repository = client.db().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
             input.set<"name">("Ada");
@@ -1466,7 +1466,7 @@ RUVIA_DB_ENTITY(trigger_populated_entity, "devices",
 TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto roles = client.handle().repository<role_entity>();
+        auto roles = client.db().repository<role_entity>();
         auto query = roles.query_builder("r");
         query.join<user_role_entity>(db_join_type::inner, "ur", user_role_entity::column<"role_id">() == role_entity::column<"id">())
             .where(user_role_entity::column<"user_id">("ur") == 42)
@@ -1488,7 +1488,7 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
         const auto grouped_sql = clean_grouped.get_query_and_parameters();
         EXPECT_TRUE(grouped_sql.sql().find("GROUP BY \"r\".\"id\", \"r\".\"name\" HAVING ((\"r\".\"id\" > $2) AND EXISTS (SELECT") != std::string_view::npos);
 
-        auto devices = client.handle().repository<trigger_populated_entity>();
+        auto devices = client.db().repository<trigger_populated_entity>();
         trigger_populated_entity dev;
         dev.set<"id">(1);
         dev.set<"name">("sensor-1");
@@ -1588,7 +1588,7 @@ RUVIA_DB_ENTITY(soft_entity, "articles",
 TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
     repository_runtime runtime;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
-        auto repo = client.handle().repository<soft_entity>();
+        auto repo = client.db().repository<soft_entity>();
 
         auto active_qb = repo.query_builder("a");
         active_qb.select({"id", "title"})
@@ -1614,7 +1614,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
         EXPECT_TRUE(with_deleted_sql.sql().find("deleted_at") == std::string_view::npos);
         EXPECT_EQ(with_deleted_sql.sql(), borrowed.sql());
 
-        auto parents = client.handle().repository<parent>();
+        auto parents = client.db().repository<parent>();
         auto rel_join = parents.query_builder("p");
         rel_join.left_join("children", "c", child::column<"id">("c") > 0)
             .add_select(db_expr::count(child::column<"id">("c")), "child_count")
@@ -1699,7 +1699,7 @@ TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameter
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         // An integral double must still reach the server as float8.
         const std::array<db_value, 4> params{db_value{5}, db_value{5.0}, db_value{true}, db_value{"text"}};
         (void)co_await handle.query("SELECT $1, $2, $3, $4", std::span<const db_value>(params));
@@ -1734,7 +1734,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
     auto attachment = attach_event_loop(io);
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         auto operation = [&] {
             const std::array<char, 4> unterminated{'a', 'b', 'c', '!'};
             const std::pmr::string long_value(4096, 'x', ruvia::process_resource());
@@ -1824,7 +1824,7 @@ TEST(Ruvia, db_repository_decodes_postgresql_array_bounds_in_element_order) {
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<array_entity>();
+        auto repository = connected.db().repository<array_entity>();
         for (const auto& value : valid) {
             bool decoded = false;
             try {
@@ -1894,7 +1894,7 @@ TEST(Ruvia, db_repository_bounds_declared_postgresql_array_length_by_arrived_tex
     const test::default_resource_guard guard(capped);
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<array_entity>();
+        auto repository = connected.db().repository<array_entity>();
         bool rejected = false;
         try {
             (void)co_await repository.query_builder().get_scalar<std::pmr::vector<int>>();
@@ -1932,7 +1932,7 @@ TEST(Ruvia, db_repository_write_paths_stamp_version_and_update_date) {
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<versioned_entity>();
+        auto repository = connected.db().repository<versioned_entity>();
         const auto row = versioned_entity::column<"id">() == 1;
         (void)co_await repository.restore(row);
         (void)co_await repository.soft_delete(row);
@@ -1983,7 +1983,7 @@ TEST(Ruvia, db_repository_rejects_repeated_mapped_result_columns_without_wildcar
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto repository = connected.handle().repository<named_entity>();
+        auto repository = connected.db().repository<named_entity>();
         bool ambiguous = false;
         try {
             (void)co_await repository.find();

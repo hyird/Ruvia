@@ -44,7 +44,7 @@ TEST(Ruvia, db_transaction_options_support_cold_cancellation_and_reject_invalid_
         auto& context_value = test::new_test_io_context();
         auto attachment = attach_event_loop(context_value, {.queue_capacity_ = 8});
         test::with_connected_db_client(attachment, db_config{.driver_ = driver}, [&](db_client& client) -> task<void> {
-            auto handle = client.handle();
+            auto handle = client.db();
             stop_source cancellation;
             cancellation.request_stop();
             auto cancelled = handle.with_options({.stop_token_ = cancellation.token()});
@@ -140,7 +140,7 @@ TEST(Ruvia, db_transaction_can_prepare_cold_operations_while_a_statement_is_runn
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         auto transaction = co_await handle.begin_transaction();
         bool first_completed = false;
         task_scope running(connected.worker());
@@ -228,7 +228,7 @@ TEST(Ruvia, db_stream_cold_reads_and_close_wait_for_the_started_read_to_finish) 
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         auto stream = co_await handle.query_stream("SELECT v FROM records");
         const auto prefetched = co_await stream.read();
         EXPECT_TRUE(prefetched && (*prefetched)["v"].as<std::string_view>() == "prefetched");
@@ -279,7 +279,7 @@ TEST(Ruvia, db_stream_close_after_exhaustion_is_idempotent) {
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
+        auto stream = co_await connected.db().query_stream("SELECT v FROM records");
         while (co_await stream.read()) {
         }
         EXPECT_TRUE(!stream.active());
@@ -302,7 +302,7 @@ TEST(Ruvia, db_transaction_savepoint_commands_quote_identifiers_and_keep_transac
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto transaction = co_await connected.handle().begin_transaction();
+        auto transaction = co_await connected.db().begin_transaction();
         EXPECT_TRUE(ruvia::test::throws_on([&] { (void)transaction.savepoint(""); }));
         co_await transaction.savepoint("stage_1");
         EXPECT_TRUE(transaction.active());
@@ -341,7 +341,7 @@ TEST(Ruvia, db_transaction_advisory_locks_notify_and_cursors_execute_in_order) {
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto transaction = co_await connected.handle().begin_transaction();
+        auto transaction = co_await connected.db().begin_transaction();
         co_await transaction.advisory_lock(7001);
         co_await transaction.advisory_lock(17, 1);
         co_await transaction.advisory_lock("resource-key", 99);
@@ -385,7 +385,7 @@ TEST(Ruvia, db_transaction_scalar_decode_failure_releases_slot_for_next_transact
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         {
-            auto transaction = co_await connected.handle().begin_transaction();
+            auto transaction = co_await connected.db().begin_transaction();
             bool failed = false;
             try {
                 (void)co_await transaction.try_advisory_lock(7001);
@@ -395,7 +395,7 @@ TEST(Ruvia, db_transaction_scalar_decode_failure_releases_slot_for_next_transact
             EXPECT_TRUE(failed);
             EXPECT_TRUE(!transaction.active());
         }
-        auto next = co_await connected.handle().begin_transaction();
+        auto next = co_await connected.db().begin_transaction();
         EXPECT_TRUE(co_await next.try_advisory_lock(7001));
         co_await next.commit();
     });
@@ -551,7 +551,7 @@ TEST(Ruvia, db_transaction_held_idle_past_its_deadline_closes_the_session_and_fa
         std::optional<db_error::code_type> code;
         bool ended = false;
         drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
-            auto transaction = co_await connected.handle().begin_transaction();
+            auto transaction = co_await connected.db().begin_transaction();
             (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
             // Throws unless the session already ended while the transaction sat idle.
             co_await await_disconnects(connected.worker(), *peer);
@@ -581,7 +581,7 @@ TEST(Ruvia, db_transaction_statement_is_bounded_by_the_remaining_transaction_tim
         std::chrono::steady_clock::duration statement_time{};
         bool ended = false;
         drive_client(*peer, driver, lease, [&](db_client& connected) -> task<void> {
-            auto transaction = co_await connected.handle().begin_transaction();
+            auto transaction = co_await connected.db().begin_transaction();
             (void)co_await sleep_for(connected.worker(), lease / 2);
             const auto started = std::chrono::steady_clock::now();
             try {
@@ -611,7 +611,7 @@ TEST(Ruvia, db_transaction_without_a_deadline_keeps_its_session_while_idle) {
         std::pmr::string value{ruvia::process_resource()};
         bool committed = false;
         drive_client(*peer, driver, std::nullopt, [&](db_client& connected) -> task<void> {
-            auto transaction = co_await connected.handle().begin_transaction();
+            auto transaction = co_await connected.db().begin_transaction();
             (void)co_await sleep_for(connected.worker(), std::chrono::milliseconds(300));
             const auto rows = co_await transaction.query("SELECT v FROM records");
             if (!rows.empty()) {
@@ -638,7 +638,7 @@ TEST(Ruvia, db_stream_held_idle_past_its_deadline_closes_the_session_and_fails_r
             std::optional<db_error::code_type> code;
             bool ended = false;
             drive_client(*peer, driver, std::chrono::milliseconds(100), [&](db_client& connected) -> task<void> {
-                auto stream = co_await connected.handle().query_stream("SELECT v FROM records");
+                auto stream = co_await connected.db().query_stream("SELECT v FROM records");
                 if (const auto row = co_await stream.read(); row) {
                     first = (*row)["v"].as<std::string_view>().value_or("");
                 }

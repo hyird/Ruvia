@@ -446,8 +446,8 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http3_body_reader) {
     server.listen(secure("127.0.0.1", tcp.endpoint().port(), identity, udp_port));
     runtime.handles_[0].start(server.start(runtime.handles_[0].handle())).get();
     ruvia::test::http3_test_client client({asio::ip::address_v4::loopback(), udp_port}, identity.ca_file_, "localhost", 5s);
-    (void)client.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/wait"}}, false);
-    (void)client.start_raw_request({{":method", "POST"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/wait"}}, false);
+    (void)client.start_streaming_request("POST", "/wait");
+    (void)client.start_streaming_request("POST", "/wait");
     // QUIC pacing is pumped while waiting for server output.
     unsigned active{};
     ASSERT_TRUE(client.wait_until([&] {
@@ -457,7 +457,7 @@ TEST(Ruvia, request_stream_abort_connection_wakes_every_http3_body_reader) {
         return active == 2;
     },
         5s));
-    (void)client.start_raw_request({{":method", "GET"}, {":scheme", "https"}, {":authority", "localhost"}, {":path", "/abort"}});
+    (void)client.start_request("GET", "/abort");
     EXPECT_TRUE(client.wait_until([&] { return client.closed(); }, 5s));
     EXPECT_TRUE(left.try_acquire_for(5s));
     EXPECT_TRUE(left.try_acquire_for(5s));

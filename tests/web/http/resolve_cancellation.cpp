@@ -48,7 +48,7 @@ ruvia::task<void> hold_executor(ruvia::worker_handle worker, std::shared_ptr<hel
 ruvia::task<void> send_query(ruvia::http_client& client, ruvia::stop_token stop,
     std::optional<ruvia::http_client_error::code_type>& code) {
     try {
-        auto response = co_await client.with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
+        auto response = co_await client.client().with_options({.stop_token_ = std::move(stop)}).get("/resolve").send();
         (void)co_await response.stream().read_all();
     } catch (const ruvia::http_client_error& error) {
         code = error.code();

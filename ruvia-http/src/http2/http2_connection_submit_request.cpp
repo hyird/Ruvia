@@ -64,7 +64,7 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
 std::variant<std::uint32_t, http2_request_head_submit_error>
 http2_connection::submit_regular_request_head(std::string_view method,
     std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
-    std::span<const http_header_view> headers, http2_request_content content,
+    std::span<const http_header_view> headers, http_request_content_plan content,
     http_client_request_expectation expectation, http_request_field_source source) {
     if (const auto error = local_request_admission_error()) {
         return *error;
@@ -72,12 +72,8 @@ http2_connection::submit_regular_request_head(std::string_view method,
     const bool without_content = content.without_content() != nullptr;
     const auto* known_length_content = content.known_length_content();
     const bool streaming_content = content.streaming_content() != nullptr;
-    const auto expected_length = known_length_content != nullptr ? std::optional{known_length_content->length()}
-                                 : streaming_content             ? content.streaming_content()->expected_length()
-                                                                 : std::nullopt;
-    if (!without_content && known_length_content == nullptr && !streaming_content) {
-        return http2_request_head_submit_error::invalid_message;
-    }
+    const auto declared_length = content.declared_length();
+    const auto expected_length = declared_length ? std::optional{declared_length->value()} : std::nullopt;
     const bool content_will_follow = !without_content && (!expected_length || *expected_length != 0);
     const auto content_indication = content_will_follow ? http_request_content_indication::will_follow
                                                         : http_request_content_indication::no_content;
@@ -87,8 +83,8 @@ http2_connection::submit_regular_request_head(std::string_view method,
     if (without_content) {
         end_stream = http2_end_stream::end_stream;
     } else if (known_length_content != nullptr) {
-        end_stream = known_length_content->length() == 0 ? http2_end_stream::end_stream
-                                                         : http2_end_stream::keep_open;
+        end_stream = known_length_content->length().value() == 0 ? http2_end_stream::end_stream
+                                                                 : http2_end_stream::keep_open;
     }
     const auto known_method = classify_http_method(method);
     const auto default_port = http_uri_scheme_default_port(scheme);

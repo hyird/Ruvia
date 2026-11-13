@@ -331,7 +331,7 @@ TEST(Ruvia, http1_client_informational_callback_observes_deadline_and_explicit_s
             [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
                 ruvia::stop_source stop;
                 ruvia::worker_signal entered(worker);
-                const auto handle = client.with_options(
+                const auto handle = client.client().with_options(
                     {.timeout_ = deadline ? std::optional<ruvia::timeout_duration>(std::chrono::milliseconds(500)) : std::nullopt,
                         .stop_token_ = stop.token()});
                 auto request = handle.get("/cancel-hints");
@@ -448,7 +448,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
             ruvia::http_client client(attachment.loop(),
                 {.base_url_ = url, .request_timeout_ = std::chrono::seconds(5), .protocol_ = ruvia::http_client_protocol::http1_only});
             ruvia::stop_source stop;
-            const auto handle = client.with_options({.stop_token_ = stop.token()});
+            const auto handle = client.client().with_options({.stop_token_ = stop.token()});
             auto request = handle.post("/buffered");
             std::string content(content_bytes, 'b');
             request.body(content);

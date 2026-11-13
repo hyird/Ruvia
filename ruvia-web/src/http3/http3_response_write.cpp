@@ -55,12 +55,15 @@ task<http3_data_write_status> write_http3_stream_data(
                                           : http3_data_write_status::stream_aborted;
         }
         const auto submitted = session.codec().submit_data(stream_id, byte_view(bytes));
-        if (submitted.status_ == http3_status::closed) {
-            co_return http3_data_write_status::terminated;
+        if (submitted.status_ == http3_status::invalid_message) {
+            throw std::length_error("HTTP/3 response exceeds Content-Length");
         }
         if (submitted.status_ != http3_status::accepted && submitted.status_ != http3_status::would_block) {
-            // The stream no longer accepts content: it was reset.
-            co_return http3_data_write_status::stream_aborted;
+            // The stream no longer accepts content: it was reset, or the
+            // connection ended.
+            co_return signal.terminated() || session.codec().connection_error().has_value()
+                ? http3_data_write_status::terminated
+                : http3_data_write_status::stream_aborted;
         }
         bytes.remove_prefix(submitted.accepted_bytes_);
         session.wake_writer();

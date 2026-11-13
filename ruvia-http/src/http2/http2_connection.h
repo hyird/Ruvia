@@ -43,7 +43,6 @@
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
-#include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_client_response_head.h"
@@ -53,6 +52,7 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_push.h"
+#include "ruvia/http/http_request_content_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -925,7 +925,7 @@ public:
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>
     submit_regular_request_head(std::string_view method,
         std::string_view scheme, std::optional<std::string_view> authority, std::string_view path,
-        std::span<const http_header_view> headers, http2_request_content content,
+        std::span<const http_header_view> headers, http_request_content_plan content,
         http_client_request_expectation expectation = http_client_request_expectation::none,
         http_request_field_source source = http_request_field_source::generated);
     [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error>

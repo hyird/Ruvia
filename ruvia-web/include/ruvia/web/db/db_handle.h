@@ -582,9 +582,10 @@ public:
     // client would begin pool shutdown at the end of the full expression.
     // Each call registers one allocation-free capability with the client
     // operation scope, so keep the returned handle for a sequence of commands
-    // instead of calling handle() per command.
-    [[nodiscard]] db_handle handle(operation_options options = {}) const&;
-    db_handle handle(operation_options = {}) const&& = delete;
+    // instead of calling db() per command. Like context::db(), the handle
+    // carries no operation options; derive them with with_options().
+    [[nodiscard]] db_handle db() const&;
+    db_handle db() const&& = delete;
 
     // Idempotent and callable from any thread. Pool teardown runs on the bound
     // event loop; use shutdown() when its completion must be awaited.

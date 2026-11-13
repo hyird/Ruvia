@@ -97,7 +97,7 @@ TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
         config.pool_size_per_worker_ = 0;
         config.connect_timeout_ = std::chrono::milliseconds::zero();
         const auto connected = [](ruvia::db_client& value) -> ruvia::task<void> {
-            auto operation = value.handle().query("SELECT 1");
+            auto operation = value.db().query("SELECT 1");
             (void)operation;
             co_return;
         };
@@ -159,7 +159,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
             auto attachment = attach_event_loop(io);
             db_client client(attachment.loop(), config);
             test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-                const auto handle = connected.handle({.timeout_ = std::chrono::seconds(5)});
+                const auto handle = connected.db().with_options({.timeout_ = std::chrono::seconds(5)});
                 auto transaction = co_await handle.begin_transaction();
                 if (ending == 0) {
                     co_await transaction.commit();
@@ -207,7 +207,7 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
     auto attachment = attach_event_loop(io);
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& value) -> task<void> {
-        auto handle = value.handle();
+        auto handle = value.db();
         auto first = co_await handle.begin_transaction();
         auto second = co_await handle.begin_transaction();
         bool timed_out = false;
@@ -261,7 +261,7 @@ TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
     auto attachment = attach_event_loop(io);
     db_client client(attachment.loop(), config);
     test::drive_backend_client(attachment, client, [&](db_client& value) -> task<void> {
-        auto handle = value.handle();
+        auto handle = value.db();
         auto first = co_await handle.begin_transaction();
         auto second = co_await handle.begin_transaction();
         task_scope pending(value.worker());

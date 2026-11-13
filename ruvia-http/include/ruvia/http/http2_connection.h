@@ -14,7 +14,6 @@
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
-#include "ruvia/http/http2_request_content.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
@@ -23,6 +22,7 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_request_content_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -63,7 +63,7 @@ struct http2_regular_request_head_view final {
     std::optional<borrowed_text> authority_{};
     borrowed_text target_{"/"};
     borrowed_http_headers headers_{};
-    http2_request_content content_{http2_request_content::none()};
+    http_request_content_plan content_{http_request_content_plan::none()};
     http_client_request_expectation expectation_{http_client_request_expectation::none};
     http_request_field_source field_source_{http_request_field_source::generated};
 };
@@ -194,7 +194,10 @@ public:
     // unconsumed suffix is retained. Retry the suffix after obtaining output credit
     // and/or a WINDOW_UPDATE/SETTINGS change. complete means this input was consumed,
     // not that its frames reached the socket. Frame headers are additional overhead.
-    // Validate the complete input's length/terminal intent before consuming anything.
+    // Validate the complete input's length/terminal intent before consuming
+    // anything: input beyond the declared Content-Length, or a terminal input
+    // short of it, returns {0, invalid_message}. A stream whose content is not
+    // open throws std::logic_error.
     // END_STREAM is emitted only after consuming this entire input. An empty
     // terminal input is still a DATA frame. The nghttp2 backend defers it until
     // both connection and stream send windows are positive; otherwise
@@ -205,7 +208,11 @@ public:
     // Finish only after all source bytes were consumed. Trailer fields are encoded
     // before returning. Without trailers the END_STREAM rides an empty DATA frame
     // and returns backpressured, changing nothing, under the same window rule as
-    // submit_data().
+    // submit_data(). Content short of the declared Content-Length, or a trailer
+    // field that is invalid, not permitted in request trailers (RFC 9110
+    // section 6.5.1) or over the header list limit, returns invalid_message and
+    // changes nothing; a stream whose request content is not open throws
+    // std::logic_error.
     [[nodiscard]] http2_finish_status finish_request(std::uint32_t stream_id,
         std::span<const http_header_view> trailers = {});
     [[nodiscard]] http2_request_content_release_status release_request_content(
@@ -256,9 +263,9 @@ public:
     submit_streaming_response_head(std::uint32_t stream_id, http_response response,
         http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
     // Call after all body bytes have been consumed. Encodes trailers before returning;
-    // field storage may then be released. Incomplete Content-Length is rejected.
-    // Without trailers it returns backpressured under the same window rule as
-    // finish_request().
+    // field storage may then be released. Incomplete Content-Length returns
+    // invalid_message. Without trailers it returns backpressured under the same
+    // window rule as finish_request().
     [[nodiscard]] http2_finish_status finish_response(
         std::uint32_t stream_id, const http_response_trailer_section& trailers);
     // ORIGIN and ALTSVC payloads are limited to the smaller of the peer's
@@ -350,6 +357,7 @@ private:
 
 // RFC 8441 Extended CONNECT with :protocol websocket: the negotiation's
 // Sec-WebSocket-* request fields followed by the application headers.
+// Validate the final head with validate_extended_connect_websocket_client_response().
 [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
     std::string_view authority, std::string_view target, std::span<const http_header> headers = {},
@@ -358,14 +366,5 @@ private:
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
     std::string_view authority, std::string_view target, std::span<const http_header_view> headers,
     http_request_field_source source = http_request_field_source::generated);
-
-// Validates the server's 2xx response on a still-open stream, then its
-// selection against the negotiation. The result view borrows the response head.
-[[nodiscard]] std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_http2_websocket_client_response(
-    const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open);
-std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error>
-validate_http2_websocket_client_response(
-    const websocket_client_negotiation&, const http_client_response_head&&, bool) = delete;
 
 }  // namespace ruvia

@@ -318,9 +318,8 @@ struct tunnel_upgrade_session_operation final {
         co_return &session_->tunnel();
     }
 
-    [[nodiscard]] task<websocket*> accept_request_stream_websocket(context& context_value, websocket_route_config config) {
-        auto endpoint = route_endpoint::websocket(process_resource(), nullptr, std::move(config));
-        const auto& websocket_endpoint = *endpoint.websocket();
+    [[nodiscard]] task<websocket*> accept_request_stream_websocket(
+        context& context_value, const websocket_route_endpoint& websocket_endpoint) {
         const auto headers = websocket_response_headers(context_value);
         auto committed = co_await commit_websocket_(context_value, websocket_endpoint, headers);
         if (!committed) {
@@ -349,10 +348,11 @@ struct tunnel_upgrade_session_operation final {
                 return accept_request_stream_tunnel(context_value, config);
             };
             const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
-            auto accept_websocket = [this, &context_value](websocket_route_config config) {
-                return accept_request_stream_websocket(context_value, std::move(config));
+            auto accept_websocket = [this, &context_value](const websocket_route_endpoint& endpoint) {
+                return accept_request_stream_websocket(context_value, endpoint);
             };
-            const auto websocket_accept_ref = callback_access::bind<task<websocket*>(websocket_route_config)>(accept_websocket);
+            const auto websocket_accept_ref =
+                callback_access::bind<task<websocket*>(const websocket_route_endpoint&)>(accept_websocket);
             std::exception_ptr failure;
             try {
                 co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);

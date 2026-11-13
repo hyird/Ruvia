@@ -94,6 +94,11 @@ struct rate_limit_slot final {
 };
 static_assert(sizeof(rate_limit_slot) <= 128, "worker rate-limit slots must stay compact");
 
+// The one validation of a configured app-wide or router-wide rule: a
+// positive limit and window, a known overflow policy and a power-of-two
+// table capacity. Throws std::invalid_argument.
+void validate_rate_limit_config(const rate_limit_config& config);
+
 // One sliding-window table owned and accessed by exactly one
 // web_worker_runtime worker. Startup allocates every slot;
 // request-path lookup mutates ordinary worker-local state and performs no

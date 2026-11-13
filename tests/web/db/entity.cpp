@@ -383,7 +383,7 @@ TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_f
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
-        auto handle = connected.handle();
+        auto handle = connected.db();
         for (int i = 0; i < 4; ++i) {
             const auto rows = co_await handle.query("SELECT 1 AS val");
             EXPECT_EQ(rows.size(), std::size_t{1});

@@ -56,6 +56,7 @@ public:
           lifecycle_(normalize_websocket_lifecycle_options(lifecycle)),
           read_timeout_(read_timeout),
           write_lane_(worker),
+          read_signal_(worker),
           heartbeat_signal_(worker),
           cancellation_(make_worker_cancellation_target(*this, worker)) {}
 
@@ -90,11 +91,17 @@ public:
         tunnel_.abort();
         heartbeat_signal_.notify();
         write_lane_.notify();
+        transport_state_.data_signal_.notify();
     }
 
     void cancel_operation_by_id(std::uint64_t id) noexcept {
-        if (id != 0 && (id == read_id_ || id == write_id_)) {
-            abort();
+        if (id == 0) {
+            return;
+        }
+        if (id == read_id_) {
+            interrupt(operation_lane::read, http_client_error::code_type::cancelled);
+        } else if (id == write_id_) {
+            interrupt(operation_lane::write, http_client_error::code_type::cancelled);
         }
     }
 
@@ -167,8 +174,8 @@ public:
         websocket_opcode opcode, std::pmr::string payload, websocket_send_options options,
         operation_options operation_options_value) {
         state->require_current();
-        auto active = claim_operation_lane(state->write_active_, "concurrent WebSocket sends are not supported");
-        operation_guard operation(*state, state->write_id_, std::move(operation_options_value));
+        auto active = claim_operation_lane(state->write_active_, "concurrent WebSocket output operations are not supported");
+        operation_guard operation(*state, operation_lane::write, std::move(operation_options_value));
         try {
             co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
             write_guard lane(*state);
@@ -195,14 +202,15 @@ public:
         }
     }
 
-    static task<std::optional<websocket_message>> receive(std::shared_ptr<http_client_websocket_state> state,
+    static task<std::optional<websocket_message>> read(std::shared_ptr<http_client_websocket_state> state,
         operation_options options) {
         state->require_current();
-        auto active = claim_operation_lane(state->read_active_, "concurrent WebSocket receives are not supported");
+        read_lane_lease active(*state);
         if (state->ended_ && !state->failure_) {
             co_return std::nullopt;
         }
-        operation_guard operation(*state, state->read_id_, std::move(options));
+        operation_guard operation(*state, operation_lane::read, std::move(options));
+        std::optional<http_client_error::code_type> interrupted;
         try {
             state->resume_pong_deadline();
             for (;;) {
@@ -215,24 +223,42 @@ public:
                     co_return std::nullopt;
                 }
             }
+        } catch (const read_interruption&) {
+            interrupted = state->read_interrupt_;
+        } catch (const http_client_error&) {
+            state->abort();
+            // Once close() has sent its Close, whatever ends the handshake is
+            // this read's end; termination() tells how.
+            if (!state->local_close_sent_) {
+                if (state->failure_ == http_client_error::code_type::timeout) {
+                    state->check();
+                }
+                throw;
+            }
         } catch (...) {
             state->abort();
-            if (state->failure_ == http_client_error::code_type::timeout) {
-                state->check();
-            }
             throw;
         }
+        if (!interrupted) {
+            co_return std::nullopt;
+        }
+        throw http_client_error(*interrupted, "WebSocket read interrupted");
     }
 
     static task<void> close(std::shared_ptr<http_client_websocket_state> state,
         websocket_close_code code, std::pmr::string reason, operation_options options) {
         state->require_current();
-        auto read_active = claim_operation_lane(state->read_active_, "WebSocket close cannot overlap receive");
-        auto write_active = claim_operation_lane(state->write_active_, "WebSocket close cannot overlap send");
+        auto write_active = claim_operation_lane(state->write_active_, "WebSocket close cannot overlap an output operation");
         if (state->ended_ && !state->failure_) {
             co_return;
         }
-        operation_guard operation(*state, state->read_id_, std::move(options));
+        // A pending read observes the peer Close itself; otherwise close reads,
+        // and holds the read lane while it does.
+        std::optional<read_lane_lease> reading;
+        if (!state->read_active_) {
+            reading.emplace(*state);
+        }
+        operation_guard operation(*state, operation_lane::write, std::move(options));
         worker_timer_registration close_timer;
         if (const auto bound = state->lifecycle_.close_handshake_timeout_) {
             (void)state->worker_.schedule_timer(close_timer, worker_timer_deadline_after(bound->value()),
@@ -249,16 +275,25 @@ public:
                 if (state->protocol_.submit_close(code, reason) != websocket_close_submit_status::accepted) {
                     throw http_client_error(http_client_error::code_type::invalid_request, "invalid WebSocket close");
                 }
+                state->local_close_sent_ = true;
                 std::pmr::string(reason.get_allocator()).swap(reason);
                 co_await state->flush();
                 lane.commit();
             }
+            // RFC 6455 section 7.1.1: a pending read observes the peer Close
+            // and completes the handshake; once it ends early, close() reads.
             while (!state->ended_) {
+                if (!reading) {
+                    if (state->read_active_) {
+                        co_await state->read_signal_.wait();
+                        continue;
+                    }
+                    reading.emplace(*state);
+                }
                 const auto event = co_await state->next_event();
                 if (event.close() || event.transport_end()) {
                     close_timer.cancel();
                     co_await state->finish_close();
-                    break;
                 }
             }
         } catch (...) {
@@ -271,29 +306,90 @@ public:
     }
 
 private:
+    enum class operation_lane : std::uint8_t {
+        read,
+        write,
+    };
+
+    // Unwinds an interrupted read to read(); it never leaves this state.
+    struct read_interruption final {};
+
+    // A read deadline or stop request ends only that read; an output one
+    // aborts the session.
+    void interrupt(operation_lane lane, http_client_error::code_type reason) noexcept {
+        if (lane == operation_lane::write) {
+            abort(reason);
+            return;
+        }
+        if (!read_active_ || read_interrupt_) {
+            return;
+        }
+        read_interrupt_ = reason;
+        write_lane_.notify();
+        transport_state_.data_signal_.notify();
+    }
+
+    void throw_if_read_interrupted() const {
+        if (read_interrupt_) {
+            throw read_interruption{};
+        }
+    }
+
     class operation_guard final {
     public:
-        operation_guard(http_client_websocket_state& state, std::uint64_t& identity,
-            operation_options options)
-            : cancellation_(state.cancellation_, identity) {
+        operation_guard(http_client_websocket_state& state, operation_lane lane, operation_options options)
+            : state_(state),
+              lane_(lane),
+              cancellation_(state.cancellation_, lane == operation_lane::read ? state.read_id_ : state.write_id_) {
             const auto effective = override_operation_options(state.options_, std::move(options));
+            if (effective.stop_token_.stop_requested()) {
+                throw http_client_error(http_client_error::code_type::cancelled, "WebSocket operation cancelled");
+            }
             const auto timeout = operation_timeout(effective.timeout_);
             if (const auto deadline = timeout.deadline()) {
-                (void)state.worker_.schedule_timer(timer_, *deadline, [&state](worker_timer_outcome outcome) noexcept {
+                (void)state.worker_.schedule_timer(timer_, *deadline, [&state, lane](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
-                        state.abort(http_client_error::code_type::timeout);
+                        state.interrupt(lane, http_client_error::code_type::timeout);
                     }
                 });
             }
             cancellation_.arm(effective.stop_token_);
             state.check();
         }
+        ~operation_guard() {
+            if (lane_ == operation_lane::read) {
+                state_.read_interrupt_.reset();
+            }
+        }
         operation_guard(const operation_guard&) = delete;
         operation_guard& operator=(const operation_guard&) = delete;
 
     private:
+        http_client_websocket_state& state_;
+        operation_lane lane_;
         worker_timer_registration timer_;
         worker_cancellation_registration<worker_cancellation_target<http_client_websocket_state>> cancellation_;
+    };
+
+    // Holds the read lane; releasing it wakes a close() waiting for a pending read.
+    class read_lane_lease final {
+    public:
+        explicit read_lane_lease(http_client_websocket_state& state)
+            : state_(state) {
+            if (state_.read_active_) {
+                throw std::logic_error("concurrent WebSocket reads are not supported");
+            }
+            state_.read_active_ = true;
+        }
+        ~read_lane_lease() {
+            state_.read_active_ = false;
+            state_.read_signal_.notify();
+        }
+        read_lane_lease(const read_lane_lease&) = delete;
+        read_lane_lease& operator=(const read_lane_lease&) = delete;
+
+    private:
+        http_client_websocket_state& state_;
     };
 
     class write_guard final {
@@ -434,7 +530,10 @@ private:
         for (;;) {
             std::optional<websocket_event> event;
             {
-                co_await write_lane_.wait_for_idle(true, [this] { check(); });
+                co_await write_lane_.wait_for_idle(true, [this] {
+                    check();
+                    throw_if_read_interrupted();
+                });
                 write_guard lane(*this);
                 event = protocol_.next_event();
                 if (event && event->close()) {
@@ -490,6 +589,7 @@ private:
             }
             std::optional<std::span<const std::byte>> bytes;
             try {
+                co_await await_tunnel_input();
                 bytes = co_await tunnel_.read();
             } catch (const http_client_error& error) {
                 record_transport_failure(error);
@@ -502,6 +602,18 @@ private:
             }
             input_.append(as_chars(*bytes));
             touch_activity();
+        }
+    }
+
+    // Waits outside the tunnel's read lane, so an interrupted read leaves no
+    // tunnel operation behind; tunnel_.read() then completes without waiting.
+    task<void> await_tunnel_input() {
+        const auto& response = transport_state_;
+        while (response.offset_ == response.buffered_.size() && response.pending_.empty() &&
+               !response.receive_complete() && !response.failure_ && !response.pool_closed_) {
+            check();
+            throw_if_read_interrupted();
+            co_await transport_state_.data_signal_.wait();
         }
     }
 
@@ -580,10 +692,14 @@ private:
     websocket_lifecycle_options lifecycle_;
     std::optional<timeout_duration> read_timeout_;
     websocket_write_lane write_lane_;
+    worker_signal read_signal_;
     worker_signal heartbeat_signal_;
     websocket_peer_close_info peer_close_;
     std::optional<http_client_error::code_type> failure_;
     bool ended_{};
+    // close() has sent its Close: a pending read ends with nullopt.
+    bool local_close_sent_{};
+    std::optional<http_client_error::code_type> read_interrupt_;
     bool read_active_{};
     bool write_active_{};
     std::uint64_t read_id_{};
@@ -608,9 +724,9 @@ detail::http_client_websocket_state& require_websocket(
     state->require_current();
     return *state;
 }
-// Termination and byte counts read the protocol core without throwing:
-// moved-from owners have none, and other workers violate the session contract.
-const websocket_connection* websocket_protocol(
+// Session-state accessors read the state without throwing: moved-from owners
+// have none, and other workers violate the session contract.
+const detail::http_client_websocket_state* current_websocket(
     const std::shared_ptr<detail::http_client_websocket_state>& state) noexcept {
     if (!state) {
         return nullptr;
@@ -618,7 +734,7 @@ const websocket_connection* websocket_protocol(
     if (!state->worker().is_current()) {
         std::terminate();
     }
-    return &state->protocol();
+    return state.get();
 }
 }  // namespace
 
@@ -654,10 +770,13 @@ task<void> http_client_websocket::write_owned(websocket_opcode opcode, std::pmr:
     return detail::http_client_websocket_state::write(
         state_, opcode, detail::rebind_owned_storage(payload, state.resource()), options, std::move(operation));
 }
-task<void> http_client_websocket::send(std::string_view payload, websocket_send_options options, operation_options operation) & {
+task<void> http_client_websocket::text(std::string_view payload, websocket_send_options options, operation_options operation) & {
     return write(websocket_opcode::text, payload, options, std::move(operation));
 }
-task<void> http_client_websocket::send(std::span<const std::byte> payload, websocket_send_options options, operation_options operation) & {
+task<void> http_client_websocket::binary(std::string_view payload, websocket_send_options options, operation_options operation) & {
+    return write(websocket_opcode::binary, payload, options, std::move(operation));
+}
+task<void> http_client_websocket::binary(std::span<const std::byte> payload, websocket_send_options options, operation_options operation) & {
     return write(websocket_opcode::binary, as_chars(payload), options, std::move(operation));
 }
 task<void> http_client_websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
@@ -669,10 +788,10 @@ task<void> http_client_websocket::ping(std::string_view payload, operation_optio
 task<void> http_client_websocket::pong(std::string_view payload, operation_options operation) & {
     return write(websocket_opcode::pong, payload, {}, std::move(operation));
 }
-task<std::optional<websocket_message>> http_client_websocket::receive(operation_options operation) & {
+task<std::optional<websocket_message>> http_client_websocket::read(operation_options operation) & {
     (void)require_websocket(state_);
     validate_operation_options(operation);
-    return detail::http_client_websocket_state::receive(state_, std::move(operation));
+    return detail::http_client_websocket_state::read(state_, std::move(operation));
 }
 task<void> http_client_websocket::close(websocket_close_options options, operation_options operation) & {
     auto& state = require_websocket(state_);
@@ -680,35 +799,39 @@ task<void> http_client_websocket::close(websocket_close_options options, operati
     return detail::http_client_websocket_state::close(
         state_, options.code_, std::pmr::string(options.reason_.view(), state.resource()), std::move(operation));
 }
-std::string_view http_client_websocket::subprotocol() const& {
-    return require_websocket(state_).subprotocol();
+std::string_view http_client_websocket::subprotocol() const& noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->subprotocol() : std::string_view{};
+}
+bool http_client_websocket::connected() const noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr && state->connected();
+}
+std::optional<std::uint16_t> http_client_websocket::peer_close_code() const noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->peer_close_code() : std::nullopt;
+}
+std::string_view http_client_websocket::peer_close_reason() const& noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->peer_close_reason() : std::string_view{};
+}
+websocket_termination http_client_websocket::termination() const noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->protocol().termination() : websocket_termination::none;
+}
+std::uint64_t http_client_websocket::bytes_received() const noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->protocol().bytes_received() : 0;
+}
+std::uint64_t http_client_websocket::bytes_sent() const noexcept {
+    const auto* state = current_websocket(state_);
+    return state != nullptr ? state->protocol().bytes_sent() : 0;
 }
 http_protocol_version http_client_websocket::protocol_version() const {
     return require_websocket(state_).protocol_version();
 }
 const http_client_connection_info& http_client_websocket::connection_info() const& {
     return require_websocket(state_).connection_info();
-}
-bool http_client_websocket::connected() const {
-    return require_websocket(state_).connected();
-}
-std::optional<std::uint16_t> http_client_websocket::peer_close_code() const {
-    return require_websocket(state_).peer_close_code();
-}
-std::string_view http_client_websocket::peer_close_reason() const& {
-    return require_websocket(state_).peer_close_reason();
-}
-websocket_termination http_client_websocket::termination() const noexcept {
-    const auto* protocol = websocket_protocol(state_);
-    return protocol != nullptr ? protocol->termination() : websocket_termination::none;
-}
-std::uint64_t http_client_websocket::bytes_received() const noexcept {
-    const auto* protocol = websocket_protocol(state_);
-    return protocol != nullptr ? protocol->bytes_received() : 0;
-}
-std::uint64_t http_client_websocket::bytes_sent() const noexcept {
-    const auto* protocol = websocket_protocol(state_);
-    return protocol != nullptr ? protocol->bytes_sent() : 0;
 }
 const worker_handle& http_client_websocket::worker() const& {
     return require_websocket(state_).worker();

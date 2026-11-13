@@ -650,8 +650,8 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
         bool exited = false;
         bool send_finished = false;
         std::exception_ptr failure;
-        auto request = client.with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000},
-                                               .stop_token_ = stop.token()})
+        auto request = client.client().with_options({.timeout_ = mode == cancellation_case::timeout ? timeout_duration{200} : timeout_duration{2000},
+                                                        .stop_token_ = stop.token()})
                            .get("/redirect");
         request.redirect_policy([&](http_origin_view origin, stop_token token) -> task<bool> {
             entered = true;

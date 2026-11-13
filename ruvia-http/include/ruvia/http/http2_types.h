@@ -19,6 +19,9 @@ enum class http2_finish_status : std::uint8_t {
     accepted,
     // The stream disappeared or was reset while its owner was finishing it.
     closed,
+    // The submitted DATA does not reach the declared Content-Length, or the
+    // trailer section cannot be sent. Nothing changed; the stream stays open.
+    invalid_message,
     // An empty trailer section ends the stream with an empty DATA frame, which
     // nghttp2 sends only with positive connection and stream send windows
     // (RFC 9113 §6.9). Nothing changed; retry after the window opens.
@@ -154,6 +157,9 @@ enum class http2_data_submit_status : std::uint8_t {
     backpressured,
     expectation_pending,
     closed,
+    // The input would exceed the declared Content-Length, or end the stream
+    // before reaching it. Nothing was consumed.
+    invalid_message,
 };
 
 // Only consumed_bytes_ have been copied into serialized DATA. The unconsumed

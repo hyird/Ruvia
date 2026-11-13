@@ -26,6 +26,9 @@
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/http2_connection.h"
 #endif
+#ifdef RUVIA_ENABLE_HTTP3
+#include "ruvia/http/http3_connection.h"
+#endif
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
@@ -446,7 +449,11 @@ public:
 #ifdef RUVIA_ENABLE_HTTP2
     std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
 #endif
-    std::size_t http3_data_credit_{0};
+#ifdef RUVIA_ENABLE_HTTP3
+    // Receive credit of buffered response DATA, returned as the consumer
+    // takes it (RFC 9000 §4.1).
+    std::optional<::ruvia::http3_received_data_credit> http3_data_credit_{};
+#endif
     std::optional<std::pmr::deque<std::pmr::string>> http3_datagrams_;
     std::size_t http3_datagram_bytes_{0};
     bool http3_native_datagrams_{false};

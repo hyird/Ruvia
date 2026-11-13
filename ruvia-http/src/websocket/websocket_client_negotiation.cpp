@@ -266,6 +266,17 @@ websocket_client_negotiation::validate_fields(std::span<const http_header> field
     return detail::validate_websocket_client_selection(*this, fields_value, false);
 }
 
+std::variant<websocket_client_negotiation_result_view, error_type> validate_extended_connect_websocket_client_response(
+    const websocket_client_negotiation& negotiation, const http_client_response_head& head, bool stream_open) {
+    if (!head.status().is_successful()) {
+        return error_type::response_status;
+    }
+    if (!stream_open) {
+        return error_type::stream_closed;
+    }
+    return detail::validate_websocket_client_selection(negotiation, head.headers(), true);
+}
+
 namespace detail {
 std::variant<websocket_client_negotiation_result_view, error_type> validate_websocket_client_selection(
     const websocket_client_negotiation& negotiation, std::span<const http_header> fields, bool extended) {

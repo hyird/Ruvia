@@ -62,16 +62,24 @@ public:
         co_return result_value.result() != 0;
     }
 
-    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes) {
+    // A cancellation emitted on `slot` ends only this transport read (a TLS
+    // stream shields its record writes), after which `check` may throw to
+    // abandon it.
+    template <typename check_type>
+    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot) {
         const auto writable = bytes.prepare(4096);
         const auto result = co_await async_asio<std::size_t>([&](auto completion) {
-            stream_.async_read_some(asio::buffer(writable.data(), writable.size()), std::move(completion));
+            stream_.async_read_some(asio::buffer(writable.data(), writable.size()),
+                asio::bind_cancellation_slot(slot, std::move(completion)));
         });
         bytes.commit(result.result());
         if (is_stream_read_end(result.error_code())) {
             co_return false;
         }
         if (result.error_code()) {
+            if (result.error_code() == asio::error::operation_aborted) {
+                check();
+            }
             throw inbound_transport_error(result.error_code(), "WebSocket read");
         }
         co_return result.result() != 0;

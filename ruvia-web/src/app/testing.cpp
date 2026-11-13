@@ -238,30 +238,6 @@ test_app& test_app::server(server_config config) {
     return *this;
 }
 
-test_app& test_app::compression(compression_config config) {
-    impl_->require_configurable();
-    impl_->options_.set_compression(std::move(config));
-    return *this;
-}
-
-test_app& test_app::compression(std::nullptr_t) {
-    impl_->require_configurable();
-    impl_->options_.clear_compression();
-    return *this;
-}
-
-test_app& test_app::cors(cors_config config) {
-    impl_->require_configurable();
-    impl_->options_.set_cors(config);
-    return *this;
-}
-
-test_app& test_app::cors(std::nullptr_t) {
-    impl_->require_configurable();
-    impl_->options_.clear_cors();
-    return *this;
-}
-
 test_app& test_app::rate_limit(rate_limit_config config) {
     impl_->require_configurable();
     impl_->options_.set_rate_limit(config);

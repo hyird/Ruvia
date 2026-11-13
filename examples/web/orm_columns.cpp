@@ -46,7 +46,7 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db, db_client& concurrent) {
-    auto handle = db.handle();
+    auto handle = db.db();
     auto items = handle.repository<line_item>();
     line_item input;
     input.set<"id">(1);
@@ -76,7 +76,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     auto snapshot_items = snapshot.repository<line_item>();
     const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     changes.set<"quantity">(6);
-    co_await concurrent.handle().repository<line_item>().update(line_item::column<"id">() == 1, changes);
+    co_await concurrent.db().repository<line_item>().update(line_item::column<"id">() == 1, changes);
     const auto after = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
     require(before && after && before->get<"total">() == 35 && after->get<"total">() == 35,
         "repeatable-read snapshot changed after another connection committed");

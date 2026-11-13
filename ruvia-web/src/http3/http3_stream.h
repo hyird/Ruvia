@@ -16,6 +16,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_priority.h"
@@ -40,6 +41,13 @@ enum class http3_body_store_status : std::uint8_t {
     stored,
     too_large,
     backlog_overflow,
+};
+
+// Tunnel bytes taken together with the receive credit they hold; the reader
+// drops the credit once it consumed the bytes.
+struct http3_tunnel_chunk final {
+    std::pmr::string bytes_;
+    std::optional<http3_received_data_credit> credit_;
 };
 
 class http3_stream final {
@@ -121,16 +129,17 @@ public:
         datagram_bytes_ -= payload.size();
         return payload;
     }
-    [[nodiscard]] std::pmr::string take_tunnel_bytes() {
-        std::pmr::string result(body_.get_allocator());
-        result.swap(body_);
+    [[nodiscard]] http3_tunnel_chunk take_tunnel_bytes() {
+        http3_tunnel_chunk result{std::pmr::string(body_.get_allocator()), std::exchange(body_credit_, std::nullopt)};
+        result.bytes_.swap(body_);
         return result;
     }
 
-    // Buffered body: the whole content, borrowed by the request at dispatch.
-    // Streaming body: the bytes queued for the reader.
-    [[nodiscard]] http3_body_store_status store(
-        std::string_view data, protocol_byte_limit total_limit, std::size_t backlog_limit) {
+    // Buffered body: the whole content, borrowed by the request at dispatch;
+    // its credit returns as it is stored. Streaming body and tunnel: the bytes
+    // queued for the reader, holding their credit until it takes them.
+    [[nodiscard]] http3_body_store_status store(std::string_view data, http3_received_data_credit&& credit,
+        protocol_byte_limit total_limit, std::size_t backlog_limit) {
         if (http_request_body_addition_failure(received_bytes_, data.size(), total_limit).has_value()) {
             return http3_body_store_status::too_large;
         }
@@ -144,6 +153,13 @@ public:
             return http3_body_store_status::backlog_overflow;
         }
         received_bytes_ += data.size();
+        if (body_mode_ == request_body_mode::stream && credit.valid()) {
+            if (body_credit_) {
+                body_credit_->merge(std::move(credit));
+            } else {
+                body_credit_.emplace(std::move(credit));
+            }
+        }
         return http3_body_store_status::stored;
     }
 
@@ -153,31 +169,34 @@ public:
     std::string_view buffered_body() const&& = delete;
 
     // Streaming reader: hands out every queued byte as one chunk, valid until
-    // the next pop(). Returns how many bytes the previous chunk held, whose
-    // flow-control credit the caller now returns.
-    [[nodiscard]] std::pair<std::string_view, std::size_t> pop() & RUVIA_LIFETIMEBOUND {
-        const auto consumed = active_chunk_.size();
+    // the next pop(). The previous chunk's flow-control credit returns now;
+    // true when it held any, so the caller can let the writer send it.
+    [[nodiscard]] std::pair<std::string_view, bool> pop() & RUVIA_LIFETIMEBOUND {
+        const bool returned = active_credit_.has_value();
+        active_credit_.reset();
+        if (body_credit_) {
+            active_credit_.emplace(std::move(*body_credit_));
+            body_credit_.reset();
+        }
         http_clear_pmr_string_retaining_small(active_chunk_);
         active_chunk_.swap(body_);
-        return {active_chunk_, consumed};
+        return {active_chunk_, returned};
     }
-    std::pair<std::string_view, std::size_t> pop() && = delete;
-
-    // Streamed content received and not yet handed back as credit, returned
-    // when the handler ends so a stopped reader cannot strand
-    // connection-level credit. Buffered content returns its credit as it is
-    // stored.
-    [[nodiscard]] std::size_t unconsumed_bytes() const noexcept {
-        return body_mode_ == request_body_mode::stream ? body_.size() + active_chunk_.size() : 0;
-    }
+    std::pair<std::string_view, bool> pop() && = delete;
 
     // The handler finished: the content's storage goes back to the
-    // connection's inbound budget. Its credit is returned first.
-    void discard_body() noexcept {
+    // connection's inbound budget, and credit for content received but never
+    // read returns so a stopped reader cannot strand connection-level credit.
+    // True when any credit returned.
+    bool discard_body() noexcept {
+        const bool returned = body_credit_.has_value() || active_credit_.has_value();
+        body_credit_.reset();
+        active_credit_.reset();
         std::pmr::string(body_.get_allocator()).swap(body_);
         std::pmr::string(active_chunk_.get_allocator()).swap(active_chunk_);
         datagrams_.reset();
         datagram_bytes_ = 0;
+        return returned;
     }
 
     void mark_body_failure(http_request_body_failure failure) noexcept {
@@ -290,6 +309,9 @@ private:
     // reader drains (streaming). active_chunk_ backs the last popped view.
     std::pmr::string body_;
     std::pmr::string active_chunk_;
+    // Receive credit of body_ and active_chunk_ (streaming body or tunnel).
+    std::optional<http3_received_data_credit> body_credit_;
+    std::optional<http3_received_data_credit> active_credit_;
     std::optional<std::pmr::deque<std::pmr::string>> datagrams_;
     std::size_t datagram_bytes_{0};
     std::size_t received_bytes_{0};

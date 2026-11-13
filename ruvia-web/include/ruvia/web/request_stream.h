@@ -48,9 +48,12 @@ struct request_body_state final {
 namespace detail {
 struct request_stream_access;
 class router_state;
+class websocket_route_endpoint;
 // Commits a tunnel request's success head and returns the established tunnel.
 using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
-using request_stream_websocket_accept = callback_ref<task<websocket*>(websocket_route_config)>;
+// Negotiates against a validated endpoint the caller keeps alive until the
+// returned task completes.
+using request_stream_websocket_accept = callback_ref<task<websocket*>(const websocket_route_endpoint&)>;
 using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
@@ -64,10 +67,11 @@ using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 // connection cannot carry with 421, an unsupported Expect with 417 and a
 // declared body over server_config::max_stream_body_bytes_ with 413, applies
 // flow control, the server timeouts and the HTTP/3 0-RTT 425 rule; these
-// answers use the framework's default error representation. No route,
-// middleware, document root, CORS policy, response compression, rate limit
-// or on_error handler takes part automatically. A callback may explicitly
-// await router::dispatch() to apply its own frozen routes and middleware.
+// answers use the framework's default error representation. The host's
+// server_config::cors_ and compression_ policies apply to every response, as
+// to routed ones. No route, middleware, document root, rate limit or on_error
+// handler takes part automatically. A callback may explicitly await
+// router::dispatch() to apply its own frozen routes and middleware.
 //
 // The callback selects exactly one response: respond(), response().commit(),
 // accept_tunnel(), accept_websocket(), or terminal reset()/abort_connection().
@@ -253,6 +257,9 @@ private:
 
     [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
     [[nodiscard]] task<websocket*> accept_websocket_impl(websocket_route_config config);
+    // A router's WebSocket route reuses its frozen endpoint.
+    [[nodiscard]] task<websocket*> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
+    void require_unselected_response() const;
     void reset_impl(std::optional<std::uint64_t> error);
 
     context& context_;

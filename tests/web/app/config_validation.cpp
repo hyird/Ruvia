@@ -87,8 +87,11 @@ TEST(Ruvia, app_document_root_rejects_disabled_refresh) {
 }
 
 TEST(Ruvia, app_compression_rejects_invalid_thresholds_at_configuration) {
-    EXPECT_TRUE(
-        throws_invalid([] { ruvia::app().compression({.min_bytes_ = 1024, .sync_bytes_ = 512}); }));
-    EXPECT_TRUE(throws_invalid(
-        [] { ruvia::app().compression({.min_bytes_ = 1024, .sync_bytes_ = 2048, .max_bytes_ = 1024}); }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().server({.compression_ = ruvia::compression_config{.min_bytes_ = 1024, .sync_bytes_ = 512}});
+    }));
+    EXPECT_TRUE(throws_invalid([] {
+        ruvia::app().server(
+            {.compression_ = ruvia::compression_config{.min_bytes_ = 1024, .sync_bytes_ = 2048, .max_bytes_ = 1024}});
+    }));
 }

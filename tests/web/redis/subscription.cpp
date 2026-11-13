@@ -255,7 +255,7 @@ private:
 
 ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     auto subscription = redis.subscription();
 
     bool rejected_early_read = false;
@@ -329,7 +329,7 @@ ruvia::task<void> check_events_arrive_in_wire_order(ruvia::redis_client& client)
 ruvia::task<void> check_empty_names_keep_their_wire_identity(
     ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     auto subscription = redis.subscription();
     co_await subscription.subscribe("");
     co_await subscription.psubscribe("");
@@ -395,7 +395,7 @@ ruvia::task<void> check_empty_names_keep_their_wire_identity(
 
 ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client) {
     co_await client.connect();
-    auto redis = client.handle();
+    auto redis = client.redis();
     auto subscription = redis.subscription();
     const std::pmr::string allowed_name(64 * 1024, 'a', ruvia::process_resource());
     const std::array<std::string_view, 2> channels{"denied", allowed_name};
@@ -417,7 +417,7 @@ ruvia::task<void> check_error_reply_keeps_connection(ruvia::redis_client& client
 
 ruvia::task<void> check_server_close_is_an_io_error(ruvia::redis_client& client) {
     co_await client.connect();
-    auto subscription = client.handle().subscription();
+    auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"close"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -443,7 +443,7 @@ ruvia::task<void> check_server_close_is_an_io_error(ruvia::redis_client& client)
 
 ruvia::task<void> check_malformed_push_closes(ruvia::redis_client& client) {
     co_await client.connect();
-    auto subscription = client.handle().subscription();
+    auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"malformed"};
     co_await subscription.subscribe(channels);
     bool protocol_error = false;
@@ -459,7 +459,7 @@ ruvia::task<void> check_malformed_push_closes(ruvia::redis_client& client) {
 
 ruvia::task<void> check_read_timeout(ruvia::redis_client& client) {
     co_await client.connect();
-    auto subscription = client.handle({.timeout_ = std::chrono::milliseconds(200)}).subscription();
+    auto subscription = client.redis().with_options({.timeout_ = std::chrono::milliseconds(200)}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -478,7 +478,7 @@ ruvia::task<void> check_read_timeout(ruvia::redis_client& client) {
 ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, ruvia::stop_source& stop,
     std::promise<void>& confirmed_promise) {
     co_await client.connect();
-    auto subscription = client.handle({.stop_token_ = stop.token()}).subscription();
+    auto subscription = client.redis().with_options({.stop_token_ = stop.token()}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -498,7 +498,7 @@ ruvia::task<void> check_stop_token_ends_the_stream(ruvia::redis_client& client, 
 
 ruvia::task<void> check_abort_and_concurrent_reads(ruvia::redis_client& client) {
     co_await client.connect();
-    auto subscription = client.handle().subscription();
+    auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -527,7 +527,7 @@ ruvia::task<void> check_abort_and_concurrent_reads(ruvia::redis_client& client) 
 ruvia::task<void> check_client_close_ends_pending_read(ruvia::redis_client& client,
     std::promise<void>& confirmed_promise) {
     co_await client.connect();
-    auto subscription = client.handle().subscription();
+    auto subscription = client.redis().subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -551,7 +551,7 @@ constexpr auto probe_test_timeout = std::chrono::seconds(5);
 ruvia::task<void> check_silent_peer_fails_the_idle_probe(
     ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
-    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     const std::array<std::string_view, 1> channels{"silent"};
     co_await subscription.subscribe(channels);
     auto confirmed = co_await subscription.read();
@@ -592,14 +592,14 @@ ruvia::task<void> publish_after_idle_intervals(
 ruvia::task<void> check_answered_probes_keep_an_idle_subscription(
     ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
-    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     co_await subscription.subscribe("quiet");
     auto confirmed = co_await subscription.read();
     EXPECT_TRUE(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "quiet");
     std::optional<std::pmr::string> payload;
     ruvia::task_scope scope(client.worker());
     scope.spawn(read_late_message(subscription, payload));
-    scope.spawn(publish_after_idle_intervals(client.handle(), client.worker()));
+    scope.spawn(publish_after_idle_intervals(client.redis(), client.worker()));
     co_await scope.join();
     // The read outlived several intervals and returned the message itself:
     // every PING reply was consumed internally.
@@ -612,7 +612,7 @@ ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(
     ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
     const auto read_timeout = 4 * idle_probe_interval;
-    auto subscription = client.handle({.timeout_ = read_timeout}).subscription();
+    auto subscription = client.redis().with_options({.timeout_ = read_timeout}).subscription();
     co_await subscription.subscribe("quiet");
     auto confirmed = co_await subscription.read();
     EXPECT_TRUE(confirmed && confirmed->confirmation() && confirmed->confirmation()->name() == "quiet");
@@ -637,7 +637,7 @@ ruvia::task<void> check_unsubscribed_connection_consumes_plain_pong(
 ruvia::task<void> check_unanswered_command_stands_in_for_the_ping(
     ruvia::redis_client& client, const pubsub_peer& peer) {
     co_await client.connect();
-    auto subscription = client.handle({.timeout_ = probe_test_timeout}).subscription();
+    auto subscription = client.redis().with_options({.timeout_ = probe_test_timeout}).subscription();
     const std::array<std::string_view, 1> channels{"unanswered"};
     co_await subscription.subscribe(channels);
     const auto started = std::chrono::steady_clock::now();

@@ -801,11 +801,11 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     for (const bool compress : {false, true}) {
                         auto writing = [&] {
                             const std::pmr::string owned(payload, ruvia::process_resource());
-                            return compress ? session.send(std::as_bytes(std::span(owned)), {.compress_ = true})
-                                            : session.send(owned, {.compress_ = false});
+                            return compress ? session.binary(std::as_bytes(std::span(owned)), {.compress_ = true})
+                                            : session.text(owned, {.compress_ = false});
                         }();
                         co_await std::move(writing);
-                        const auto message = co_await session.receive();
+                        const auto message = co_await session.read();
                         EXPECT_TRUE(message.has_value());
                         if (message) {
                             EXPECT_EQ(message->payload(), payload);
@@ -814,23 +814,31 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         }
                     }
                     co_await session.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "pooled"});
-                    EXPECT_TRUE(!(co_await session.receive()));
+                    EXPECT_TRUE(!(co_await session.read()));
                     {
                         auto timed = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").connect();
                         bool timed_out = false;
                         try {
-                            (void)co_await timed.receive({.timeout_ = std::chrono::milliseconds(20)});
+                            (void)co_await timed.read({.timeout_ = std::chrono::milliseconds(20)});
                         } catch (const ruvia::http_client_error& error) {
                             timed_out = error.code() == ruvia::http_client_error::code_type::timeout;
                         }
                         EXPECT_TRUE(timed_out);
-                        EXPECT_TRUE(!timed.connected());
+                        // A read deadline ends only that read: the session keeps
+                        // its buffered input and serves the next read.
+                        EXPECT_TRUE(timed.connected());
+                        co_await timed.text("after-timeout");
+                        const auto echoed = co_await timed.read({.timeout_ = std::chrono::seconds(5)});
+                        EXPECT_TRUE(echoed.has_value() && echoed->payload() == "after-timeout");
+                        EXPECT_TRUE(timed.termination() == ruvia::websocket_termination::none);
+                        co_await timed.close();
+                        EXPECT_TRUE(timed.termination() == ruvia::websocket_termination::local_close);
                     }
                     {
                         auto limited = co_await websocket_client.client().websocket("/fluent/websocket").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
                         bool rejected = false;
                         try {
-                            co_await limited.send(std::pmr::string(33, 'm', ruvia::process_resource()));
+                            co_await limited.text(std::pmr::string(33, 'm', ruvia::process_resource()));
                         } catch (const ruvia::http_client_error& error) {
                             rejected = error.code() == ruvia::http_client_error::code_type::message_too_large;
                         }
@@ -842,7 +850,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                         auto limited = co_await websocket_client.client().websocket("/fluent/websocket?oversize=1").header("x-owned", "pooled").subprotocol("echo.v1").max_message_bytes(32).connect();
                         bool rejected = false;
                         try {
-                            (void)co_await limited.receive();
+                            (void)co_await limited.read();
                         } catch (const ruvia::http_client_error& error) {
                             rejected = error.code() == ruvia::http_client_error::code_type::protocol_error;
                         }
@@ -855,7 +863,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     bool cancelled = false;
                     const auto receive = [&]() -> ruvia::task<void> {
                         try {
-                            (void)co_await active.receive();
+                            (void)co_await active.read();
                         } catch (const ruvia::http_client_error& error) {
                             cancelled = error.code() == ruvia::http_client_error::code_type::closing ||
                                         error.code() == ruvia::http_client_error::code_type::cancelled;
@@ -1031,9 +1039,7 @@ void fluent_client_tests::verify_request_host_cancellation(server& server) {
             bool cancelled = false;
             const auto request = [&]() -> ruvia::task<void> {
                 try {
-                    (void)co_await owner.with_options({.stop_token_ = stop.token()})
-                        .get("/fluent/host-cancel")
-                        .send();
+                    (void)co_await owner.client().with_options({.stop_token_ = stop.token()}).get("/fluent/host-cancel").send();
                 } catch (const ruvia::http_client_error& error) {
                     cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
                 }
