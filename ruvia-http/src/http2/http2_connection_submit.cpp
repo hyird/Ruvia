@@ -21,7 +21,6 @@
 #include "http2/http2_connection.h"
 #include "http_wire_sink.h"
 #include "parser/http_uri_grammar.h"
-#include "response/http_binary_response_fields.h"
 #include "response/http_response_header_state.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 namespace ruvia::detail {

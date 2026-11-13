@@ -24,10 +24,10 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
+#include "ruvia/web/model.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/testing.h"
-#include "ruvia/web/validation.h"
 
 #include "scoped_temp_directory.h"
 

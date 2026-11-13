@@ -921,7 +921,7 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 
 ## 5. 声明式模型 `RUVIA_MODEL`、序列化与参数校验
 
-头文件：`"ruvia/web/model.h"`、`"ruvia/web/validation.h"`。
+头文件：`"ruvia/web/model.h"`。
 
 ### 5.1 模型定义与字段类型
 
@@ -959,7 +959,6 @@ CSRF 的 `header_name_` 必须是前端脚本主动提交 token 的自定义字�
 
 ```cpp
 #include "ruvia/web/model.h"
-#include "ruvia/web/validation.h"
 
 RUVIA_MODEL(create_user_request,
     RUVIA_REQUIRED_FIELD(username, ruvia::string,
@@ -1023,7 +1022,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
   - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` / `get<T>("key")` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。
   - `get<T>()` 把整个 token 转换为 `T`，返回 `std::optional<T>`。`get<T>("key")` 是成员查找，返回 `ruvia::json_field_lookup<T>`：`status()` 为 `ruvia::unique_lookup_status::absent`（无此成员，非对象 token 一律为此）、`found`（恰好一个成员名按转义解码后等于 `key`）或 `repeated`（同名成员出现两次及以上；RFC 8259 §4 未定义重复名语义，因此不选取任何一次出现，与模型类型化解析拒绝重复字段一致，扫描在第二次出现处立即停止）。`value()` 仅在 `found` 且成员值能转换为 `T`（模型类型还须通过字段校验）时有值；`found` 而 `value()` 为空表示成员存在但不是合法的 `T`。左值查找结果的 `value()` 返回引用，右值查找结果的 `value()` 按值移出 `std::optional<T>`（如 `if (auto port = obj.get<ruvia::uint32>("port").value())`），值同样不能比被查询的 token 活得久。
   - 成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；移动后重新取得借用视图，不继续使用旧视图。
-- **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
+- **命令式校验器 `ruvia::validator`（`"ruvia/web/model.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid(validation_failure_options = {})` 抛出携带 issues 的 `ruvia::http_error`（默认 400 / `validation_failed`）。
 
 ---

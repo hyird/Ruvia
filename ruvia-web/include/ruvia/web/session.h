@@ -5,6 +5,10 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/core/task.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/web/middleware.h"
+
 namespace ruvia::detail {
 
 class context_session_state;
@@ -50,10 +54,6 @@ private:
 }  // namespace ruvia
 
 #ifdef RUVIA_ENABLE_REDIS
-
-#include "ruvia/core/task.h"
-#include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/middleware.h"
 
 namespace ruvia {
 

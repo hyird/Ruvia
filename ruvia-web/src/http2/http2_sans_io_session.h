@@ -8,12 +8,9 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 
-#include "context/context_services.h"
-#include "server/connection_scanner.h"
-#include "server/http_connection_close.h"
+#include "context/context_access.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
-#include "server/inbound_socket_stream.h"
-
 namespace ruvia::detail {
 
 class route_table;

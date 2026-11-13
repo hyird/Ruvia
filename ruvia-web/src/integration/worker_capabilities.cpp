@@ -11,20 +11,19 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/web_worker.h"
 
-#include "client/http_client_registry.h"
-#include "context/context_services.h"
-#include "integration/named_capability.h"
-
+#include "client/http_client_pool.h"
+#include "context/context_access.h"
+#include "integration/operation_interrupt.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 
-#include "db/db_registry.h"
+#include "db/db_pool.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis_session.h"
 
-#include "redis/redis_registry.h"
+#include "redis/redis_pool.h"
 #endif
 namespace ruvia::detail {
 namespace {

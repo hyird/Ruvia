@@ -27,20 +27,16 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/worker_runtime.h"
 
-#include "app/app_runtime_graph.h"
 #include "app/app_state.h"
-#include "integration/named_capability.h"
-#include "integration/runtime_control_completion.h"
+#include "integration/operation_interrupt.h"
 #include "router/route_table.h"
-#include "server/config_validation.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
-#include "server/prepared_listener_state.h"
-
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db/db_config_storage.h"
+#include "db/db_pipeline.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis/redis_config_storage.h"
+#include "redis/redis_pool.h"
 #endif
 
 namespace ruvia {

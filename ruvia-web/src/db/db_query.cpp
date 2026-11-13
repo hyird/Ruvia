@@ -8,8 +8,6 @@
 #include <stdexcept>
 
 #include "db/db_sql_format.h"
-#include "query_storage.h"
-
 namespace ruvia::detail {
 
 namespace {

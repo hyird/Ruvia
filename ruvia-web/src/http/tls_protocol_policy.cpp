@@ -1,4 +1,4 @@
-#include "tls/tls_protocol_policy.h"
+#include "http/tls_protocol_policy.h"
 
 #include <algorithm>
 #include <atomic>
@@ -28,10 +28,9 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/http/http_ascii.h"
 
-#include "client/client_tls.h"
-#include "integration/runtime_control_completion.h"
-#include "server/http_server_listener.h"
-
+#include "client/client_tcp_transport.h"
+#include "integration/operation_interrupt.h"
+#include "server/http_server_options.h"
 namespace ruvia::detail {
 namespace {
 

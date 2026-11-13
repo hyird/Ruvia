@@ -1,14 +1,32 @@
 #pragma once
 
+#ifdef _WIN32
+#include <winsock2.h>
+
+#include <asio/ip/tcp.hpp>
+#else
+#include <asio/posix/stream_descriptor.hpp>
+#endif
+
+#include <algorithm>
 #include <array>
 #include <chrono>
+#include <concepts>
 #include <coroutine>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
+#include <span>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
@@ -16,6 +34,344 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/db/db_types.h"
+
+#include "client/client_tcp_transport.h"
+#include "integration/operation_interrupt.h"
+#include "server/connection_lifecycle.h"
+
+namespace ruvia::detail {
+
+// Readiness classes a database driver can wait for. A wait completes on the
+// first class that becomes ready.
+enum class db_socket_readiness : std::uint8_t {
+    none = 0,
+    read = 1,
+    write = 2,
+    error = 4,
+};
+
+[[nodiscard]] constexpr db_socket_readiness operator|(db_socket_readiness left, db_socket_readiness right) noexcept {
+    return static_cast<db_socket_readiness>(static_cast<std::uint8_t>(left) | static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr bool has_db_socket_readiness(db_socket_readiness set, db_socket_readiness value) noexcept {
+    return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(value)) != 0;
+}
+
+struct db_socket_wait_result final {
+    // The class that completed first; none when the wait failed or was cancelled.
+    db_socket_readiness ready_{db_socket_readiness::none};
+    std::error_code error_{};
+    // The slot deadline guarding this wait expired.
+    bool expired_{false};
+};
+
+// Ruvia-owned duplicate of a database driver's connection socket, registered
+// with ASIO for readiness waits.
+//
+// MariaDB and libpq own their native socket and close it themselves inside
+// their read/write calls when the transport fails (libmariadb end_server,
+// libpq pqDropConnection). Registering that handle directly would leave ASIO
+// holding a handle the driver may close -- and the OS may reuse -- between two
+// waits. A duplicate refers to the same socket object, so it observes the same
+// readiness, but its handle belongs to Ruvia: the driver closing its own
+// handle can neither invalidate nor be invalidated by it. The duplicate is
+// therefore made and registered once per driver socket and kept until the
+// pool closes the connection.
+//
+// The duplicate keeps the underlying connection open after the driver has
+// closed its handle. The driver only does that on a transport failure, which
+// the pool answers by closing the slot, and closing the slot closes the
+// duplicate first so the driver's own close still ends the connection.
+struct db_slot_socket final {
+    explicit db_slot_socket(asio::io_context& io_context);
+
+    db_slot_socket(const db_slot_socket&) = delete;
+    db_slot_socket& operator=(const db_slot_socket&) = delete;
+
+#if defined(_WIN32)
+    using native_socket_type = std::uintptr_t;
+    using waitable_type = asio::ip::tcp::socket;
+    asio::ip::tcp::socket socket_;
+    static constexpr native_socket_type invalid_socket = std::numeric_limits<native_socket_type>::max();
+#else
+    using native_socket_type = asio::posix::stream_descriptor::native_handle_type;
+    using waitable_type = asio::posix::stream_descriptor;
+    asio::posix::stream_descriptor descriptor_;
+    static constexpr native_socket_type invalid_socket = -1;
+#endif
+    // The driver handle the open duplicate was made from.
+    native_socket_type source_{invalid_socket};
+
+    // Any-of readiness wait. The first completion cancels the others, and the
+    // awaiting coroutine resumes only after every started handler has run, so
+    // no outstanding operation still borrows the awaiter.
+    class readiness_awaiter final {
+    public:
+        readiness_awaiter(db_slot_socket& socket, db_socket_readiness wanted) noexcept
+            : socket_(socket),
+              wanted_(wanted) {}
+
+        [[nodiscard]] bool await_ready() const noexcept {
+            return false;
+        }
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        // Rethrows a failure to start a wait.
+        [[nodiscard]] db_socket_wait_result await_resume() const;
+
+    private:
+        void start(waitable_type::wait_type wait_type, db_socket_readiness readiness);
+        void complete(db_socket_readiness readiness, std::error_code error) noexcept;
+
+        db_slot_socket& socket_;
+        db_socket_readiness wanted_;
+        std::coroutine_handle<> continuation_{};
+        db_socket_wait_result result_{};
+        std::exception_ptr initiation_failure_{};
+        std::uint8_t pending_{0};
+        bool completed_{false};
+    };
+
+    // Duplicates and registers the driver's socket unless the open duplicate
+    // was already made from this handle value. The value is the only identity
+    // checked, so a caller must close() before the driver can replace its
+    // socket with one that reuses the value.
+    [[nodiscard]] std::error_code attach(native_socket_type driver_socket) noexcept;
+    [[nodiscard]] readiness_awaiter wait(db_socket_readiness wanted) noexcept {
+        return readiness_awaiter(*this, wanted);
+    }
+    void cancel() noexcept;
+    // Cancels pending waits and closes the duplicate, leaving the driver's
+    // socket open and unregistered.
+    void close() noexcept;
+
+private:
+    [[nodiscard]] waitable_type& waitable() noexcept;
+};
+
+// Puts a driver-owned socket into non-blocking mode. A driver whose
+// asynchronous API suspends on EAGAIN cannot suspend at all while its socket
+// blocks, so it runs the whole operation inside the call that was supposed to
+// start it.
+[[nodiscard]] std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type driver_socket) noexcept;
+
+// What a look at an idle pooled connection's socket finds.
+enum class db_idle_socket_status : std::uint8_t {
+    quiet,
+    // Bytes wait to be read.
+    pending_data,
+    // End of stream or a socket error: the server ended the session.
+    closed,
+};
+
+// Peeks at most one byte of a driver-owned socket without blocking and
+// without taking it from the driver (Pingora's test_reusable_stream). Both
+// drivers keep their socket non-blocking: libpq always, MariaDB through
+// set_db_socket_non_blocking().
+[[nodiscard]] db_idle_socket_status peek_db_idle_socket(db_slot_socket::native_socket_type driver_socket) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class validated_db_config_view final {
+public:
+    [[nodiscard]] const db_config& get() const noexcept {
+        return *config_;
+    }
+
+private:
+    friend validated_db_config_view validated_db_config(const db_config& config);
+
+    explicit validated_db_config_view(const db_config& config) noexcept
+        : config_(&config) {}
+
+    const db_config* config_;
+};
+
+[[nodiscard]] inline constexpr std::uint16_t default_db_port(db_driver driver) noexcept {
+    switch (driver) {
+        case db_driver::mariadb:
+            return 3306;
+        case db_driver::postgresql:
+            return 5432;
+        default:
+            return 0;
+    }
+}
+
+[[nodiscard]] inline std::uint16_t configured_db_port(const db_config& config) noexcept {
+    return config.port_.has_value() ? config.port_->value() : default_db_port(config.driver_);
+}
+
+inline void validate_db_config(const db_config& config) {
+    validate_client_tls_config(config.tls_);
+    // Both drivers are configured with key files only; refuse a password they
+    // would silently ignore.
+    if (config.tls_.identity_.has_value() && !config.tls_.identity_->private_key_password_.empty()) {
+        throw std::invalid_argument("database TLS does not support encrypted private keys");
+    }
+    const auto driver = config.driver_;
+    if (driver == db_driver::mariadb && config.tls_.mode_ == client_tls_mode::verify_identity) {
+        if (!is_client_ip_address(config.host_) || config.tls_.server_name_.has_value()) {
+            throw std::invalid_argument("MariaDB authenticated TLS requires a numeric host with an IP certificate; server_name is unsupported");
+        }
+    }
+    if (driver != db_driver::mariadb && driver != db_driver::postgresql) {
+        throw std::invalid_argument("database driver must be selected");
+    }
+#ifndef RUVIA_ENABLE_MARIADB
+    if (driver == db_driver::mariadb) {
+        throw std::invalid_argument("MariaDB support is not enabled");
+    }
+#endif
+#ifndef RUVIA_ENABLE_POSTGRESQL
+    if (driver == db_driver::postgresql) {
+        throw std::invalid_argument("PostgreSQL support is not enabled");
+    }
+#endif
+
+    validate_client_origin_host(config.host_, "database host must not be empty", "database host is invalid");
+    // Both drivers pass these to C APIs as NUL-terminated strings.
+    for (const std::string_view value : {std::string_view{config.username_}, std::string_view{config.password_},
+             std::string_view{config.database_}}) {
+        if (value.find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("database credentials must not contain NUL bytes");
+        }
+    }
+    detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
+    detail::ensure_positive_size(config.pool_size_per_worker_, "database pool size must be greater than zero");
+    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
+        config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_,
+        config.acquire_timeout_, config.transaction_timeout_);
+}
+
+[[nodiscard]] inline validated_db_config_view validated_db_config(const db_config& config) {
+    validate_db_config(config);
+    return validated_db_config_view(config);
+}
+
+validated_db_config_view validated_db_config(db_config&&) = delete;
+validated_db_config_view validated_db_config(const db_config&&) = delete;
+
+#ifdef RUVIA_ENABLE_REDIS
+struct db_cache_config_storage final {
+    template <typename config_type>
+    db_cache_config_storage(const config_type& source_value)
+        : duration_(source_value.duration_),
+          always_enabled_(source_value.always_enabled_),
+          ignore_errors_(source_value.ignore_errors_),
+          key_prefix_(source_value.key_prefix_) {
+        if (duration_.count() <= 0 || key_prefix_.empty()) {
+            throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
+        }
+    }
+    std::chrono::milliseconds duration_;
+    bool always_enabled_;
+    bool ignore_errors_;
+    std::string key_prefix_;
+};
+#endif
+
+// Worker/app-owned copy of the public startup configuration. Retained runtime
+// state is explicitly rebound to its owning PMR domain here.
+struct db_config_storage final {
+    db_config_storage(const db_config& source_value)
+        : db_config_storage(validated_db_config(source_value)) {}
+
+    db_config_storage(validated_db_config_view source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value.get()) {}
+
+    db_config_storage(db_config_storage&&) noexcept = default;
+    db_config_storage(const db_config_storage& source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value) {}
+
+    db_driver driver_{db_driver::unspecified};
+    std::string host_;
+    std::uint16_t port_{0};
+    std::string username_;
+    std::string password_;
+    client_tls_config_storage tls_;
+    std::string database_;
+    std::size_t pool_size_per_worker_;
+    std::optional<timeout_duration> connect_timeout_;
+    std::optional<timeout_duration> read_timeout_;
+    std::optional<timeout_duration> write_timeout_;
+    std::optional<timeout_duration> query_timeout_;
+    std::optional<timeout_duration> acquire_timeout_;
+    std::optional<timeout_duration> transaction_timeout_;
+    // Whether a slot whose connection ended connects again on its next use.
+    // Off for a pool bound to the sessions it opened at startup (the
+    // migrator's): a statement on a lost session then fails rather than run
+    // on a new one that lacks the old one's session-scoped state.
+    bool reconnect_{true};
+
+private:
+    struct validated_config_tag_type final {};
+
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config& source) noexcept {
+        return configured_db_port(source);
+    }
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config_storage& source) noexcept {
+        return source.port_;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config&) noexcept {
+        return true;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config_storage& source) noexcept {
+        return source.reconnect_;
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config& source) {
+        return {source.tls_, client_tls_files::keep_paths};
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config_storage& source) {
+        return {source.tls_};
+    }
+
+    template <typename source_type>
+        requires(std::same_as<source_type, db_config> || std::same_as<source_type, db_config_storage>)
+    db_config_storage(validated_config_tag_type, const source_type& source_value)
+        : driver_(source_value.driver_),
+          host_(source_value.host_),
+          port_(resolved_port(source_value)),
+          username_(source_value.username_),
+          password_(source_value.password_),
+          tls_(tls_storage(source_value)),
+          database_(source_value.database_),
+          pool_size_per_worker_(source_value.pool_size_per_worker_),
+          connect_timeout_(source_value.connect_timeout_),
+          read_timeout_(source_value.read_timeout_),
+          write_timeout_(source_value.write_timeout_),
+          query_timeout_(source_value.query_timeout_),
+          acquire_timeout_(source_value.acquire_timeout_),
+          transaction_timeout_(source_value.transaction_timeout_),
+          reconnect_(resolved_reconnect(source_value)) {}
+};
+
+#ifdef RUVIA_ENABLE_REDIS
+struct db_query_cache_registration_storage final {
+    db_query_cache_registration_storage(const db_query_cache_registration& source_value)
+        : redis_alias_(source_value.redis_alias_),
+          policy_(source_value.policy_) {
+        validate_capability_alias(redis_alias_, "database query cache Redis alias must not be empty");
+    }
+    std::string redis_alias_;
+    db_cache_config_storage policy_;
+};
+#endif
+
+struct db_definition final {
+    using config_storage_type = db_config_storage;
+    std::string alias_;
+    db_config_storage config_;
+#ifdef RUVIA_ENABLE_REDIS
+    std::optional<db_query_cache_registration_storage> query_cache_{};
+#endif
+};
+
+}  // namespace ruvia::detail
 
 // Pipelining of buffered statements outside transactions, shared by the
 // drivers whose protocol lets one connection carry several statements at
@@ -40,14 +396,6 @@
 // it for every statement sharing the connection after it; such statements
 // belong in a transaction. A group dissolving with its connection left inside
 // a transaction block closes that connection.
-
-#include <algorithm>
-#include <functional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <type_traits>
-#include <vector>
 
 namespace ruvia::detail {
 

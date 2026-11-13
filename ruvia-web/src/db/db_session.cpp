@@ -4,10 +4,8 @@
 #include "ruvia/web/db/db_query.h"
 
 #include "db/db_pool.h"
-#include "db/db_query_execution.h"
-#include "integration/request_io_metrics.h"
+#include "integration/operation_interrupt.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "db/db_query_cache_state.h"
 #endif
 
 // The per-request database handle: it borrows a registry entry for the
@@ -27,14 +25,9 @@
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_session.h"
 
-#include "client/client_happy_eyeballs.h"
-#include "client/client_lifecycle.h"
-#include "db/db_query_cache_state.h"
-#include "db/db_registry.h"
+#include "client/client_tcp_transport.h"
 #include "db/db_sql_format.h"
-#include "query_storage.h"
-#include "redis/redis_registry.h"
-
+#include "redis/redis_pool.h"
 namespace ruvia {
 
 namespace {

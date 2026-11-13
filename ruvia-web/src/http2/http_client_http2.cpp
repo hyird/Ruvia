@@ -16,11 +16,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "client/http_client_connection.h"
+#include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
-#include "client/http_client_transport_error.h"
 #include "http/inline_http_header_views.h"
 
 namespace ruvia::detail {

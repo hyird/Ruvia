@@ -29,8 +29,11 @@
 
 #include "coding/http_zlib_stream.h"
 #include "field/http_connection_fields.h"
-#include "http_request_access.h"
 #include "http_wire_sink.h"
+
+#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
+#include <emmintrin.h>
+#endif
 
 namespace ruvia {
 
@@ -84,10 +87,6 @@ private:
     const http_request& request, websocket_handshake_validation_options options = {}) noexcept;
 }  // namespace detail
 }  // namespace ruvia
-
-#if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
-#include <emmintrin.h>
-#endif
 
 // The RFC 6455 section 5.2 wire vocabulary: what a frame's first two bytes mean,
 // which opcode and length combinations are legal, and the byte-level encode and

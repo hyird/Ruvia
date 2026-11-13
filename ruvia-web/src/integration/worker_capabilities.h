@@ -15,15 +15,14 @@
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/web_worker.h"
 
-#include "client/http_client_registry.h"
-#include "client/http_client_response_memory.h"
-#include "context/context_services.h"
+#include "client/http_client_pool.h"
+#include "context/context_access.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db/db_registry.h"
+#include "db/db_pool.h"
 #endif
 #include "http/inline_http_header_views.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis/redis_registry.h"
+#include "redis/redis_pool.h"
 #endif
 #include <string>
 #include <string_view>

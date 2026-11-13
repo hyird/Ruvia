@@ -12,7 +12,7 @@
 
 #include "field/http_connection_fields.h"
 #include "http1/http_header_block_parser.h"
-#include "http_request_access.h"
+#include "http_wire_sink.h"
 #include "parser/http_uri_grammar.h"
 namespace ruvia {
 namespace {

@@ -40,11 +40,16 @@
 #define RUVIA_JSON_SCAN_NEON 1
 #endif
 
+#include <initializer_list>
+
+#include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_utf8.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/integer.h"
+#include "ruvia/web/middleware.h"
 
 namespace ruvia::detail {
 
@@ -5579,4 +5584,396 @@ private:
 };
 
 }  // namespace ruvia
-#include "ruvia/web/validation.h"
+
+namespace ruvia {
+
+enum class validation_target : std::uint8_t { json,
+    form,
+    query,
+    param,
+    header,
+    cookie };
+namespace detail {
+
+template <typename t_type>
+[[nodiscard]] std::string_view validation_string_view(const t_type& value) noexcept {
+    if constexpr (requires { value.view(); }) {
+        return value.view();
+    } else {
+        return std::string_view(value);
+    }
+}
+
+}  // namespace detail
+
+// How validator::throw_if_invalid presents its issues: the http_error it throws
+// carries these values together with the collected validation issues.
+struct validation_failure_options final {
+    http_status_code status_{http_status::bad_request};
+    borrowed_text code_{"validation_failed"};
+    borrowed_text message_{"request validation failed"};
+};
+
+// Allocation failure during copy assignment leaves both validators unchanged.
+// Successful moves leave an empty source that can be reused.
+class validator final {
+public:
+    using issue_list_type = std::vector<validation_issue>;
+
+    validator() noexcept = default;
+
+    validator(const validator&) = default;
+
+    validator& operator=(const validator& other) {
+        if (this != &other) {
+            auto copied = other.issues_;
+            issues_.swap(copied);
+        }
+        return *this;
+    }
+
+    validator(validator&& other) noexcept
+        : issues_(std::move(other.issues_)) {
+        other.issues_.clear();
+    }
+
+    validator& operator=(validator&& other) noexcept {
+        if (this != &other) {
+            issues_ = std::move(other.issues_);
+            other.issues_.clear();
+        }
+        return *this;
+    }
+
+    ~validator() = default;
+
+    validator& add(std::string_view field, std::string_view code, std::string_view message) & RUVIA_LIFETIMEBOUND {
+        issues_.push_back(validation_issue({.field_ = field, .code_ = code, .message_ = message}));
+        return *this;
+    }
+    validator& add(std::string_view, std::string_view, std::string_view) && = delete;
+
+    template <typename optional_type>
+    validator& required(const optional_type& value, std::string_view field,
+        std::string_view message = "is required") & RUVIA_LIFETIMEBOUND {
+        if (!value) {
+            add(field, "required", message);
+        }
+        return *this;
+    }
+    template <typename optional_type>
+    validator& required(const optional_type&, std::string_view, std::string_view = "is required") && = delete;
+
+    template <typename optional_type>
+    validator& min_length(const optional_type& value, std::string_view field, std::size_t min_value,
+        std::string_view message = "is too short") & RUVIA_LIFETIMEBOUND {
+        if (value && detail::validation_string_view(*value).size() < min_value) {
+            add(field, "too_small", message);
+        }
+        return *this;
+    }
+    template <typename optional_type>
+    validator& min_length(
+        const optional_type&, std::string_view, std::size_t, std::string_view = "is too short") && = delete;
+
+    template <typename optional_type>
+    validator& max_length(const optional_type& value, std::string_view field, std::size_t max_value,
+        std::string_view message = "is too long") & RUVIA_LIFETIMEBOUND {
+        if (value && detail::validation_string_view(*value).size() > max_value) {
+            add(field, "too_big", message);
+        }
+        return *this;
+    }
+    template <typename optional_type>
+    validator& max_length(
+        const optional_type&, std::string_view, std::size_t, std::string_view = "is too long") && = delete;
+
+    template <typename optional_type, typename min_type, typename max_type>
+    validator& range(const optional_type& value, std::string_view field, min_type min_value, max_type max_value,
+        std::string_view message = "is out of range") & RUVIA_LIFETIMEBOUND {
+        if (value) {
+            if (detail::validation_less(*value, min_value)) {
+                add(field, "too_small", message);
+            } else if (detail::validation_greater(*value, max_value)) {
+                add(field, "too_big", message);
+            }
+        }
+        return *this;
+    }
+    template <typename optional_type, typename min_type, typename max_type>
+    validator& range(const optional_type&, std::string_view, min_type, max_type,
+        std::string_view = "is out of range") && = delete;
+
+    template <typename optional_type>
+    validator& one_of(const optional_type& value, std::string_view field,
+        std::initializer_list<std::string_view> allowed,
+        std::string_view message = "is not allowed") & RUVIA_LIFETIMEBOUND {
+        if (!value) {
+            return *this;
+        }
+
+        const auto actual = detail::validation_string_view(*value);
+        for (const auto option : allowed) {
+            if (actual == option) {
+                return *this;
+            }
+        }
+
+        add(field, "one_of", message);
+        return *this;
+    }
+    template <typename optional_type>
+    validator& one_of(const optional_type&, std::string_view, std::initializer_list<std::string_view>,
+        std::string_view = "is not allowed") && = delete;
+
+    [[nodiscard]] bool ok() const noexcept {
+        return issues_.empty();
+    }
+
+    [[nodiscard]] bool valid() const noexcept {
+        return ok();
+    }
+
+    [[nodiscard]] const issue_list_type& issues() const& noexcept RUVIA_LIFETIMEBOUND {
+        return issues_;
+    }
+    [[nodiscard]] const issue_list_type& issues() const&& = delete;
+
+    void throw_if_invalid(validation_failure_options options = {}) const& {
+        if (!ok()) {
+            throw http_error({.status_ = options.status_,
+                .code_ = options.code_,
+                .message_ = options.message_,
+                .validation_issues_ = issues_});
+        }
+    }
+
+    void throw_if_invalid(validation_failure_options options = {}) && {
+        if (!ok()) {
+            auto moved_issues = std::move(issues_);
+            issues_.clear();
+            throw http_error(
+                options.status_, options.code_.view(), options.message_.view(), {}, std::move(moved_issues));
+        }
+    }
+
+private:
+    issue_list_type issues_;
+};
+
+template <typename model_type>
+    requires detail::is_model<model_type>
+void validate_model(const model_type& model, validator& out) {
+    detail::model_validation_access::validate_model(model, out);
+}
+
+template <typename t_type>
+    requires detail::is_model<t_type>
+[[nodiscard]] t_type from_form(std::string_view body) {
+    auto parsed_value = detail::model_parse_access::parse_form_owned<t_type>(body);
+    if (!parsed_value) {
+        throw std::invalid_argument("invalid form value");
+    }
+    validator validator_value;
+    validate_model(*parsed_value, validator_value);
+    std::move(validator_value).throw_if_invalid();
+    return std::move(*parsed_value);
+}
+
+// Supports models, Ruvia scalar values, strings, bytes and arrays of these
+// types. Model types also evaluate their declared field validation rules.
+template <typename t_type>
+    requires detail::is_model_json_value<t_type>
+[[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
+    auto parsed_value = detail::parse_json_document<t_type>(
+        body, detail::model_string_storage::owned, options);
+    if (!parsed_value) {
+        throw std::invalid_argument("invalid JSON value");
+    }
+    if constexpr (detail::model_validation_access::contains_model<t_type>()) {
+        validator validator_value;
+        detail::model_validation_access::validate_value(*parsed_value, validator_value);
+        std::move(validator_value).throw_if_invalid();
+    }
+    return std::move(*parsed_value);
+}
+
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline std::optional<t_type> json_value::get() const& {
+    auto parsed_value = detail::parse_json_document<t_type>(view(), detail::model_string_storage::borrowed);
+    if (!parsed_value) {
+        return std::nullopt;
+    }
+    if constexpr (detail::model_validation_access::contains_model<t_type>()) {
+        if (!detail::model_validation_access::value_rules_valid(*parsed_value)) {
+            return std::nullopt;
+        }
+    }
+    return parsed_value;
+}
+
+// A repeated name makes the member ambiguous (RFC 8259 section 4 leaves its
+// meaning unpredictable), so the lookup reports it instead of choosing an
+// occurrence, as typed model parsing rejects it: the scan stops at the second
+// occurrence and neither value is parsed. A unique match is converted by
+// json_value::get<T>(), the single parse-and-validate path for dynamic tokens.
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
+    std::optional<std::string_view> match;
+    const auto visited = detail::visit_json_object_fields(view(),
+        [&match, field](std::string_view key, std::string_view value_view) {
+            if (key != field) {
+                return true;
+            }
+            if (match) {
+                return false;
+            }
+            match = value_view;
+            return true;
+        });
+    switch (visited) {
+        case detail::json_object_visit_result::stopped:
+            return json_field_lookup<t_type>(unique_lookup_status::repeated);
+        case detail::json_object_visit_result::invalid:
+            // Every construction path validates the complete object.
+            throw std::logic_error("json_object token is not a complete JSON object");
+        case detail::json_object_visit_result::complete:
+            break;
+    }
+    if (!match) {
+        return json_field_lookup<t_type>(unique_lookup_status::absent);
+    }
+    detail::skip_json_whitespace(*match);
+    const json_value value(detail::borrowed_model_token_tag{}, *match);
+    return json_field_lookup<t_type>(value.get<t_type>());
+}
+
+template <typename t_type>
+    requires detail::is_model_field<t_type>
+[[nodiscard]] inline json_field_lookup<t_type> json_value::get(std::string_view field) const& {
+    if (!is_object()) {
+        return json_field_lookup<t_type>(unique_lookup_status::absent);
+    }
+    // Borrows this token's bytes, so results stay valid as long as *this.
+    const json_object object(detail::borrowed_model_token_tag{}, view());
+    return object.get<t_type>(field);
+}
+}  // namespace ruvia
+
+// RUVIA_MIN / RUVIA_MAX constrain a field's magnitude. For a number field this
+// is its value; for a string field it is the UTF-8 BYTE length, not the
+// codepoint count -- a three-emoji string is 12 bytes -- so choose bounds with
+// multibyte input in mind (for example a minimum-length rule on free text).
+#define RUVIA_MIN(value, message) \
+    ::ruvia::detail::model::min<value, ::ruvia::fixed_string{message}>
+#define RUVIA_MAX(value, message) \
+    ::ruvia::detail::model::max<value, ::ruvia::fixed_string{message}>
+#define RUVIA_ONE_OF(message, ...) \
+    ::ruvia::detail::model::one_of<::ruvia::fixed_string{message}, __VA_ARGS__>
+#define RUVIA_EMAIL(message) ::ruvia::detail::model::email<::ruvia::fixed_string{message}>
+// Pattern rules use anchored (^...$) byte patterns: literals, '.', positive
+// or negative character classes, literal ranges, \d/\w/\s, and '*', '+', '?'.
+// Escaped literals may be range endpoints; descending ranges and range endpoints
+// such as \d are rejected at compile time. A trailing class '-' is a literal.
+// Patterns are limited to 256 bytes and bounded matching work. Exceeding a
+// match limit fails validation. Use RUVIA_CUSTOM for matching syntax outside
+// this dialect.
+#define RUVIA_PATTERN(pattern, message) \
+    ::ruvia::detail::model::pattern_rule<pattern, ::ruvia::fixed_string{message}>
+#define RUVIA_CUSTOM(predicate, message) \
+    ::ruvia::detail::model::custom<predicate, ::ruvia::fixed_string{message}>
+
+namespace ruvia {
+class context;
+
+namespace detail {
+
+[[noreturn]] void throw_invalid_json_body();
+[[noreturn]] void throw_invalid_json_content_type();
+[[noreturn]] void throw_invalid_form_content_type();
+
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+inline constexpr std::string_view request_body_media_type =
+    target == validation_target::json ? "application/json" : "application/x-www-form-urlencoded";
+
+// Media-type parameters, including charset, do not select the request model.
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+[[nodiscard]] bool request_has_body_media_type(std::optional<std::string_view> content_type) {
+    return http_ascii_equals_ignore_case(
+        http_media_type_only(content_type.value_or(std::string_view{})), request_body_media_type<target>);
+}
+
+template <validation_target target>
+    requires(target == validation_target::json || target == validation_target::form)
+[[noreturn]] inline void throw_invalid_content_type() {
+    if constexpr (target == validation_target::json) {
+        throw_invalid_json_content_type();
+    } else {
+        throw_invalid_form_content_type();
+    }
+}
+
+template <validation_target target, typename model_type>
+[[nodiscard]] model_type parse_and_validate_request_model(
+    std::conditional_t<target == validation_target::json || target == validation_target::form,
+        std::string_view, std::reference_wrapper<const request_name_value_list>>
+        input) {
+    auto model = [&] {
+        if constexpr (target == validation_target::json) {
+            auto parsed_value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
+            if (!parsed_value) {
+                // Selecting JSON makes malformed input an error, not an optional
+                // format mismatch that json_if<T>() may silently skip.
+                throw_invalid_json_body();
+            }
+            return std::move(*parsed_value);
+        } else if constexpr (target == validation_target::form) {
+            return model_parse_access::parse_form<model_type>(form_body_input{.body_ = input});
+        } else {
+            return model_parse_access::parse_form<model_type>(input);
+        }
+    }();
+    validator validator_value;
+    model_validation_access::validate_model(model, validator_value);
+    std::move(validator_value).throw_if_invalid();
+    return model;
+}
+
+// One validating middleware per request source: parses the model from `target`,
+// runs its declared rules, binds it for the handler, then continues the chain.
+template <validation_target target, typename body_type>
+class model_validation_middleware final {
+public:
+    static_assert(is_model<body_type>, "request validation middleware requires a RUVIA_MODEL");
+    static_assert(target != validation_target::header ||
+                      model::unique_model_wire_names_ignore_ascii_case(model::model_access::schema<body_type>()),
+        "header_model field names must be unique ignoring ASCII case");
+    using ruvia_validation_body_type = body_type;
+
+    [[nodiscard]] task<void> invoke(context& c, next& next_value);
+};
+
+}  // namespace detail
+
+template <typename body_type>
+using json_body = detail::model_validation_middleware<validation_target::json, body_type>;
+
+template <typename body_type>
+using form_body = detail::model_validation_middleware<validation_target::form, body_type>;
+
+template <typename body_type>
+using query_model = detail::model_validation_middleware<validation_target::query, body_type>;
+
+template <typename body_type>
+using path_model = detail::model_validation_middleware<validation_target::param, body_type>;
+
+template <typename body_type>
+using header_model = detail::model_validation_middleware<validation_target::header, body_type>;
+
+template <typename body_type>
+using cookie_model = detail::model_validation_middleware<validation_target::cookie, body_type>;
+}  // namespace ruvia

@@ -11,8 +11,7 @@
 #include <utility>
 
 #include "ruvia/http/http_status.h"
-#include "ruvia/web/validation.h"
-
+#include "ruvia/web/model.h"
 namespace {
 
 using ruvia::default_error_code;

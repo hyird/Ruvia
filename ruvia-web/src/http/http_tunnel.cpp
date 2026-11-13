@@ -30,14 +30,9 @@
 #include "ruvia/web/http_client.h"
 
 #include "client/http_client_pool.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
-#include "http/http_socket_tunnel_transport.h"
+#include "http/http_tunnel_session.h"
 #include "integration/operation_interrupt.h"
-#include "integration/operation_lane_lease.h"
 #include "server/connection_lifecycle.h"
-#include "server/inbound_buffer_budget.h"
-
 namespace ruvia::detail {
 class http_capsule_stream_state final {
 public:

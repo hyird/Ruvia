@@ -14,13 +14,9 @@
 #include "ruvia/web/streaming.h"
 
 #include "client/http_client_pool.h"
-#include "client/http_client_request_storage.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
-#include "context/context_services.h"
+#include "context/context_access.h"
 #include "http/inline_http_header_views.h"
-#include "integration/operation_lane_lease.h"
-
+#include "integration/operation_interrupt.h"
 namespace ruvia {
 
 const std::error_category& http_client_category() noexcept {

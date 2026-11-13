@@ -27,10 +27,8 @@
 #include "ruvia/web/streaming.h"
 
 #include "context/context_access.h"
-#include "context/context_services.h"
 #include "http/inline_http_header_views.h"
-#include "http/request_body_loader.h"
-#include "http/static_path_normalization.h"
+#include "http/static_root_index.h"
 #include "integration/operation_interrupt.h"
 
 namespace ruvia {

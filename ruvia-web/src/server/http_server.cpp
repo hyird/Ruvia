@@ -24,12 +24,11 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/controller.h"
 
-#include "integration/runtime_control_completion.h"
+#include "integration/operation_interrupt.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
-#include "server/inbound_buffer_budget.h"
-#include "server/prepared_listener_state.h"
 #include "server/worker_connections.h"
 
 namespace ruvia::detail {

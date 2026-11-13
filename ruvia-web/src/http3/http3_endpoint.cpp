@@ -1,5 +1,3 @@
-#include "http3/http3_endpoint.h"
-
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 
 #include <array>
@@ -35,10 +33,28 @@
 #include <asio/error.hpp>
 #include <asio/ip/udp.hpp>
 
+#include "http/tls_protocol_policy.h"
 #include "server/connection_lifecycle.h"
-#include "tls/tls_protocol_policy.h"
 #if defined(_WIN32)
-#include "server/windows_acceptor.h"
+#include "server/http_server_options.h"
+#endif
+
+#include <ngtcp2/ngtcp2_crypto.h>
+
+#include <string_view>
+
+#include "ruvia/core/worker_ref.h"
+
+#include "http/tls_protocol_policy.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
+#if defined(__linux__)
+#include <linux/filter.h>
 #endif
 
 namespace ruvia::detail {
@@ -213,14 +229,6 @@ inline std::error_code send_http3_packet(asio::ip::udp::socket& socket, const as
 
 }  // namespace ruvia::detail
 #endif
-
-#include <ngtcp2/ngtcp2_crypto.h>
-
-#include <string_view>
-
-#include "ruvia/core/worker_ref.h"
-
-#include "tls/tls_protocol_policy.h"
 
 namespace ruvia::detail {
 namespace {
@@ -821,17 +829,6 @@ bool make_http3_stateless_reset_token(
 }
 
 }  // namespace ruvia::detail
-
-#if !defined(_WIN32)
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
-#include <cerrno>
-#endif
-#if defined(__linux__)
-#include <linux/filter.h>
-#endif
 
 namespace ruvia::detail {
 #if !defined(_WIN32)

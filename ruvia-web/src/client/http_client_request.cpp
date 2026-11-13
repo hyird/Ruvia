@@ -14,15 +14,10 @@
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/streaming.h"
 
-#include "client/client_tls.h"
-#include "client/http_client_config_storage.h"
+#include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_registry.h"
-#include "client/http_client_request_storage.h"
-#include "client/http_client_response_state.h"
 #include "http/inline_http_header_views.h"
-#include "tls/tls_protocol_policy.h"
-
+#include "http/tls_protocol_policy.h"
 namespace ruvia {
 namespace detail {
 

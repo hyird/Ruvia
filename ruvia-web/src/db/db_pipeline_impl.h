@@ -48,8 +48,7 @@
 
 #include "db/db_pipeline.h"
 #include "db/db_pool.h"
-#include "integration/request_io_metrics.h"
-
+#include "integration/operation_interrupt.h"
 namespace ruvia::detail {
 
 // db_config's read and write timeouts bound waiting without socket progress in

@@ -65,7 +65,6 @@
 #include "field/http_connection_fields.h"
 #include "http_wire_sink.h"
 #include "parser/http_uri_grammar.h"
-#include "response/http_binary_response_fields.h"
 #include "response/http_response_header_state.h"
 namespace ruvia::detail {
 

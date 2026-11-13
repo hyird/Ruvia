@@ -27,17 +27,11 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 
-#include "client/client_happy_eyeballs.h"
-#include "client/client_tls.h"
+#include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
-#include "client/http_client_transport_error.h"
-#include "http3/http3_endpoint.h"
+#include "http/tls_protocol_policy.h"
 #include "http3/http3_session.h"
 #include "server/connection_lifecycle.h"
-#include "tls/tls_protocol_policy.h"
-
 namespace ruvia::detail {
 namespace {
 using error_code = std::error_code;

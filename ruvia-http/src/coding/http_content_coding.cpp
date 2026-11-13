@@ -17,7 +17,7 @@
 
 #include "coding/http_zlib_stream.h"
 #include "field/http_connection_fields.h"
-#include "http_request_access.h"
+#include "http_wire_sink.h"
 #include "response/http_response_header_state.h"
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token

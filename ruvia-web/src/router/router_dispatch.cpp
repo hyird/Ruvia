@@ -9,7 +9,6 @@
 #include "ruvia/web/static_files.h"
 
 #include "context/context_access.h"
-#include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
 #include "router/route_table.h"
 
@@ -48,12 +47,15 @@
 #include "ruvia/web/web_worker.h"
 
 #include "http/inline_http_header_views.h"
-#include "http/request_body_loader.h"
-#include "http/session_access.h"
 #include "integration/operation_interrupt.h"
 #include "integration/worker_capabilities.h"
-#include "server/inbound_buffer_budget.h"
-#include "server/inbound_transport_error.h"
+#include "server/connection_lifecycle.h"
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_session.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_session.h"
+#endif
 
 namespace ruvia {
 
@@ -901,13 +903,6 @@ task<std::optional<http_response>> detail::route_table::dispatch_bound_stream(
 }
 
 }  // namespace ruvia
-
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
-#endif
 
 namespace ruvia::detail {
 namespace {

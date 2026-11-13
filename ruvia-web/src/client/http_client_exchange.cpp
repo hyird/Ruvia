@@ -21,18 +21,12 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "client/client_lifecycle.h"
-#include "client/http_client_config_storage.h"
+#include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"
-#include "client/http_client_registry.h"
-#include "client/http_client_request_storage.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
+#include "http/http_websocket_connection.h"
 #include "http/inline_http_header_views.h"
-#include "integration/operation_lane_lease.h"
-#include "tls/tls_protocol_policy.h"
-#include "websocket/http_websocket_connection.h"
-
+#include "http/tls_protocol_policy.h"
+#include "integration/operation_interrupt.h"
 namespace ruvia::detail {
 
 struct http_client_output_write_input final {

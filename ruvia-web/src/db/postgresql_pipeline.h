@@ -16,8 +16,6 @@
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"
-#include "db/db_slot_socket.h"
-
 struct pg_conn;
 struct pg_result;
 // PostgreSQL's part of statement pipelining (db_pipeline.h): a group's

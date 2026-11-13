@@ -15,13 +15,146 @@
 #include <vector>
 
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response_file.h"
+#include "ruvia/http/url_encoding.h"
+#include "ruvia/web/error.h"
 #include "ruvia/web/static_files.h"
+
+#if defined(__unix__)
+#include "server/connection_lifecycle.h"
+#endif
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline bool is_windows_drive_path(std::string_view path) noexcept {
+    if (path.size() < 2 || path[1] != ':') {
+        return false;
+    }
+    const auto c = path.front();
+    return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z');
+}
+
+[[noreturn]] inline void throw_invalid_static_file_path() {
+    throw http_error({.status_ = ruvia::http_status::forbidden,
+        .code_ = "forbidden",
+        .message_ = "invalid static file path"});
+}
+
+// Percent-decodes `input` in one pass into `output`, which holds at least
+// input.size() bytes, and returns the decoded size. Percent mode fails on a
+// malformed escape; form mode maps '+' to a space and keeps a '%' that starts
+// no valid escape as a literal byte (WHATWG percent-decode). With
+// `reject_encoded_separators`, an escape revealing '/' or '\\' fails too.
+[[nodiscard]] inline std::optional<std::size_t> decode_url_bytes(
+    std::string_view input, char* output, url_decode_mode mode, bool reject_encoded_separators) noexcept {
+    std::size_t size = 0;
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (mode == url_decode_mode::form && c == '+') {
+            c = ' ';
+        } else if (c == '%') {
+            if (const auto byte = http_try_decode_percent_byte(input, i)) {
+                if (reject_encoded_separators && (*byte == '/' || *byte == '\\')) {
+                    return std::nullopt;
+                }
+                c = static_cast<char>(*byte);
+                i += 2;
+            } else if (mode != url_decode_mode::form) {
+                return std::nullopt;
+            }
+        }
+        output[size++] = c;
+    }
+    return size;
+}
+
+// Percent-decodes an encoded request path, or a wildcard tail of one, exactly
+// once into the file path it names: the path itself when it holds no escape,
+// otherwise the decoded bytes in `storage`. Routing and path-scoped middleware
+// split request paths on raw '/' only, so an escape revealing '/' or '\\'
+// would forge a segment boundary they never saw; that, like a malformed
+// escape, yields nullopt.
+[[nodiscard]] inline std::optional<std::string_view> decode_request_path(
+    std::string_view path, std::string& storage) {
+    if (!has_url_encoding(path, url_decode_mode::percent)) {
+        return path;
+    }
+    storage.resize(path.size());
+    const auto size = decode_url_bytes(path, storage.data(), url_decode_mode::percent, true);
+    if (!size) {
+        return std::nullopt;
+    }
+    storage.resize(*size);
+    return std::string_view(storage);
+}
+
+// Web static-file path policy: validate a decoded file path relative to the
+// configured document root. '/' and '\\' both separate segments; a "." or ".."
+// segment, an empty interior segment, a NUL, or an absolute or drive path is
+// rejected (403) rather than resolved. Requests carrying a dot segment never
+// reach a route, and a decoded parameter could otherwise hide one behind an
+// encoded separator ("sub%2F..%2Fsecret") that no route or path scope saw, so
+// every caller fails closed instead of resolving it. A final separator names
+// the directory itself and is dropped. The input is borrowed when it is
+// already canonical; only a '\\' separator rebuilds it in `storage`.
+[[nodiscard]] inline std::optional<std::string_view> try_normalize_static_relative_path(
+    std::string_view input, std::string& storage) {
+    if (input.empty()) {
+        return input;
+    }
+    if (input.front() == '/' || input.front() == '\\' || is_windows_drive_path(input)) {
+        return std::nullopt;
+    }
+
+    constexpr std::string_view stop_bytes("/\\\0", 3);
+    bool backslash = false;
+    std::size_t cursor_value = 0;
+    for (;;) {
+        const auto stop = input.find_first_of(stop_bytes, cursor_value);
+        const auto end = stop == std::string_view::npos ? input.size() : stop;
+        const auto segment = input.substr(cursor_value, end - cursor_value);
+        if (segment == "." || segment == "..") {
+            return std::nullopt;
+        }
+        if (stop == std::string_view::npos) {
+            break;
+        }
+        if (input[stop] == '\0' || segment.empty()) {
+            return std::nullopt;
+        }
+        backslash = backslash || input[stop] == '\\';
+        cursor_value = stop + 1;
+    }
+
+    auto canonical = input;
+    if (canonical.back() == '/' || canonical.back() == '\\') {
+        canonical.remove_suffix(1);
+    }
+    if (!backslash) {
+        return canonical;
+    }
+    storage.assign(canonical.data(), canonical.size());
+    std::ranges::replace(storage, '\\', '/');
+    return storage;
+}
+
+[[nodiscard]] inline std::string_view normalize_static_relative_path(
+    std::string_view input, std::string& storage) {
+    const auto normalized = try_normalize_static_relative_path(input, storage);
+    if (!normalized.has_value()) {
+        throw_invalid_static_file_path();
+    }
+    return *normalized;
+}
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
@@ -64,10 +197,6 @@ struct static_root_config_storage final {
 [[nodiscard]] std::string content_type_for(std::string_view extension,
     const static_root_config_storage& config);
 }  // namespace ruvia::detail
-
-#if defined(__unix__)
-#include "server/http_native_file.h"
-#endif
 
 namespace ruvia::detail {
 
@@ -769,3 +898,62 @@ inline void validate_static_root_options(const static_root_options& options) {
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia::detail {
+enum class static_file_selection_mode : std::uint8_t {
+    identity_only,
+    precompressed,
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+// Which bytes a static route actually serves: the identity file, a
+// precompressed sidecar, or a refresh-built in-memory variant the client
+// accepts.
+class static_file_representation final {
+public:
+    static_file_representation(
+        detail::static_root_entry_view entry_value, http_content_coding content_coding) noexcept
+        : entry_(entry_value),
+          content_coding_(content_coding) {}
+
+    static_file_representation(detail::static_root_entry_view entry_value,
+        detail::static_root_memory_variant_view memory_variant, http_content_coding content_coding) noexcept
+        : entry_(entry_value),
+          memory_variant_(memory_variant),
+          content_coding_(content_coding) {}
+
+    [[nodiscard]] const detail::static_root_entry_view& entry() const& noexcept RUVIA_LIFETIMEBOUND {
+        return entry_;
+    }
+    const detail::static_root_entry_view& entry() const&& = delete;
+
+    [[nodiscard]] const detail::static_root_memory_variant_view* memory_variant() const& noexcept RUVIA_LIFETIMEBOUND {
+        return memory_variant_.has_value() ? &*memory_variant_ : nullptr;
+    }
+    const detail::static_root_memory_variant_view* memory_variant() const&& = delete;
+    [[nodiscard]] http_content_coding content_coding() const noexcept {
+        return content_coding_;
+    }
+
+private:
+    detail::static_root_entry_view entry_;
+    std::optional<detail::static_root_memory_variant_view> memory_variant_;
+    http_content_coding content_coding_;
+};
+
+// Selects the best precompressed sidecar (foo.js.br / .gz / .zst) or
+// refresh-built in-memory variant the request's Accept-Encoding selection
+// accepts -- highest q-value wins, ties resolve br > zstd > gzip. The served
+// bytes are the variant's, so its size/etag/modified describe the wire
+// representation; the caller keeps the original Content-Type. Index lookups
+// only (no per-request filesystem stat). nullopt means no acceptable
+// representation exists.
+[[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
+    const static_root& root, std::string_view relative,
+    const http_response_coding_selection& selection,
+    detail::static_root_entry_view identity);
+
+}  // namespace ruvia

@@ -20,14 +20,9 @@
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
 
-#include "client/client_lifecycle.h"
-#include "client/client_tls.h"
-#include "integration/operation_lane_lease.h"
-#include "redis/redis_client_runtime.h"
-#include "redis/redis_protocol.h"
-#include "redis/redis_registry.h"
-#include "redis/redis_reply_parsers.h"
-
+#include "client/client_tcp_transport.h"
+#include "integration/operation_interrupt.h"
+#include "redis/redis_pool.h"
 namespace ruvia::detail {
 namespace {
 

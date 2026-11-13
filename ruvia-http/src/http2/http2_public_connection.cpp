@@ -17,9 +17,10 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "field/http_connection_fields.h"
 #include "http1/http_header_block_parser.h"
 #include "http2/http2_connection.h"
-#include "http_request_access.h"
+#include "http_wire_sink.h"
 #include "parser/http_uri_grammar.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 

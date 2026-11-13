@@ -13,8 +13,16 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/http/http_number_format.h"
 
+#include "db/db_pipeline.h"
 #include "db/db_pipeline_impl.h"
-#include "db/db_slot_socket.h"
+#if !defined(_WIN32)
+#include <fcntl.h>
+#include <sys/socket.h>
+#include <sys/types.h>
+#include <unistd.h>
+
+#include <cerrno>
+#endif
 
 namespace ruvia::detail {
 namespace {
@@ -926,15 +934,6 @@ template class db_pool<postgresql_driver>;
 #endif
 
 }  // namespace ruvia::detail
-
-#if !defined(_WIN32)
-#include <fcntl.h>
-#include <sys/socket.h>
-#include <sys/types.h>
-#include <unistd.h>
-
-#include <cerrno>
-#endif
 
 namespace ruvia::detail {
 

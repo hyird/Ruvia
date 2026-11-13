@@ -21,7 +21,7 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "field/http_connection_fields.h"
-#include "http_request_access.h"
+#include "http_wire_sink.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 namespace ruvia::detail {

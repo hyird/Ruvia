@@ -38,20 +38,12 @@
 #include "ruvia/web/streaming.h"
 
 #include "context/context_access.h"
-#include "context/context_services.h"
-#include "http/request_body_loader.h"
-#include "http3/http3_endpoint.h"
+#include "http/tls_protocol_policy.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
 #include "server/connection_lifecycle.h"
-#include "server/http_buffered_response.h"
-#include "server/http_response_stream_dispatch.h"
 #include "server/http_server_options.h"
-#include "server/http_upgrade_route.h"
-#include "server/inbound_transport_error.h"
 #include "server/multiplexed_stream_signal.h"
-#include "tls/tls_protocol_policy.h"
-
 namespace ruvia::detail {
 namespace {
 

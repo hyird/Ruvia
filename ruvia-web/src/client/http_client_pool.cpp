@@ -20,12 +20,8 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_tunnel.h"
 
-#include "client/client_tls.h"
-#include "client/http_client_connection.h"
-#include "client/http_client_response_memory.h"
-#include "client/http_client_response_state.h"
-#include "client/http_client_transport_error.h"
-#include "integration/operation_lane_lease.h"
+#include "client/client_tcp_transport.h"
+#include "integration/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

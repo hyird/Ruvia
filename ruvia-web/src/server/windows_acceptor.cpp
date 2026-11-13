@@ -1,5 +1,4 @@
-#include "server/windows_acceptor.h"
-
+#include "server/http_server_options.h"
 #if defined(_WIN32)
 
 #include <mswsock.h>
@@ -31,10 +30,9 @@
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/timer.h"
 
-#include "server/connection_count.h"
 #include "server/connection_lifecycle.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3/http3_endpoint.h"
+#include "http3/http3_session.h"
 #endif
 
 namespace ruvia::detail {

@@ -12,8 +12,6 @@
 
 #include "ruvia/web/context.h"
 
-#include "http/session_access.h"
-
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
@@ -23,7 +21,7 @@
 
 #include "context/context_access.h"
 #include "http/inline_http_header_views.h"
-#include "tls/tls_protocol_policy.h"
+#include "http/tls_protocol_policy.h"
 #endif
 
 #include <algorithm>

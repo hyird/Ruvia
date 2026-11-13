@@ -1,9 +1,9 @@
-#include "server/http_connection_state.h"
-
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <exception>
 #include <limits>
 #include <new>
@@ -21,38 +21,49 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/bytes.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_server_semantics.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_cache.h"
+#include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/http_target_origin.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/server_connection.h"
 #include "ruvia/web/streaming.h"
 
 #include "context/context_access.h"
-#include "context/context_services.h"
-#include "http/http_socket_tunnel_transport.h"
+#include "http/http_tunnel_session.h"
+#include "http/inline_http_header_views.h"
+#include "http/tls_protocol_policy.h"
 #include "integration/operation_interrupt.h"
-#include "integration/operation_lane_lease.h"
 #include "router/route_table.h"
 #include "server/connection_lifecycle.h"
-#include "server/connection_scanner.h"
-#include "server/http_connection_close.h"
 #include "server/http_server_options.h"
-#include "server/http_upgrade_route.h"
-#include "server/inbound_buffer_budget.h"
-#include "server/inbound_transport_error.h"
-#include "server/response_file_source.h"
+#include "server/multiplexed_stream_signal.h"
 #include "server/worker_connections.h"
+
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db_session.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis_session.h"
+#endif
 
 namespace ruvia::detail {
 namespace {
@@ -833,13 +844,6 @@ template task<void> worker_connections::serve_connection<server_tls_stream>(
 
 }  // namespace ruvia::detail
 
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_session.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
-#endif
-
 namespace ruvia::detail {
 
 struct request_stream_access final {
@@ -1139,3 +1143,967 @@ void request_stream::require_unselected_response() const {
 }
 
 }  // namespace ruvia
+
+namespace ruvia::detail {
+namespace {
+
+[[nodiscard]] protocol_byte_limit request_body_byte_limit(request_body_mode body_mode,
+    const std::optional<std::size_t>& max_stream_body_bytes, std::size_t max_buffered_body_bytes,
+    std::size_t route_limit) {
+    if (body_mode != request_body_mode::stream) {
+        const auto limit = route_limit != 0 && route_limit < max_buffered_body_bytes
+                               ? route_limit
+                               : max_buffered_body_bytes;
+        return protocol_byte_limit::limited(limit);
+    }
+    if (!max_stream_body_bytes.has_value()) {
+        return route_limit != 0 ? protocol_byte_limit::limited(route_limit)
+                                : protocol_byte_limit::unlimited();
+    }
+    const auto limit =
+        route_limit != 0 && route_limit < *max_stream_body_bytes ? route_limit : *max_stream_body_bytes;
+    return protocol_byte_limit::limited(limit);
+}
+
+// RFC 9110 §7.4 against the transport connection's facts. A secured
+// connection without a recorded certificate cannot vouch for any host.
+[[nodiscard]] bool connection_carries_target(const http_request& request, const context_services& services) noexcept {
+    const auto origin = decide_http_target_origin(request,
+        {.secured_ = services.get_conn_info().tls() != nullptr, .trusted_gateway_ = services.peer_trusted()});
+    switch (origin.action()) {
+        case http_target_origin_action::accept:
+            return true;
+        case http_target_origin_action::verify_certificate: {
+            auto* certificate = services.served_certificate();
+            return certificate != nullptr && certificate->covers(origin);
+        }
+        case http_target_origin_action::misdirected:
+            break;
+    }
+    return false;
+}
+
+}  // namespace
+http_request_admission_policy http_request_admission_policy::server(const http_server_options& options) noexcept {
+    return {
+        .max_stream_body_bytes_ = options.server_.max_stream_body_bytes_,
+        .max_buffered_body_bytes_ = options.server_.max_buffered_body_bytes_,
+        .apply_rate_limit_ = true,
+        .verify_target_origin_ = true,
+    };
+}
+
+protocol_byte_limit http_request_body_limit(const route_resolution& resolution, request_body_mode mode,
+    const http_request_admission_policy& policy) noexcept {
+    const auto* resolved = resolution.resolved();
+    return request_body_byte_limit(mode, policy.max_stream_body_bytes_, policy.max_buffered_body_bytes_,
+        resolved != nullptr ? resolved->route().max_request_body_bytes() : 0);
+}
+
+http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection rejection) noexcept {
+    return http_request_rejection(rate_limit_rejection_error(), rejection);
+}
+
+task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services) {
+    auto response = co_await routes.handle_error(request, rejection.error(), services);
+    if (const auto* rate_limit = rejection.rate_limit()) {
+        apply_rate_limit_rejection_headers(response, *rate_limit);
+    }
+    co_return response;
+}
+
+void http_response_tail::record_access(const access_log_sink& access_log, http_status_code status) const noexcept {
+    if (!access_log.callback_) {
+        return;
+    }
+    access_log.invoke(access_log_record_access::make({
+        .method_ = request_->method(),
+        .known_method_ = request_->known_method(),
+        .path_ = request_->path(),
+        .protocol_version_ = request_->protocol_version(),
+        .remote_address_ = remote_address_,
+        .client_address_ = client_address_,
+        .status_ = status,
+        .duration_micros_ = access_log_record_access::duration_since(start_),
+        .db_count_ = io_metrics_.db_count_,
+        .db_duration_micros_ = io_metrics_.db_duration_micros_,
+        .redis_count_ = io_metrics_.redis_count_,
+        .redis_duration_micros_ = io_metrics_.redis_duration_micros_,
+    }));
+}
+
+void http_response_tail::defer_access(const access_log_sink& access_log, http1_deferred_access_log& deferred,
+    std::size_t head_end, http_status_code status) const {
+    if (!access_log.callback_) {
+        return;
+    }
+    deferred.defer(head_end, *request_, client_address_, start_, status, io_metrics_);
+}
+
+http_request_admission admit_http_request(const http_request_admission_input& input,
+    const http_request_admission_policy& policy, const context_services& services) {
+    const auto& request = input.request_;
+    // The host's compression and CORS policies cover request stream responses
+    // too; the application-wide rate limit belongs to the routes alone, and a
+    // router applies its own.
+    const bool request_stream = static_cast<bool>(services.request_stream());
+    const auto coding = input.coding_;
+    // Negotiate against every coding. A document root or context::static_file
+    // may serve an indexed precompressed sidecar even when this worker has no
+    // runtime encoder; the encoder capability travels to representation
+    // preparation instead of pruning the client's choices here. A failed
+    // negotiation stays in the selection until the response status is known: a
+    // buffered 204/205/304 carries no representation and must not become 406.
+    auto coding_policy = http_response_coding_policy::selected(coding);
+    // Keyed on the client, not the hop: behind a trusted proxy every request
+    // would otherwise share the proxy's single key. Resolved once per request
+    // and bound to the services every context of this request is created from.
+    const auto* resolved = input.resolution_.resolved();
+    http_request_admission admission(
+        http_response_tail(request, coding_policy, {}, {}, input.start_), services);
+    if (services.peer_trusted()) {
+        admission.services_.bind_conn_info(services.resolve_conn_info(request));
+    }
+    const auto& connection = admission.services_.get_conn_info();
+    const auto remote_address = connection.remote().address();
+    const auto client_address = connection.client().address();
+    admission.tail_.bind_addresses(remote_address, client_address);
+    admission.tail_.bind_alternative_service(services.alternative_service());
+    admission.services_.bind_response_coding(coding);
+    if (input.pinned_arrival_.has_value()) {
+        admission.services_.pin_arrival(*input.pinned_arrival_);
+    }
+    if (resolved != nullptr) {
+        admission.services_.bind_route_body_limit(resolved->route().max_request_body_bytes());
+    }
+    admission.resolved_ = resolved;
+    const auto* endpoint = resolved != nullptr ? &resolved->route().endpoint() : nullptr;
+    admission.body_limit_ = http_request_body_limit(input.resolution_,
+        endpoint != nullptr ? endpoint->request_body_mode() : request_body_mode::buffered, policy);
+
+    const auto reject = [&](http_request_rejection rejection) {
+        admission.endpoint_ = http_request_endpoint::rejection;
+        admission.rejection_ = rejection;
+        return std::move(admission);
+    };
+
+    // Before any expectation, limit or endpoint decision: a request this
+    // connection cannot carry is not this server's to evaluate.
+    if (policy.verify_target_origin_ && !connection_carries_target(request, services)) {
+        return reject(http_request_rejection::error(http_error_info(
+            {.status_ = http_status::misdirected_request, .message_ = "misdirected request"})));
+    }
+
+    // Expect extensions are valid HTTP syntax. The protocol reports the
+    // semantic fact; this product implements only 100-continue and chooses the
+    // RFC 9110-permitted 417 before reading request content.
+    if (input.expectation_ != nullptr &&
+        *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
+        return reject(http_request_rejection::error(
+            [&] { const auto err = http_unsupported_expectation_error(); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
+    }
+    if (policy.apply_rate_limit_ && !request_stream) {
+        if (const auto rejection = decide_request_rate_limit(
+                admission.services_.rate_limiter(), client_address, input.pinned_arrival_)) {
+            return reject(http_request_rejection::rate_limited(*rejection));
+        }
+    }
+    // Content already in hand (buffered bodies and subrequests) is held
+    // to the same ceiling a streaming protocol enforces while reading.
+    if (admission.body_limit_.exceeds(request.body_bytes().size())) {
+        return reject(http_request_rejection::error(
+            [&] { const auto err = http_request_body_protocol_error(http_request_body_failure::too_large); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
+    }
+    if (endpoint == nullptr) {
+        admission.endpoint_ = http_request_endpoint::buffered;
+        return admission;
+    }
+    if (const auto* tunnel = endpoint->tunnel()) {
+        admission.udp_tunnel_ = tunnel->protocol() == "connect-udp" ||
+                                (request_stream && (request.protocol() == "connect-udp" || is_http_connect_udp_upgrade_request(request)));
+        if (admission.udp_tunnel_ && validate_http_connect_udp_request(request).has_value()) {
+            return reject(http_request_rejection::error(http_error_info(
+                {.status_ = http_status::bad_request, .message_ = "invalid CONNECT-UDP request head"})));
+        }
+        admission.endpoint_ = http_request_endpoint::tunnel;
+        return admission;
+    }
+    if (endpoint->websocket() != nullptr) {
+        // An upgrade selects no HTTP response representation.
+        admission.endpoint_ = http_request_endpoint::websocket;
+        return admission;
+    }
+    if (endpoint->response_stream() != nullptr) {
+        admission.endpoint_ = http_request_endpoint::response_stream;
+        return admission;
+    }
+    const auto* buffered = endpoint->buffered();
+    admission.endpoint_ = buffered != nullptr && buffered->request_body_mode() == request_body_mode::stream
+                              ? http_request_endpoint::stream_body
+                              : http_request_endpoint::buffered;
+    return admission;
+}
+
+task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
+    const http_request_admission_input& input, const http_request_admission_policy& policy,
+    const context_services& services, http_response& response) {
+    auto admission = admit_http_request(input, policy, services);
+    if (const auto* rejection = admission.rejection()) {
+        // As in the server: a rejection does not inherit the coding promise.
+        admission.tail().disable_response_coding();
+        response = co_await respond_http_request_rejection(
+            routes, input.request_, *rejection, admission.services());
+    } else {
+        co_await routes.dispatch_buffered_response(input.request_, input.resolution_,
+            document_root_binding::none(), admission.services(), admission.static_file_mode(), response);
+    }
+    co_return admission;
+}
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+namespace {
+
+// A coded representation is worth sending only when strictly smaller than
+// the identity bytes; the encoder stops at this cap instead of finishing.
+// When the client refuses identity (RFC 9110 §12.5.3), any acceptable coding
+// beats a 406, so the cap is lifted.
+[[nodiscard]] http_content_encode_options compressed_body_options(
+    std::string_view plain, bool identity_accepted) noexcept {
+    if (!identity_accepted) {
+        return {.max_encoded_bytes_ = (std::numeric_limits<std::size_t>::max)()};
+    }
+    return {.max_encoded_bytes_ = plain.empty() ? 0 : plain.size() - 1};
+}
+
+// Publishes an encoder result as the response representation. The commit
+// stages every affected header before publishing the owned body, so a
+// request-resource failure leaves the identity response usable for the typed
+// 500 path instead of exposing a mixed body/metadata state.
+[[nodiscard]] http_response_compression_status commit_compressed_body(
+    http_response& response, http_content_coding coding, std::optional<std::string>&& encoding) {
+    if (!encoding.has_value()) {
+        return http_response_compression_status::not_applicable;
+    }
+    response.replace_body_with_content_encoding(std::move(*encoding), http_content_coding_token(coding));
+    return http_response_compression_status::compressed;
+}
+
+[[nodiscard]] bool response_headers_skip_compression(const http_response& response) noexcept {
+    if (response.header("Content-Range").has_value()) {
+        return true;
+    }
+    if (const auto content_type = response.header("Content-Type");
+        !content_type.has_value() || !is_http_media_type_compressible(*content_type)) {
+        return true;
+    }
+    const bool has_cache_control = response.header("Cache-Control").has_value();
+    cache_control_field_parser cache_parser;
+    for (const auto& header : response.headers()) {
+        const auto name = header.name();
+        switch (name.size()) {
+            case 11U:
+                if (http_ascii_equals_ignore_case(name, "Repr-Digest") ||
+                    http_ascii_equals_ignore_case(name, "Content-MD5")) {
+                    return true;
+                }
+                break;
+            case 13U:
+                if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
+                    cache_parser.update(header.value());
+                }
+                break;
+            case 14U:
+                if ((name[8] | 0x20) == 'd' && http_ascii_equals_ignore_case(name, "Content-Digest")) {
+                    return true;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return has_cache_control && cache_parser.finish().has(cache_control_directive::no_transform);
+}
+
+}  // namespace
+
+std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
+    const auto field = response.header("Content-Length");
+    if (!field.has_value()) {
+        return std::nullopt;
+    }
+    std::optional<std::uint64_t> declared;
+    bool valid = true;
+    http_visit_comma_separated_quoted_field_items(*field, [&](std::string_view item) noexcept {
+        if (item.empty()) {
+            valid = false;
+            return false;
+        }
+        std::uint64_t parsed = 0;
+        const auto [ptr, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed);
+        if (ec != std::errc{} || ptr != item.data() + item.size() ||
+            (declared.has_value() && *declared != parsed)) {
+            valid = false;
+            return false;
+        }
+        declared = parsed;
+        return true;
+    });
+    return valid ? declared : std::nullopt;
+}
+
+bool declared_length_permits_encoding(const http_response_coding_selection& selection,
+    const compression_config& options, std::uint64_t declared) noexcept {
+    // min_bytes_ only says when encoding stops paying off; a client that
+    // refuses identity is served a coding at any size instead of a 406.
+    return !(((declared == 0 || declared < options.min_bytes_) && selection.identity_accepted()) ||
+             declared > options.max_bytes_);
+}
+
+namespace {
+
+// An empty HEAD body is a HEAD handler describing the GET representation
+// without producing it. Encoding those zero bytes would publish the coded
+// length of nothing (RFC 9110 §8.6). Apply the coding GET would select, sized
+// by the declared Content-Length, and drop that length: the coded size is
+// unknown and §8.6 allows omitting it.
+[[nodiscard]] http_buffered_compression_step apply_head_content_encoding(
+    const http_response_coding_selection& selection, http_response& response,
+    const compression_config& options, std::optional<std::uint64_t> declared) {
+    const bool encode = declared.has_value() ? declared_length_permits_encoding(selection, options, *declared)
+                                             : !selection.identity_accepted();
+    if (!encode) {
+        return {http_response_compression_status::not_applicable, false};
+    }
+    response.apply_content_encoding(http_content_coding_token(selection.coding()));
+    return {http_response_compression_status::compressed, false};
+}
+
+}  // namespace
+
+http_response_compression_decision prepare_response_compression(
+    const http_response_coding_selection& selection, http_known_method request_method,
+    http_response& response, http_response_compression_source source_value,
+    http_response_coding_availability availability) {
+    // A file's bytes are served as the representation their validators and
+    // HEAD response describe, whether the transport reads the file or the
+    // context already carries them in memory.
+    if (source_value == http_response_compression_source::buffered && response.has_file_representation()) {
+        return http_response_compression_decision::fixed_representation;
+    }
+    if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
+        return http_response_compression_decision::fixed_representation;
+    }
+    // An application-encoded body is kept, but whether it is sent (200) or
+    // refused (406) still depends on Accept-Encoding, so caches must key on it
+    // (RFC 9110 §12.5.5; Pingora depends_on_accept_encoding).
+    if (response.header("Content-Encoding").has_value()) {
+        response.add_vary_token("Accept-Encoding");
+        return http_response_compression_decision::fixed_representation;
+    }
+    // Integrity fields describe the content or the selected representation,
+    // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
+    // Content-MD5 likewise covered the sent content). Encoding here would
+    // leave them describing bytes that are not sent.
+    if (availability == http_response_coding_availability::identity_only ||
+        response.status() == http_status::partial_content ||
+        response_headers_skip_compression(response)) {
+        return http_response_compression_decision::fixed_representation;
+    }
+
+    response.add_vary_token("Accept-Encoding");
+    if (selection.coding() == http_content_coding::identity) {
+        return http_response_compression_decision::negotiated_identity;
+    }
+    return http_response_compression_decision::encode;
+}
+
+http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection,
+    http_known_method request_method, http_response& response, const compression_config& options,
+    worker_codecs& codecs, bool offload_available) {
+    constexpr http_buffered_compression_step not_applicable{http_response_compression_status::not_applicable, false};
+    const auto body = response.body_bytes();
+
+    const auto decision = prepare_response_compression(selection, request_method, response,
+        http_response_compression_source::buffered,
+        http_response_coding_availability::identity_and_compression);
+    // Negotiation errors above still propagate; only encoding and publication
+    // failures become a typed compression result.
+    try {
+        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head &&
+            body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+            const auto declared = declared_content_length(response);
+            if (declared != std::uint64_t{0}) {
+                return apply_head_content_encoding(selection, response, options, declared);
+            }
+        }
+        if (decision != http_response_compression_decision::encode ||
+            !declared_length_permits_encoding(selection, options, body.size())) {
+            return not_applicable;
+        }
+        // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
+        // pool; without one they stay identity (or 406 when identity is refused)
+        // rather than stall the event loop.
+        if (body.size() > options.sync_bytes_) {
+            return {http_response_compression_status::not_applicable, offload_available};
+        }
+
+        const auto coding = selection.coding();
+        auto encoding = codecs.encoder(coding).encode(
+            body, compressed_body_options(body, selection.identity_accepted()));
+        return {commit_compressed_body(response, coding, std::move(encoding)), false};
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        return {http_response_compression_status::failed, false};
+    }
+}
+
+task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection,
+    http_response& response, const worker_ref& worker_value, const stop_token& stop_token_value) {
+    try {
+        const auto coding = selection.coding();
+        const bool identity_accepted = selection.identity_accepted();
+        std::string plain(response.body_bytes());
+        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
+            [coding, identity_accepted, plain = std::move(plain)]() {
+                return encode_http_content(
+                    coding, plain, compressed_body_options(plain, identity_accepted));
+            });
+        if (result_value.failed()) {
+            ruvia::report_unhandled_failure("response compression", result_value.error());
+            co_return http_response_compression_status::failed;
+        }
+        if (!result_value.completed()) {
+            // Queue saturation and shutdown are overload/lifecycle outcomes,
+            // not broken encoders. Preserve the identity representation when
+            // identity is acceptable; otherwise report 503 Service Unavailable.
+            co_return http_response_compression_status::unavailable;
+        }
+        co_return commit_compressed_body(response, coding, std::move(result_value).take_value());
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        // Input ownership, encoder execution and representation publication
+        // leave the original identity body intact on failure.
+        co_return http_response_compression_status::failed;
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) noexcept {
+    return connection_transport(
+        &socket, [](void* target) noexcept { close_socket(*static_cast<asio::ip::tcp::socket*>(target)); },
+        [](void* target) noexcept {
+            std::error_code ignored;
+            static_cast<asio::ip::tcp::socket*>(target)->cancel(ignored);
+        });
+}
+namespace {
+
+[[nodiscard]] worker_ref require_scanner_worker(worker_ref worker_value) {
+    if (!worker_value.valid()) {
+        throw std::invalid_argument("connection scanner requires a valid worker");
+    }
+    return worker_value;
+}
+
+[[nodiscard]] bool timeout_expired(
+    const std::optional<timeout_duration>& timeout, std::int64_t inactive_ms) noexcept {
+    return timeout.has_value() && inactive_ms >= timeout->value().count();
+}
+
+[[nodiscard]] std::int64_t close_deadline_after(std::int64_t now, std::chrono::milliseconds delay) noexcept {
+    const auto maximum = (std::numeric_limits<std::int64_t>::max)();
+    return now > maximum - delay.count() ? maximum : now + delay.count();
+}
+
+[[nodiscard]] std::int64_t activity_now_ms() noexcept {
+    // 向上取整活动时间，避免毫秒截断让超时提前；扫描时钟仍向下取整。
+    return std::chrono::ceil<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+}  // namespace
+
+connection_scanner::periodic_check_registration::~periodic_check_registration() noexcept {
+    reset();
+}
+void connection_scanner::periodic_check_registration::reset() noexcept {
+    if (entry_ != nullptr) {
+        entry_->remove_periodic_check(*this);
+    }
+}
+connection_scanner::entry::~entry() noexcept {
+    connection_scanner::detach_entry(*this);
+    detach_periodic_checks();
+}
+void connection_scanner::entry::touch() noexcept {
+    if (scanner_ != nullptr) {
+        last_active_ms_ = activity_now_ms();
+    }
+}
+void connection_scanner::entry::note_write_progress() noexcept {
+    if (scanner_ != nullptr) {
+        last_active_ms_ = activity_now_ms();
+        write_progress_ms_ = last_active_ms_;
+    }
+}
+void connection_scanner::entry::set_phase(phase next_phase) noexcept {
+    if (scanner_ == nullptr) {
+        return;
+    }
+    const bool write_started = next_phase == phase::writing && !write_pending();
+    touch();
+    if (phase_ != next_phase) {
+        phase_started_ms_ = last_active_ms_;
+    }
+    if (write_started) {
+        write_progress_ms_ = last_active_ms_;
+    }
+    phase_ = next_phase;
+    // A head read that completed before its cancel took effect returns the
+    // connection to its phase timeouts; the stale request has no deadline.
+    if (reading_request_head_) {
+        close_requested_ = false;
+    }
+    reading_request_head_ = false;
+    sync_reusable();
+}
+void connection_scanner::entry::read_request_head(phase timeout_phase) noexcept {
+    set_phase(timeout_phase);
+    reading_request_head_ = scanner_ != nullptr;
+    close_requested_ = false;
+    sync_reusable();
+}
+connection_scanner::entry::phase_scope::~phase_scope() {
+    if (entry_.scanner_ == nullptr) {
+        return;
+    }
+    entry_.touch();
+    entry_.phase_started_ms_ = phase_started_ms_;
+    entry_.phase_ = phase_;
+    entry_.reading_request_head_ = reading_request_head_;
+    entry_.sync_reusable();
+}
+connection_scanner::entry::write_scope::write_scope(entry& entry_value) noexcept
+    : entry_(entry_value) {
+    if (!entry_.write_pending()) {
+        entry_.note_write_progress();
+    }
+    ++entry_.write_scopes_;
+}
+connection_scanner::entry::write_scope::~write_scope() {
+    --entry_.write_scopes_;
+    entry_.touch();
+}
+void connection_scanner::entry::enter_long_lived() noexcept {
+    set_phase(phase::long_lived);
+}
+std::int64_t connection_scanner::entry::last_active_ms() const noexcept {
+    return last_active_ms_;
+}
+void connection_scanner::entry::register_periodic_check(periodic_check_registration& registration,
+    void* target, periodic_check_type tick, drain_check_type drain) noexcept {
+    registration.reset();
+    registration.entry_ = this;
+    registration.target_ = target;
+    registration.tick_ = tick;
+    registration.drain_ = drain;
+    registration.next_ = periodic_checks_;
+    if (periodic_checks_ != nullptr) {
+        periodic_checks_->prev_ = &registration;
+    }
+    periodic_checks_ = &registration;
+}
+void connection_scanner::entry::remove_periodic_check(
+    periodic_check_registration& registration) noexcept {
+    if (registration.entry_ != this) {
+        return;
+    }
+    if (registration.prev_ != nullptr) {
+        registration.prev_->next_ = registration.next_;
+    } else {
+        periodic_checks_ = registration.next_;
+    }
+    if (registration.next_ != nullptr) {
+        registration.next_->prev_ = registration.prev_;
+    }
+    if (periodic_scan_next_ == &registration) {
+        periodic_scan_next_ = registration.next_;
+    }
+    registration.entry_ = nullptr;
+    registration.prev_ = registration.next_ = nullptr;
+    registration.target_ = nullptr;
+    registration.tick_ = nullptr;
+    registration.drain_ = nullptr;
+}
+void connection_scanner::entry::detach_periodic_checks() noexcept {
+    periodic_scan_next_ = nullptr;
+    while (periodic_checks_ != nullptr) {
+        periodic_checks_->reset();
+    }
+}
+bool connection_scanner::entry::linked() const noexcept {
+    return prev_ != nullptr && next_ != nullptr;
+}
+void connection_scanner::entry::sync_reusable() noexcept {
+    const bool listed = reusable_next_ != nullptr;
+    if (scanner_ == nullptr || reusable() == listed) {
+        return;
+    }
+    if (listed) {
+        unlink_reusable();
+        return;
+    }
+    auto& sentinel = scanner_->impl_->reusable_sentinel_;
+    reusable_prev_ = sentinel.reusable_prev_;
+    reusable_next_ = &sentinel;
+    sentinel.reusable_prev_->reusable_next_ = this;
+    sentinel.reusable_prev_ = this;
+}
+void connection_scanner::entry::unlink_reusable() noexcept {
+    if (reusable_next_ == nullptr) {
+        return;
+    }
+    reusable_prev_->reusable_next_ = reusable_next_;
+    reusable_next_->reusable_prev_ = reusable_prev_;
+    reusable_prev_ = reusable_next_ = nullptr;
+}
+bool connection_scanner::entry::has_drain_check() const noexcept {
+    for (const auto* registration = periodic_checks_; registration != nullptr; registration = registration->next_) {
+        if (registration->drain_ != nullptr) {
+            return true;
+        }
+    }
+    return false;
+}
+void connection_scanner::entry::notify_drain() noexcept {
+    // A callback may detach its own registration; read the successor first.
+    for (auto* registration = periodic_checks_; registration != nullptr;) {
+        auto* const next = registration->next_;
+        if (registration->drain_ != nullptr) {
+            registration->drain_(registration->target_);
+        }
+        registration = next;
+    }
+}
+connection_scanner::guard::guard(
+    connection_scanner& scanner, entry& entry_value, connection_transport transport_value)
+    : entry_(entry_value) {
+    scanner.impl_->register_entry(entry_, transport_value);
+}
+connection_scanner::guard::~guard() {
+    connection_scanner::detach_entry(entry_);
+}
+connection_scanner::impl_type::impl_type(
+    connection_scanner* owner_value, worker_ref worker_value, connection_scanner_options options)
+    : owner_(owner_value),
+      worker_(require_scanner_worker(std::move(worker_value))),
+      timer_state_(std::make_shared<timer_state_type>(this)),
+      options_(std::move(options)),
+      cached_now_ms_(steady_now_ms()) {
+    sentinel_.prev_ = sentinel_.next_ = &sentinel_;
+    reusable_sentinel_.reusable_prev_ = reusable_sentinel_.reusable_next_ = &reusable_sentinel_;
+}
+bool connection_scanner::impl_type::retire() noexcept {
+    // scanning_ is worker-local; only the worker thread may observe it. On that
+    // thread a set flag means this call is nested inside the scan callback,
+    // which already holds the timer mutex.
+    const bool on_worker = worker_.is_current();
+    const bool nested_in_scan = on_worker && scanning_;
+    if (nested_in_scan) {
+        stop();
+        timer_state_->owner_ = nullptr;
+        release_after_scan_ = true;
+    } else if (on_worker) {
+        stop();
+        timer_state_->owner_ = nullptr;
+    } else {
+        // Another thread may be scanning; wait for that callback to finish.
+        std::lock_guard lock(timer_state_->mutex_);
+        stop();
+        timer_state_->owner_ = nullptr;
+    }
+    // Unregistration keeps the scan cursors consistent, so a nested scan ends
+    // without visiting any detached node.
+    while (sentinel_.next_ != &sentinel_) {
+        unregister_entry(*sentinel_.next_);
+    }
+    return nested_in_scan;
+}
+
+connection_scanner::connection_scanner(worker_ref worker_value, connection_scanner_options options)
+    : impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
+connection_scanner::~connection_scanner() noexcept {
+    if (impl_->retire()) {
+        // The scan running further up this stack frees the impl.
+        static_cast<void>(impl_.release());
+    }
+}
+void connection_scanner::start() {
+    impl_->start();
+}
+void connection_scanner::stop() noexcept {
+    impl_->stop();
+}
+void connection_scanner::close_all() noexcept {
+    impl_->close_all();
+}
+bool connection_scanner::evict_oldest_reusable() noexcept {
+    auto& sentinel = impl_->reusable_sentinel_;
+    for (auto* current = sentinel.reusable_next_; current != &sentinel; current = current->reusable_next_) {
+        // A write still under way belongs to an exchange that only just
+        // ended; its connection is not idle yet.
+        if (current->write_pending()) {
+            continue;
+        }
+        // Closed at once rather than asked to close: the new connection takes
+        // the slot now. The close request keeps the entry out of the list
+        // while its owner unwinds.
+        if (current->lifecycle_ != nullptr) {
+            current->lifecycle_->set_reason(connection_close_reason::aborted);
+        }
+        impl_type::record_close_request(*current, impl_->cached_now_ms_);
+        current->transport_.close();
+        return true;
+    }
+    return false;
+}
+void connection_scanner::detach_entry(entry& entry_value) noexcept {
+    if (entry_value.scanner_ != nullptr) {
+        entry_value.scanner_->impl_->unregister_entry(entry_value);
+    }
+}
+
+void connection_scanner::impl_type::start() {
+    if (running_) {
+        return;
+    }
+    running_ = true;
+    cached_now_ms_ = steady_now_ms();
+    try {
+        schedule();
+    } catch (...) {
+        running_ = false;
+        throw;
+    }
+}
+void connection_scanner::impl_type::stop() noexcept {
+    running_ = false;
+    timer_.cancel();
+}
+void connection_scanner::impl_type::register_entry(entry& entry_value, connection_transport transport_value) {
+    if (entry_value.scanner_ != nullptr) {
+        throw std::logic_error("connection scanner entry is already registered");
+    }
+    // A parked scanner resumes with its first entry. Armed before linking, so
+    // a failure leaves the entry unregistered.
+    if (running_ && !timer_.registered()) {
+        schedule();
+    }
+    entry_value.transport_ = transport_value;
+    entry_value.scanner_ = owner_;
+    entry_value.touch();
+    entry_value.phase_started_ms_ = entry_value.last_active_ms_;
+    entry_value.phase_ = phase::idle;
+    entry_value.close_requested_ = false;
+    entry_value.next_ = sentinel_.next_;
+    entry_value.prev_ = &sentinel_;
+    sentinel_.next_->prev_ = &entry_value;
+    sentinel_.next_ = &entry_value;
+}
+void connection_scanner::impl_type::unregister_entry(entry& entry_value) noexcept {
+    if (entry_value.scanner_ != owner_ || !entry_value.linked()) {
+        return;
+    }
+    if (entry_value.last_active_ms_ > retired_activity_ms_) {
+        retired_activity_ms_ = entry_value.last_active_ms_;
+    }
+    if (scan_current_ == &entry_value) {
+        scan_current_ = nullptr;
+    }
+    if (scan_next_ == &entry_value) {
+        scan_next_ = entry_value.next_;
+    }
+    entry_value.prev_->next_ = entry_value.next_;
+    entry_value.next_->prev_ = entry_value.prev_;
+    entry_value.prev_ = entry_value.next_ = nullptr;
+    entry_value.unlink_reusable();
+    entry_value.transport_ = {};
+    entry_value.detach_periodic_checks();
+    entry_value.scanner_ = nullptr;
+}
+void connection_scanner::impl_type::close_all() noexcept {
+    for (auto* current = sentinel_.next_; current != &sentinel_; current = current->next_) {
+        if (current->lifecycle_ != nullptr) {
+            current->lifecycle_->set_reason(connection_close_reason::cancelled);
+        }
+        current->transport_.close();
+    }
+}
+void connection_scanner::impl_type::schedule() {
+    if (!running_) {
+        return;
+    }
+    const auto timer_state = timer_state_;
+    // A stopped timer queue arms nothing: scanning ends with the worker, as it
+    // does for a scan timer that stop_timers() cancels.
+    (worker_).schedule_timer(timer_, ::ruvia::deadline_after(options_.scan_interval_.value()), [timer_state](worker_timer_outcome outcome) {
+        if (outcome == worker_timer_outcome::cancelled) {
+            return;
+        }
+        impl_type* destroy_after_lock = nullptr;
+        {
+            std::lock_guard lock(timer_state->mutex_);
+            auto* scanner = timer_state->owner_;
+            if (scanner == nullptr || !scanner->running_) {
+                return;
+            }
+            // Expiry has consumed this timer. Release its token before callbacks,
+            // which may stop, restart, or destroy the scanner.
+            scanner->timer_.cancel();
+            // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
+            const auto interval_start = scanner->cached_now_ms_;
+            scanner->cached_now_ms_ = steady_now_ms();
+            scanner->scanning_ = true;
+            const bool idle = scanner->scan(interval_start);
+            scanner->scanning_ = false;
+            if (scanner->release_after_scan_) {
+                // A callback destroyed the scanner; its teardown already ran.
+                destroy_after_lock = scanner;
+            } else {
+                // Never during an exchange or a burst: only after a whole interval
+                // in which no entry carried a request exchange and none had activity
+                // (I/O, registration or retirement), once per such quiet period. The
+                // timer runs on the worker, whose thread heap this collects.
+                if (idle && scanner->retired_activity_ms_ < interval_start) {
+                    if (!scanner->quiet_trimmed_) {
+                        collect_thread_heap();
+                        scanner->quiet_trimmed_ = true;
+                    }
+                } else {
+                    scanner->quiet_trimmed_ = false;
+                }
+                // With no entry left and the quiet period trimmed, nothing remains to
+                // time: park until register_entry() re-arms the scan.
+                const bool parked = scanner->quiet_trimmed_ && scanner->sentinel_.next_ == &scanner->sentinel_;
+                if (!parked && !scanner->timer_.registered()) {
+                    scanner->schedule();
+                }
+            }
+        }
+        if (destroy_after_lock != nullptr) {
+            delete destroy_after_lock;
+        }
+    });
+}
+bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
+    const auto now = cached_now_ms_;
+    bool idle = true;
+    scan_next_ = sentinel_.next_;
+    while (scan_next_ != &sentinel_) {
+        scan_current_ = scan_next_;
+        scan_next_ = scan_current_->next_;
+        // Checked before this entry's callbacks, which may touch it at the new time.
+        idle = idle && !active_since(*scan_current_, interval_start);
+        scan_current_->periodic_scan_next_ = scan_current_->periodic_checks_;
+        // A callback can retire the current entry or a later one. Unregistration
+        // updates both scanner-owned cursors before the entry can be destroyed.
+        while (scan_current_ != nullptr && scan_current_->periodic_scan_next_ != nullptr) {
+            auto* registration = scan_current_->periodic_scan_next_;
+            scan_current_->periodic_scan_next_ = registration->next_;
+            registration->tick_(registration->target_, now);
+        }
+        if (scan_current_ != nullptr && is_timed_out(*scan_current_, now)) {
+            expire(*scan_current_);
+        }
+        scan_current_ = nullptr;
+    }
+    scan_next_ = nullptr;
+    return idle;
+}
+bool connection_scanner::impl_type::active_since(const entry& entry_value, std::int64_t interval_start) noexcept {
+    // A connection waiting for, or still reading, a request head has no
+    // exchange; neither has an upgraded one between messages, nor a
+    // multiplexed session without a stream. Anything else (a handshake, an
+    // admitted request, a response) is an exchange.
+    return entry_value.last_active_ms_ >= interval_start || entry_value.write_pending() ||
+           (!entry_value.reading_request_head_ && entry_value.phase_ != phase::long_lived &&
+               entry_value.phase_ != phase::awaiting_stream);
+}
+void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
+    if (entry_value.lifecycle_ != nullptr) {
+        entry_value.lifecycle_->set_reason(connection_close_reason::timeout);
+    }
+    if (!entry_value.close_requested_) {
+        const auto now = cached_now_ms_;
+        if (entry_value.reading_request_head_) {
+            request_close(entry_value, close_deadline_after(now, options_.scan_interval_.value()));
+            return;
+        }
+        // A stalled write cannot carry a graceful end (GOAWAY, close alert);
+        // a write still progressing is followed by the drain's own output.
+        if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) &&
+            entry_value.has_drain_check()) {
+            // The callback may retire the entry; record the request first.
+            record_close_request(entry_value, close_deadline_after(now, connection_close_grace));
+            entry_value.notify_drain();
+            return;
+        }
+    }
+    entry_value.transport_.close();
+}
+void connection_scanner::impl_type::request_close(entry& entry_value, std::int64_t deadline_ms) noexcept {
+    // The pending read completes with operation_aborted; its owner then ends
+    // the connection with its close alert instead of an abrupt close. A TLS
+    // read can lose the cancel (the ssl operation resumes reading a partial
+    // record), so the deadline closes the socket of one that never returns.
+    record_close_request(entry_value, deadline_ms);
+    entry_value.transport_.cancel();
+}
+void connection_scanner::impl_type::record_close_request(entry& entry_value, std::int64_t deadline_ms) noexcept {
+    // Repeated requests (a timeout, then a drain) keep the earliest deadline.
+    if (!entry_value.close_requested_ || deadline_ms < entry_value.close_deadline_ms_) {
+        entry_value.close_deadline_ms_ = deadline_ms;
+    }
+    entry_value.close_requested_ = true;
+    entry_value.sync_reusable();
+}
+bool connection_scanner::impl_type::is_timed_out(const entry& entry_value, std::int64_t now) const noexcept {
+    // A graceful close request is bounded by its own deadline, which later
+    // activity (the GOAWAY or alert write it asked for) does not extend.
+    if (entry_value.close_requested_) {
+        return now >= entry_value.close_deadline_ms_;
+    }
+    if (write_stalled(entry_value, now)) {
+        return true;
+    }
+    // 活动时间独立采样，不能把配置的扫描间隔当成调度延迟的上界。
+    const auto inactive_ms = now - entry_value.last_active_ms_;
+    const auto phase_elapsed_ms = now - entry_value.phase_started_ms_;
+    switch (entry_value.phase_) {
+        case phase::reading_initial:
+            return timeout_expired(options_.initial_read_timeout_, inactive_ms) ||
+                   timeout_expired(options_.initial_read_completion_timeout_, phase_elapsed_ms);
+        case phase::reading_payload:
+            return timeout_expired(options_.payload_read_timeout_, inactive_ms) ||
+                   timeout_expired(options_.payload_read_completion_timeout_, phase_elapsed_ms);
+        case phase::writing:
+        case phase::long_lived:
+            return false;
+        case phase::awaiting_stream:
+            return timeout_expired(options_.idle_timeout_, phase_elapsed_ms);
+        case phase::idle:
+        default:
+            return timeout_expired(options_.idle_timeout_, inactive_ms);
+    }
+}
+bool connection_scanner::impl_type::write_stalled(const entry& entry_value, std::int64_t now) const noexcept {
+    return entry_value.write_pending() &&
+           timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
+}
+
+}  // namespace ruvia::detail

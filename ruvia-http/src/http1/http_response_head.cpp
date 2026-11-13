@@ -17,7 +17,6 @@
 #include "ruvia/http/http_status.h"
 
 #include "field/http_connection_fields.h"
-#include "http_request_access.h"
 #include "http_wire_sink.h"
 #include "response/http_response_header_state.h"
 namespace ruvia::detail {

@@ -25,8 +25,6 @@
 
 #include "db/db_sql_format.h"
 #include "db/mariadb_pipeline.h"
-#include "db/mariadb_sql.h"
-
 namespace ruvia::detail {
 namespace {
 

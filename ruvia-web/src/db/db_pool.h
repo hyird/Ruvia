@@ -26,13 +26,11 @@
 #include "ruvia/web/db/db_session.h"
 #include "ruvia/web/db/db_types.h"
 
-#include "client/client_happy_eyeballs.h"
-#include "db/db_config_storage.h"
-#include "db/db_slot_socket.h"
+#include "client/client_tcp_transport.h"
+#include "db/db_pipeline.h"
 #include "db/mariadb_pipeline.h"
 #include "db/postgresql_pipeline.h"
-#include "integration/slot_pool.h"
-
+#include "integration/operation_interrupt.h"
 struct st_mysql;
 struct pg_conn;
 
@@ -41,6 +39,14 @@ struct pg_conn;
 // stream and transaction shapes; a driver supplies its connection type, the
 // protocol hooks that talk to its client library, and the state it keeps per
 // connection (session_type) and per pool (state_type).
+
+#include <string>
+
+#include "ruvia/web/db/db.h"
+#include "ruvia/web/db/db_query.h"
+#include "ruvia/web/redis/redis_session.h"
+
+#include "db/db_sql_format.h"
 
 namespace ruvia::detail {
 
@@ -583,3 +589,199 @@ void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[m
 }
 
 }  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Every result shape, so cache-id removal can name each entry of one id.
+inline constexpr std::array db_cache_shapes{
+    db_cache_shape::rows, db_cache_shape::one, db_cache_shape::exists, db_cache_shape::count};
+
+// The key part naming each result shape, indexed by its value. An id-keyed
+// entry stores the caller's id and this tag as separate key parts, so no user
+// id can spell another id's shape.
+inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_shape_tags{
+    "rows", "one", "exists", "count"};
+
+[[nodiscard]] constexpr std::string_view db_cache_shape_tag(db_cache_shape shape) noexcept {
+    return db_cache_shape_tags[static_cast<std::size_t>(shape)];
+}
+
+// The key prefix of one alias's cache entries: everything that decides what a
+// cached result means (namespace, alias, driver, server, database, user and
+// TLS server name) digested into one key part.
+[[nodiscard]] std::string db_cache_prefix(std::string_view name_space, std::string_view alias,
+    const db_config_storage& config);
+
+[[nodiscard]] std::string encode_db_cache_rows(const db_rows& rows);
+[[nodiscard]] db_rows decode_db_cache_rows(std::string bytes_value);
+// Key functions take the immutable prefix already built for this cache owner.
+// Append all result shapes for one id, sharing the id digest.
+void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view prefix, std::string_view id);
+// Keyed by id and shape when the query names an id, otherwise by its SQL and parameters.
+[[nodiscard]] std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
+    std::string_view sql, std::span<const db_value> params, db_driver driver);
+
+// The deferred database statement behind a cached step. On a cache hit it is
+// destroyed without starting; on a miss it runs once on the plan's backend.
+class db_cache_query final {
+public:
+    db_cache_query(const db_query_backend& backend, std::string sql, std::vector<db_value> params) noexcept
+        : backend_(backend),
+          sql_(std::move(sql)),
+          params_(std::move(params)) {}
+
+    db_cache_query(const db_cache_query&) = delete;
+    db_cache_query& operator=(const db_cache_query&) = delete;
+    db_cache_query(db_cache_query&&) noexcept = default;
+    db_cache_query& operator=(db_cache_query&&) = delete;
+
+    // The returned task owns the statement and the options it runs under.
+    [[nodiscard]] task<db_rows> operator()(operation_options options) &&;
+
+private:
+    db_query_backend backend_;
+    std::string sql_;
+    std::vector<db_value> params_;
+};
+
+// One database alias's Redis-backed query-result cache (Redis builds only).
+// Worker-local: concurrent misses of one key on this worker share one fill.
+class db_query_cache_state final {
+public:
+    // `prefix` is the alias's db_cache_prefix().
+    db_query_cache_state(const redis_session& redis, const db_cache_config_storage& config, std::string prefix);
+    ~db_query_cache_state();
+    void close_now() noexcept;
+    [[nodiscard]] std::optional<std::string> key(
+        const db_query& query, const db_statement& statement, db_driver driver);
+    // Serves the step from the cache, or runs `database` and stores its rows.
+    [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::string key,
+        db_cache_query database, operation_options options, operation_deadline deadline);
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] task<void> remove(
+        std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
+    [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options);
+
+private:
+    // One read-through fill in flight: the caller that missed first (the
+    // leader) runs the statement; later misses of the same full key wait for
+    // its encoded result, or for its end without one, and then look again.
+    // Shared, so a waiter still reads it after the leader's frame is gone.
+    struct fill final {
+        explicit fill(std::string_view key)
+            : key_(key) {}
+
+        std::string key_;
+        // Requested once the fill ends, with or without a result.
+        stop_source done_;
+        std::optional<std::string> result_;
+        // A waiter joined, so the leader publishes its result in memory.
+        bool awaited_{false};
+    };
+    using fill_pointer = std::shared_ptr<fill>;
+    class fill_lead;
+
+    void require_open() const;
+    task<db_rows> query(std::string key, std::chrono::milliseconds duration, db_cache_query database,
+        operation_options options, operation_deadline deadline);
+    // Ends the fill if it is still the one listed for its key. Later misses
+    // of that key no longer join it.
+    void unlist_fill(const fill& ended) noexcept;
+    // After remove() or clear(), a fill that started before must not answer
+    // callers that arrive after: they read the database themselves.
+    void unlist_fills(std::span<const std::string> keys) noexcept;
+    void unlist_all_fills() noexcept;
+
+    bool closed_{false};
+    stop_source stop_;
+    const worker_ref& worker_;
+    std::chrono::milliseconds duration_;
+    bool always_enabled_;
+    bool ignore_errors_;
+    // The store's reply limit: a GET of a larger entry fails on every hit, so
+    // such an entry is never written.
+    std::optional<std::size_t> max_entry_reply_bytes_;
+    std::string prefix_;
+    redis_session redis_;
+    std::vector<fill_pointer> fills_;
+};
+
+}  // namespace ruvia::detail
+
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+
+namespace ruvia {
+class redis_session;
+}
+
+namespace ruvia::detail {
+
+class redis_registry;
+struct request_io_metrics;
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state;
+#endif
+
+class db_registry final {
+public:
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        const db_config& default_config);
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        std::span<const db_definition> databases, redis_registry* redis = nullptr);
+#ifdef RUVIA_ENABLE_REDIS
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        const db_config& config,
+        const redis_session& redis, const db_cache_config& policy);
+#endif
+    ~db_registry();
+
+    db_registry(const db_registry&) = delete;
+    db_registry& operator=(const db_registry&) = delete;
+
+    task<void> connect();
+    void close_now() noexcept;
+    [[nodiscard]] bool empty() const noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] db_session get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_session get(
+        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+
+    template <typename driver_type>
+    using pool_owner_ptr_type = std::unique_ptr<db_pool<driver_type>>;
+#if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
+    using pool_owner_type = std::variant<pool_owner_ptr_type<mariadb_driver>, pool_owner_ptr_type<postgresql_driver>>;
+#elif defined(RUVIA_ENABLE_MARIADB)
+    using pool_owner_type = std::variant<pool_owner_ptr_type<mariadb_driver>>;
+#else
+    using pool_owner_type = std::variant<pool_owner_ptr_type<postgresql_driver>>;
+#endif
+
+private:
+    void add(asio::io_context& io_context, const worker_ref& worker, db_config_storage config);
+
+    struct entry_type final {
+        explicit entry_type(pool_owner_type pool) noexcept;
+        pool_owner_type pool_;
+#ifdef RUVIA_ENABLE_REDIS
+        std::unique_ptr<db_query_cache_state> cache_;
+#endif
+    };
+
+#ifdef RUVIA_ENABLE_REDIS
+    void attach_cache(std::size_t index, const worker_ref& worker_value,
+        const redis_session& redis, const db_cache_config_storage& policy,
+        const db_config_storage& config, std::string_view alias);
+#endif
+    [[nodiscard]] db_session session(
+        const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+
+    std::vector<entry_type> entries_;
+    named_capability_index alias_index_;
+#ifdef RUVIA_ENABLE_REDIS
+    mutable ::ruvia::operation_scope cache_scope_;
+#endif
+};
+
+}  // namespace ruvia::detail
+
+#endif

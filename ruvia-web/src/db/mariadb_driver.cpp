@@ -23,9 +23,7 @@
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"
 #include "db/mariadb_pipeline.h"
-#include "db/mariadb_sql.h"
-#include "tls/tls_protocol_policy.h"
-
+#include "http/tls_protocol_policy.h"
 namespace ruvia::detail {
 namespace {
 

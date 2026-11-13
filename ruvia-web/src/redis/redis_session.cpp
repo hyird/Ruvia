@@ -17,12 +17,8 @@
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "integration/request_io_metrics.h"
-#include "redis/redis_client_runtime.h"
+#include "integration/operation_interrupt.h"
 #include "redis/redis_pool.h"
-#include "redis/redis_protocol.h"
-#include "redis/redis_reply_parsers.h"
-
 namespace ruvia::detail {
 
 // Classifies a raw pooled command before it is encoded. Connection-stateful

@@ -21,12 +21,18 @@
 
 #include <asio/io_context.hpp>
 #ifdef _WIN32
+#include <bcrypt.h>
+#include <sddl.h>
+
 #include <asio/windows/stream_handle.hpp>
 #else
+#include <fcntl.h>
+#include <unistd.h>
+
 #include <asio/posix/stream_descriptor.hpp>
 #endif
-
 #include <algorithm>
+#include <cerrno>
 #include <exception>
 #include <memory>
 #include <new>
@@ -40,6 +46,11 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_runtime.h"
+#ifdef __linux__
+#include <sys/eventfd.h>
+#endif
+
+#include <iterator>
 
 namespace ruvia::detail {
 
@@ -201,21 +212,6 @@ private:
 }  // namespace ruvia::detail
 
 #ifndef _WIN32
-
-#include <fcntl.h>
-
-#include <array>
-#include <cerrno>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <system_error>
-#include <utility>
-
-#ifdef __linux__
-#include <sys/eventfd.h>
-#endif
-#include <unistd.h>
 
 namespace ruvia::detail {
 
@@ -381,19 +377,6 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds) {
 #endif
 
 #ifdef _WIN32
-
-#include <bcrypt.h>
-#include <sddl.h>
-
-#include <algorithm>
-#include <array>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <iterator>
-#include <stdexcept>
-#include <utility>
 
 namespace ruvia::detail {
 

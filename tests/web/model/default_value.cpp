@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "ruvia/web/model.h"
-#include "ruvia/web/validation.h"
 
 #include "test_exceptions.h"
 

@@ -25,10 +25,8 @@
 #include "ruvia/http/http_content_coding.h"
 
 #include "http/inline_http_header_views.h"
-#include "http/static_file_variant.h"
-#include "http/static_path_normalization.h"
 #include "http/static_root_index.h"
-#include "server/http_native_file.h"
+#include "server/connection_lifecycle.h"
 // servable file recorded with the metadata a response needs, and lookups after
 // that touch only the index. A request never walks or stats the tree: a
 // file-backed response opens its one indexed entry on the blocking pool and

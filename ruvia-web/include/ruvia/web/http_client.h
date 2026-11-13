@@ -24,7 +24,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/http_tunnel.h"
-#include "ruvia/web/validation.h"
+#include "ruvia/web/model.h"
 #include "ruvia/web/websocket.h"
 
 namespace ruvia {

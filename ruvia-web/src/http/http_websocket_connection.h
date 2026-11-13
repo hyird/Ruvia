@@ -38,11 +38,8 @@
 #include "ruvia/web/websocket.h"
 
 #include "context/context_access.h"
-#include "server/connection_scanner.h"
+#include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
-#include "server/inbound_buffer_budget.h"
-#include "server/inbound_transport_error.h"
-
 namespace ruvia::detail {
 
 // The one lifecycle check of server routes and clients.
