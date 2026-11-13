@@ -110,8 +110,12 @@ public:
     [[nodiscard]] task<void> migrate_http3(std::pmr::string local_address, std::uint16_t port,
         operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
-    [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(http_client_response_state& state);
-    [[nodiscard]] task<bool> send_http3_datagram(http_client_response_state& state, std::string_view payload);
+    // `operation` follows the client's per-operation contract: an interrupted
+    // read keeps queued input, an interrupted send abandons the tunnel.
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(
+        http_client_response_state& state, operation_options operation);
+    [[nodiscard]] task<bool> send_http3_datagram(
+        http_client_response_state& state, std::string_view payload, operation_options operation);
 #endif
     [[nodiscard]] http_client_response_memory_domain& response_memory() noexcept {
         return *response_memory_;

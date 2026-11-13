@@ -402,6 +402,7 @@ public:
     RUVIA_GET("/fluent/host-cancel", host_cancel);
     RUVIA_GET("/fluent/hold", hold);
     RUVIA_GET("/fluent/pipe", pipe);
+    RUVIA_GET("/fluent/pipe-bounded", pipe_bounded);
     RUVIA_GET_WS("/fluent/websocket", websocket_echo,
         (ruvia::websocket_route_config{.subprotocols_ = {"echo.v1"}, .require_subprotocol_ = true, .deflate_ = {.enabled_ = true}}));
     RUVIA_ROUTES_END
@@ -506,6 +507,33 @@ public:
         if (!moved.stream().complete()) {
             throw std::runtime_error("response pipe did not consume the moved source");
         }
+    }
+
+    // An already-stopped token forwards nothing, so the bounded forward that
+    // follows still commits the whole response.
+    ruvia::task<void> pipe_bounded(ruvia::context& c) {
+        auto response = co_await c.client("source").get("/fluent/stream-source").send();
+        ruvia::stop_source stop;
+        stop.request_stop();
+        bool cancelled = false;
+        try {
+            co_await response.pipe_to(c, {.stop_token_ = stop.token()});
+        } catch (const ruvia::http_client_error& error) {
+            cancelled = error.code() == ruvia::http_client_error::code_type::cancelled;
+        }
+        if (!cancelled || response.stream().complete()) {
+            throw std::runtime_error("stopped response pipe did not fail before forwarding");
+        }
+        bool rejected = false;
+        try {
+            (void)response.pipe_to(c, {.timeout_ = std::chrono::milliseconds(0)});
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        if (!rejected) {
+            throw std::runtime_error("response pipe accepted a non-positive timeout");
+        }
+        co_await response.pipe_to(c, {.timeout_ = std::chrono::seconds(5)});
     }
 
     ruvia::task<void> websocket_echo(ruvia::context& c) {
@@ -672,6 +700,12 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 const auto contents = co_await piped.text();
                 EXPECT_EQ(contents.text(), "firstsecond");
                 EXPECT_TRUE(piped.trailer("x-finished") == "yes");
+                auto bounded = co_await origin.get("/fluent/pipe-bounded").send();
+                EXPECT_TRUE(bounded.status() == ruvia::http_status::created);
+                EXPECT_TRUE(bounded.header("x-stream-source") == "retained");
+                const auto bounded_contents = co_await bounded.text();
+                EXPECT_EQ(bounded_contents.text(), "firstsecond");
+                EXPECT_TRUE(bounded.trailer("x-finished") == "yes");
             }
 
             auto json_request = [&] {

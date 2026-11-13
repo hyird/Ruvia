@@ -1663,8 +1663,10 @@ http_client_pool::alternative_service* http_client_pool::find_alternative_servic
     return nullptr;
 }
 
-task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input(http_client_response_state& state) {
+task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input(
+    http_client_response_state& state, operation_options operation) {
     auto lane = claim_operation_lane(state.body_operation_active_, "HTTP/3 tunnel input is already active");
+    const http_client_operation_interruption interruption(state, http_client_operation_lane::read, operation);
     for (;;) {
         state.release_consumed_body_prefix();
         if (state.offset_ < state.buffered_.size()) {
@@ -1691,11 +1693,13 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
         if (state.receive_complete()) {
             co_return std::nullopt;
         }
+        state.throw_if_read_interrupted();
         co_await state.data_signal_.wait();
     }
 }
 
-task<bool> http_client_pool::send_http3_datagram(http_client_response_state& state, std::string_view payload) {
+task<bool> http_client_pool::send_http3_datagram(
+    http_client_response_state& state, std::string_view payload, operation_options operation) {
     auto* const connection_value = state.tunnel_ && state.transport_ == http_client_response_transport::http3
                                        ? find_http3_connection(state)
                                        : nullptr;
@@ -1703,7 +1707,15 @@ task<bool> http_client_pool::send_http3_datagram(http_client_response_state& sta
         throw http_client_error(http_client_error::code_type::closing, "HTTP/3 tunnel output closed");
     }
     auto lane = claim_operation_lane(state.tunnel_->output_.operation_active_, "HTTP/3 tunnel output is already active");
-    co_return co_await connection_value->send_datagram(state, std::as_bytes(std::span(payload.data(), payload.size())));
+    const http_client_operation_interruption interruption(state, http_client_operation_lane::output, operation);
+    try {
+        const bool sent = co_await connection_value->send_datagram(state, std::as_bytes(std::span(payload.data(), payload.size())));
+        state.throw_if_output_interrupted();
+        co_return sent;
+    } catch (...) {
+        state.throw_if_output_interrupted();
+        throw;
+    }
 }
 #endif
 

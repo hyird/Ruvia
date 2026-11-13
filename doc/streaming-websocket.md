@@ -360,6 +360,7 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 | `ruvia::http_udp_tunnel` | `read(operation = {})`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
 
 - **逐次读取中断**：`read()` 的 `operation`（`operation_options`）超时或停止只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`）；未消费输入与半个 Capsule 保留，可继续读取。
+- **客户端适配器**：由 `http_client_tunnel` 转成的 Capsule / Datagram / UDP 门面语义相同，中断改抛 `http_client_error`（`timeout` / `cancelled`）。
 - **逐次输出中断**：`write()`、`send()`、`finish()` 的超时或停止中止隧道（部分写出无法撤回）并抛同样的异常；令牌在启动前已停止则不发出任何字节、不中止隧道。
 - **时限叠加**：一次 Capsule / Datagram 调用内的多次传输读写共用该调用的截止期；服务器写超时与隧道排空时限继续生效；非正超时抛 `std::invalid_argument`。
 

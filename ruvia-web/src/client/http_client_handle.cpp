@@ -278,6 +278,27 @@ void detail::http_client_response_state::throw_if_read_interrupted() const {
     }
 }
 
+operation_options detail::http_client_response_state::downstream_step(const operation_steps& steps) const {
+    auto step = steps.try_next();
+    if (!step.has_value()) {
+        throw_interrupted(*this, operation_interrupt_cause::timed_out, "HTTP client read timed out", "HTTP client read cancelled");
+    }
+    return std::move(*step);
+}
+
+void detail::http_client_response_state::rethrow_downstream_failure(const operation_steps& steps) const {
+    try {
+        throw;
+    } catch (const std::system_error& error) {
+        if (steps.interrupted(error)) {
+            throw_interrupted(*this,
+                error.code() == std::errc::timed_out ? operation_interrupt_cause::timed_out : operation_interrupt_cause::cancelled,
+                "HTTP client read timed out", "HTTP client read cancelled");
+        }
+        throw;
+    }
+}
+
 void detail::http_client_response_state::throw_if_output_interrupted() const {
     if (output_operation_ != nullptr && output_operation_->interrupted()) {
         throw_interrupted(*this, *output_operation_->cause(), "HTTP client write timed out", "HTTP client write cancelled");
@@ -402,6 +423,7 @@ template <typename view>
 task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail::http_client_response_state::consume_body(operation_options operation, response_stream_writer* output) {
     auto& state_value = *this;
     auto activity = claim_operation_lane(state_value.body_operation_active_, "HTTP client response body operation is already active");
+    [[maybe_unused]] const operation_steps steps(operation);
     const http_client_operation_interruption interruption(state_value, http_client_operation_lane::read, operation);
     for (;;) {
         // A forward is bounded as a whole: its bound also ends it between
@@ -435,7 +457,11 @@ task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> detail
         const auto count = std::min(response_body_read_chunk_bytes, state_value.buffered_.size() - state_value.offset_);
         const auto chunk = std::string_view(state_value.buffered_).substr(state_value.offset_, count);
         if constexpr (std::is_void_v<view>) {
-            co_await output->write(std::as_bytes(std::span(chunk.data(), chunk.size())));
+            try {
+                co_await output->write(std::as_bytes(std::span(chunk.data(), chunk.size())), state_value.downstream_step(steps));
+            } catch (...) {
+                state_value.rethrow_downstream_failure(steps);
+            }
             state_value.offset_ += count;
         } else {
             state_value.offset_ += count;

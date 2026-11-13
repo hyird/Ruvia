@@ -171,19 +171,34 @@ public:
         : deadline_(operation.timeout_),
           stop_(std::move(operation.stop_token_)) {}
 
-    // Throws std::system_error (timed_out) once the deadline has passed.
-    [[nodiscard]] operation_options next(const char* operation_name) const {
+    // The time left and the same stop token for the next step; std::nullopt
+    // once the deadline has passed.
+    [[nodiscard]] std::optional<operation_options> try_next() const {
         const auto remaining = deadline_.remaining();
         if (remaining.has_value() && remaining->value().count() <= 0) {
+            return std::nullopt;
+        }
+        return operation_options{.timeout_ = remaining, .stop_token_ = stop_};
+    }
+
+    // Throws std::system_error (timed_out) once the deadline has passed.
+    [[nodiscard]] operation_options next(const char* operation_name) const {
+        auto step = try_next();
+        if (!step.has_value()) {
             operation_interrupt::throw_cause(operation_interrupt_cause::timed_out, operation_name);
         }
-        return {.timeout_ = remaining, .stop_token_ = stop_};
+        return std::move(*step);
+    }
+
+    // Whether this operation's own deadline or stop token accounts for `cause`.
+    [[nodiscard]] bool interrupted_by(operation_interrupt_cause cause) const noexcept {
+        return cause == operation_interrupt_cause::timed_out ? deadline_.expired() : stop_.stop_requested();
     }
 
     // Whether `error` is a step interrupted by this operation's deadline or stop token.
     [[nodiscard]] bool interrupted(const std::system_error& error) const noexcept {
-        return (error.code() == std::errc::timed_out && deadline_.expired()) ||
-               (error.code() == std::errc::operation_canceled && stop_.stop_requested());
+        return (error.code() == std::errc::timed_out && interrupted_by(operation_interrupt_cause::timed_out)) ||
+               (error.code() == std::errc::operation_canceled && interrupted_by(operation_interrupt_cause::cancelled));
     }
 
 private:

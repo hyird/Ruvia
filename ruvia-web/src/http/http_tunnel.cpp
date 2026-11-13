@@ -146,17 +146,53 @@ public:
         }
         return result_value.capsule_complete_;
     }
+    // Interruptions use the tunnel's error family: std::system_error over a
+    // server tunnel, http_client_error over a client tunnel.
+    [[noreturn]] void throw_interrupted(operation_interrupt_cause cause, const char* operation_name) const {
+        if (client_) {
+            throw http_client_error(cause == operation_interrupt_cause::timed_out ? http_client_error::code_type::timeout
+                                                                                  : http_client_error::code_type::cancelled,
+                operation_name);
+        }
+        operation_interrupt::throw_cause(cause, operation_name);
+    }
+    // A stop requested before an operation starts leaves the stream untouched.
+    void throw_if_stopped_before_start(const operation_options& operation, const char* operation_name) const {
+        if (operation.stop_token_.stop_requested()) {
+            throw_interrupted(operation_interrupt_cause::cancelled, operation_name);
+        }
+    }
+    [[nodiscard]] operation_options next_step(const operation_steps& steps, const char* operation_name) const {
+        auto step = steps.try_next();
+        if (!step.has_value()) {
+            throw_interrupted(operation_interrupt_cause::timed_out, operation_name);
+        }
+        return std::move(*step);
+    }
+    // Whether the exception being handled is a step interrupted by `steps`.
+    [[nodiscard]] static bool interrupted(const operation_steps& steps) noexcept {
+        try {
+            throw;
+        } catch (const std::system_error& error) {
+            return steps.interrupted(error);
+        } catch (const http_client_error& error) {
+            return (error.code() == http_client_error::code_type::timeout && steps.interrupted_by(operation_interrupt_cause::timed_out)) ||
+                   (error.code() == http_client_error::code_type::cancelled && steps.interrupted_by(operation_interrupt_cause::cancelled));
+        } catch (...) {
+            return false;
+        }
+    }
     [[nodiscard]] task<bool> read_input(bool datagrams, const operation_steps& steps) {
         clear_input();
         if (datagrams && has_native_transport()) {
             std::optional<http_tunnel_input> chunk;
             if (server_) {
-                chunk = co_await server_->read_datagram_raw(steps.next("capsule read"));
+                chunk = co_await server_->read_datagram_raw(next_step(steps, "capsule read"));
             }
 #ifdef RUVIA_ENABLE_HTTP3
             else {
                 auto& state = *client_->response_.state_;
-                chunk = co_await state.pool_->read_http3_tunnel_input(state);
+                chunk = co_await state.pool_->read_http3_tunnel_input(state, next_step(steps, "capsule read"));
             }
 #endif
             if (!chunk) {
@@ -168,14 +204,14 @@ public:
             co_return true;
         }
         if (server_) {
-            auto chunk = co_await server_->read_raw(steps.next("capsule read"));
+            auto chunk = co_await server_->read_raw(next_step(steps, "capsule read"));
             if (!chunk) {
                 co_return false;
             }
             owned_input_.emplace(std::move(*chunk));
             input_ = *owned_input_;
         } else {
-            auto chunk = co_await client_->read();
+            auto chunk = co_await client_->read(next_step(steps, "capsule read"));
             if (!chunk) {
                 co_return false;
             }
@@ -195,29 +231,29 @@ public:
     }
     [[nodiscard]] task<bool> send_datagram(std::string_view bytes, const operation_steps& steps) {
         if (server_) {
-            co_return co_await server_->write_datagram_raw(bytes, steps.next("capsule write"));
+            co_return co_await server_->write_datagram_raw(bytes, next_step(steps, "capsule write"));
         }
 #ifdef RUVIA_ENABLE_HTTP3
         auto& state = *client_->response_.state_;
-        co_return co_await state.pool_->send_http3_datagram(state, bytes);
+        co_return co_await state.pool_->send_http3_datagram(state, bytes, next_step(steps, "capsule write"));
 #else
         co_return false;
 #endif
     }
     [[nodiscard]] task<void> send_bytes(std::pmr::string&& bytes_value, const operation_steps& steps) {
         if (server_ != nullptr) {
-            co_await server_->write_raw(std::move(bytes_value), steps.next("capsule write"));
+            co_await server_->write_raw(std::move(bytes_value), next_step(steps, "capsule write"));
             co_return;
         }
         const auto limit = client_->response_.state_->tunnel_->config_.max_chunk_bytes_;
         if (bytes_value.size() <= limit) {
-            co_await client_->write_owned(std::move(bytes_value));
+            co_await client_->write_owned(std::move(bytes_value), next_step(steps, "capsule write"));
             co_return;
         }
         std::string_view remaining = bytes_value;
         while (!remaining.empty()) {
             const auto chunk = remaining.substr(0, limit);
-            co_await client_->write(chunk);
+            co_await client_->write(chunk, next_step(steps, "capsule write"));
             remaining.remove_prefix(chunk.size());
         }
     }
@@ -270,12 +306,6 @@ struct capsule_write_input final {
     bool datagram_{};
     operation_options operation_;
 };
-// A stop requested before an operation starts leaves the stream untouched.
-inline void throw_if_stopped_before_start(const operation_options& operation, const char* operation_name) {
-    if (operation.stop_token_.stop_requested()) {
-        operation_interrupt::throw_cause(operation_interrupt_cause::cancelled, operation_name);
-    }
-}
 // Failure aborts the stream, except an interrupted read, which keeps the
 // partly received capsule for the next read.
 class running_capsule_operation final {
@@ -530,7 +560,7 @@ task<std::optional<http_capsule>> http_capsule_stream::read(operation_options op
 }
 task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsule_state_pin pin, operation_options operation) {
     auto& state_value = pin.state();
-    detail::throw_if_stopped_before_start(operation, "capsule read");
+    state_value.throw_if_stopped_before_start(operation, "capsule read");
     const detail::operation_steps steps(std::move(operation));
     detail::running_capsule_operation running(state_value, false);
     if (state_value.receive_ended_) {
@@ -551,8 +581,8 @@ task<std::optional<http_capsule>> http_capsule_stream::read_owned(detail::capsul
                 co_return std::nullopt;
             }
         }
-    } catch (const std::system_error& error) {
-        if (steps.interrupted(error)) {
+    } catch (...) {
+        if (detail::http_capsule_stream_state::interrupted(steps)) {
             running.keep_stream();
         }
         throw;
@@ -582,7 +612,7 @@ task<void> http_capsule_stream::write_frame(
     std::string_view prefix, std::string_view payload_value, bool datagram, operation_options operation) {
     const auto write = +[](detail::capsule_write_input input) -> task<void> {
         auto& state_value = input.pin_.state();
-        detail::throw_if_stopped_before_start(input.operation_, "capsule write");
+        state_value.throw_if_stopped_before_start(input.operation_, "capsule write");
         const detail::operation_steps steps(std::move(input.operation_));
         detail::running_capsule_operation running(state_value, true);
         if (state_value.send_ended_) {
@@ -621,13 +651,13 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
     validate_operation_options(operation);
     const auto finish_value = +[](detail::capsule_state_pin pin, operation_options finish_operation) -> task<void> {
         auto& state_value = pin.state();
-        detail::throw_if_stopped_before_start(finish_operation, "capsule finish");
+        state_value.throw_if_stopped_before_start(finish_operation, "capsule finish");
         detail::running_capsule_operation running(state_value, true);
         if (!state_value.send_ended_) {
             if (state_value.server_) {
                 co_await state_value.server_->finish(std::move(finish_operation));
             } else {
-                co_await state_value.client_->finish();
+                co_await state_value.client_->finish(std::move(finish_operation));
             }
             state_value.send_ended_ = true;
         }
@@ -666,7 +696,7 @@ task<std::optional<http_datagram>> http_datagram_stream::read(operation_options 
 task<std::optional<http_datagram>> http_datagram_stream::read_owned(
     detail::capsule_state_pin pin, bool udp, operation_options operation) {
     auto& state_value = pin.state();
-    detail::throw_if_stopped_before_start(operation, "HTTP Datagram read");
+    state_value.throw_if_stopped_before_start(operation, "HTTP Datagram read");
     const detail::operation_steps steps(std::move(operation));
     detail::running_capsule_operation running(state_value, false);
     try {
@@ -727,8 +757,8 @@ task<std::optional<http_datagram>> http_datagram_stream::read_owned(
             }
             co_return http_datagram(http_capsule(state_value, http_datagram_capsule_type, std::move(result_value)), offset);
         }
-    } catch (const std::system_error& error) {
-        if (steps.interrupted(error)) {
+    } catch (...) {
+        if (detail::http_capsule_stream_state::interrupted(steps)) {
             running.keep_stream();
         }
         throw;

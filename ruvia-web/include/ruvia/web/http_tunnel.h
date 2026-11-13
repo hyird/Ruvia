@@ -87,9 +87,10 @@ private:
 // operations may coexist. One read and one output operation may run concurrently.
 // `operation` bounds a whole call: a timeout or stop ends only that read,
 // keeping a partly received capsule for the next one, and aborts the stream
-// during an output operation. Over an http_tunnel either throws
-// std::system_error (timed_out or operation_canceled); a stop requested
-// before an output operation starts sends nothing.
+// during an output operation. Either throws std::system_error (timed_out or
+// operation_canceled) over an http_tunnel, http_client_error (timeout or
+// cancelled) over an http_client_tunnel; a stop requested before an output
+// operation starts sends nothing.
 class http_capsule_stream final {
 public:
     http_capsule_stream(const http_capsule_stream&) = delete;

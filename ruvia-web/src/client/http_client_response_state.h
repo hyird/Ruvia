@@ -338,6 +338,12 @@ public:
     }
     void throw_if_read_interrupted() const;
     void throw_if_output_interrupted() const;
+    // A forward's downstream response_stream_writer step runs with the time
+    // left in `steps`; http_client_error(timeout) once none is left.
+    [[nodiscard]] operation_options downstream_step(const operation_steps& steps) const;
+    // Rethrows the exception being handled, reporting a downstream step that
+    // `steps` interrupted as this client's http_client_error.
+    [[noreturn]] void rethrow_downstream_failure(const operation_steps& steps) const;
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
     [[nodiscard]] task<void> dispatch_informational(const operation_timeout& timeout);

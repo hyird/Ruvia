@@ -266,13 +266,15 @@ task<void> pipe_response(http_client_response response, detail::http_client_resp
     if (operation.stop_token_.stop_requested()) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP client operation cancelled");
     }
-    const operation_timeout deadline(operation.timeout_);
-    if (co_await output.commit() == stream_commit_result::body) {
-        const auto remaining = deadline.remaining();
-        if (remaining && remaining->value() <= std::chrono::milliseconds::zero()) {
-            throw http_client_error(http_client_error::code_type::timeout, "HTTP client read timed out");
-        }
-        co_await state.consume_body<void>({.timeout_ = remaining, .stop_token_ = operation.stop_token_}, &output);
+    const detail::operation_steps steps(std::move(operation));
+    stream_commit_result committed{};
+    try {
+        committed = co_await output.commit(state.downstream_step(steps));
+    } catch (...) {
+        state.rethrow_downstream_failure(steps);
+    }
+    if (committed == stream_commit_result::body) {
+        co_await state.consume_body<void>(state.downstream_step(steps), &output);
         std::pmr::vector<http_header_view> trailers(pmr_resource_or_default(resource));
         trailers.reserve(response.trailers().size());
         for (const auto& field : response.trailers()) {
@@ -280,7 +282,11 @@ task<void> pipe_response(http_client_response response, detail::http_client_resp
                 trailers.emplace_back(field.name(), field.value());
             }
         }
-        co_await output.end(trailers);
+        try {
+            co_await output.end(trailers, state.downstream_step(steps));
+        } catch (...) {
+            state.rethrow_downstream_failure(steps);
+        }
     }
 }
 
