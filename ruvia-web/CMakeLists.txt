@@ -3,17 +3,7 @@ ruvia_collect_cpp_sources(ruvia_web_sources src
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(FILTER ruvia_web_sources EXCLUDE
-        REGEX "/src/(db_pool|mariadb_driver|postgresql_driver)\\.cpp$")
-else()
-    if(NOT RUVIA_ENABLE_MARIADB)
-        list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/mariadb_driver\\.cpp$")
-    endif()
-    if(NOT RUVIA_ENABLE_POSTGRESQL)
-        list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/postgresql_driver\\.cpp$")
-    endif()
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db_pool\\.cpp$")
 endif()
 # The database query-result cache stores rows in Redis.
 if(NOT RUVIA_ENABLE_REDIS)

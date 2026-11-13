@@ -10,17 +10,23 @@
 
 #include <array>
 #include <chrono>
+#include <cstddef>
 #include <exception>
 #include <iostream>
 #include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <variant>
 
+#include "ruvia/core/event_loop.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/http_client.h"
 
 #include "backend_config.h"
 namespace {
@@ -154,4 +160,239 @@ int main() {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
+}
+
+// Standalone HTTP/1 and HTTP/2 client: streaming uploads, trailers, body readers,
+// interim heads, redirects, push, advertisements, and retained result budgets.
+// First run ruvia_example_http_features, then this executable with 1 or 2.
+// RUVIA_CLIENT_TLS=true selects TLS on localhost:8444 instead of HTTP on port 8093.
+// Set RUVIA_TLS_CA to trust the example server certificate.
+
+namespace http_client_advanced_example {
+
+ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
+    std::string target("/features/redirect");
+    for (unsigned hop = 0; hop != 4; ++hop) {
+        // Disable the fluent client's automatic redirects to inspect each hop.
+        auto response = co_await origin.get(target).redirects(0).send();
+        if (!ruvia::is_http_redirect_status(response.status())) {
+            auto bytes_value = co_await response.stream().read_all();
+            std::cout << "redirected bytes=" << bytes_value.bytes().size() << '\n';
+            co_return;
+        }
+        const auto location = response.header("location");
+        if (!location) {
+            throw std::runtime_error("redirect has no Location");
+        }
+        auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(),
+            {.current_target_ = target, .location_ = *location});
+        const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
+        if (!resolved || resolved->cross_origin()) {
+            // Origins are fixed at startup. Following another origin requires
+            // a preconfigured client and stripping origin-specific credentials.
+            throw std::runtime_error("this example only follows same-origin redirects");
+        }
+        target.assign(resolved->target());
+        // Drain the old response before reusing its HTTP/1 connection. Abandoning
+        // a partially consumed HTTP/1 response closes that connection instead.
+        while (co_await response.stream().read()) {
+        }
+    }
+    throw std::runtime_error("redirect hop limit exceeded");
+}
+
+ruvia::task<ruvia::http_client_response_bytes> exercise(
+    ruvia::event_loop loop, ruvia::http_client_config config) {
+    // Construction performs no I/O. A client owns one fixed origin and binds
+    // to this loop; its first request lazily establishes the connection.
+    ruvia::http_client client(loop, config,
+        {.result_budget_ = {.max_retained_bytes_ = 1024 * 1024, .max_in_flight_bytes_ = 4 * 1024 * 1024}});
+    std::optional<ruvia::http_client_response_bytes> retained;
+    std::exception_ptr failure;
+    try {
+        const auto origin = client.client();
+        auto bounded = client.client().with_options({.timeout_ = std::chrono::seconds(5)});
+        {
+            const std::array<ruvia::http_header_view, 1> headers{{
+                {"content-type", "application/octet-stream"},
+            }};
+            // With no content_length, HTTP/1 uses chunked transfer coding;
+            // HTTP/2 carries the same body and trailers in DATA and HEADERS.
+            // A 100-continue expectation lets a peer reject the head first.
+            std::cout << "upload\n";
+            auto exchange_value = co_await bounded.post("/features/upload").headers(headers).upload({.expectation_ = ruvia::http_client_request_expectation::continue_value, .max_chunk_bytes_ = 1024});
+            co_await exchange_value.body().write("hello ");
+            co_await exchange_value.body().write("world!");
+            const std::array<ruvia::http_header_view, 1> trailers{{{"X-Upload-Complete", "yes"}}};
+            co_await exchange_value.body().end(trailers);
+            auto response = co_await exchange_value.response();
+            while (const auto text = co_await response.stream().text()) {
+                // Each view expires at the next body operation. Do not retain
+                // it or assume an entire UTF-8 character is in one chunk.
+                std::cout << *text;
+            }
+        }
+        {
+            std::cout << "informational response and push\n";
+            auto response = co_await bounded.get("/features/info").send();
+            std::cout << "interim heads=" << response.informational_responses().size() << '\n';
+            if (response.protocol_version() == ruvia::http_protocol_version::http2) {
+                response.reprioritize({.urgency_ = 1, .incremental_ = true});
+            }
+            while (co_await response.stream().read()) {
+            }
+            while (auto push = origin.next_push()) {
+                std::cout << "push=" << push->request().path_ << '\n';
+                auto pushed = co_await push->response();
+                auto content = co_await pushed.stream().read_all(4096);
+                std::cout << "pushed bytes=" << content.bytes().size() << '\n';
+            }
+            while (auto advertisement = origin.next_advertisement()) {
+                std::cout << "advertisement: origins=" << (advertisement->origins() != nullptr)
+                          << " alt-svc=" << (advertisement->alternative_service() != nullptr) << '\n';
+            }
+        }
+        co_await follow_redirect(origin);
+        {
+            auto response = co_await bounded.get("/features/safe").send();
+            while (co_await response.stream().read()) {
+            }
+        }
+        {
+            auto response = co_await bounded.get("/features/download").send();
+            // read(), text(), read_all(), and pipe_to() consume ONE linear body
+            // reader. read_all() collects only its unread remainder, with both
+            // a per-call limit and a total retained-result budget.
+            retained.emplace(co_await response.stream().read_all(4096));
+            if (response.trailer("X-Example-Complete") != "yes") {
+                throw std::runtime_error("missing response trailer");
+            }
+        }
+        std::cout << "completed requests=" << origin.stats().completed_requests_ << '\n';
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    // Response metadata, pushes, advertisements, and borrowed chunks must be
+    // destroyed on this loop. http_client_response_bytes is the owned exception:
+    // it can survive the client and the loop and can cross threads.
+    co_await client.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+    co_return std::move(*retained);
+}
+
+}  // namespace http_client_advanced_example
+
+[[maybe_unused]] int run_http_client_advanced_main(int argc, char** argv) {
+    using namespace http_client_advanced_example;
+    try {
+        std::cout << std::unitbuf;
+        const std::string_view protocol = argc > 1 ? argv[1] : "1";
+        if (protocol != "1" && protocol != "2") {
+            throw std::invalid_argument("usage: ruvia_example_http_client_advanced [1|2]");
+        }
+        const example::environment env;
+        const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
+        ruvia::http_client_config config{
+            .base_url_ = tls ? "https://localhost:8444" : "http://localhost:8093",
+            .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false}
+                                         : ruvia::http_client_versions{.http2_ = false},
+            .advertisements_ = {.receive_origins_ = tls, .receive_alternative_services_ = tls},
+            .push_ = {.enabled_ = true},
+            .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
+            .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
+        };
+        // The loop looks "localhost" up on this pool instead of blocking in
+        // getaddrinfo; declared first, it outlives the loops.
+        ruvia::blocking_pool host_lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
+        loops.start();
+        auto done = loops.loop(0).start(exercise(loops.loop(0), std::move(config)));
+        auto body = std::move(done).get();
+        loops.stop();
+        loops.join();
+        const auto bytes_value = body.bytes();
+        std::cout.write(reinterpret_cast<const char*>(bytes_value.data()), static_cast<std::streamsize>(bytes_value.size()));
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// Owning WebSocket session from the fluent HTTP client over HTTP/1 or HTTP/2.
+// First run ruvia_example_http_features, then this executable with 1 or 2.
+// Connects to localhost:8093; RUVIA_CLIENT_TLS=true selects TLS on port 8444.
+// Set RUVIA_TLS_CA to trust the local CA. Expected output: text=hello,
+// binary bytes=3, then a clean close.
+
+namespace websocket_client_example {
+
+ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::http_client_config config) {
+    ruvia::http_client client(loop, config);
+    std::exception_ptr failure;
+    try {
+        auto peer = co_await client.client().websocket("/features/ws").connect();
+        // The owning session and each received payload stay on this owner loop.
+        co_await peer.text("hello", {}, {.timeout_ = std::chrono::seconds(5)});
+        auto text = co_await peer.read({.timeout_ = std::chrono::seconds(5)});
+        if (!text || !text->text() || text->payload() != "hello") {
+            throw std::runtime_error("unexpected text echo");
+        }
+        std::cout << "text=" << text->payload() << '\n';
+        co_await peer.binary(std::as_bytes(std::span(std::string_view("\0\1\2", 3))));
+        auto binary = co_await peer.read();
+        if (!binary || !binary->binary() || binary->payload() != std::string_view("\0\1\2", 3)) {
+            throw std::runtime_error("unexpected binary echo");
+        }
+        std::cout << "binary bytes=" << binary->payload().size() << '\n';
+        // Control frames are handled by the client driver. close() claims only
+        // the write lane: a read still pending here would end with nullopt.
+        co_await peer.ping("alive");
+        co_await peer.close({.code_ = ruvia::websocket_close_status::normal_closure, .reason_ = "example complete"});
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    // Cancellation/abort only requests shutdown. Always await teardown on
+    // both success and failure before destroying the client or retiring its loop.
+    co_await client.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+}  // namespace websocket_client_example
+
+[[maybe_unused]] int run_websocket_client_main(int argc, char** argv) {
+    using namespace websocket_client_example;
+    try {
+        const std::string_view protocol = argc > 1 ? argv[1] : "1";
+        if (protocol != "1" && protocol != "2") {
+            throw std::invalid_argument("usage: ruvia_example_websocket_client [1|2]");
+        }
+        const example::environment env;
+        const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
+        ruvia::http_client_config config{
+            .base_url_ = tls ? "https://localhost:8444" : "http://localhost:8093",
+            .read_timeout_ = std::chrono::seconds(5),
+            .request_timeout_ = std::chrono::seconds(5),
+            .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false}
+                                         : ruvia::http_client_versions{.http2_ = false},
+            .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
+        };
+        // The loop looks "localhost" up on this pool instead of blocking in
+        // getaddrinfo; declared first, it outlives the loops.
+        ruvia::blocking_pool host_lookups({.thread_count_ = 1});
+        ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
+        loops.start();
+        auto done = loops.loop(0).start(exchange(loops.loop(0), std::move(config)));
+        std::move(done).get();
+        loops.stop();
+        loops.join();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
 }

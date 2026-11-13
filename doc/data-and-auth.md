@@ -227,7 +227,7 @@ auto report = co_await migrator.migrate(migrations);
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
 头文件：`"ruvia/web/db.h"`。
-参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
+参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 
@@ -380,7 +380,7 @@ auto users = ruvia::decode_db_rows<user_projection>(raw);
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
 
 聚合头文件：`"ruvia/web/redis.h"`。
-参考示例：[examples/web/redis.cpp](../examples/web/redis.cpp)、[examples/web/redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)、[examples/web/redis_streams.cpp](../examples/web/redis_streams.cpp)、[examples/web/redis_orm.cpp](../examples/web/redis_orm.cpp)。
+参考示例：[examples/web/redis.cpp](../examples/web/redis.cpp)。
 
 ### 4.1 连接池配置 `ruvia::redis_config`
 

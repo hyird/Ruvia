@@ -9,11 +9,14 @@
 // See backend_tls.h for RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
 // requires the explicit setting RUVIA_REDIS_TLS=false.
 
+#include "ruvia/web/redis.h"
+
 #include <array>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <future>
 #include <iostream>
 #include <optional>
 #include <stdexcept>
@@ -25,9 +28,9 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/redis.h"
 
 #include "backend_config.h"
-
 namespace {
 
 void append_bool(std::string& output, bool value) {
@@ -453,4 +456,331 @@ int main() {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
+}
+
+// HASH CRUD works with ordinary Redis. Run once with --create-index against
+// Redis Search before using GET /users. Index creation is explicit and errors
+// if the index already exists; this example never drops existing data/indexes.
+// Build with RUVIA_ENABLE_REDIS=ON; configure RUVIA_REDIS_HOST/PORT/USER/PASSWORD.
+// Run on port 8091. POST {"id":"1","name":"Ada","age":30} as JSON to
+// /users, then GET /users/1. GET /users performs the indexed adult search.
+// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+
+RUVIA_REDIS_ENTITY(cached_user, "users",
+    RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(name, ruvia::string),
+    RUVIA_REDIS_COLUMN(age, std::uint32_t));
+
+const ruvia::redis_repository_config user_redis_config{
+    .prefix_ = "ruvia:example:users",
+    .indexes_ = {
+        {.column_ = "name", .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true},
+        {.column_ = "age", .kind_ = ruvia::redis_index_kind::numeric},
+    },
+};
+RUVIA_MODEL(create_cached_user,
+    RUVIA_REQUIRED_FIELD(id, ruvia::string, RUVIA_MIN(1, "id is required"),
+        RUVIA_MAX(64, "id is too long")),
+    RUVIA_REQUIRED_FIELD(name, ruvia::string, RUVIA_MIN(1, "name is required"),
+        RUVIA_MAX(120, "name is too long")),
+    RUVIA_REQUIRED_FIELD(age, ruvia::uint32, RUVIA_MAX(130, "age is too large")));
+
+RUVIA_MODEL(cached_user_response,
+    RUVIA_REQUIRED_FIELD(id, ruvia::string),
+    RUVIA_REQUIRED_FIELD(name, ruvia::string),
+    RUVIA_REQUIRED_FIELD(age, ruvia::uint32));
+
+RUVIA_MODEL(cached_users_response,
+    RUVIA_REQUIRED_FIELD(users, ruvia::array<cached_user_response>));
+
+class cached_user_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/users")
+    RUVIA_ROUTES_BEGIN(cached_user_controller)
+    RUVIA_POST("", create, ruvia::json_body<create_cached_user>);
+    RUVIA_GET("", adults);
+    RUVIA_GET("/:id", find);
+    RUVIA_ROUTES_END
+
+private:
+    static void fill(cached_user_response& response, const cached_user& user_value) {
+        response.set<"id">(user_value.get<"id">().view());
+        response.set<"name">(user_value.get<"name">().view());
+        response.set<"age">(ruvia::uint32{user_value.get<"age">()});
+    }
+    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
+        const auto& request = c.req().validated<create_cached_user>();
+        cached_user user_value;
+        user_value.set<"id">(request.get<"id">().view());
+        user_value.set<"name">(request.get<"name">().view());
+        user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
+        auto users = c.redis().repository<cached_user>(user_redis_config);
+        const auto result_value = co_await users.insert(user_value, {.ttl_ = std::chrono::hours(1)});
+        if (result_value.affected_entities() == 0) {
+            co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "user already exists"});
+        }
+        cached_user_response response;
+        fill(response, user_value);
+        c.draft().status(ruvia::http_status::created);
+        co_return c.json(response);
+    }
+    ruvia::task<ruvia::http_response> find(ruvia::context& c) {
+        auto user_value = co_await c.redis().repository<cached_user>(user_redis_config).find_one({.where_ = cached_user::column<"id">() == c.req().param("id").value_or("")});
+        if (!user_value) {
+            co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
+        }
+        cached_user_response response;
+        fill(response, *user_value);
+        co_return c.json(response);
+    }
+    ruvia::task<ruvia::http_response> adults(ruvia::context& c) {
+        const ruvia::redis_find_options find_options{
+            .where_ = cached_user::column<"age">() >= 18,
+            .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
+            .take_ = 20};
+        auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
+        cached_users_response response;
+        auto& output = response.ensure<"users">();
+        for (const auto& user : users) {
+            auto& item = output.emplace_back();
+            fill(item, user);
+        }
+        co_return c.json(response);
+    }
+};
+
+[[maybe_unused]] int run_redis_orm_main(int argc, char** argv) {
+    try {
+        const bool create_index = argc == 2 && std::string_view(argv[1]) == "--create-index";
+        bool failed = false;
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        auto config = example::redis_config(env_value);
+        app.redis({.config_ = config})
+            .listen({.address_ = "127.0.0.1", .http_ = 8091})
+            .server({.worker_count_ = 1, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .on_start([create_index, &failed] {
+                if (!create_index) {
+                    return;
+                }
+                const auto workers = ruvia::app().workers();
+                std::promise<void> completion;
+                auto result_value = completion.get_future();
+                const auto posted = workers.front().post([completion = std::move(completion)](ruvia::web_worker_context& worker_value) mutable -> ruvia::task<void> {
+                    try {
+                        co_await worker_value.redis().repository<cached_user>(user_redis_config).create_index();
+                        completion.set_value();
+                    } catch (...) {
+                        completion.set_exception(std::current_exception());
+                    }
+                });
+                if (posted != ruvia::post_status::accepted) {
+                    failed = true;
+                } else {
+                    // Only the lifecycle caller blocks. Workers are ready before
+                    // on_start; request admission stays closed until this returns.
+                    // Abandoning an unstarted job destroys its promise and wakes get().
+                    try {
+                        result_value.get();
+                        std::cout << "Redis user index created.\n";
+                    } catch (...) {
+                        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+                        failed = true;
+                    }
+                }
+                // --create-index is a one-shot operation, never a serving mode.
+                ruvia::app().stop();
+            })
+            .run();
+        return failed ? 1 : 0;
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// Redis Streams consumer groups and the generic command escape hatch.
+// Requires RUVIA_ENABLE_REDIS=ON and Redis configured with RUVIA_REDIS_* below.
+// Run ruvia_example_redis_streams, then POST /streams/setup once on port 8095.
+// POST /streams/publish with a text body; GET /streams/consume prints and ACKs it.
+// An idle read waits at most 500 ms and returns "no messages". Setup deliberately
+// reports an existing group instead of deleting somebody else's stream/group.
+// Demo data stays under ruvia:example:stream; use a disposable Redis database.
+// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+
+namespace redis_streams_example {
+
+constexpr std::string_view stream_key = "ruvia:example:stream";
+constexpr std::string_view group_name = "example-readers";
+
+class streams_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/streams")
+    RUVIA_ROUTES_BEGIN(streams_controller)
+    RUVIA_POST("/setup", setup);
+    RUVIA_POST("/publish", publish, ruvia::body_limit<4096>);
+    RUVIA_GET("/consume", consume);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> setup(ruvia::context& c) {
+        // Commands without a typed convenience API still use the same bounded
+        // pool, cancellation token, PMR result ownership, and error handling.
+        auto created = co_await c.redis().command("XGROUP", "CREATE", stream_key, group_name, "0", "MKSTREAM");
+        // command() returns Redis error replies as values; BUSYGROUP means the
+        // group already exists and is reported, never recreated.
+        if (created.is_error()) {
+            if (created.error().starts_with("BUSYGROUP")) {
+                co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "consumer group already exists"});
+            }
+            co_return c.error({.status_ = ruvia::http_status::bad_gateway, .message_ = "consumer group setup failed"});
+        }
+        co_return c.text(created.string());
+    }
+
+    ruvia::task<ruvia::http_response> publish(ruvia::context& c) {
+        const auto body = co_await c.req().text();
+        auto result_value = co_await c.redis().command("XADD", stream_key, "*", "body", body);
+        co_return c.text(result_value.string());
+    }
+
+    ruvia::task<ruvia::http_response> consume(ruvia::context& c) {
+        auto redis = c.redis().with_options({.timeout_ = std::chrono::seconds(2)});
+        // ">" requests never-delivered entries. A real consumer also reclaims
+        // abandoned pending work (XAUTOCLAIM) and makes its effects idempotent.
+        const std::array<ruvia::redis_stream_read_view, 1> streams{{{stream_key, ">"}}};
+        auto result_value = co_await redis.xread_group(group_name, "example-consumer", streams,
+            {.count_ = 10, .block_ = ruvia::redis_block_wait::for_duration(std::chrono::milliseconds(500))});
+        if (!result_value) {
+            co_return c.text("no messages\n");
+        }
+        std::string output;
+        for (const auto& stream : result_value->streams()) {
+            for (const auto& entry : stream.entries()) {
+                output.append(entry.id()).append("\n");
+                for (const auto& field : entry.fields()) {
+                    output.append(field.key()).append("=").append(field.value()).append("\n");
+                }
+                // ACK only after processing succeeds. A cancelled request or
+                // failed command leaves the entry pending for recovery.
+                auto ack = co_await redis.command("XACK", stream.stream(), group_name, entry.id());
+                output.append("ack=").append(std::to_string(ack.integer())).append("\n");
+            }
+        }
+        co_return c.text(std::move(output));
+    }
+};
+
+}  // namespace redis_streams_example
+
+[[maybe_unused]] int run_redis_streams_main() {
+    using namespace redis_streams_example;
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        auto config = example::redis_config(env_value);
+        // Blocking readers do not occupy ordinary command connections.
+        config.blocking_pool_size_per_worker_ = 2;
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .listen({.address_ = "127.0.0.1", .http_ = 8095})
+            .redis({.config_ = config})
+            .run();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// Redis Pub/Sub: a dedicated subscription connection fanned out as server-sent events.
+// Requires RUVIA_ENABLE_REDIS=ON and Redis configured with RUVIA_REDIS_* below.
+// Run ruvia_example_redis_pubsub on port 8096, then:
+// curl -N http://127.0.0.1:8096/pubsub/events
+// curl --data 'hello' http://127.0.0.1:8096/pubsub/publish
+// Every subscriber connection gets its own Redis connection; the request's
+// stop token closes it when the SSE client goes away. Pub/Sub delivers at most
+// once: a closed subscription has missed what was published meanwhile.
+// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+
+namespace redis_pubsub_example {
+
+constexpr std::string_view channel_name = "ruvia:example:channel";
+constexpr std::string_view channel_pattern = "ruvia:example:*";
+
+class pubsub_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/pubsub")
+    RUVIA_ROUTES_BEGIN(pubsub_controller)
+    RUVIA_POST("/publish", publish, ruvia::body_limit<4096>);
+    RUVIA_GET("/events", events_value);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> publish(ruvia::context& c) {
+        const auto body = co_await c.req().text();
+        // PUBLISH is an ordinary command on the pooled connections and reports
+        // how many subscriber connections received the message.
+        const auto receivers = co_await c.redis().publish(channel_name, body);
+        std::string output;
+        output.append("receivers=");
+        ruvia::http_append_signed(output, receivers);
+        output.push_back('\n');
+        co_return c.text(std::move(output));
+    }
+
+    ruvia::task<void> events_value(ruvia::context& c) {
+        auto events_value = c.stream_sse();
+        if (co_await events_value.commit() == ruvia::stream_commit_result::completed) {
+            co_return;
+        }
+        // The subscription inherits the request stop token: when the SSE
+        // client disconnects, the pending read() ends with std::nullopt.
+        auto subscription = c.redis().subscription();
+        const std::array<std::string_view, 1> channels{channel_name};
+        co_await subscription.subscribe(channels);
+        const std::array<std::string_view, 1> patterns{channel_pattern};
+        co_await subscription.psubscribe(patterns);
+        // Confirmations and messages arrive through read() in wire order. A
+        // message published to the channel is delivered twice here: once for
+        // the channel subscription and once for the matching pattern.
+        while (auto event = co_await subscription.read()) {
+            if (events_value.aborted()) {
+                co_return;
+            }
+            if (const auto* confirmation = event->confirmation()) {
+                const auto kind = confirmation->kind();
+                const bool subscribed = kind == ruvia::redis_pubsub_confirmation_kind::subscribed ||
+                                        kind == ruvia::redis_pubsub_confirmation_kind::pattern_subscribed;
+                co_await events_value.write({.data_ = confirmation->name().value_or(""),
+                    .event_ = subscribed ? "subscribed" : "unsubscribed"});
+            } else if (const auto* message = event->message()) {
+                // The event borrows the subscription's reply storage only
+                // until the next read(); the SSE write copies it first.
+                co_await events_value.write({.data_ = message->payload(),
+                    .event_ = message->pattern() ? "pmessage" : "message"});
+            }
+        }
+    }
+};
+
+}  // namespace redis_pubsub_example
+
+[[maybe_unused]] int run_redis_pubsub_main() {
+    using namespace redis_pubsub_example;
+    try {
+        auto& app = ruvia::app();
+        app.load_dotenv();
+        const example::environment env_value(&app.env());
+        app.server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .listen({.address_ = "127.0.0.1", .http_ = 8096})
+            .redis({.config_ = example::redis_config(env_value)})
+            .run();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
 }
