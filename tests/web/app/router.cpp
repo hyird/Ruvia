@@ -22,7 +22,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
 

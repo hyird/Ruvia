@@ -18,12 +18,10 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
-
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 
 ruvia::task<ruvia::http_response> surface_not_found(ruvia::context& c) {

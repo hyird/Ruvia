@@ -26,7 +26,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>

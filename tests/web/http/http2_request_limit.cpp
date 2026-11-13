@@ -23,7 +23,6 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 namespace http2_request_limit_test {

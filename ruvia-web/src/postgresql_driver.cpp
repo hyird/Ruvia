@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_header.h"
 
 #include "route_table.h"
 namespace ruvia::detail {

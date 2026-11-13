@@ -41,8 +41,7 @@
 #include <istream>
 #include <system_error>
 
-#include "ruvia/http/borrowed_text.h"
-
+#include "ruvia/http/http_header.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
 
@@ -124,8 +123,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/web/streaming.h"
-
+#include "ruvia/web/context.h"
 #if defined(_WIN32)
 #include <mswsock.h>
 #include <ws2tcpip.h>

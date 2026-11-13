@@ -23,7 +23,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 namespace startup_test {

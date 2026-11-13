@@ -16,8 +16,6 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
-
 // Per-operation timeouts and stop tokens of the public outbound client, driven
 // against the application's own routes over each protocol's real transport.
 namespace ruvia::test::client_operations {

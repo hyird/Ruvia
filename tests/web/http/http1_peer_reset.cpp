@@ -18,7 +18,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 // A peer that resets its connection while a buffered handler is still running

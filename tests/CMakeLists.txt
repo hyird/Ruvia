@@ -101,8 +101,8 @@ if(RUVIA_BUILD_WEB)
     endif()
     ruvia_add_web_standalone_test(ruvia_app_accept_ownership 60 web/app/accept_ownership.cpp)
     if(RUVIA_ENABLE_HTTP2)
-        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/http2/http2_goaway.cpp)
-        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/http2/http2_request_limit.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_goaway 30 web/http/http2_goaway.cpp)
+        ruvia_add_web_standalone_test(ruvia_app_http2_request_limit 30 web/http/http2_request_limit.cpp)
         ruvia_add_web_standalone_test(ruvia_app_http2_frame_observation 60 web/app/http2_frame_observation.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_app_tls_paths 30 web/app/tls_paths.cpp)
@@ -137,11 +137,10 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
     set(_ruvia_tcp_client_test_sources
-        web/http1/websocket.cpp)
+        web/http/http1_websocket.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
-            web/http2/connect.cpp
-            web/http2/streaming.cpp)
+            web/http/http2_connect.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
         ${_ruvia_tcp_client_test_sources})
@@ -152,30 +151,30 @@ if(RUVIA_BUILD_WEB)
     # Owns an application with an app-wide CORS policy and access-log hook, so
     # it cannot share the process-wide application of the other server suites.
     ruvia_add_web_standalone_test(ruvia_response_policy_tests 60
-        web/http1/response_policy.cpp)
+        web/http/http1_response_policy.cpp)
     # Owns an application with an app-wide compression policy, which would
     # otherwise encode the bodies other server suites compare.
     ruvia_add_web_standalone_test(ruvia_response_compression_tests 60
-        web/http1/response_compression.cpp)
+        web/http/http1_response_compression.cpp)
     # Owns an application with small inbound budgets.
     ruvia_add_web_standalone_test(ruvia_inbound_memory_tests 60
-        web/http1/inbound_memory.cpp)
+        web/http/http1_inbound_memory.cpp)
     # Owns a TLS application with a short write timeout, which must not time
     # the handler cases of the other server suites.
     ruvia_add_web_standalone_test(ruvia_interim_phase_timeout_tests 30
-        web/http1/interim_phase_timeout.cpp)
+        web/http/http1_interim_phase_timeout.cpp)
     # Owns a TLS application whose cleartext listener only redirects to HTTPS.
     ruvia_add_web_standalone_test(ruvia_auto_https_redirect_tests 30
-        web/http1/auto_https_redirect.cpp)
+        web/http/http1_auto_https_redirect.cpp)
     # Owns an application with an application-wide error handler that must
     # observe no peer reset.
     ruvia_add_web_standalone_test(ruvia_peer_reset_tests 60
-        web/http1/peer_reset.cpp)
+        web/http/http1_peer_reset.cpp)
     ruvia_add_web_standalone_test(ruvia_stream_disconnect_tests 120
-        web/http1/stream_disconnect.cpp)
+        web/http/http1_stream_disconnect.cpp)
     # Owns an application with a short idle timeout and a TLS listener.
     ruvia_add_web_standalone_test(ruvia_connection_close_tests 30
-        web/http1/connection_close.cpp)
+        web/http/http1_connection_close.cpp)
     # Owns an application with a document root shadowing a guarded route.
     ruvia_add_web_standalone_test(ruvia_document_root_tests 60
         web/http/document_root.cpp)
@@ -191,10 +190,10 @@ if(RUVIA_BUILD_WEB)
         web/http/file_response_failure.cpp)
     # Owns named fixed origins and redirect policies on the process application.
     ruvia_add_web_standalone_test(ruvia_http_client_api_tests 60
-        web/client/handle_and_response.cpp)
+        web/http/client_handle_and_response.cpp)
     # Owns the process application whose routes stall each client operation.
     ruvia_add_web_standalone_test(ruvia_http_client_operation_tests 60
-        web/client/operation_interruption.cpp)
+        web/http/client_operation_interruption.cpp)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
         ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http/http3_quic.cpp)
@@ -205,9 +204,9 @@ if(RUVIA_BUILD_WEB)
 
     # Feature directories join the unit suite only when their feature is built.
     ruvia_collect_test_sources(_ruvia_web_unit_sources web/*.cpp)
-    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/db/|^web/http/(jwt|redis)\\.cpp$")
+    list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/(db_pool|db_query|jwt|redis)\\.cpp$")
     if(NOT RUVIA_ENABLE_HTTP2)
-        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http2/")
+        list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/http2_")
     endif()
     if(NOT RUVIA_ENABLE_HTTP3)
         list(FILTER _ruvia_web_unit_sources EXCLUDE REGEX "^web/http/http3_")
@@ -220,8 +219,7 @@ if(RUVIA_BUILD_WEB)
         list(APPEND _ruvia_web_unit_sources web/http/redis.cpp)
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
-        ruvia_collect_test_sources(_ruvia_web_feature_sources web/db/*.cpp)
-        list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
+        list(APPEND _ruvia_web_unit_sources web/http/db_pool.cpp web/http/db_query.cpp)
     endif()
     list(SORT _ruvia_web_unit_sources)
 

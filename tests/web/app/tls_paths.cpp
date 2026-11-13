@@ -29,7 +29,6 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"

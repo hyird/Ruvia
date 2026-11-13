@@ -58,7 +58,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
@@ -107,8 +106,6 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/streaming.h"
-
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
 #endif

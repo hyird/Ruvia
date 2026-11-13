@@ -44,7 +44,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/streaming.h"
 
 #include "client_operation_fixture.h"
 #include "http3_test_client.h"

@@ -38,7 +38,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"

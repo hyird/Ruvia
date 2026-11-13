@@ -35,7 +35,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/streaming.h"
+#include "ruvia/web/context.h"
 
 #include "route_table.h"
 #if defined(_WIN32)

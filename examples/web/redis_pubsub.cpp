@@ -15,12 +15,11 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/streaming.h"
 
 #include "backend_config.h"
 

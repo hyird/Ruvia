@@ -46,9 +46,9 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/model.h"
-#include "ruvia/web/streaming.h"
 
 #include "content_decoding_fixture.h"
 #include "http_server_fixture.h"

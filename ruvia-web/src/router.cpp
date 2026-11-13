@@ -21,7 +21,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
@@ -30,7 +29,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/streaming.h"
 
 #include "route_table.h"
 
@@ -56,7 +54,6 @@
 #include "ruvia/web/model.h"
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
