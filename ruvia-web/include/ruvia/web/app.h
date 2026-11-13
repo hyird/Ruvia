@@ -36,10 +36,10 @@
 #include <stdexcept>
 #include <system_error>
 
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
-#ifdef RUVIA_ENABLE_REDIS
+#if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
 #endif
 

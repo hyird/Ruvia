@@ -62,10 +62,6 @@
 
 #include "http_server_fixture.h"
 
-#if !defined(_WIN32)
-#include <sys/socket.h>
-#endif
-
 namespace {
 
 using namespace std::chrono_literals;

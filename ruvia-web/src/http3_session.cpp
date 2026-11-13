@@ -1,4 +1,5 @@
 #include <netinet/in.h>
+#include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
 #include <sys/socket.h>
 
@@ -36,18 +37,10 @@
 #include "ruvia/web/context.h"
 
 #include "route_table.h"
-#if defined(_WIN32)
-#include "route_table.h"
-#endif
-#include <ngtcp2/ngtcp2_crypto.h>
 
-#include "ruvia/core/event_loop.h"
 #if !defined(_WIN32)
 #include <fcntl.h>
-#include <sys/socket.h>
 #include <unistd.h>
-
-#include <cerrno>
 #endif
 #if defined(__linux__)
 #include <linux/filter.h>
@@ -57,9 +50,6 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
-
-#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

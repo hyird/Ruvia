@@ -27,10 +27,10 @@
 
 #include "route_table.h"
 
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
-#ifdef RUVIA_ENABLE_REDIS
+#if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
 #endif
 
@@ -38,16 +38,6 @@
 #include <istream>
 #include <system_error>
 
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db.h"
-
-#include "route_table.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
-
-#include "route_table.h"
-#endif
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -58,33 +48,24 @@
 #endif
 
 #include <atomic>
+#include <cerrno>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <initializer_list>
+#include <limits>
 #include <span>
 #include <type_traits>
 
+#include <asio/bind_executor.hpp>
+#include <asio/error.hpp>
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/ip/udp.hpp>
-#include <openssl/crypto.h>
-
-#ifdef RUVIA_ENABLE_DATABASE
-#include "route_table.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "route_table.h"
-#endif
-
-#include <cerrno>
-#include <cstring>
-#include <limits>
-
-#include <asio/bind_executor.hpp>
-#include <asio/error.hpp>
 #include <asio/post.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/verify_mode.hpp>
+#include <openssl/crypto.h>
 #include <openssl/err.h>
 #include <openssl/evp.h>
 #include <openssl/ocsp.h>
@@ -93,12 +74,10 @@
 #include "ruvia/http/http3_connection.h"
 #endif
 #if defined(_WIN32)
-#include <windows.h>
 #else
 #include <fcntl.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <unistd.h>
 #endif
 
 #include <cassert>
@@ -118,7 +97,6 @@
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
 #endif
-#include "ruvia/http/http_request.h"
 #if defined(_WIN32)
 #include <mswsock.h>
 #include <ws2tcpip.h>
@@ -126,43 +104,15 @@
 #include <asio/windows/object_handle.hpp>
 #include <asio/windows/overlapped_ptr.hpp>
 #endif
-#if !defined(_WIN32)
-#include <sys/socket.h>
-#endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #endif
-#if defined(RUVIA_ENABLE_HTTP3)
-#include "route_table.h"
-#endif
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
-#endif
 
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
-#endif
 #include <compare>
+#include <ctime>
 #include <filesystem>
 #include <iterator>
 #include <random>
-
-#include "ruvia/http/http_client.h"
-#include "ruvia/web/model.h"
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/redis.h"
-
-#include "route_table.h"
-#endif
-#include <ctime>
 
 #include <asio/ssl/error.hpp>
 #include <asio/system_error.hpp>
@@ -173,12 +123,9 @@
 #include <openssl/rand.h>
 #include <openssl/x509v3.h>
 
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db.h"
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
-#endif
+#include "ruvia/http/http_client.h"
+#include "ruvia/web/model.h"
+
 namespace ruvia::detail {
 
 app_state::app_state() {

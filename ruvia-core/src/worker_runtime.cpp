@@ -46,12 +46,9 @@
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #ifdef _WIN32
-#include <array>
 #include <charconv>
-#include <limits>
 
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -75,7 +72,6 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
-#include <windows.h>
 #endif
 #ifdef _WIN32
 #include <bcrypt.h>
@@ -88,7 +84,7 @@
 
 #include <asio/posix/stream_descriptor.hpp>
 #endif
-#ifdef __linux__
+#if defined(__linux__)
 #include <sys/eventfd.h>
 #endif
 

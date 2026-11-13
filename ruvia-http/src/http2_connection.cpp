@@ -43,8 +43,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
-#include "http_connection_fields.h"
-
 namespace ruvia::detail {
 
 struct http2_stored_header_view final {

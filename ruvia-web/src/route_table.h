@@ -100,11 +100,6 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/context.h"
-#if defined(RUVIA_ENABLE_HTTP3)
-#include <asio/ip/udp.hpp>
-#endif
 
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
@@ -129,35 +124,21 @@
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
 #endif
-#include "ruvia/http/http_client.h"
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
-#ifdef RUVIA_ENABLE_REDIS
+#if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
 #endif
 
-#ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-#endif
-#ifdef RUVIA_ENABLE_HTTP3
-#include "ruvia/http/http3_connection.h"
-#endif
-#ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-#endif
-#ifdef RUVIA_ENABLE_HTTP2
+#if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
 #endif
 #ifdef _WIN32
 #include <winsock2.h>
 
-#include <asio/ip/tcp.hpp>
 #else
 #include <asio/posix/stream_descriptor.hpp>
-#endif
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
 #endif
 
 namespace ruvia::detail {

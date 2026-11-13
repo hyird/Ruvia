@@ -12,7 +12,7 @@
 ## 1. SQL 数据库连接池、直接查询与事务
 
 头文件：`"ruvia/web/db.h"`。
-参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
+参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/orm.cpp](../examples/web/orm.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
@@ -181,7 +181,7 @@ auto report = co_await migrator.migrate(migrations);
 ## 2. SQL 构建器、Schema DDL 与存储过程
 
 头文件：`"ruvia/web/db.h"`。
-参考示例：[examples/web/sql_queries.cpp](../examples/web/sql_queries.cpp)。
+参考示例：[examples/web/database.cpp](../examples/web/database.cpp)。
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
 

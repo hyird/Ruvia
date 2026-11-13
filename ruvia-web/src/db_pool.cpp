@@ -43,12 +43,9 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/web/db.h"
 #include "ruvia/web/redis.h"
 
-#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

@@ -42,10 +42,7 @@
 #include <arm_neon.h>
 #define RUVIA_JSON_SCAN_NEON 1
 #endif
-#include <initializer_list>
 
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 namespace ruvia {
 
 enum class integer_parse_error {

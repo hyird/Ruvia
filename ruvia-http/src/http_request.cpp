@@ -34,7 +34,6 @@
 #include <vector>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
 #include "http_connection_fields.h"

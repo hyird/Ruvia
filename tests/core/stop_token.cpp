@@ -42,7 +42,7 @@
 
 #include "worker_task_fixture.h"
 
-#ifndef _WIN32
+#if !defined(_WIN32)
 #include <unistd.h>
 #endif
 

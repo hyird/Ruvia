@@ -47,8 +47,6 @@
 #include <asio/ssl/stream.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/web/context.h"
-
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
 #endif
@@ -62,19 +60,8 @@
 #endif
 #include "ruvia/http/http_request.h"
 
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "http_server_fixture.h"
-#endif
-#if defined(RUVIA_ENABLE_HTTP2)
-
-#include "ruvia/http/http2_connection.h"
-
-#include "http_server_fixture.h"
-#endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
-
-#include "http_server_fixture.h"
 #endif
 
 #include <algorithm>
@@ -86,58 +73,22 @@
 
 #include <asio/bind_cancellation_slot.hpp>
 #include <asio/cancellation_signal.hpp>
-#include <asio/read_until.hpp>
-#include <asio/socket_base.hpp>
-
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/http_client.h"
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-#endif
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "http_server_fixture.h"
-#endif
 #include <asio/co_spawn.hpp>
 #include <asio/executor_work_guard.hpp>
 #include <asio/post.hpp>
+#include <asio/read_until.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/use_awaitable.hpp>
+
+#include "ruvia/http/http_response.h"
+#include "ruvia/web/http_client.h"
 
 #if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
 #endif
-#include <gtest/gtest.h>
 
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
 #include <functional>
-#include <memory>
-#include <semaphore>
-#include <set>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <thread>
-#include <utility>
-#include <vector>
 
-#include <asio/buffer.hpp>
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/read.hpp>
-#include <asio/write.hpp>
-
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-
-#include "http_server_fixture.h"
 #if !defined(_WIN32)
 #include <arpa/inet.h>
 #include <fcntl.h>
@@ -147,152 +98,16 @@
 
 #include <cerrno>
 #endif
-#include <asio/buffer.hpp>
-#include <asio/io_context.hpp>
+#include <span>
+
 #include <asio/ip/address.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/read_until.hpp>
-#include <asio/ssl/context.hpp>
-#include <asio/ssl/stream.hpp>
-#include <asio/write.hpp>
+#include <asio/ip/udp.hpp>
+#include <asio/ip/v6_only.hpp>
+#include <asio/ssl.hpp>
 #include <openssl/objects.h>
-#include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-
-#include "http_server_fixture.h"
-#if defined(RUVIA_ENABLE_HTTP3)
-#include <asio/ip/udp.hpp>
-
-#include "http_server_fixture.h"
-#endif
-#include <exception>
-#include <future>
-#include <mutex>
-#include <optional>
-#include <span>
-
-#include <asio/read.hpp>
-#if !defined(_WIN32)
-#include <fcntl.h>
-#include <sys/socket.h>
-
-#include <cerrno>
-#endif
-#include <gtest/gtest.h>
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <map>
-#include <mutex>
-#include <optional>
-#include <semaphore>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <thread>
-#include <utility>
-#include <vector>
-
-#include <asio/buffer.hpp>
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/read.hpp>
-#include <asio/socket_base.hpp>
-#include <asio/ssl/context.hpp>
-#include <asio/ssl/stream.hpp>
-#include <asio/write.hpp>
-#include <openssl/ssl.h>
-
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/context.h"
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-#endif
-#include <gtest/gtest.h>
-
-#include <array>
-#include <chrono>
-#include <cstdint>
-#include <exception>
-#include <filesystem>
-#include <fstream>
-#include <initializer_list>
-#include <memory>
-#include <optional>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <utility>
-#include <vector>
-
-#include <asio/ip/tcp.hpp>
-#include <asio/ip/v6_only.hpp>
-#include <asio/read.hpp>
-#include <asio/write.hpp>
-
-#include "ruvia/core/event_loop.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
-
-#include "http_server_fixture.h"
-#ifndef _WIN32
-#include <fcntl.h>
-#include <unistd.h>
-#endif
-#include <atomic>
-#include <cstddef>
-#include <functional>
-#include <future>
-#include <map>
-#include <semaphore>
-#include <span>
-#include <thread>
-
-#include <asio/io_context.hpp>
-#include <asio/ip/udp.hpp>
-#include <asio/read_until.hpp>
-#include <asio/ssl.hpp>
-#include <asio/ssl/context.hpp>
-#include <asio/ssl/stream.hpp>
-
-#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http_client.h"
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis.h"
-
-#include "http_server_fixture.h"
-#endif
-#if !defined(_WIN32)
-#include <fcntl.h>
-
-#include <cerrno>
-#endif
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "http_server_fixture.h"
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-#include "http_server_fixture.h"
-#endif
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-
-#include "http_server_fixture.h"
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-#include "http_server_fixture.h"
-#endif
 namespace peer_reset_test {
 
 using namespace std::chrono_literals;

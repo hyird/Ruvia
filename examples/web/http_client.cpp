@@ -26,7 +26,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
 
 #include "backend_config.h"
 namespace {

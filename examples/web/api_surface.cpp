@@ -9,8 +9,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <iostream>
+#include <memory>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -175,7 +178,7 @@ private:
 
     ruvia::task<ruvia::http_response> context_info(ruvia::context& c) {
         std::string body;
-        // Session capability requires session_middleware; see sessions.cpp for
+        // Session capability requires session_middleware; see redis.cpp for
         // its Redis setup. This standalone example only installs application services.
         body.append("env-vars=");
         ruvia::http_append_unsigned(body, c.env().size());
@@ -492,4 +495,372 @@ int main() {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;
     }
+}
+
+// Request policies and local dispatch; no external services are required.
+// Build: cmake --build build --config Release --target ruvia_example_request_policies -j$(nproc)
+// Run the executable, then try:
+//   curl -i -d hello http://127.0.0.1:8097/policies/small
+//   curl -i -H "X-Demo-Name: reader" http://127.0.0.1:8097/policies/dispatch
+// Expected: an echo and "reader (subrequest)" respectively.
+// GET /policies/csrf issues XSRF-TOKEN. For POST, send that cookie AND copy its
+// value into X-XSRF-TOKEN; a missing or mismatched value is rejected with 403.
+
+namespace request_policies_example {
+
+struct request_label final {
+    std::string_view name_;
+};
+
+class label_middleware final {
+public:
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
+        // The binding borrows this local value until next() finishes. Neither
+        // the label nor its request-backed string_view may escape the request.
+        const request_label label{c.req().header("X-Demo-Name").value_or("guest")};
+        auto binding = c.bind_request_state(label);
+        co_await next_value();
+    }
+};
+
+class policy_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/policies", label_middleware)
+    RUVIA_ROUTES_BEGIN(policy_controller)
+    RUVIA_POST("/small", small, ruvia::body_limit<16>);
+    RUVIA_GET("/label", label);
+    RUVIA_GET("/dispatch", dispatch);
+    RUVIA_GET("/csrf", csrf, ruvia::csrf_protection);
+    RUVIA_POST("/csrf", csrf, ruvia::csrf_protection);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> small(ruvia::context& c) {
+        // body_limit is checked before buffering. More than 16 bytes produces
+        // 413; a route may tighten, but cannot enlarge, the server-wide limit.
+        const auto body = co_await c.req().text();
+        co_return c.text(body);
+    }
+
+    ruvia::task<ruvia::http_response> label(ruvia::context& c) {
+        const auto& value = c.request_state<request_label>();
+        std::string text(value.name_);
+        text.append(c.is_subrequest() ? " (subrequest)\n" : " (network request)\n");
+        co_return c.text(std::move(text));
+    }
+
+    ruvia::task<ruvia::http_response> dispatch(ruvia::context& c) {
+        // Re-enter the production router on this worker. Child requests have
+        // fresh state, so credentials and other headers must be passed explicitly.
+        // Only buffered requests/responses are supported; streams, files, SSE,
+        // and upgrades belong on their own network routes. Nesting is bounded.
+        const std::array<ruvia::http_header_view, 1> headers{{
+            {"X-Demo-Name", c.request_state<request_label>().name_},
+        }};
+        auto response = co_await c.dispatch({
+            .method_ = "GET",
+            .target_ = "/policies/label",
+            .headers_ = headers,
+        });
+        c.draft().status(response.status());
+        // dispatch_response owns pooled bytes; text() copies them into this
+        // response before the child result is destroyed on the same worker.
+        co_return c.text(response.body());
+    }
+
+    ruvia::task<ruvia::http_response> csrf(ruvia::context& c) {
+        co_return c.text("CSRF check passed\n");
+    }
+};
+
+}  // namespace request_policies_example
+
+[[maybe_unused]] int run_request_policies_main() {
+    using namespace request_policies_example;
+    try {
+        ruvia::app()
+            .server({.process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .max_buffered_body_bytes_ = 1024})
+            .listen({.address_ = "127.0.0.1", .http_ = 8097})
+            .run();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// Middleware continuation, response decoration, and early responses.
+// Run ruvia_example_middleware_next on port 8089.
+// curl -i http://127.0.0.1:8089/middleware-next
+// /middleware-next/protected returns 401 unless X-Demo-Key: example is present.
+
+class decorate_response final {
+public:
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
+        context_value.draft().header("X-Before", "set");
+        // next() is a single-shot continuation. Await it exactly once; do not
+        // store it, detach it, or attempt to restart the downstream handler.
+        co_await next_value();
+        context_value.edit_response().header("X-After", "set");
+    }
+};
+
+class require_demo_key final {
+public:
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
+        if (context_value.req().header("X-Demo-Key") != "example") {
+            // An early response skips this branch. Outer middleware still
+            // resumes after its own awaited next(). A 401 must carry a
+            // challenge (RFC 9110 15.5.2); this demo's credential is the
+            // X-Demo-Key header, so it names its own scheme rather than
+            // Bearer, which would tell clients to send Authorization.
+            context_value.draft().status(ruvia::http_status::unauthorized);
+            context_value.draft().header("WWW-Authenticate", R"(DemoKey realm="middleware-next")");
+            context_value.respond(context_value.text("demo key required\n"));
+            co_return;
+        }
+        co_await next_value();
+    }
+};
+
+class middleware_next_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/middleware-next", decorate_response)
+
+    RUVIA_ROUTES_BEGIN(middleware_next_controller)
+    RUVIA_GET("/", ok);
+    RUVIA_GET("/protected", ok, require_demo_key);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> ok(ruvia::context& context) {
+        co_return context.text("ok\n");
+    }
+};
+
+[[maybe_unused]] int run_middleware_next_main() {
+    try {
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8089})
+            .server({.worker_count_ = 1,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
+            .run();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// Static files: c.file(...), c.static_file(...), static_root, a document root,
+// response-validator/range-request policies and gzip configuration.
+//
+// A standalone static_root is immutable. application document roots refresh every
+// second; see the commented interval configuration below.
+// Run ruvia_example_files_static, then GET http://127.0.0.1:8083/index.html
+// or /files/assets/hello.txt. /files/download describes a file-backed response.
+// Try Range: bytes=0-4 (206), If-None-Match with the returned ETag (304), and
+// Accept-Encoding: gzip. Compression depends on type, size, and negotiation.
+// The document root refreshes; the explicitly constructed static_root is a
+// snapshot. Keep it alive until application::run() returns and all file responses retire.
+
+namespace files_static_example {
+
+std::unique_ptr<ruvia::static_root> g_assets;
+
+std::filesystem::path examples_root() {
+    return std::filesystem::path(RUVIA_EXAMPLES_SOURCE_DIR);
+}
+
+// c.file() copies its path before returning its task; still build a fixed path
+// once, not per request. UTF-8 text such as a std::string or a literal works too.
+const std::filesystem::path& download_path() {
+    static const std::filesystem::path path = examples_root() / "public" / "hello.txt";
+    return path;
+}
+
+class files_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/files")
+
+    RUVIA_ROUTES_BEGIN(files_controller)
+    RUVIA_GET("/download", download);
+    RUVIA_GET("/assets/*", asset);
+    RUVIA_ROUTES_END
+
+private:
+    // file() and static_file() open the file on the blocking pool and
+    // complete with the settled response (status, validators, framing).
+    ruvia::task<ruvia::http_response> download(ruvia::context& c) {
+        co_return co_await c.file({.path_ = download_path(), .content_type_ = "text/plain; charset=utf-8"});
+    }
+
+    ruvia::task<ruvia::http_response> asset(ruvia::context& c) {
+        co_return co_await c.static_file(
+            *g_assets, {.relative_path_ = c.req().param("*").value_or("index.html")});
+    }
+};
+
+}  // namespace files_static_example
+
+[[maybe_unused]] int run_files_static_main() {
+    using namespace files_static_example;
+    try {
+        g_assets = std::make_unique<ruvia::static_root>(examples_root() / "public",
+            ruvia::static_root_options{
+                .cache_control_ = "public, max-age=3600",
+                .index_file_ = "index.html",
+                .mime_types_ = {{"txt", "text/plain; charset=utf-8"}},
+                .file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::only,
+                    .extensions_ = {"html", "txt"}},
+                .range_requests_ = ruvia::static_range_request_policy::honor,
+                .response_validators_ = ruvia::static_response_validator_policy::emit,
+                .dotfiles_ = ruvia::static_dotfile_policy::deny,
+            });
+
+        auto document_root = ruvia::document_root_config{
+            .root_ = examples_root() / "public",
+            .static_options_ =
+                {
+                    .cache_control_ = "public, max-age=3600",
+                    .index_file_ = "index.html",
+                },
+            .precompress_gzip_ = true,
+        };
+        // Document roots refresh every second by default. To tune the interval:
+        // .refresh_interval_ = std::chrono::milliseconds(500),
+        // .precompress_gzip_ refresh-builds gzip variants for changed text assets.
+        // Configure resident files through .static_options_.resident_max_bytes_
+        // and .static_options_.resident_budget_bytes_; zero disables them.
+        // The application blocking pool is enabled by default; file opens and
+        // reads run on it.
+
+        ruvia::app()
+            .listen({.address_ = "0.0.0.0", .http_ = 8083})
+            .server({.worker_count_ = 2,
+                .process_signal_handlers_ = ruvia::process_signal_handler_policy::install,
+                .compression_ = ruvia::compression_config{}})
+            .document_root(std::move(document_root))
+            .run();
+    } catch (...) {
+        std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
+        return 1;
+    }
+    return 0;
+}
+
+// In-memory application testing: test_app/test_request/dispatch_response drive the
+// production dispatch pipeline -- routing, params, model bodies, middleware,
+// fallbacks, url_for and worker state -- without opening a socket. This is the
+// pattern an application's own test suite uses; the example doubles as a
+// runnable check and exits non-zero on any mismatch.
+// Run ruvia_example_testing with no arguments or external services.
+// Assertions below check functional responses; test_app owns startup/teardown.
+
+RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
+
+namespace testing_example {
+
+struct note_counter final {
+    int stored_{0};
+};
+
+class audit_middleware final {
+public:
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
+        co_await next_value();
+        c.edit_response().header("X-Audited", "yes");
+    }
+};
+
+class notes_controller final {
+public:
+    RUVIA_CONTROLLER_GROUP("/notes")
+    RUVIA_ROUTES_BEGIN(notes_controller)
+    RUVIA_GET("/:id", note);
+    RUVIA_POST("/", create, ruvia::json_body<note_request>);
+    RUVIA_GET("/", stats);
+    RUVIA_ROUTES_END
+
+private:
+    ruvia::task<ruvia::http_response> note(ruvia::context& c) {
+        // url_for builds links from registered patterns; the pattern is the
+        // route's identity.
+        std::string body;
+        body.append("note ");
+        body.append(c.req().param("id").value_or("?"));
+        body.append(" self=");
+        body.append(c.url_for("/notes/:id", {c.req().param("id").value_or("0")}));
+        co_return c.text(std::move(body));
+    }
+
+    ruvia::task<ruvia::http_response> create(ruvia::context& c) {
+        const auto& note = c.req().validated<note_request>();
+        ++c.worker_state<note_counter>().stored_;
+        c.draft().status(ruvia::http_status::created);
+        co_return c.body(note.get<"text">().has_value() ? note.get<"text">()->view() : "empty");
+    }
+
+    ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
+        std::string body;
+        body.append("stored=");
+        body.append(std::to_string(c.worker_state<note_counter>().stored_));
+        co_return c.text(std::move(body));
+    }
+};
+
+ruvia::task<ruvia::http_response> notes_missing(ruvia::context& c) {
+    c.draft().status(ruvia::http_status::not_found);
+    co_return c.text("no such note");
+}
+
+int g_failures = 0;
+
+void expect(bool condition, const char* what) {
+    if (!condition) {
+        ++g_failures;
+        std::fprintf(stderr, "FAILED: %s\n", what);
+    }
+}
+
+}  // namespace testing_example
+
+[[maybe_unused]] int run_testing_main() {
+    using namespace testing_example;
+    ruvia::test_app app;
+    app.use<audit_middleware>().on_not_found({.prefix_ = "/notes", .handler_ = &notes_missing});
+    app.use_worker_state<note_counter>();
+
+    // Routing, params and url_for.
+    const auto note = app.request(ruvia::test_request::get("/notes/7"));
+    expect(note.status() == ruvia::http_status::ok, "GET /notes/7 is 200");
+    expect(note.body() == "note 7 self=/notes/7", "url_for builds the note link");
+    expect(
+        note.header("X-Audited").value_or("") == "yes", "global middleware stamped the response");
+
+    // Model bodies keep their production status split: 415 for the wrong
+    // media type, 400 for a malformed body of the right type.
+    const auto created =
+        app.request(ruvia::test_request::post("/notes").json(R"({"text":"remember"})"));
+    expect(created.status() == ruvia::http_status::created, "valid JSON is 201");
+    expect(created.body() == "remember", "created body echoes the model field");
+    const auto wrong_type =
+        app.request(ruvia::test_request::post("/notes").body("text", "text/plain"));
+    expect(
+        wrong_type.status() == ruvia::http_status::unsupported_media_type, "wrong media type is 415");
+
+    // Worker state persisted across the requests above.
+    const auto stats = app.request(ruvia::test_request::get("/notes"));
+    expect(stats.body() == "stored=1", "worker state persisted");
+
+    // The prefix-scoped not_found handled the miss under /notes.
+    const auto missing = app.request(ruvia::test_request::get("/notes/9/edit"));
+    expect(missing.status() == ruvia::http_status::not_found, "miss is 404");
+    expect(missing.body() == "no such note", "prefix not_found rendered the miss");
+
+    if (g_failures == 0) {
+        std::puts("testing facade example: all checks passed");
+    }
+    return g_failures == 0 ? 0 : 1;
 }

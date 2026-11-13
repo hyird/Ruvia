@@ -7,35 +7,24 @@
 // without a socket. These tests use ONLY public headers, exactly like an
 // application's own test suite would.
 
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <filesystem>
-#include <fstream>
-#include <optional>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/model.h"
-
-RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
-
-RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
-    RUVIA_REQUIRED_FIELD(count, ruvia::uint64),
-    RUVIA_REQUIRED_FIELD(tags, ruvia::array<ruvia::string>));
+#include <zlib.h>
 
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <charconv>
+#include <chrono>
 #include <cmath>
 #include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <cstdio>
+#include <ctime>
 #include <deque>
 #include <exception>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <future>
 #include <initializer_list>
@@ -44,11 +33,17 @@ RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
 #include <memory>
 #include <mutex>
 #include <new>
+#include <optional>
 #include <ranges>
+#include <semaphore>
 #include <set>
 #include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
 #include <system_error>
 #include <thread>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 #include <variant>
@@ -87,72 +82,10 @@ RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/http_client.h"
-
-#include "content_decoding_fixture.h"
-#include "http_server_fixture.h"
-
-#ifdef RUVIA_ENABLE_HTTP2
-#include "ruvia/http/http2_connection.h"
-
-#include "http_server_fixture.h"
-#endif
-
-#include <gtest/gtest.h>
-#include <zlib.h>
-
-#include <algorithm>
-#include <array>
-#include <atomic>
-#include <bit>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
-#include <cstdio>
-#include <ctime>
-#include <exception>
-#include <filesystem>
-#include <fstream>
-#include <initializer_list>
-#include <limits>
-#include <memory>
-#include <optional>
-#include <semaphore>
-#include <span>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <thread>
-#include <tuple>
-#include <type_traits>
-#include <utility>
-#include <variant>
-#include <vector>
-
-#include <asio.hpp>
-#include <asio/buffer.hpp>
-#include <asio/co_spawn.hpp>
-#include <asio/error.hpp>
-#include <asio/io_context.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/read.hpp>
-#include <asio/read_until.hpp>
-#include <asio/ssl/stream.hpp>
-#include <asio/use_awaitable.hpp>
-#include <asio/use_future.hpp>
-#include <asio/write.hpp>
-
-#include "ruvia/core/event_loop.h"
-#if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_connection.h"
-#endif
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/model.h"
 
 #include "content_decoding_fixture.h"
 #include "http_server_fixture.h"
@@ -162,27 +95,24 @@ RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
 #include <unistd.h>
 
 #include <condition_variable>
-#include <mutex>
-#include <thread>
 #endif
-#include <charconv>
-#include <future>
-#include <iterator>
-#include <new>
-
 #include <asio/ip/address_v4.hpp>
 #include <asio/ip/address_v6.hpp>
 #include <asio/ip/v6_only.hpp>
-#include <asio/streambuf.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/web/model.h"
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
-#ifdef RUVIA_ENABLE_REDIS
+#if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
 #endif
+RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
+
+RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
+    RUVIA_REQUIRED_FIELD(count, ruvia::uint64),
+    RUVIA_REQUIRED_FIELD(tags, ruvia::array<ruvia::string>));
+
 namespace {
 
 struct testing_facade_counter final {

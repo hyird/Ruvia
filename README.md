@@ -67,11 +67,11 @@ int main() {
 
 ## 示例导航与文档
 
-- 基础与 Web 服务：从 [basic_http.cpp](examples/web/basic_http.cpp) 开始，进阶用法见 [api_surface.cpp](examples/web/api_surface.cpp)、[models_validation.cpp](examples/web/models_validation.cpp)、[files_static.cpp](examples/web/files_static.cpp)、[runtime_config.cpp](examples/web/runtime_config.cpp)、[request_policies.cpp](examples/web/request_policies.cpp) 与 [testing.cpp](examples/web/testing.cpp)。
-- 流式、HTTP/2、WebSocket 与隧道：见 [streaming.cpp](examples/web/streaming.cpp) 与 [websocket.cpp](examples/web/websocket.cpp)。
+- 基础与 Web 服务：从 [basic_http.cpp](examples/web/basic_http.cpp) 开始，进阶用法见 [api_surface.cpp](examples/web/api_surface.cpp)、[models_validation.cpp](examples/web/models_validation.cpp) 与 [runtime_config.cpp](examples/web/runtime_config.cpp)。
+- 流式、HTTP/2、WebSocket 与隧道：见 [streaming.cpp](examples/web/streaming.cpp)。
 - 独立入站与外部事件循环接管：使用 [`http_server` / `http_server_group`](doc/web-guide.md#19-独立入站宿主ruviawebhttp_serverh)；原始出站 TCP/TLS 使用 [`tcp_client`](doc/web-guide.md#110-原始-tcptls-出站ruviawebtcp_clienth)，均无需 `application`、路由或控制器。
 - 出站 HTTP、WebSocket 与隧道统一使用 `c.client(alias)` 的链式 API；独立事件循环使用 `http_client(loop, config)` 或多 origin 配置集合。见 [客户端手册](doc/streaming-websocket.md#5-出站-http-客户端) 与 [http_client.cpp](examples/web/http_client.cpp)。
-- 数据库、ORM、Redis 与 JWT（需启用对应 CMake 选项）：见 [database.cpp](examples/web/database.cpp)、[sql_queries.cpp](examples/web/sql_queries.cpp)、[orm.cpp](examples/web/orm.cpp)、[redis.cpp](examples/web/redis.cpp)、[sessions.cpp](examples/web/sessions.cpp)、[event_loop_data.cpp](examples/web/event_loop_data.cpp) 与 [auth_jwt.cpp](examples/web/auth_jwt.cpp)。
+- 数据库、ORM、Redis 与 JWT（需启用对应 CMake 选项）：见 [database.cpp](examples/web/database.cpp)、[orm.cpp](examples/web/orm.cpp)、[redis.cpp](examples/web/redis.cpp) 与 [auth_jwt.cpp](examples/web/auth_jwt.cpp)。
 - 浏览 [examples/web](examples/web) 查看全部示例源码，构建 target 列表见 [examples/CMakeLists.txt](examples/CMakeLists.txt)。
 - 用户使用指南与公开 API 文档见 [doc/README.md](doc/README.md)。
 

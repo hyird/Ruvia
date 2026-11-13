@@ -17,7 +17,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/http_client.h"
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
 

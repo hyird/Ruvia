@@ -178,7 +178,7 @@ ruvia::task<void> stream_subscription(
 ## 3. WebSocket 服务端
 
 头文件：`"ruvia/web/context.h"`、`"ruvia/http/http_client.h"`。
-参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
+参考示例：[examples/web/streaming.cpp](../examples/web/streaming.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
 不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发ruviawebrequest_streamh) 显式协商并取得同一个 `websocket` 会话接口。

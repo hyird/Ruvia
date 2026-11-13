@@ -16,6 +16,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -23,58 +24,49 @@
 #include <exception>
 #include <filesystem>
 #include <future>
+#include <initializer_list>
 #include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
+#include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
+#include <variant>
 #include <vector>
 
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
 #include <asio/executor_work_guard.hpp>
+#include <asio/ip/address.hpp>
 #include <asio/ip/udp.hpp>
 #include <asio/post.hpp>
 #include <asio/read.hpp>
 #include <asio/read_until.hpp>
+#include <asio/socket_base.hpp>
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/error.hpp>
+#include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 #include <openssl/evp.h>
 #include <openssl/pem.h>
+#include <openssl/rand.h>
 #include <openssl/rsa.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
 #include <openssl/x509v3.h>
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 
 #include "worker_task_fixture.h"
-
-#if defined(_WIN32)
-#include <windows.h>
-
-#include <cwchar>
-#include <memory>
-#endif
-#include <algorithm>
-#include <initializer_list>
-#include <optional>
-#include <span>
-#include <variant>
-
-#include <asio/ip/address.hpp>
-#include <asio/socket_base.hpp>
-#include <asio/steady_timer.hpp>
-#include <openssl/rand.h>
-#include <openssl/x509_vfy.h>
 
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
@@ -87,52 +79,22 @@
 #include "ruvia/http/http3_connection.h"
 #endif
 
-#include <algorithm>
-#include <array>
 #include <charconv>
-#include <chrono>
-#include <cstddef>
-#include <cstdint>
 #include <cstring>
-#include <exception>
-#include <future>
-#include <limits>
-#include <map>
-#include <optional>
-#include <span>
-#include <stdexcept>
-#include <string>
-#include <string_view>
-#include <system_error>
-#include <thread>
-#include <utility>
-#include <vector>
 
-#include <asio/co_spawn.hpp>
-#include <asio/executor_work_guard.hpp>
-#include <asio/ip/tcp.hpp>
-#include <asio/post.hpp>
-#include <asio/read.hpp>
 #include <asio/redirect_error.hpp>
-#include <asio/steady_timer.hpp>
-#include <asio/use_awaitable.hpp>
 #include <asio/use_future.hpp>
-#include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/http_client.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#ifdef RUVIA_ENABLE_DATABASE
+#if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif
 #endif
-#ifdef RUVIA_ENABLE_REDIS
+#if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
-#endif
-#include "ruvia/core/task.h"
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db.h"
 #endif
 namespace ruvia::test {
 

@@ -12,16 +12,12 @@ endfunction()
 
 ruvia_add_example(ruvia_example_basic_http web/basic_http.cpp)
 ruvia_add_example(ruvia_example_api_surface web/api_surface.cpp)
+target_compile_definitions(ruvia_example_api_surface PRIVATE
+    RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/web")
 ruvia_add_example(ruvia_example_models_validation web/models_validation.cpp)
 ruvia_add_example(ruvia_example_streaming web/streaming.cpp)
-ruvia_add_example(ruvia_example_files_static web/files_static.cpp)
-target_compile_definitions(ruvia_example_files_static PRIVATE
-    RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/web")
-ruvia_add_example(ruvia_example_websocket web/websocket.cpp)
 ruvia_add_example(ruvia_example_http_client web/http_client.cpp)
 ruvia_add_example(ruvia_example_runtime_config web/runtime_config.cpp)
-ruvia_add_example(ruvia_example_testing web/testing.cpp)
-ruvia_add_example(ruvia_example_request_policies web/request_policies.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt web/auth_jwt.cpp)
@@ -29,11 +25,6 @@ endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_database web/database.cpp)
-    ruvia_add_example(ruvia_example_sql_queries web/sql_queries.cpp)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL AND RUVIA_ENABLE_REDIS)
-    ruvia_add_example(ruvia_example_event_loop_data web/event_loop_data.cpp)
 endif()
 
 if(RUVIA_ENABLE_POSTGRESQL)
@@ -41,6 +32,5 @@ if(RUVIA_ENABLE_POSTGRESQL)
 endif()
 
 if(RUVIA_ENABLE_REDIS)
-    ruvia_add_example(ruvia_example_sessions web/sessions.cpp)
     ruvia_add_example(ruvia_example_redis web/redis.cpp)
 endif()
