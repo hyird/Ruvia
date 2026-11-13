@@ -330,7 +330,7 @@ for (const auto& worker : ruvia::app().workers()) {
 
 ---
 
-### 1.6 连接观察钩子（`"ruvia/web/server_observation.h"`）
+### 1.6 连接观察钩子（`"ruvia/web/http_server.h"`）
 
 #### 1.6.1 原始与结构化协议观察
 
@@ -387,7 +387,7 @@ ruvia::app()
 
 - **返回值**：`true` 表示找到已登记连接并请求关闭，不表示任务已全部回收；未知或已退役 ID 返回 `false`。违反上述调用边界抛 `std::logic_error`，请求内自断连使用 `abort_connection()`。
 
-### 1.7 原始连接分发（`"ruvia/web/server_connection.h"`）
+### 1.7 原始连接分发（`"ruvia/web/http_server.h"`）
 
 `listen_config::dispatch_ = ruvia::listener_dispatch::connection` 的监听器把每个已接受的连接交给 `on_connection()` 注册的处理器：明文监听器交付 socket 字节，HTTPS 监听器在握手完成后交付解密字节流，服务器不解析 HTTP。同一应用可同时拥有 `routes` 与 `connection` 监听器；`app.h` 已包含该头。
 
@@ -427,7 +427,7 @@ ruvia::app()
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
 - **平台**：Windows 与 POSIX 语义一致，连接同样经 Acceptor 交给业务 worker 后处理。
 
-### 1.8 请求流分发（`"ruvia/web/request_stream.h"`）
+### 1.8 请求流分发（`"ruvia/web/http_server.h"`）
 
 `listen_config::dispatch_ = ruvia::listener_dispatch::request_stream` 的监听器把每个 HTTP 请求（HTTP/1.1、明文 prior-knowledge 与 TLS 上的 HTTP/2、配对的 HTTP/3）交给 `on_request_stream()` 注册的处理器，不经过路由。同一应用可同时拥有 `routes`、`request_stream` 与 `connection` 监听器；`app.h` 已包含该头。
 
@@ -601,7 +601,7 @@ int main() {
 }
 ```
 
-### 1.10 原始 TCP/TLS 出站（`"ruvia/web/tcp_client.h"`）
+### 1.10 原始 TCP/TLS 出站（`"ruvia/web/http_client_types.h"`）
 
 `tcp_client(event_loop, const tcp_client_config&)` 是可独立使用的字节流拥有者，不解析 HTTP，也不创建线程；复用共享 DNS、Happy Eyeballs、TCP 策略与 SAN 校验的 TLS/mTLS 传输。
 
@@ -897,10 +897,10 @@ const auto& user = c.request_state<current_user>();
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
 | `ruvia::body_limit<MaxBytes>` (`"ruvia/web/controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
-| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/rate_limit.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
+| `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/middleware.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"ruvia/web/middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"ruvia/web/session.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
+| `ruvia::session_middleware` (`"ruvia/web/middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"ruvia/web/context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。
@@ -1029,7 +1029,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 ## 6. 静态文件服务与内存级测试
 
-### 6.1 静态文件服务（`"ruvia/web/static_files.h"`）
+### 6.1 静态文件服务（`"ruvia/web/server_config.h"`）
 
 Ruvia 提供三种静态文件服务方式：
 

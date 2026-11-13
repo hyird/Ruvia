@@ -6,7 +6,7 @@
 
 ## 1. 流式请求体与流式响应 / SSE
 
-头文件：`"ruvia/web/streaming.h"`、`"ruvia/web/multipart_reader.h"`、`"ruvia/http/sse.h"`。
+头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/sse.h"`。
 不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主ruviawebhttp_serverh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
