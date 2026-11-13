@@ -465,6 +465,28 @@ http_client_request& http_client_request::redirect_policy(
     redirect_policy_ = std::move(policy);
     return *this;
 }
+http_client_request& http_client_request::redirect_policy(http_client_redirect_observer policy) {
+    return on_redirect(std::move(policy));
+}
+http_client_request& http_client_request::redirect_policy(
+    http_client_async_redirect_observer policy) {
+    return on_redirect(std::move(policy));
+}
+http_client_request& http_client_request::on_redirect(http_client_redirect_observer observer) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    redirect_observer_ = std::move(observer);
+    return *this;
+}
+http_client_request& http_client_request::on_redirect(
+    http_client_async_redirect_observer observer) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    async_redirect_observer_ = std::move(observer);
+    return *this;
+}
 
 task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_config config) {
     if (consumed_) {
@@ -512,46 +534,120 @@ task<http_client_response> http_client_request::send() {
     return make_scoped_operation(client_.registration_.scope(), send_owned(std::move(*this)));
 }
 
+namespace {
+
+[[nodiscard]] std::pmr::string format_origin_target_url(
+    const http_origin_view& origin, std::string_view target, std::pmr::memory_resource* resource) {
+    auto* const target_resource = pmr_resource_or_default(resource);
+    const auto authority = make_http_origin_authority(origin, target_resource);
+    const std::string_view scheme_prefix =
+        origin.scheme() == http_scheme::https ? "https://" : "http://";
+    std::pmr::string url(target_resource);
+    url.reserve(scheme_prefix.size() + authority.size() + target.size());
+    url.append(scheme_prefix);
+    url.append(authority);
+    if (!target.empty() && target.front() != '/' && target != "*") {
+        url.push_back('/');
+    }
+    url.append(target);
+    return url;
+}
+
+}  // namespace
+
 task<http_client_response> http_client_request::send_owned(http_client_request request) {
     // One deadline spans every redirect hop; each hop receives it as an absolute bound.
-    const operation_deadline total(request.client_.options_.timeout_.has_value()
-                                       ? request.client_.options_.timeout_
-                                       : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
+    const operation_deadline total(
+        request.client_.options_.timeout_.has_value()
+            ? request.client_.options_.timeout_
+            : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
+    co_return co_await follow_redirects(std::move(request), std::nullopt, total, false);
+}
+
+task<http_client_response> http_client_request::follow_redirects(http_client_request request,
+    std::optional<http_client_response> initial_response, const operation_deadline& total,
+    bool upload_initial_hop) {
     for (std::size_t redirects = 0;; ++redirects) {
-        request.client_.registration_.require_active();
-        if (total.expired()) {
-            throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP redirect deadline expired", std::nullopt, nullptr, redirects != 0);
+        std::optional<http_client_response> hop_response;
+        if (redirects == 0 && initial_response.has_value()) {
+            hop_response.emplace(std::move(*initial_response));
+            initial_response.reset();
+        } else {
+            request.client_.registration_.require_active();
+            if (total.expired()) {
+                throw http_client_error(std::make_error_code(std::errc::timed_out),
+                    "HTTP redirect deadline expired", std::nullopt, nullptr, redirects != 0,
+                    redirects);
+            }
+            request.client_.options_.timeout_ = total.timeout();
+            std::optional<task<http_client_response>> dispatched;
+            {
+                const detail::inline_http_header_views<16> fields(
+                    request.headers_, request.headers_.get_allocator().resource());
+                const http_client_request_view view{
+                    .method_ = request.method_,
+                    .target_ = request.target_,
+                    .headers_ = fields.view(),
+                    .content_ = request.has_body_
+                                    ? http_client_request_content_view::bytes(request.body_)
+                                    : http_client_request_content_view::none()};
+                dispatched.emplace(request.client_.dispatch(
+                    view, request.request_options_, request.informational_callback_));
+            }
+            if (redirects == request.max_redirects_) {
+                std::pmr::string(request.method_.get_allocator()).swap(request.method_);
+                std::pmr::string(request.target_.get_allocator()).swap(request.target_);
+                std::pmr::vector<http_header>(request.headers_.get_allocator())
+                    .swap(request.headers_);
+                std::pmr::string(request.body_.get_allocator()).swap(request.body_);
+                try {
+                    co_return co_await std::move(*dispatched);
+                } catch (const http_client_error& error) {
+                    if (redirects != 0 && error.redirect_hops() == 0) {
+                        throw http_client_error(error.code(), error.what(), error.status(),
+                            error.connection_info(), error.request_written(), redirects);
+                    }
+                    throw;
+                }
+            }
+            try {
+                hop_response.emplace(co_await std::move(*dispatched));
+            } catch (const http_client_error& error) {
+                if (redirects != 0 && error.redirect_hops() == 0) {
+                    throw http_client_error(error.code(), error.what(), error.status(),
+                        error.connection_info(), error.request_written(), redirects);
+                }
+                throw;
+            }
         }
-        request.client_.options_.timeout_ = total.timeout();
-        std::optional<task<http_client_response>> dispatched;
-        {
-            const detail::inline_http_header_views<16> fields(
-                request.headers_, request.headers_.get_allocator().resource());
-            const http_client_request_view view{
-                .method_ = request.method_,
-                .target_ = request.target_,
-                .headers_ = fields.view(),
-                .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
-                                              : http_client_request_content_view::none()};
-            dispatched.emplace(request.client_.dispatch(view, request.request_options_, request.informational_callback_));
-        }
+
+        auto response = std::move(*hop_response);
         if (redirects == request.max_redirects_) {
-            std::pmr::string(request.method_.get_allocator()).swap(request.method_);
-            std::pmr::string(request.target_.get_allocator()).swap(request.target_);
-            std::pmr::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
-            std::pmr::string(request.body_.get_allocator()).swap(request.body_);
-            co_return co_await std::move(*dispatched);
+            co_return response;
         }
-        auto response = co_await std::move(*dispatched);
         const auto status = response.status().value();
         if (status != 301 && status != 302 && status != 303 && status != 307 && status != 308) {
             co_return response;
         }
+        const http_client_request_view current_view{
+            .method_ = request.method_,
+            .target_ = request.target_,
+            .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
+                                          : http_client_request_content_view::none()};
+        const auto plan = plan_http_client_redirect_request(
+            current_view, {.status_ = response.status(), .resource_ = request.client_.resource_});
+        if (upload_initial_hop && redirects == 0 &&
+            plan.content_disposition() != http_client_redirect_content_disposition::drop) {
+            co_return response;
+        }
+
         std::optional<std::string_view> location;
         for (const auto& field : response.headers()) {
             if (http_ascii_equals_ignore_case(field.name(), "location")) {
                 if (location) {
-                    throw http_client_error(make_error_code(http_client_errc::protocol_error), "repeated redirect Location");
+                    throw http_client_error(make_error_code(http_client_errc::protocol_error),
+                        "repeated redirect Location", std::nullopt, &response.connection_info(),
+                        true, redirects);
                 }
                 location = field.value();
             }
@@ -559,18 +655,76 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         if (!location) {
             co_return response;
         }
-        auto resolved = resolve_http_client_redirect_target(request_origin(request.client_, request.request_options_),
-            {.current_target_ = request.target_, .location_ = *location, .resource_ = request.client_.resource_});
+        const auto current_origin = request_origin(request.client_, request.request_options_);
+        auto resolved = resolve_http_client_redirect_target(current_origin,
+            {.current_target_ = request.target_,
+                .location_ = *location,
+                .resource_ = request.client_.resource_});
         auto* next = std::get_if<http_client_resolved_redirect>(&resolved);
         if (next == nullptr) {
             co_return response;
         }
+
+        if (request.redirect_observer_ || request.async_redirect_observer_) {
+            const auto source_url = format_origin_target_url(
+                current_origin, request.target_, request.client_.resource_);
+            const auto target_url = format_origin_target_url(
+                next->origin(), next->target(), request.client_.resource_);
+            const http_client_redirect_hop hop_event(redirects, current_origin, request.target_,
+                source_url, response.connection_info(), response.status(), *location,
+                next->origin(), next->target(), target_url, next->cross_origin());
+            if (request.redirect_observer_) {
+                if (!request.redirect_observer_(hop_event)) {
+                    co_return response;
+                }
+                request.client_.registration_.require_active();
+            }
+            if (request.async_redirect_observer_) {
+                stop_source deadline_stop;
+                stop_group cancellation{request.client_.options_.stop_token_,
+                    request.client_.host_stop_token_, deadline_stop.token()};
+                worker_timer_registration timer;
+                if (const auto deadline_value = total.deadline()) {
+                    (void)request.client_.pool_->worker().schedule_timer(timer, *deadline_value,
+                        [&deadline_stop](worker_timer_outcome outcome) noexcept {
+                            if (outcome == worker_timer_outcome::expired) {
+                                deadline_stop.request_stop();
+                            }
+                        });
+                }
+                const auto require_live_observer = [&]() {
+                    if (total.expired()) {
+                        throw http_client_error(std::make_error_code(std::errc::timed_out),
+                            "HTTP redirect policy deadline expired", std::nullopt,
+                            &response.connection_info(), true, redirects);
+                    }
+                    if (cancellation.token().stop_requested()) {
+                        throw http_client_error(
+                            std::make_error_code(std::errc::operation_canceled),
+                            "HTTP redirect policy cancelled", std::nullopt,
+                            &response.connection_info(), true, redirects);
+                    }
+                };
+                require_live_observer();
+                const auto accepted =
+                    co_await request.async_redirect_observer_(hop_event, cancellation.token());
+                require_live_observer();
+                if (!accepted) {
+                    co_return response;
+                }
+                request.client_.registration_.require_active();
+            }
+        }
+
+        const bool has_custom_policy = static_cast<bool>(request.redirect_policy_) ||
+                                       static_cast<bool>(request.redirect_observer_) ||
+                                       static_cast<bool>(request.async_redirect_observer_);
         auto next_pool = request.client_.pool_owner_;
         if (next->cross_origin()) {
             if (request.redirect_policy_) {
                 stop_source deadline_stop;
-                stop_group cancellation{request.client_.options_.stop_token_, request.client_.host_stop_token_,
-                    deadline_stop.token()};
+                stop_group cancellation{request.client_.options_.stop_token_,
+                    request.client_.host_stop_token_, deadline_stop.token()};
                 worker_timer_registration timer;
                 if (const auto deadline_value = total.deadline()) {
                     (void)request.client_.pool_->worker().schedule_timer(timer, *deadline_value,
@@ -583,27 +737,33 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 const auto require_live_policy = [&]() {
                     if (total.expired()) {
                         throw http_client_error(std::make_error_code(std::errc::timed_out),
-                            "HTTP redirect policy deadline expired", std::nullopt, &response.connection_info());
+                            "HTTP redirect policy deadline expired", std::nullopt,
+                            &response.connection_info(), true, redirects);
                     }
                     if (cancellation.token().stop_requested()) {
-                        throw http_client_error(std::make_error_code(std::errc::operation_canceled),
-                            "HTTP redirect policy cancelled", std::nullopt, &response.connection_info());
+                        throw http_client_error(
+                            std::make_error_code(std::errc::operation_canceled),
+                            "HTTP redirect policy cancelled", std::nullopt,
+                            &response.connection_info(), true, redirects);
                     }
                 };
                 require_live_policy();
-                const auto accepted = co_await request.redirect_policy_(next->origin(), cancellation.token());
+                const auto accepted =
+                    co_await request.redirect_policy_(next->origin(), cancellation.token());
                 require_live_policy();
                 if (!accepted) {
                     co_return response;
                 }
                 request.client_.registration_.require_active();
-            } else if (request.client_.scheme() == http_scheme::https && next->scheme() != http_scheme::https) {
+            } else if (!has_custom_policy && request.client_.scheme() == http_scheme::https &&
+                       next->scheme() != http_scheme::https) {
                 co_return response;
             }
-            auto authority = make_http_origin_authority(next->origin(), request.client_.resource_);
+            auto authority =
+                make_http_origin_authority(next->origin(), request.client_.resource_);
             // Route overrides belong to the origin that set them.
             clear_route_overrides(request.request_options_);
-            if (!request.client_.pool_->config().fixed_origin_ && request.redirect_policy_ &&
+            if (!request.client_.pool_->config().fixed_origin_ && has_custom_policy &&
                 next->scheme() == request.client_.scheme()) {
                 // An alias without a fixed origin reaches the accepted origin itself.
                 request.request_options_.authority_.emplace(std::string_view(authority));
@@ -617,22 +777,27 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 }
             }
         }
-        const http_client_request_view view{
-            .method_ = request.method_,
-            .target_ = request.target_,
-            .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
-                                          : http_client_request_content_view::none()};
-        const auto plan = plan_http_client_redirect_request(view, {.status_ = response.status(), .resource_ = request.client_.resource_});
+
+        if (upload_initial_hop && redirects == 0 && response.state_ != nullptr &&
+            response.state_->upload_) {
+            response.state_->upload_->abandoned_ = true;
+            response.state_->upload_->output_.stop();
+        }
+
         request.method_.assign(plan.method());
         request.target_.assign(next->target());
-        const bool drop = plan.content_disposition() == http_client_redirect_content_disposition::drop;
+        const bool drop =
+            plan.content_disposition() == http_client_redirect_content_disposition::drop;
         std::erase_if(request.headers_, [&](const http_header& field) {
             const auto name = field.name();
             return http_ascii_equals_ignore_case(name, "host") ||
-                   (next->cross_origin() && (http_ascii_equals_ignore_case(name, "authorization") ||
-                                                http_ascii_equals_ignore_case(name, "proxy-authorization") || http_ascii_equals_ignore_case(name, "cookie"))) ||
+                   (next->cross_origin() &&
+                       (http_ascii_equals_ignore_case(name, "authorization") ||
+                           http_ascii_equals_ignore_case(name, "proxy-authorization") ||
+                           http_ascii_equals_ignore_case(name, "cookie"))) ||
                    (drop && (http_ascii_equals_ignore_case(name.substr(0, 8), "content-") ||
-                                http_ascii_equals_ignore_case(name, "transfer-encoding") || http_ascii_equals_ignore_case(name, "trailer") ||
+                                http_ascii_equals_ignore_case(name, "transfer-encoding") ||
+                                http_ascii_equals_ignore_case(name, "trailer") ||
                                 http_ascii_equals_ignore_case(name, "expect")));
         });
         if (drop) {
@@ -651,14 +816,40 @@ task<http_client_exchange> http_client_request::upload(http_client_upload_config
     if (has_body_) {
         throw std::invalid_argument("streamed upload cannot also have a buffered body");
     }
-    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
-    auto dispatched = client_.dispatch_upload({.method_ = method_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
+    client_.registration_.require_active();
+    if (config.max_chunk_bytes_ == 0 ||
+        config.continue_timeout_.value() <= std::chrono::milliseconds::zero() ||
+        (config.expectation_ != http_client_request_expectation::none &&
+            config.expectation_ != http_client_request_expectation::continue_value)) {
+        throw std::invalid_argument("streaming upload requires a bodyless head and valid upload policy");
+    }
     consumed_ = true;
-    std::pmr::string(method_.get_allocator()).swap(method_);
-    std::pmr::string(target_.get_allocator()).swap(target_);
-    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
-    std::pmr::string(body_.get_allocator()).swap(body_);
-    return dispatched;
+    return make_scoped_operation(
+        client_.registration_.scope(), upload_owned(std::move(*this), config));
+}
+
+task<http_client_exchange> http_client_request::upload_owned(
+    http_client_request request, http_client_upload_config config) {
+    std::optional<task<http_client_exchange>> dispatched;
+    {
+        const detail::inline_http_header_views<16> fields(
+            request.headers_, request.headers_.get_allocator().resource());
+        detail::http_client_request_storage storage(
+            request.method_, request.target_, fields.view(), request.client_.resource_);
+        storage.options_ = detail::copy_http_client_request_settings(request.request_options_);
+        storage.informational_ = request.informational_callback_;
+        storage.pool_owner_ = request.client_.pool_owner_;
+        storage.set_host_stop(request.client_.host_stop_token_);
+        dispatched.emplace(
+            request.client_.pool_->open_request(std::move(storage), config, request.client_.options_));
+    }
+    auto exchange = co_await std::move(*dispatched);
+    if (request.max_redirects_ != 0 && exchange.body().state_ != nullptr &&
+        exchange.body().state_->upload_) {
+        exchange.body().state_->upload_->redirect_request_ =
+            make_pmr_object<http_client_request>(process_resource(), std::move(request));
+    }
+    co_return exchange;
 }
 
 http_client_connect_request::http_client_connect_request(const http_client_handle& client,

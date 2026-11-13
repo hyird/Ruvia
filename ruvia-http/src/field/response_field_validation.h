@@ -30,4 +30,6 @@ private:
 [[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value,
     response_field_state& state) noexcept;
 
+[[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
+
 }  // namespace ruvia::detail

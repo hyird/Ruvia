@@ -478,7 +478,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
-自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.redirect_policy(task<bool>(http_origin_view, stop_token))` 在跨源跳转前等待调用方策略，策略可先 `co_await owner.upsert(...)` 注册目标；返回 `false` 保留原响应。回调须响应令牌，目标视图只借用到回调完成。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))`（及同形 `.redirect_policy(...)` 重载）在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |
@@ -496,7 +496,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | 每请求阶段超时 | `configure` 的 `timeouts_` 分别覆盖 `connect_`、`read_`、`write_`、`acquire_`；默认继承，`http_client_timeout_override::after(duration)` 替换，`disabled()` 只禁用该阶段 |
 | 独立探测连接 | `.configure({.fresh_connection_ = true})` 使用不借用、也不归还业务复用池的物理连接，支持 HTTP/1、HTTP/2、HTTP/3 |
 | 统一请求配置 | `.configure(http_client_request_options)` 设置上述请求策略；CONNECT 构造器也提供该入口 |
-| DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析 alias 拨号名。`dns_refresh_interval_` 每周期只重新解析仍有存活连接的拨号域名（含请求级 `dial_host_`，IP 字面量不查询，无连接不发查询），受 worker 级并发上限约束；答案不再包含连接所用地址时退役该连接。`stats().dns_refreshes_` 计数后台查询 |
+| DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析 alias 拨号名并淘汰地址已变更的连接；`co_await handle.resolve_dns(options)` / `co_await handle.resolve_dns(host, options)` 与独立函数 `co_await ruvia::resolve_dns(worker_or_loop, host, options)` 执行非破坏性异步 DNS 解析，返回排序去重后的 `ip_address` 列表而不触发关闭现有活动连接或 WebSocket。`dns_refresh_interval_` 每周期只重新解析仍有存活连接的拨号域名（含请求级 `dial_host_`，IP 字面量不查询，无连接不发查询），受 worker 级并发上限约束；`stats().dns_refreshes_` 计数后台查询 |
 | 定向断连 | handle 的 `close_connection(id)` 按实际物理连接 ID 关闭，旧 ID 不会命中新连接；共享多路复用连接上的流一并终止 |
 
 - **总期限独立**：阶段覆盖不改变 `request_timeout_` 或宿主取消。总期限仍计入慢下游与 1xx 回调等待；代理若不需要整体时限，须在 origin 配置中显式设为 `nullopt`。读无活动预算在等待调用方消费正文时暂停。

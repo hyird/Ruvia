@@ -1,11 +1,17 @@
 #pragma once
 
 #include <cstddef>
+#include <limits>
+#include <span>
 #include <string_view>
 
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_status.h"
 
 namespace ruvia {
+
+class http_response_headers;
 
 // Bytes a field costs beyond its name and value: the ": " separator and the
 // CRLF of its normalized HTTP/1 field line "name: value\r\n".
@@ -65,5 +71,69 @@ private:
     (void)budget.add(std::string_view("\r\n").size());
     return budget;
 }
+
+namespace detail {
+
+[[nodiscard]] constexpr std::size_t saturating_add_size(
+    std::size_t left, std::size_t right) noexcept {
+    constexpr auto maximum = (std::numeric_limits<std::size_t>::max)();
+    return left > maximum - right ? maximum : left + right;
+}
+
+template <typename field_span_type>
+[[nodiscard]] constexpr std::size_t estimate_http1_fields_bytes_impl(
+    const field_span_type& fields, bool include_terminating_crlf) noexcept {
+    std::size_t total = include_terminating_crlf ? 2U : 0U;
+    for (const auto& field : fields) {
+        total = saturating_add_size(total, field.name().size());
+        total = saturating_add_size(total, field.value().size());
+        total = saturating_add_size(total, http_field_line_overhead);
+    }
+    return total;
+}
+
+}  // namespace detail
+
+[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(
+    std::span<const http_header> fields, bool include_terminating_crlf = true) noexcept {
+    return detail::estimate_http1_fields_bytes_impl(fields, include_terminating_crlf);
+}
+
+[[nodiscard]] constexpr std::size_t estimate_http1_field_section_bytes(
+    std::span<const http_header_view> fields, bool include_terminating_crlf = true) noexcept {
+    return detail::estimate_http1_fields_bytes_impl(fields, include_terminating_crlf);
+}
+
+[[nodiscard]] std::size_t estimate_http1_field_section_bytes(
+    const http_response_headers& fields, bool include_terminating_crlf = true) noexcept;
+
+[[nodiscard]] constexpr std::size_t estimate_http1_trailers_bytes(
+    std::span<const http_header> trailers, bool include_terminating_crlf = true) noexcept {
+    return estimate_http1_field_section_bytes(trailers, include_terminating_crlf);
+}
+
+[[nodiscard]] constexpr std::size_t estimate_http1_trailers_bytes(
+    std::span<const http_header_view> trailers, bool include_terminating_crlf = true) noexcept {
+    return estimate_http1_field_section_bytes(trailers, include_terminating_crlf);
+}
+
+// Equivalent HTTP/1.1 wire byte size of a response status line ("HTTP/1.1 NNN
+// <reason>\r\n"), all header field lines, and the terminating CRLF.
+[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(
+    http_status_code status, std::span<const http_header> headers) noexcept {
+    const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
+    return detail::saturating_add_size(
+        status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+}
+
+[[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(
+    http_status_code status, std::span<const http_header_view> headers) noexcept {
+    const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
+    return detail::saturating_add_size(
+        status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+}
+
+[[nodiscard]] std::size_t estimate_http1_response_head_bytes(
+    http_status_code status, const http_response_headers& headers) noexcept;
 
 }  // namespace ruvia

@@ -167,6 +167,7 @@ public:
     std::exception_ptr failure_;
     bool content_released_{};
     http_client_response_handoff response_;
+    std::unique_ptr<http_client_request, pmr_object_deleter<http_client_request>> redirect_request_;
 };
 
 // Composite per-stream deadline timer shared by HTTP/2 and HTTP/3 client

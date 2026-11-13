@@ -3,9 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <span>
 #include <string_view>
 
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_header.h"
 
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
 // request expresses, and the response coding the server picks from them.
@@ -164,15 +167,22 @@ public:
     [[nodiscard]] static http_response_coding_selection select(
         const http_response_coding_qualities& qualities,
         http_response_coding_candidates candidates) noexcept;
+    [[nodiscard]] static constexpr http_response_coding_selection select(
+        const http_response_coding_qualities& qualities,
+        std::span<const http_content_coding> candidates) noexcept;
 
     // Ranks the same Accept-Encoding snapshot over the codings one
     // representation store actually holds (for example indexed precompressed
     // files), so that store never parses the request's fields again.
     [[nodiscard]] constexpr http_response_coding_selection select(
         http_response_coding_candidates candidates) const noexcept {
-        return rank(scores_, candidates);
+        return rank(scores_, candidates, explicit_identity_);
     }
 
+    [[nodiscard]] constexpr http_response_coding_selection select(
+        std::span<const http_content_coding> candidates) const noexcept {
+        return rank_ordered(scores_, candidates, explicit_identity_);
+    }
     // False when the client accepts none of the candidates.
     [[nodiscard]] constexpr bool acceptable() const noexcept {
         return acceptable_;
@@ -205,17 +215,35 @@ private:
     // Client score per http_content_coding value; -1 marks an unacceptable coding.
     using scores_type = std::array<std::int16_t, 5>;
 
-    constexpr http_response_coding_selection(http_content_coding coding, bool acceptable, scores_type scores) noexcept
+    constexpr http_response_coding_selection(http_content_coding coding, bool acceptable,
+        scores_type scores, bool explicit_identity = false) noexcept
         : scores_(scores),
           coding_(coding),
-          acceptable_(acceptable) {}
+          acceptable_(acceptable),
+          explicit_identity_(explicit_identity) {}
+
+    [[nodiscard]] static constexpr scores_type make_scores(
+        const http_response_coding_qualities& qualities) noexcept {
+        scores_type scores{};
+        for (std::size_t index = 0; index < scores.size(); ++index) {
+            scores[index] =
+                static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
+        }
+        return scores;
+    }
 
     [[nodiscard]] static constexpr http_response_coding_selection rank(
-        scores_type scores, http_response_coding_candidates candidates) noexcept;
+        scores_type scores, http_response_coding_candidates candidates,
+        bool explicit_identity = false) noexcept;
+
+    [[nodiscard]] static constexpr http_response_coding_selection rank_ordered(
+        scores_type scores, std::span<const http_content_coding> candidates,
+        bool explicit_identity) noexcept;
 
     scores_type scores_;
     http_content_coding coding_;
     bool acceptable_;
+    bool explicit_identity_{false};
 };
 
 // Picks the best response coding from the supplied representation candidates
@@ -231,15 +259,18 @@ inline http_response_coding_selection http_response_coding_selection::select(
 inline http_response_coding_selection http_response_coding_selection::select(
     const http_response_coding_qualities& qualities,
     http_response_coding_candidates candidates) noexcept {
-    scores_type scores{};
-    for (std::size_t index = 0; index < scores.size(); ++index) {
-        scores[index] = static_cast<std::int16_t>(qualities.score(static_cast<http_content_coding>(index)));
-    }
-    return rank(scores, candidates);
+    return rank(make_scores(qualities), candidates, qualities.identity_.explicit_quality_ >= 0);
+}
+
+constexpr http_response_coding_selection http_response_coding_selection::select(
+    const http_response_coding_qualities& qualities,
+    std::span<const http_content_coding> candidates) noexcept {
+    return rank_ordered(
+        make_scores(qualities), candidates, qualities.identity_.explicit_quality_ >= 0);
 }
 
 constexpr http_response_coding_selection http_response_coding_selection::rank(
-    scores_type scores, http_response_coding_candidates candidates) noexcept {
+    scores_type scores, http_response_coding_candidates candidates, bool explicit_identity) noexcept {
     constexpr http_content_coding preference[] = {
         http_content_coding::brotli,
         http_content_coding::zstd,
@@ -261,7 +292,46 @@ constexpr http_response_coding_selection http_response_coding_selection::rank(
             found = true;
         }
     }
-    return http_response_coding_selection(best, found, scores);
+    return http_response_coding_selection(best, found, scores, explicit_identity);
+}
+
+constexpr http_response_coding_selection http_response_coding_selection::rank_ordered(
+    scores_type scores, std::span<const http_content_coding> candidates,
+    bool explicit_identity) noexcept {
+    http_content_coding best = http_content_coding::identity;
+    bool found = false;
+    int best_score = -1;
+    bool identity_in_candidates = false;
+    for (const auto coding : candidates) {
+        const auto index = static_cast<std::size_t>(coding);
+        if (index >= scores.size()) {
+            continue;
+        }
+        if (coding == http_content_coding::identity) {
+            identity_in_candidates = true;
+        }
+        const int raw_score = scores[index];
+        if (raw_score < 0) {
+            continue;
+        }
+        const int score =
+            (coding == http_content_coding::identity && !explicit_identity) ? 0 : raw_score;
+        if (score > best_score) {
+            best_score = score;
+            best = coding;
+            found = true;
+        }
+    }
+    const int identity_score =
+        scores[static_cast<std::size_t>(http_content_coding::identity)];
+    if (!identity_in_candidates && identity_score >= 0) {
+        if (!found || (explicit_identity && identity_score > best_score)) {
+            best = http_content_coding::identity;
+            best_score = identity_score;
+            found = true;
+        }
+    }
+    return http_response_coding_selection(best, found, scores, explicit_identity);
 }
 
 class http_response;
@@ -289,5 +359,30 @@ enum class http_response_content_coding_status : std::uint8_t {
 // quality snapshot and selects among all producible codings. This is the one
 // Accept-Encoding preference authority for HTTP/1, HTTP/2 and subrequests.
 [[nodiscard]] http_response_coding_selection http_response_coding_selection_for(const http_request& request) noexcept;
+
+// Selects a content coding from Accept-Encoding using the caller's ordered
+// candidate list for tie-breaking, comparing explicit/implicit identity weight
+// and returning std::nullopt when every candidate (and identity) is rejected.
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
+    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
+    std::span<const http_header> request_headers,
+    std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
+    std::span<const http_header_view> request_headers,
+    std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] http_response_coding_selection select_http_accept_encoding(
+    const http_request& request, std::span<const http_content_coding> candidates) noexcept;
+
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
+    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
+    std::span<const http_header> request_headers,
+    std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
+    std::span<const http_header_view> request_headers,
+    std::span<const http_content_coding> candidates) noexcept;
+[[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
+    const http_request& request, std::span<const http_content_coding> candidates) noexcept;
 
 }  // namespace ruvia

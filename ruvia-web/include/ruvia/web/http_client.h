@@ -40,6 +40,7 @@ class response_stream_writer;
 class http_client_request;
 class http_client_connect_request;
 class http_client_websocket_request;
+class operation_deadline;
 
 namespace detail {
 class http_client_pool;
@@ -292,6 +293,7 @@ private:
     friend class detail::http_client_response_handoff;
     friend class http_client_push;
     friend class http_client_request_body_writer;
+    friend class http_client_request;
 
     explicit http_client_response(detail::http_client_pool& pool);
     explicit http_client_response(detail::http_client_response_state* state_value) noexcept;
@@ -517,6 +519,7 @@ public:
 
 private:
     friend class http_client_exchange;
+    friend class http_client_request;
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept
         : state_(state_value) {}
     ~http_client_request_body_writer() = default;
@@ -580,6 +583,13 @@ public:
     [[nodiscard]] std::pmr::vector<http_client_endpoint_address> dns_snapshot() const;
     void update_dns(std::span<const http_client_endpoint_address> addresses) const;
     [[nodiscard]] task<void> refresh_dns() const;
+    // Non-destructive DNS resolution: resolves the client's dial host (or a
+    // specified host) into a sorted, deduplicated IP address list without
+    // retiring existing active connections or WebSockets.
+    [[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+        operation_options options = {}) const;
+    [[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+        std::string_view host, operation_options options = {}) const;
     [[nodiscard]] bool close_connection(std::uint64_t id) const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
     [[nodiscard]] std::optional<http_client_push> next_push() const;
@@ -639,6 +649,13 @@ public:
     // 在跨源跳转前 await，可异步 upsert 目的 origin；false 保留原响应。
     // token 合并宿主、调用方取消与总截止期；回调须协作取消，返回后才释放借用 origin。
     http_client_request& redirect_policy(move_only_function<task<bool>(http_origin_view, stop_token)> policy);
+    http_client_request& redirect_policy(http_client_redirect_observer policy);
+    http_client_request& redirect_policy(http_client_async_redirect_observer policy);
+    // Per-hop redirect observation and control callback invoked on every
+    // redirect hop (same-origin and cross-origin alike) before following it.
+    // Returning false stops following and returns the redirect response.
+    http_client_request& on_redirect(http_client_redirect_observer observer);
+    http_client_request& on_redirect(http_client_async_redirect_observer observer);
     template <typename value_type>
         requires detail::is_model_json_value<value_type>
     http_client_request& json(const value_type& value) {
@@ -661,8 +678,14 @@ public:
 
 private:
     friend class http_client_handle;
+    friend class detail::http_client_response_handoff;
     http_client_request(const http_client_handle& client, std::string_view method, std::string_view path);
     static task<http_client_response> send_owned(http_client_request request);
+    static task<http_client_exchange> upload_owned(
+        http_client_request request, http_client_upload_config config);
+    static task<http_client_response> follow_redirects(http_client_request request,
+        std::optional<http_client_response> initial_response, const operation_deadline& total,
+        bool upload_initial_hop);
     [[nodiscard]] std::pmr::vector<http_header_view> field_views() const;
     http_client_handle client_;
     std::pmr::string method_;
@@ -675,6 +698,8 @@ private:
     http_client_request_options request_options_;
     std::shared_ptr<http_client_informational_callback> informational_callback_;
     move_only_function<task<bool>(http_origin_view, stop_token)> redirect_policy_;
+    http_client_redirect_observer redirect_observer_;
+    http_client_async_redirect_observer async_redirect_observer_;
     bool has_body_{false};
     bool consumed_{false};
 };
@@ -755,6 +780,13 @@ public:
 private:
     std::shared_ptr<detail::http_client_state> state_;
 };
+
+// Standalone non-destructive asynchronous DNS resolution bound to a worker or
+// event loop. Returns a sorted, deduplicated list of numeric IP addresses.
+[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+    const worker_handle& worker, std::string_view host, operation_options options = {});
+[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+    event_loop loop, std::string_view host, operation_options options = {});
 
 }  // namespace ruvia
 

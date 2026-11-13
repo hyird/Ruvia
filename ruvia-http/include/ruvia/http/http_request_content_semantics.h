@@ -73,4 +73,21 @@ enum class http_request_content_semantics : std::uint8_t {
     return http_request_content_semantics::no_additional_requirements;
 }
 
+// Whether a request method should explicitly send Content-Length: 0 when
+// forwarded or generated with no body (false for GET, HEAD, DELETE, OPTIONS,
+// TRACE, CONNECT; true for POST, PUT, PATCH and extension methods).
+[[nodiscard]] constexpr bool http_method_sends_zero_content_length(
+    std::string_view method) noexcept {
+    if (method.empty() || method == "GET" || method == "HEAD" || method == "DELETE" ||
+        method == "OPTIONS" || method == "TRACE" || method == "CONNECT") {
+        return false;
+    }
+    return true;
+}
+
+[[nodiscard]] constexpr bool http_method_requires_zero_content_length(
+    std::string_view method) noexcept {
+    return http_method_sends_zero_content_length(method);
+}
+
 }  // namespace ruvia

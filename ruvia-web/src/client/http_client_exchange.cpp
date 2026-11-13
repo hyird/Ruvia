@@ -29,12 +29,27 @@ task<http_client_response> http_client_response_handoff::receive_owned(
     if (taken_) {
         throw std::logic_error("HTTP response has already been transferred");
     }
+    const operation_deadline redirect_deadline(
+        operation.timeout_.has_value()
+            ? operation.timeout_
+            : (pin.state_->upload_ && pin.state_->upload_->redirect_request_ &&
+                          pin.state_->pool_ != nullptr
+                      ? std::optional<operation_timeout>(
+                            pin.state_->pool_->config().request_timeout_)
+                      : std::nullopt));
     {
-        const http_client_operation_interruption interruption(*pin.state_, http_client_operation_lane::read, operation);
+        const http_client_operation_interruption interruption(
+            *pin.state_, http_client_operation_lane::read, operation);
         co_await pin.state_->await_head(head_message);
     }
     taken_ = true;
     pin.consumer_ = true;
+    if (pin.state_->upload_ && pin.state_->upload_->redirect_request_) {
+        auto redirect_request = std::move(*pin.state_->upload_->redirect_request_);
+        pin.state_->upload_->redirect_request_.reset();
+        co_return co_await http_client_request::follow_redirects(
+            std::move(redirect_request), std::move(pin), redirect_deadline, true);
+    }
     co_return std::move(pin);
 }
 

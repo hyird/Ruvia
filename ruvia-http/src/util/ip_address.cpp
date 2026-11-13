@@ -132,4 +132,79 @@ std::pmr::string ip_address::to_string(std::pmr::memory_resource* resource) cons
         resource == nullptr ? std::pmr::get_default_resource() : resource);
 }
 
+namespace {
+
+[[nodiscard]] std::optional<std::array<std::uint8_t, 16>> to_mapped_ipv6_bytes(
+    const ip_address& address) noexcept {
+    if (address.family() == ip_address_family::ipv4) {
+        const auto v4 = address.bytes();
+        return std::array<std::uint8_t, 16>{
+            0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff, v4[0], v4[1], v4[2], v4[3]};
+    }
+    if (address.scope_id() != 0) {
+        return std::nullopt;
+    }
+    std::array<std::uint8_t, 16> v6{};
+    const auto raw = address.bytes();
+    std::copy_n(raw.data(), 16, v6.data());
+    return v6;
+}
+
+}  // namespace
+
+std::optional<ip_cidr> ip_cidr::parse(std::string_view text) noexcept {
+    const auto slash = text.find('/');
+    const auto address_text = slash == std::string_view::npos ? text : text.substr(0, slash);
+    const auto parsed = ip_address::parse(address_text);
+    if (!parsed) {
+        return std::nullopt;
+    }
+    const auto mapped = to_mapped_ipv6_bytes(*parsed);
+    if (!mapped) {
+        return std::nullopt;
+    }
+    const bool was_v4 = parsed->family() == ip_address_family::ipv4;
+    const unsigned max_bits = was_v4 ? 32U : 128U;
+    unsigned bits = max_bits;
+    if (slash != std::string_view::npos) {
+        const auto prefix_text = text.substr(slash + 1);
+        if (prefix_text.empty() || prefix_text.size() > 3 ||
+            (prefix_text.size() > 1 && prefix_text.front() == '0')) {
+            return std::nullopt;
+        }
+        const auto [end, err] =
+            std::from_chars(prefix_text.data(), prefix_text.data() + prefix_text.size(), bits);
+        if (err != std::errc{} || end != prefix_text.data() + prefix_text.size() ||
+            bits > max_bits) {
+            return std::nullopt;
+        }
+    }
+    ip_cidr result;
+    result.network_ = *mapped;
+    result.prefix_bits_ = static_cast<std::uint8_t>(was_v4 ? bits + 96U : bits);
+    return result;
+}
+
+bool ip_cidr::contains(const ip_address& address) const noexcept {
+    const auto peer = to_mapped_ipv6_bytes(address);
+    if (!peer) {
+        return false;
+    }
+    const std::size_t full_bytes = prefix_bits_ / 8U;
+    const std::uint8_t rem_bits = prefix_bits_ % 8U;
+    if (!std::equal(network_.begin(), network_.begin() + full_bytes, peer->begin())) {
+        return false;
+    }
+    if (rem_bits == 0) {
+        return true;
+    }
+    const auto mask = static_cast<std::uint8_t>(0xffU << (8U - rem_bits));
+    return (network_[full_bytes] & mask) == ((*peer)[full_bytes] & mask);
+}
+
+bool ip_cidr::contains(std::string_view address_text) const noexcept {
+    const auto parsed = ip_address::parse(address_text);
+    return parsed.has_value() && contains(*parsed);
+}
+
 }  // namespace ruvia

@@ -19,7 +19,7 @@ namespace ruvia {
 // created or reset, or the library reported an internal error). It is an
 // internal failure, never a property of the representation; encode and decode
 // both throw it, and allocation exceptions retain their original type.
-class http_content_codec_error final : public std::runtime_error {
+class http_content_codec_error : public std::runtime_error {
 public:
     using std::runtime_error::runtime_error;
 };

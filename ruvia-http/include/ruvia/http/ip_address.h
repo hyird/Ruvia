@@ -65,6 +65,19 @@ public:
     [[nodiscard]] constexpr std::uint32_t scope_id() const noexcept {
         return scope_id_;
     }
+    [[nodiscard]] constexpr bool is_ipv4_mapped() const noexcept {
+        return family_ == ip_address_family::ipv6 && scope_id_ == 0 &&
+               bytes_[0] == 0 && bytes_[1] == 0 && bytes_[2] == 0 && bytes_[3] == 0 &&
+               bytes_[4] == 0 && bytes_[5] == 0 && bytes_[6] == 0 && bytes_[7] == 0 &&
+               bytes_[8] == 0 && bytes_[9] == 0 && bytes_[10] == 0xff && bytes_[11] == 0xff;
+    }
+
+    [[nodiscard]] constexpr ip_address normalized_ipv4() const noexcept {
+        if (is_ipv4_mapped()) {
+            return ipv4({bytes_[12], bytes_[13], bytes_[14], bytes_[15]});
+        }
+        return *this;
+    }
 
     // RFC 5952 text: dotted decimal for IPv4; for IPv6 lowercase hex with the
     // longest zero run compressed, IPv4-mapped as "::ffff:a.b.c.d", and a zone
@@ -106,5 +119,26 @@ private:
 
 static_assert(std::is_trivially_copyable_v<ip_address>);
 static_assert(std::is_trivially_copyable_v<ip_endpoint>);
+
+// An IPv4 or IPv6 CIDR prefix block (or bare address with full-width prefix).
+// IPv4 blocks are stored in IPv4-mapped IPv6 form so 10.0.0.0/8 matches both
+// 10.1.2.3 and ::ffff:10.1.2.3.
+class ip_cidr final {
+public:
+    constexpr ip_cidr() noexcept = default;
+
+    [[nodiscard]] static std::optional<ip_cidr> parse(std::string_view text) noexcept;
+
+    [[nodiscard]] bool contains(const ip_address& address) const noexcept;
+    [[nodiscard]] bool contains(std::string_view address_text) const noexcept;
+
+    friend constexpr bool operator==(const ip_cidr&, const ip_cidr&) noexcept = default;
+
+private:
+    std::array<std::uint8_t, 16> network_{};
+    std::uint8_t prefix_bits_{128};
+};
+
+static_assert(std::is_trivially_copyable_v<ip_cidr>);
 
 }  // namespace ruvia

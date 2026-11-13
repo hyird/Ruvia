@@ -1,13 +1,23 @@
 #pragma once
 
 #include <cstdint>
+#include <limits>
+#include <memory_resource>
 #include <optional>
+#include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/port_number.h"
 
 namespace ruvia {
+
+class http_request;
 
 // Validates an HTTP origin-form request target without allocating. The same
 // protocol rule applies to server routes and outbound HTTP/websocket clients.
@@ -85,4 +95,87 @@ private:
 
 // Validates a WHATWG serialized origin, not a general URI or origin list.
 [[nodiscard]] bool is_valid_http_serialized_origin(std::string_view value) noexcept;
+
+// Normalizes an incoming request target for proxy forwarding: converts
+// absolute-form targets to origin-form (with "/" when the path is empty and
+// preserving any query), converts an OPTIONS target with an empty path and no
+// query to "*", and preserves all other forms verbatim.
+[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
+    std::string_view method, std::string_view target,
+    std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
+    http_known_method method, std::string_view target,
+    std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
+    const http_request& request, std::pmr::memory_resource* resource = nullptr);
+
+enum class http_max_forwards_status : std::uint8_t {
+    absent,
+    valid,
+    invalid,
+};
+
+// Parsed Max-Forwards hop count (RFC 9110 section 7.6.2).
+class http_max_forwards_result final {
+public:
+    [[nodiscard]] static constexpr http_max_forwards_result absent() noexcept {
+        return http_max_forwards_result(http_max_forwards_status::absent, 0);
+    }
+    [[nodiscard]] static constexpr http_max_forwards_result invalid() noexcept {
+        return http_max_forwards_result(http_max_forwards_status::invalid, 0);
+    }
+    [[nodiscard]] static constexpr http_max_forwards_result valid(std::uint64_t current) noexcept {
+        return http_max_forwards_result(http_max_forwards_status::valid, current);
+    }
+
+    [[nodiscard]] constexpr http_max_forwards_status status() const noexcept {
+        return status_;
+    }
+    [[nodiscard]] constexpr bool is_absent() const noexcept {
+        return status_ == http_max_forwards_status::absent;
+    }
+    [[nodiscard]] constexpr bool is_valid() const noexcept {
+        return status_ == http_max_forwards_status::valid;
+    }
+    [[nodiscard]] constexpr bool is_invalid() const noexcept {
+        return status_ == http_max_forwards_status::invalid;
+    }
+    [[nodiscard]] constexpr std::optional<std::uint64_t> current() const noexcept {
+        return is_valid() ? std::optional<std::uint64_t>(current_) : std::nullopt;
+    }
+    [[nodiscard]] constexpr bool exhausted() const noexcept {
+        return is_valid() && current_ == 0;
+    }
+    [[nodiscard]] constexpr std::optional<std::uint64_t> decremented() const noexcept {
+        return (is_valid() && current_ > 0) ? std::optional<std::uint64_t>(current_ - 1)
+                                            : std::nullopt;
+    }
+    [[nodiscard]] std::pmr::string format_decremented(
+        std::pmr::memory_resource* resource = nullptr) const;
+
+private:
+    constexpr http_max_forwards_result(
+        http_max_forwards_status status, std::uint64_t current) noexcept
+        : current_(current),
+          status_(status) {}
+
+    std::uint64_t current_{0};
+    http_max_forwards_status status_{http_max_forwards_status::absent};
+};
+
+[[nodiscard]] std::optional<std::uint64_t> parse_http_max_forwards_value(
+    std::string_view field_value,
+    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
+    std::string_view field_value,
+    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
+    std::span<const http_header> headers,
+    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
+    std::span<const http_header_view> headers,
+    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
+[[nodiscard]] http_max_forwards_result parse_http_max_forwards(
+    const http_request& request,
+    std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 }  // namespace ruvia

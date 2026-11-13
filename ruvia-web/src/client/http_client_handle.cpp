@@ -99,6 +99,92 @@ task<void> refresh_client_dns(std::shared_ptr<detail::http_client_pool> pool, op
     co_await pool->refresh_dns(std::move(options));
 }
 
+[[nodiscard]] ip_address to_ruvia_ip_address(const asio::ip::address& address) noexcept {
+    if (address.is_v4()) {
+        return ip_address::ipv4(address.to_v4().to_bytes());
+    }
+    const auto v6 = address.to_v6();
+    return ip_address::ipv6(v6.to_bytes(), static_cast<std::uint32_t>(v6.scope_id()))
+        .normalized_ipv4();
+}
+
+[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns_owned(worker_handle worker,
+    std::pmr::string host, operation_options options,
+    std::shared_ptr<const http_client_address_validator> validator = nullptr,
+    std::uint16_t validator_port = 80) {
+    const operation_deadline timeout(options.timeout_);
+    if (options.stop_token_.stop_requested()) {
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled),
+            "HTTP DNS resolution cancelled", std::nullopt, nullptr, false);
+    }
+    if (timeout.expired()) {
+        throw http_client_error(std::make_error_code(std::errc::timed_out),
+            "HTTP DNS resolution timed out", std::nullopt, nullptr, false);
+    }
+    detail::client_host_resolver resolver(worker);
+    auto pending = resolver.resolve(host, validator_port, timeout, options.stop_token_);
+    detail::client_resolve_result result;
+    if (auto* immediate = std::get_if<detail::client_resolve_result>(&pending)) {
+        result = std::move(*immediate);
+    } else {
+        result = co_await std::move(std::get<task<detail::client_resolve_result>>(pending));
+    }
+    if (options.stop_token_.stop_requested() || result.error_ == asio::error::operation_aborted) {
+        throw http_client_error(std::make_error_code(std::errc::operation_canceled),
+            "HTTP DNS resolution cancelled", std::nullopt, nullptr, false);
+    }
+    if (timeout.expired() || result.error_ == asio::error::timed_out) {
+        throw http_client_error(std::make_error_code(std::errc::timed_out),
+            "HTTP DNS resolution timed out", std::nullopt, nullptr, false);
+    }
+    if (result.error_ == asio::error::no_buffer_space) {
+        throw http_client_error(make_error_code(http_client_errc::queue_full),
+            "HTTP DNS resolution blocking pool queue full", std::nullopt, nullptr, false);
+    }
+    if (result.error_ || (!result.literal_ && result.addresses_.empty())) {
+        throw http_client_error(make_error_code(http_client_errc::resolve_failed),
+            "HTTP DNS resolution failed", std::nullopt, nullptr, false);
+    }
+    std::pmr::vector<ip_address> addresses(process_resource());
+    const auto append_endpoint = [&](const asio::ip::tcp::endpoint& endpoint) {
+        if (validator && !(*validator)(endpoint.address().to_string(), endpoint.port())) {
+            throw http_client_error(make_error_code(http_client_errc::resolve_failed),
+                "HTTP dial address rejected", std::nullopt, nullptr, false);
+        }
+        addresses.push_back(to_ruvia_ip_address(endpoint.address()));
+    };
+    if (result.literal_) {
+        append_endpoint(*result.literal_);
+    } else {
+        addresses.reserve(result.addresses_.size());
+        for (const auto& entry : result.addresses_) {
+            append_endpoint(entry.endpoint());
+        }
+    }
+    std::ranges::sort(addresses);
+    const auto unique_range = std::ranges::unique(addresses);
+    addresses.erase(unique_range.begin(), unique_range.end());
+    co_return addresses;
+}
+
+[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_client_handle_dns(
+    std::shared_ptr<detail::http_client_pool> pool, std::pmr::string host,
+    operation_options handle_options, operation_options call_options, stop_token host_stop) {
+    stop_group cancellation{host_stop, handle_options.stop_token_, call_options.stop_token_};
+    std::optional<operation_timeout> effective_timeout = handle_options.timeout_;
+    if (call_options.timeout_) {
+        if (!effective_timeout ||
+            call_options.timeout_->duration() < effective_timeout->duration()) {
+            effective_timeout = call_options.timeout_;
+        }
+    }
+    if (!effective_timeout) {
+        effective_timeout = operation_timeout(pool->config().connect_timeout_);
+    }
+    co_return co_await resolve_dns_owned(pool->worker(), std::move(host),
+        {.timeout_ = effective_timeout, .stop_token_ = cancellation.token()},
+        pool->config().address_validator_, pool->config().dial_port_);
+}
 }  // namespace
 
 http_client_response::http_client_response(detail::http_client_pool& pool)
@@ -752,6 +838,27 @@ task<void> http_client_handle::refresh_dns() const {
     registration_.require_active();
     return make_scoped_operation(registration_.scope(), refresh_client_dns(pool_owner_, options_, host_stop_token_));
 }
+task<std::pmr::vector<ip_address>> http_client_handle::resolve_dns(
+    operation_options options) const {
+    registration_.require_active();
+    if (pool_->config().dial_host_.empty()) {
+        throw std::logic_error(
+            "HTTP client alias without a fixed origin or dial host has no default DNS target");
+    }
+    return resolve_dns(pool_->config().dial_host_, std::move(options));
+}
+
+task<std::pmr::vector<ip_address>> http_client_handle::resolve_dns(
+    std::string_view host, operation_options options) const {
+    registration_.require_active();
+    if (host.empty() || host.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("DNS host must not be empty or contain NUL");
+    }
+    detail::require_client_host_lookup(host, pool_->worker());
+    return make_scoped_operation(registration_.scope(),
+        resolve_client_handle_dns(pool_owner_, std::pmr::string(host, process_resource()),
+            options_, std::move(options), host_stop_token_));
+}
 bool http_client_handle::close_connection(std::uint64_t id) const {
     registration_.require_active();
     return pool_->close_connection(id);
@@ -794,4 +901,21 @@ http_client_handle context::client(std::string_view alias) const {
     return services().client_registries().client(alias, operation_scope_, capabilities_.stop_token());
 }
 
+task<std::pmr::vector<ip_address>> resolve_dns(
+    const worker_handle& worker, std::string_view host, operation_options options) {
+    if (!worker.valid()) {
+        throw std::invalid_argument("DNS resolution requires a valid worker handle");
+    }
+    if (host.empty() || host.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("DNS host must not be empty or contain NUL");
+    }
+    detail::require_client_host_lookup(host, worker);
+    return resolve_dns_owned(
+        worker, std::pmr::string(host, process_resource()), std::move(options));
+}
+
+task<std::pmr::vector<ip_address>> resolve_dns(
+    event_loop loop, std::string_view host, operation_options options) {
+    return resolve_dns(loop.handle(), host, std::move(options));
+}
 }  // namespace ruvia

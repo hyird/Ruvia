@@ -170,9 +170,20 @@ void retain_http_client_binary_response_head(http_client_response_state& state_v
 
 void publish_http_client_final_head(
     http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
-    if (state_value.upload_ && !state_value.upload_->output_.ended_ &&
-        head.request_content_signal_ == http_client_request_content_signal::exchange_complete) {
-        state_value.upload_->output_.stop();
+    if (state_value.upload_ && !state_value.upload_->output_.ended_) {
+        const auto status = head.status_.status();
+        const bool rewrite_upload_redirect =
+            state_value.upload_->redirect_request_ != nullptr &&
+            (status == http_status::see_other ||
+                ((status == http_status::moved_permanently || status == http_status::found) &&
+                    state_value.request_method_ == http_known_method::post));
+        if (head.request_content_signal_ == http_client_request_content_signal::exchange_complete ||
+            rewrite_upload_redirect) {
+            if (rewrite_upload_redirect) {
+                state_value.upload_->abandoned_ = true;
+            }
+            state_value.upload_->output_.stop();
+        }
     }
     state_value.status_ = head.status_;
     state_value.protocol_version_ = head.protocol_version_;

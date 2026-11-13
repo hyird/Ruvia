@@ -463,4 +463,66 @@ http_response_content_coding_status evaluate_http_response_content_coding(
     }
     return http_response_content_coding_status::accepted;
 }
+
+http_response_coding_selection select_http_accept_encoding(
+    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
+    http_response_coding_qualities qualities;
+    qualities.update(accept_encoding);
+    return http_response_coding_selection::select(qualities, candidates);
+}
+
+http_response_coding_selection select_http_accept_encoding(
+    std::span<const http_header> request_headers,
+    std::span<const http_content_coding> candidates) noexcept {
+    http_response_coding_qualities qualities;
+    for (const auto& header : request_headers) {
+        if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
+        }
+    }
+    return http_response_coding_selection::select(qualities, candidates);
+}
+
+http_response_coding_selection select_http_accept_encoding(
+    std::span<const http_header_view> request_headers,
+    std::span<const http_content_coding> candidates) noexcept {
+    http_response_coding_qualities qualities;
+    for (const auto& header : request_headers) {
+        if (http_ascii_equals_ignore_case(header.name(), "Accept-Encoding")) {
+            qualities.update(header.value());
+        }
+    }
+    return http_response_coding_selection::select(qualities, candidates);
+}
+
+http_response_coding_selection select_http_accept_encoding(
+    const http_request& request, std::span<const http_content_coding> candidates) noexcept {
+    return http_response_coding_selection_for(request).select(candidates);
+}
+
+std::optional<http_content_coding> negotiate_http_content_coding(
+    std::string_view accept_encoding, std::span<const http_content_coding> candidates) noexcept {
+    const auto selection = select_http_accept_encoding(accept_encoding, candidates);
+    return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
+}
+
+std::optional<http_content_coding> negotiate_http_content_coding(
+    std::span<const http_header> request_headers,
+    std::span<const http_content_coding> candidates) noexcept {
+    const auto selection = select_http_accept_encoding(request_headers, candidates);
+    return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
+}
+
+std::optional<http_content_coding> negotiate_http_content_coding(
+    std::span<const http_header_view> request_headers,
+    std::span<const http_content_coding> candidates) noexcept {
+    const auto selection = select_http_accept_encoding(request_headers, candidates);
+    return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
+}
+
+std::optional<http_content_coding> negotiate_http_content_coding(
+    const http_request& request, std::span<const http_content_coding> candidates) noexcept {
+    const auto selection = select_http_accept_encoding(request, candidates);
+    return selection.acceptable() ? std::optional(selection.coding()) : std::nullopt;
+}
 }  // namespace ruvia
