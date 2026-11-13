@@ -1,8 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -20,6 +22,31 @@ class http_client_pool;
 class http_client_tunnel_state;
 class http_client_upload_state;
 class http_client_output_queue;
+struct http_client_config_storage;
+
+// Syntax of http_client_request_options' route overrides, independently of
+// any alias; throws std::invalid_argument.
+void validate_http_client_route_options(const http_client_request_options& options);
+
+// The effective origin and transport of one request: the alias defaults with
+// the request's route overrides applied. Views borrow the alias configuration
+// or the owning request storage.
+struct http_client_route final {
+    http_origin_view origin_;
+    // RFC 3986 authority with the scheme's default port omitted.
+    std::string_view authority_;
+    std::string_view dial_host_;
+    std::uint16_t dial_port_{};
+    // TLS SNI and verified peer name; empty for http.
+    std::string_view server_name_;
+    // The authority is the alias authority: its cookie jar applies.
+    bool alias_origin_{true};
+    // Dial target and server name are the alias defaults: a connection of
+    // this transport is authenticated for the alias origin (server push).
+    bool alias_transport_{true};
+    // Both of the above: Alt-Svc applies.
+    bool alias_route_{true};
+};
 
 struct http_client_websocket_handshake final {
     http_client_websocket_handshake(websocket_client_negotiation_config_view config,
@@ -114,6 +141,14 @@ public:
     [[nodiscard]] bool udp_tunnel() const noexcept {
         return tunnel_protocol_ == "connect-udp";
     }
+    // Validates the route overrides against `config` and fixes route(). Only
+    // once the storage reached the address it keeps while its request runs:
+    // a move drops the resolved views.
+    void resolve_route(const http_client_config_storage& config);
+    [[nodiscard]] const http_client_route& route() const& noexcept {
+        return *route_;
+    }
+    const http_client_route& route() const&& = delete;
     http_client_request_options options_;
     std::shared_ptr<http_client_pool> pool_owner_;
 
@@ -134,6 +169,9 @@ private:
     http_client_tunnel_state* tunnel_{};
     bool has_body_{false};
     http_client_upload_state* upload_{};
+    // The normalized authority override that route() views.
+    std::pmr::string route_authority_;
+    std::optional<http_client_route> route_;
 };
 
 }  // namespace ruvia::detail

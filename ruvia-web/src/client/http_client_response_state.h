@@ -450,8 +450,13 @@ public:
     std::optional<std::pmr::deque<std::pmr::string>> http3_datagrams_;
     std::size_t http3_datagram_bytes_{0};
     bool http3_native_datagrams_{false};
+    // Pool position and pool-unique serial of the connection owner carrying
+    // this response; positions are reused once their owner is reclaimed.
     std::size_t connection_index_{0};
+    std::uint64_t connection_serial_{0};
     std::uint64_t connection_generation_{0};
+    // The request used the alias route: its response may update Alt-Svc.
+    bool alias_route_{true};
     std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
     std::uint64_t stream_id_{0};

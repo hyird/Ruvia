@@ -152,7 +152,7 @@ int main() {
             .server({.worker_count_ = 2, .process_signal_handlers_ = ruvia::process_signal_handler_policy::install})
             .client({
                 .base_url_ = base_url,
-                .connection_count_ = 4,
+                .connection_limits_ = {.max_open_ = 16, .max_idle_http1_ = 8, .max_idle_multiplexed_ = 2},
                 .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},
             })
             .run();

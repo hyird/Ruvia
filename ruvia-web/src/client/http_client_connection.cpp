@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_ascii.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
@@ -40,26 +41,31 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
     std::terminate();
 }
 
-[[nodiscard]] client_tcp_endpoint http_client_endpoint(http_client_pool& pool) noexcept {
+[[nodiscard]] client_tcp_endpoint http_client_endpoint(http_client_pool& pool, std::string_view dial_host,
+    std::uint16_t dial_port, std::string_view server_name, bool http11_only) noexcept {
     const auto& config = pool.config();
-    return {.host_ = config.dial_host_,
-        .port_ = config.dial_port_,
-        .tls_ = config.scheme_ == http_scheme::https ? &config.tls_ : nullptr,
+    const bool https = config.scheme_ == http_scheme::https;
+    return {.host_ = dial_host,
+        .port_ = dial_port,
+        .tls_ = https ? &config.tls_ : nullptr,
         .tcp_ = config.tcp_,
-        .alpn_ = client_alpn_bytes(select_client_alpn(config.protocol_)),
-        .identity_host_ = config.host_,
+        .alpn_ = client_alpn_bytes(http11_only ? client_alpn::http11 : select_client_alpn(config.protocol_)),
+        .identity_host_ = server_name,
         .resolve_context_ = &pool,
-        .resolve_ = [](void* context, client_host_resolver& resolver, const operation_timeout& timeout) -> task<client_resolve_result> {
-            auto& owner = *static_cast<http_client_pool*>(context);
-            return owner.resolve_addresses(owner.config().dial_host_, owner.config().dial_port_, resolver, timeout);
+        .resolve_ = [](void* context, client_host_resolver& resolver, const operation_timeout& timeout, std::string_view host, std::uint16_t port) -> task<client_resolve_result> {
+            return static_cast<http_client_pool*>(context)->resolve_addresses(host, port, resolver, timeout);
         }};
 }
 
 }  // namespace
 
-http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index)
-    : transport_(pool.io_context(), pool.tls_context(), pool.worker(), http_client_endpoint(pool),
-          pool.wire_counters()),
+http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
+    std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
+    bool http11_only)
+    : dial_host_(dial_host, process_resource()),
+      server_name_(server_name, process_resource()),
+      transport_(pool.io_context(), pool.tls_context(), pool.worker(),
+          http_client_endpoint(pool, dial_host_, dial_port, server_name_, http11_only), pool.wire_counters()),
       read_buffer_(process_resource()),
       write_buffer_(process_resource()),
 #ifdef RUVIA_ENABLE_HTTP2
@@ -67,8 +73,11 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 #endif
       connect_scheduler_(1, pool.worker(), process_resource()),
       http1_scheduler_(1, pool.worker(), process_resource()),
+      http11_only_(http11_only),
       pool_(pool),
       index_(index),
+      serial_(serial),
+      alias_route_(alias_route),
 #ifdef RUVIA_ENABLE_HTTP2
       http2_streams_(process_resource()),
 #endif
@@ -76,6 +85,48 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 }
 
 http_client_connection::~http_client_connection() = default;
+
+bool http_client_connection::serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
+    bool http11_only) const noexcept {
+    if (fresh_ || retired_ || address_retired_ || transport_.endpoint().port_ != dial_port ||
+        !http_ascii_equals_ignore_case(dial_host_, dial_host) || !http_ascii_equals_ignore_case(server_name_, server_name)) {
+        return false;
+    }
+    // An HTTP/1.1-only exchange may also reuse a connection that negotiated
+    // HTTP/1.1 from the alias offer.
+    return http11_only_ == http11_only || (http11_only && protocol_ == protocol_type::http1);
+}
+
+bool http_client_connection::idle() const noexcept {
+    if (!connected_ || retired_) {
+        return false;
+    }
+#ifdef RUVIA_ENABLE_HTTP2
+    if (protocol_ == protocol_type::http2) {
+        return http2_.usable() && http2_streams_.empty();
+    }
+#endif
+    return protocol_ == protocol_type::http1 && http1_operations_ == 0 && idle_watch_wanted_;
+}
+
+bool http_client_connection::reclaimable() const noexcept {
+#ifdef RUVIA_ENABLE_HTTP2
+    if (http2_.running() || !http2_streams_.empty() || state_waiters_ != nullptr) {
+        return false;
+    }
+#endif
+    return users_ == 0 && !connected_ && http1_operations_ == 0 && !idle_watcher_started_;
+}
+
+#ifdef RUVIA_ENABLE_HTTP2
+void http_client_connection::on_http2_capacity() noexcept {
+    pool_.admission_changed();
+}
+
+void http_client_connection::on_http2_stopped() noexcept {
+    pool_.connection_retired();
+}
+#endif
 
 void http_client_connection::capture_connection_info(http_client_response_state& response, bool reused) const {
     if (response.connection_info_.id_ != connection_id_) {
@@ -156,6 +207,9 @@ void http_client_connection::close() noexcept {
 #endif
     read_buffer_.clear();
     write_buffer_.clear();
+    // A parked idle watcher ends with the connection.
+    idle_watch_signal_.notify();
+    pool_.connection_retired();
 }
 
 void http_client_connection::begin_idle() noexcept {
@@ -199,6 +253,7 @@ void http_client_connection::begin_idle() noexcept {
 }
 
 void http_client_connection::end_idle() noexcept {
+    idle_order_ = 0;
     idle_timer_.cancel();
     if (std::exchange(idle_watch_wanted_, false)) {
         ++idle_period_;
@@ -244,7 +299,9 @@ task<void> http_client_connection::watch_idle_http1() {
     // and the connection closes at once instead of waiting for reuse or
     // idle_timeout_. Readiness is awaited on the raw socket without running
     // the TLS engine; idle_status() then classifies it.
-    while (!retired_) {
+    // Parked between idle periods while connected; a closed connection's
+    // watcher ends so the pool can reclaim the owner.
+    while (!retired_ && connected_) {
         if (!idle_watch_wanted_) {
             co_await idle_watch_signal_.wait();
             continue;
@@ -266,6 +323,8 @@ task<void> http_client_connection::watch_idle_http1() {
         }
         close();
     }
+    idle_watcher_started_ = false;
+    pool_.connection_retired();
 }
 
 void http_client_connection::retain_idle_buffers() noexcept {
@@ -342,6 +401,13 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP client connect wait");
     }
+    // However the connect ends, requests waiting for this route's protocol re-check.
+    struct admission_publication final {
+        http_client_pool& pool_;
+        ~admission_publication() {
+            pool_.admission_changed();
+        }
+    } publication{pool_};
     const auto connect_slot = acquired.value();
     struct connect_lease final {
         pool_lease_scheduler& scheduler_;

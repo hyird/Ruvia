@@ -338,9 +338,12 @@ struct client_tcp_endpoint final {
     client_tcp_config tcp_;
     // ALPN wire offer borrowed until transport retirement; empty for TCP.
     std::span<const unsigned char> alpn_{};
+    // TLS SNI and verified peer name, used verbatim; empty selects the TLS
+    // configuration's server name, else host_.
     std::string_view identity_host_{};
     void* resolve_context_{};
-    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_timeout&){};
+    // Resolves host_ and port_ in place of the transport's own resolver.
+    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_timeout&, std::string_view, std::uint16_t){};
 };
 
 // True for an OpenSSL failure or a TLS stream truncated without close_notify.
@@ -366,6 +369,9 @@ public:
 
     [[nodiscard]] bool secure() const noexcept {
         return endpoint_.tls_ != nullptr;
+    }
+    [[nodiscard]] const client_tcp_endpoint& endpoint() const noexcept {
+        return endpoint_;
     }
     // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
     // peer identity and the ALPN offer before the handshake. h2-only offers

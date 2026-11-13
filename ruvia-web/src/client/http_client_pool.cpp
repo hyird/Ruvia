@@ -38,27 +38,16 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
     }
 }
 
-[[nodiscard]] std::size_t http_client_scheduler_slots(const http_client_config_storage& config) noexcept {
-    if (config.protocol_ == http_client_protocol::http1_only) {
-        return config.connection_count_;
+// Position for a new connection owner: the first free entry, else appended.
+// Existing owners never move; only the vector of owner pointers may grow.
+template <typename owner_type>
+[[nodiscard]] std::size_t free_connection_position(std::pmr::vector<owner_type>& owners) {
+    const auto free = std::ranges::find(owners, nullptr);
+    if (free != owners.end()) {
+        return static_cast<std::size_t>(free - owners.begin());
     }
-#ifdef RUVIA_ENABLE_HTTP3
-    if (config.protocol_ == http_client_protocol::http3_only) {
-        return config.connection_count_ * config.http3_.max_concurrent_streams_;
-    }
-    if (config.protocol_ == http_client_protocol::negotiate) {
-#ifdef RUVIA_ENABLE_HTTP2
-        return config.connection_count_ * (std::max)(config.max_concurrent_http2_streams_per_connection_, config.http3_.max_concurrent_streams_);
-#else
-        return config.connection_count_ * config.http3_.max_concurrent_streams_;
-#endif
-    }
-#endif
-#ifdef RUVIA_ENABLE_HTTP2
-    return config.connection_count_ * config.max_concurrent_http2_streams_per_connection_;
-#else
-    return config.connection_count_;
-#endif
+    owners.emplace_back(nullptr, typename owner_type::deleter_type{process_resource()});
+    return owners.size() - 1;
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
@@ -80,15 +69,61 @@ bool can_retry_reused_connection_request(std::optional<http_client_error::code_t
            !response.abandoned_;
 }
 
-void http_client_slot_policy::throw_acquire_failure(const http_client_pool&, worker_wait_status status) {
-    throw_http_client_wait_failure(status, "HTTP client connection pool acquire");
-}
+// Moves a request from buffered to in flight once a connection serves it.
+struct http_client_pool::request_admission final {
+    http_client_pool& pool_;
+    bool in_flight_{false};
+    void admit() noexcept {
+        if (!std::exchange(in_flight_, true)) {
+            --pool_.requests_buffered_;
+            ++pool_.requests_in_flight_;
+        }
+    }
+    ~request_admission() {
+        if (in_flight_) {
+            --pool_.requests_in_flight_;
+        } else {
+            --pool_.requests_buffered_;
+        }
+    }
+};
 
-void http_client_slot_policy::throw_aborted(const http_client_pool&, pool_slot_abort_reason reason) {
-    const auto code = reason == pool_slot_abort_reason::cancelled ? http_client_error::code_type::cancelled
-                                                                  : http_client_error::code_type::closing;
-    throw http_client_error(code, http_client_error_message(code));
-}
+// One admission wait's cancellation: a stop reaches cancel_operation_by_id(),
+// which wakes admission waiters to observe it.
+struct http_client_pool::admission_waiter final {
+    admission_waiter(http_client_pool& pool, http_client_response_state& state_value, const stop_token& stop)
+        : pool_(pool),
+          next_(pool.admission_waiters_),
+          cancellation_(pool.cancellation_target_, cancellation_id_, state_value) {
+        pool_.admission_waiters_ = this;
+        try {
+            cancellation_.arm(stop);
+        } catch (...) {
+            unlink();
+            throw;
+        }
+    }
+    admission_waiter(const admission_waiter&) = delete;
+    admission_waiter& operator=(const admission_waiter&) = delete;
+    ~admission_waiter() {
+        unlink();
+    }
+    void unlink() noexcept {
+        auto** link = &pool_.admission_waiters_;
+        while (*link != this) {
+            if (*link == nullptr) {
+                std::terminate();
+            }
+            link = &(*link)->next_;
+        }
+        *link = next_;
+    }
+
+    http_client_pool& pool_;
+    admission_waiter* next_;
+    std::uint64_t cancellation_id_{};
+    http_client_response_cancellation<http_client_cancellation_target> cancellation_;
+};
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
     http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain)
@@ -101,17 +136,17 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       pushes_(process_resource()),
       result_budget_domain_(std::move(result_budget_domain)),
       tls_context_(asio::ssl::context::tls_client),
-      slots_(*this, http_client_scheduler_slots(config_), worker_),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),
       background_tasks_(worker_, {.resource_ = process_resource()}),
       connections_(process_resource()),
+      admission_signal_(worker_),
+      reclaim_signal_(worker_),
       dns_changed_(worker_) {
+    // Connections are created on demand; a DNS alias still needs its lookup
+    // pool from the start.
+    require_client_host_lookup(config_.dial_host_, worker_);
     if (config_.scheme_ == http_scheme::https) {
         configure_client_tls_context(*tls_context_.native_handle(), config_.tls_);
-    }
-    connections_.reserve(config_.connection_count_);
-    for (std::size_t index = 0; index < config_.connection_count_; ++index) {
-        connections_.push_back(make_pmr_object<http_client_connection>(process_resource(), *this, index));
     }
     response_memory_ = http_client_response_memory_domain::create(worker_, result_budget_domain_);
     schedule_dns_refresh();
@@ -184,13 +219,16 @@ void http_client_pool::install_addresses(client_resolve_result result) {
                 connection->retire_addresses();
             }
         }
+        if (http3_tls_) {
+            http3_tls_->forget_endpoints();
+        }
 #endif
     }
 }
 
 void http_client_pool::update_dns(std::span<const http_client_endpoint_address> addresses) {
     require_accepting();
-    if (slots_.closing()) {
+    if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
     if (addresses.empty()) {
@@ -248,7 +286,7 @@ task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view
 
 task<void> http_client_pool::refresh_dns(operation_options options) {
     require_accepting();
-    if (slots_.closing()) {
+    if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
     ++dns_active_;
@@ -282,12 +320,12 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
 }
 
 void http_client_pool::schedule_dns_refresh() {
-    if (!config_.dns_refresh_interval_ || slots_.closing() || background_joined_) {
+    if (!config_.dns_refresh_interval_ || closing_ || background_joined_) {
         return;
     }
     (void)worker_.schedule_timer(dns_refresh_timer_, worker_timer_deadline_after(config_.dns_refresh_interval_->value()),
         [this](worker_timer_outcome outcome) noexcept {
-            if (outcome != worker_timer_outcome::expired || slots_.closing()) {
+            if (outcome != worker_timer_outcome::expired || closing_) {
                 return;
             }
             try {
@@ -302,7 +340,7 @@ task<void> http_client_pool::background_refresh_dns() {
     try {
         co_await refresh_dns({});
     } catch (...) {
-        if (!slots_.closing()) {
+        if (!closing_) {
             report_unhandled_failure("HTTP DNS refresh", std::current_exception());
         }
     }
@@ -336,13 +374,15 @@ http_client_pool::~http_client_pool() {
 }
 
 void http_client_pool::close_now() noexcept {
-    if (!slots_.close()) {
+    if (std::exchange(closing_, true)) {
         return;
     }
     dns_refresh_timer_.cancel();
     dns_stop_.request_stop();
-    // slots_.close() retires queued waiters and connection shutdown aborts
-    // every connect and exchange; a transferred slot fails at admission.
+    // Admission waiters observe closing_; connection shutdown aborts every
+    // connect and exchange.
+    admission_signal_.notify();
+    reclaim_signal_.notify();
     for (auto& connection_value : connections_) {
         if (connection_value) {
             connection_value->shutdown();
@@ -408,6 +448,15 @@ task<void> http_client_pool::join() {
 }
 
 http_client_stats http_client_pool::stats() const noexcept {
+    std::size_t idle = 0;
+    for (const auto& connection_value : connections_) {
+        idle += connection_value && connection_value->idle() ? 1U : 0U;
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (const auto& connection_value : http3_connections_) {
+        idle += connection_value && connection_value->idle() ? 1U : 0U;
+    }
+#endif
     return {.buffered_requests_ = requests_buffered_,
         .in_flight_requests_ = requests_in_flight_,
         .completed_requests_ = completed_requests_,
@@ -415,6 +464,8 @@ http_client_stats http_client_pool::stats() const noexcept {
         .plaintext_bytes_sent_ = wire_counters_.sent_,
         .plaintext_bytes_received_ = wire_counters_.received_,
         .idle_connections_with_pending_data_ = idle_connections_with_pending_data_,
+        .open_connections_ = open_connections_,
+        .idle_connections_ = idle,
         .dropped_advertisements_ = advertisements_.dropped(),
         .received_pushes_ = received_pushes_,
         .rejected_pushes_ = rejected_pushes_};
@@ -423,6 +474,12 @@ http_client_stats http_client_pool::stats() const noexcept {
 void http_client_pool::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
     if (cancellation_id == 0) {
         return;
+    }
+    for (auto* waiter = admission_waiters_; waiter != nullptr; waiter = waiter->next_) {
+        if (waiter->cancellation_id_ == cancellation_id) {
+            admission_signal_.notify();
+            return;
+        }
     }
     for (auto& connection_value : connections_) {
         if (connection_value && connection_value->cancel_by_id(cancellation_id)) {
@@ -443,18 +500,19 @@ void http_client_pool::reprioritize(http_client_response_state& state_value, htt
         std::terminate();
     }
 #ifdef RUVIA_ENABLE_HTTP2
-    if (state_value.transport_ == http_client_response_transport::http2 &&
-        state_value.connection_index_ < connections_.size()) {
-        connection(state_value.connection_index_).reprioritize(state_value, priority);
-        return;
+    if (state_value.transport_ == http_client_response_transport::http2) {
+        if (auto* connection_value = find_connection(state_value)) {
+            connection_value->reprioritize(state_value, priority);
+            return;
+        }
     }
 #endif
 #ifdef RUVIA_ENABLE_HTTP3
-    if (state_value.transport_ == http_client_response_transport::http3 &&
-        state_value.connection_index_ < http3_connections_.size() &&
-        http3_connections_[state_value.connection_index_]) {
-        http3_connections_[state_value.connection_index_]->reprioritize(state_value, priority);
-        return;
+    if (state_value.transport_ == http_client_response_transport::http3) {
+        if (auto* connection_value = find_http3_connection(state_value)) {
+            connection_value->reprioritize(state_value, priority);
+            return;
+        }
     }
 #endif
     (void)state_value;
@@ -571,74 +629,352 @@ void http_client_pool::require_accepting() const {
     }
 }
 
-http_client_connection& http_client_pool::connection_for_request(std::size_t index) noexcept {
-    index %= config_.connection_count_;
-    auto& preferred = connection(index);
-    const auto find_connection = [this, index](auto predicate) noexcept -> http_client_connection* {
-        for (std::size_t offset = 1; offset < config_.connection_count_; ++offset) {
-            auto& candidate = connection((index + offset) % config_.connection_count_);
-            if (predicate(candidate)) {
-                return &candidate;
-            }
-        }
+void http_client_pool::require_open() const {
+    if (closing_) {
+        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
+    }
+}
+
+http_client_connection* http_client_pool::find_connection(const http_client_response_state& state_value) noexcept {
+    if (state_value.connection_index_ >= connections_.size()) {
         return nullptr;
-    };
-#ifdef RUVIA_ENABLE_HTTP2
-    if (preferred.protocol_ == http_client_connection::protocol_type::http2) {
-        if (preferred.available_http2_request_streams() != 0) {
-            return preferred;
+    }
+    auto* const connection_value = connections_[state_value.connection_index_].get();
+    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_
+               ? connection_value
+               : nullptr;
+}
+
+void http_client_pool::admission_changed() noexcept {
+    admission_signal_.notify();
+}
+
+void http_client_pool::connection_retired() noexcept {
+    admission_signal_.notify();
+    if (reclaimer_started_) {
+        reclaim_signal_.notify();
+    }
+}
+
+void http_client_pool::start_reclaimer() {
+    if (!reclaimer_started_) {
+        background_tasks_.spawn(run_reclaimer());
+        reclaimer_started_ = true;
+    }
+}
+
+task<void> http_client_pool::run_reclaimer() {
+    while (!closing_) {
+        co_await reclaim_signal_.wait();
+        if (!closing_) {
+            reclaim_connections();
         }
-        if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
-                return candidate.protocol_ == http_client_connection::protocol_type::http2 &&
-                       candidate.available_http2_request_streams() != 0;
-            })) {
-            return *match;
+    }
+}
+
+void http_client_pool::reclaim_connections() noexcept {
+    // Runs on its own worker turn, after the coroutine that retired a
+    // connection unwound: reclaimable() owners have no borrower left.
+    bool reclaimed = false;
+    for (auto& owner : connections_) {
+        if (owner && owner->reclaimable()) {
+            owner.reset();
+            --open_connections_;
+            reclaimed = true;
         }
-        // A full or draining session never blocks a request while another
-        // slot can open a connection at once (Pingora: a shutting-down or
-        // full HTTP/2 connection leads to a new connection).
-        if (auto* match = find_connection(
-                [](const http_client_connection& candidate) noexcept { return candidate.idle_unconnected(); })) {
-            return *match;
+    }
+    while (!connections_.empty() && !connections_.back()) {
+        connections_.pop_back();
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (auto& owner : http3_connections_) {
+        if (owner && owner->reclaimable()) {
+            owner.reset();
+            --open_connections_;
+            reclaimed = true;
         }
-        return preferred;
+    }
+    while (!http3_connections_.empty() && !http3_connections_.back()) {
+        http3_connections_.pop_back();
     }
 #endif
-    if (preferred.http1_operations_ == 0) {
-        return preferred;
+    if (reclaimed) {
+        admission_signal_.notify();
     }
-    if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
-            if (candidate.connected_ && candidate.protocol_ == http_client_connection::protocol_type::http1 &&
-                candidate.http1_operations_ == 0) {
-                return true;
-            }
-#ifdef RUVIA_ENABLE_HTTP2
-            if (candidate.protocol_ == http_client_connection::protocol_type::http2 &&
-                candidate.available_http2_request_streams() != 0) {
-                return true;
-            }
+}
+
+void http_client_pool::mark_idle(std::uint64_t& idle_order, bool multiplexed) noexcept {
+    if (idle_order == 0) {
+        ++(multiplexed ? idle_multiplexed_ : idle_http1_);
+    }
+    idle_order = ++idle_clock_;
+    enforce_idle_limits();
+}
+
+void http_client_pool::enforce_idle_limits() noexcept {
+    const auto& limits = config_.connection_limits_;
+    if (idle_http1_ <= limits.max_idle_http1_ && idle_multiplexed_ <= limits.max_idle_multiplexed_) {
+        return;
+    }
+    // The counters are upper bounds: a connection also stops idling by
+    // closing on its own. Recount before closing anything.
+    idle_http1_ = 0;
+    idle_multiplexed_ = 0;
+    for (auto& owner : connections_) {
+        if (!owner || owner->idle_order_ == 0) {
+            continue;
+        }
+        if (!owner->idle()) {
+            owner->idle_order_ = 0;
+            continue;
+        }
+        ++(owner->protocol_ == http_client_connection::protocol_type::http1 ? idle_http1_ : idle_multiplexed_);
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (auto& owner : http3_connections_) {
+        if (!owner || owner->idle_order_ == 0) {
+            continue;
+        }
+        if (!owner->idle()) {
+            owner->idle_order_ = 0;
+            continue;
+        }
+        ++idle_multiplexed_;
+    }
 #endif
+    while (idle_http1_ > limits.max_idle_http1_ && close_least_recent_idle(false)) {
+    }
+    while (idle_multiplexed_ > limits.max_idle_multiplexed_ && close_least_recent_idle(true)) {
+    }
+}
+
+bool http_client_pool::close_least_recent_idle(std::optional<bool> multiplexed) noexcept {
+    http_client_connection* oldest = nullptr;
+    std::uint64_t oldest_order = (std::numeric_limits<std::uint64_t>::max)();
+    for (auto& owner : connections_) {
+        if (!owner || owner->users_ != 0 || !owner->idle()) {
+            continue;
+        }
+        const bool owner_multiplexed = owner->protocol_ != http_client_connection::protocol_type::http1;
+        if ((!multiplexed || *multiplexed == owner_multiplexed) && owner->idle_order_ < oldest_order) {
+            oldest = owner.get();
+            oldest_order = owner->idle_order_;
+        }
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    http3_client_connection* oldest_http3 = nullptr;
+    if (!multiplexed || *multiplexed) {
+        for (auto& owner : http3_connections_) {
+            if (owner && owner->users_ == 0 && owner->idle() && owner->idle_order_ < oldest_order) {
+                oldest = nullptr;
+                oldest_http3 = owner.get();
+                oldest_order = owner->idle_order_;
+            }
+        }
+    }
+    if (oldest_http3 != nullptr) {
+        if (std::exchange(oldest_http3->idle_order_, 0) != 0 && idle_multiplexed_ != 0) {
+            --idle_multiplexed_;
+        }
+        oldest_http3->close();
+        return true;
+    }
+#endif
+    if (oldest == nullptr) {
+        return false;
+    }
+    auto& counter = oldest->protocol_ == http_client_connection::protocol_type::http1 ? idle_http1_ : idle_multiplexed_;
+    if (std::exchange(oldest->idle_order_, 0) != 0 && counter != 0) {
+        --counter;
+    }
+    oldest->close_idle();
+    return true;
+}
+
+bool http_client_pool::admits_new_connection() noexcept {
+    const auto& max_open = config_.connection_limits_.max_open_;
+    if (!max_open || open_connections_ < *max_open) {
+        return true;
+    }
+    // An owner nothing uses that no longer idles is closing; its reclamation
+    // frees a position, so no further idle connection is closed for it.
+    for (const auto& owner : connections_) {
+        if (owner && owner->users_ == 0 && !owner->idle()) {
             return false;
-        })) {
-        return *match;
+        }
     }
-    if (auto* match = find_connection([](const http_client_connection& candidate) noexcept {
-            return candidate.protocol_ != http_client_connection::protocol_type::http2 &&
-                   candidate.http1_operations_ == 0;
-        })) {
-        return *match;
+#ifdef RUVIA_ENABLE_HTTP3
+    for (const auto& owner : http3_connections_) {
+        if (owner && owner->users_ == 0 && !owner->idle()) {
+            return false;
+        }
     }
-    return preferred;
+#endif
+    (void)close_least_recent_idle(std::nullopt);
+    return false;
+}
+
+void http_client_pool::throw_if_admission_ended(const stop_token& stop, const http_client_response_state& state_value) const {
+    require_open();
+    throw_if_abandoned(state_value);
+    if (stop.stop_requested()) {
+        throw_http_client_wait_failure(worker_wait_status::cancelled, "HTTP client connection pool acquire");
+    }
+}
+
+task<void> http_client_pool::wait_for_admission(const operation_timeout& acquire_timeout) {
+    // A connection available at once is taken even past the bound; only
+    // waiting is bounded.
+    if (acquire_timeout.expired()) {
+        throw_http_client_wait_failure(worker_wait_status::timed_out, "HTTP client connection pool acquire");
+    }
+    worker_timer_registration deadline_timer;
+    if (const auto deadline = acquire_timeout.deadline()) {
+        (void)worker_.schedule_timer(deadline_timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
+            if (outcome == worker_timer_outcome::expired) {
+                admission_signal_.notify();
+            }
+        });
+    }
+    co_await admission_signal_.wait();
+}
+
+bool http_client_pool::requires_http11_connection(const http_client_request_storage& request) const noexcept {
+#ifdef RUVIA_ENABLE_HTTP2
+    // HTTP/1.1 Upgrade never runs over h2 (RFC 9113 section 8.6): a negotiating
+    // TLS origin gets a connection offering only http/1.1.
+    return request.is_upgrade() && config_.protocol_ == http_client_protocol::negotiate &&
+           config_.scheme_ == http_scheme::https;
+#else
+    (void)request;
+    return false;
+#endif
+}
+
+task<http_client_connection*> http_client_pool::acquire_tcp_connection(const http_client_request_storage& request,
+    const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& state_value,
+    request_admission& admission) {
+    const auto& route = request.route();
+    const bool http11_only = requires_http11_connection(request);
+    const bool fresh = request.options_.fresh_connection_;
+#ifdef RUVIA_ENABLE_HTTP2
+    const bool may_multiplex = !http11_only && (config_.protocol_ == http_client_protocol::http2_only ||
+                                                   (config_.protocol_ == http_client_protocol::negotiate &&
+                                                       config_.scheme_ == http_scheme::https && !prefers_http11_));
+#endif
+    admission_waiter waiter(*this, state_value, stop);
+    for (;;) {
+        throw_if_admission_ended(stop, state_value);
+        http_client_connection* selected = nullptr;
+        http_client_connection* reconnectable = nullptr;
+        bool negotiating = false;
+        for (auto& owner : connections_) {
+            auto* const candidate = owner.get();
+            if (fresh || candidate == nullptr || !candidate->serves(route.dial_host_, route.dial_port_, route.server_name_, http11_only)) {
+                continue;
+            }
+            if (candidate->users_ == 0 && candidate->idle_unconnected()) {
+                reconnectable = reconnectable != nullptr ? reconnectable : candidate;
+                continue;
+            }
+#ifdef RUVIA_ENABLE_HTTP2
+            if (candidate->protocol_ == http_client_connection::protocol_type::http2) {
+                if (candidate->available_http2_request_streams() != 0) {
+                    selected = candidate;
+                    break;
+                }
+                continue;
+            }
+            if (candidate->users_ != 0) {
+                // A connection of this route still negotiating may offer h2.
+                negotiating = negotiating || (may_multiplex && candidate->protocol_ == http_client_connection::protocol_type::unknown);
+                continue;
+            }
+#else
+            if (candidate->users_ != 0) {
+                continue;
+            }
+#endif
+            // The most recently used idle HTTP/1 connection, so the others age out.
+            if (candidate->protocol_ == http_client_connection::protocol_type::http1 && candidate->connected_ &&
+                candidate->http1_operations_ == 0 && (selected == nullptr || candidate->idle_order_ > selected->idle_order_)) {
+                selected = candidate;
+            }
+        }
+        if (selected == nullptr && !negotiating) {
+            selected = reconnectable;
+        }
+        if (selected == nullptr && !negotiating && admits_new_connection()) {
+            start_reclaimer();
+            const auto index = free_connection_position(connections_);
+            connections_[index] = make_pmr_object<http_client_connection>(process_resource(), *this, index,
+                ++next_connection_serial_, route.dial_host_, route.dial_port_, route.server_name_, route.alias_transport_,
+                http11_only);
+            ++open_connections_;
+            selected = connections_[index].get();
+            selected->fresh_ = fresh;
+        }
+        if (selected != nullptr) {
+            if (selected->idle_order_ != 0) {
+                auto& counter = selected->protocol_ == http_client_connection::protocol_type::http1 ? idle_http1_ : idle_multiplexed_;
+                counter -= counter != 0 ? 1U : 0U;
+                selected->idle_order_ = 0;
+            }
+            ++selected->users_;
+            admission.admit();
+            co_return selected;
+        }
+        co_await wait_for_admission(acquire_timeout);
+    }
+}
+
+void http_client_pool::release_tcp_connection(http_client_connection& connection_value) noexcept {
+    if (connection_value.users_ == 0) {
+        std::terminate();
+    }
+    --connection_value.users_;
+    if (connection_value.users_ == 0 && connection_value.idle()) {
+        mark_idle(connection_value.idle_order_,
+            connection_value.protocol_ != http_client_connection::protocol_type::http1);
+    }
+    if (connection_value.reclaimable()) {
+        connection_retired();
+    } else {
+        admission_changed();
+    }
+}
+
+task<void> http_client_pool::execute_tcp_request(const http_client_request_storage& request,
+    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+    http_client_response_state& state_value, request_admission& admission) {
+    auto* const connection_value = co_await acquire_tcp_connection(request, acquire_timeout, stop, state_value, admission);
+    struct connection_use final {
+        http_client_pool& pool_;
+        http_client_connection& connection_;
+        bool fresh_;
+        ~connection_use() {
+            if (fresh_) {
+                connection_.close();
+            }
+            pool_.release_tcp_connection(connection_);
+        }
+    } use{*this, *connection_value, request.options_.fresh_connection_};
+    state_value.connection_index_ = connection_value->index();
+    state_value.connection_serial_ = connection_value->serial();
+    co_await execute_tcp(*connection_value, request, timeout, acquire_timeout, std::move(stop), state_value);
 }
 
 task<void> http_client_pool::execute_request_into(
     http_client_request_storage request, operation_options options, http_client_response_state* state_value) {
     try {
         throw_if_abandoned(*state_value);
+        // The storage is at its final address in this frame.
+        request.resolve_route(config_);
     } catch (...) {
         ++failed_requests_;
         throw;
     }
+    state_value->alias_route_ = request.route().alias_route_;
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
     const std::array stop_tokens{request.host_stop(), options.stop_token_, dns_stop_.token()};
     stop_group cancellation(stop_tokens);
@@ -650,52 +986,22 @@ task<void> http_client_pool::execute_request_into(
         throw http_client_error(http_client_error::code_type::queue_full, "HTTP client request buffer is full");
     }
     ++requests_buffered_;
-    std::size_t index = 0;
+    request_admission admission{*this};
     try {
-        index = co_await slots_.acquire(timeout, state_value->effective_acquire_timeout_, options.stop_token_);
-    } catch (...) {
-        --requests_buffered_;
-        ++failed_requests_;
-        throw;
-    }
-    --requests_buffered_;
-    ++requests_in_flight_;
-    const slot_pool_type::lease_guard lease(slots_, index);
-    http_client_connection* tcp_connection = nullptr;
-    try {
-        throw_if_abandoned(*state_value);
+        require_open();
+        if (request.is_upgrade() && (config_.protocol_ == http_client_protocol::http2_only ||
+                                        config_.protocol_ == http_client_protocol::http3_only)) {
+            throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP Upgrade requires HTTP/1.1");
+        }
 #ifdef RUVIA_ENABLE_HTTP3
-        if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value, index)) {
-            --requests_in_flight_;
+        if (co_await execute_http3(request, timeout, acquire_timeout, options.stop_token_, *state_value, admission)) {
             ++completed_requests_;
             co_return;
         }
 #endif
-        if (request.options_.fresh_connection_) {
-            const auto fresh_index = config_.connection_count_ + index;
-            if (connections_.size() <= fresh_index) {
-                connections_.resize(fresh_index + 1);
-            }
-            if (!connections_[fresh_index]) {
-                connections_[fresh_index] = make_pmr_object<http_client_connection>(process_resource(), *this, fresh_index);
-                connections_[fresh_index]->fresh_ = true;
-            }
-            tcp_connection = connections_[fresh_index].get();
-        } else {
-            tcp_connection = &connection_for_request(index);
-        }
-        state_value->connection_index_ = tcp_connection->index();
-        co_await execute_tcp(*tcp_connection, request, timeout, acquire_timeout, options.stop_token_, *state_value);
-        if (request.options_.fresh_connection_) {
-            tcp_connection->close();
-        }
-        --requests_in_flight_;
+        co_await execute_tcp_request(request, timeout, acquire_timeout, options.stop_token_, *state_value, admission);
         ++completed_requests_;
     } catch (...) {
-        if (tcp_connection && request.options_.fresh_connection_) {
-            tcp_connection->close();
-        }
-        --requests_in_flight_;
         ++failed_requests_;
         throw;
     }
@@ -862,9 +1168,9 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
     switch (state_value.transport_) {
         case http_client_response_transport::http2:
 #ifdef RUVIA_ENABLE_HTTP2
-            if (state_value.connection_index_ < connections_.size()) {
+            if (auto* const found = find_connection(state_value)) {
                 const auto error = malformed ? http2_error_code::protocol_error : http2_error_code::cancel;
-                auto& conn = connection(state_value.connection_index_);
+                auto& conn = *found;
                 if (conn.generation_ == state_value.connection_generation_ &&
                     error == http2_error_code::protocol_error && state_value.stream_id_ != 0) {
                     conn.http2_.submit_reset(static_cast<std::uint32_t>(state_value.stream_id_), error);
@@ -880,21 +1186,20 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
             break;
         case http_client_response_transport::http3:
 #ifdef RUVIA_ENABLE_HTTP3
-            if (state_value.connection_index_ < http3_connections_.size() && http3_connections_[state_value.connection_index_]) {
-                http3_connections_[state_value.connection_index_]->abandon(state_value, malformed);
+            if (auto* const conn = find_http3_connection(state_value)) {
+                conn->abandon(state_value, malformed);
             }
 #endif
             break;
         case http_client_response_transport::unassigned:
         case http_client_response_transport::http1:
             if (state_value.cancellation_id_ != 0) {
-                if (state_value.connection_index_ >= connections_.size() ||
-                    !connection(state_value.connection_index_).cancel_by_id(state_value.cancellation_id_)) {
+                auto* const conn = find_connection(state_value);
+                if (conn == nullptr || !conn->cancel_by_id(state_value.cancellation_id_)) {
                     cancel_operation_by_id(state_value.cancellation_id_);
                 }
-            } else if (state_value.connection_index_ < connections_.size() &&
-                       connection(state_value.connection_index_).http1_response_ == &state_value) {
-                connection(state_value.connection_index_).close();
+            } else if (auto* const conn = find_connection(state_value); conn != nullptr && conn->http1_response_ == &state_value) {
+                conn->close();
             }
             break;
     }
@@ -910,8 +1215,8 @@ void http_client_pool::abandon_response(http_client_response_state& state_value,
 void http_client_pool::release_response_data(http_client_response_state& state_value) noexcept {
 #ifdef RUVIA_ENABLE_HTTP3
     if (state_value.transport_ == http_client_response_transport::http3) {
-        if (state_value.connection_index_ < http3_connections_.size() && http3_connections_[state_value.connection_index_]) {
-            http3_connections_[state_value.connection_index_]->release_data(state_value);
+        if (auto* const conn = find_http3_connection(state_value)) {
+            conn->release_data(state_value);
         } else {
             state_value.http3_data_credit_ = 0;
         }
@@ -919,8 +1224,8 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
     }
 #endif
 #ifdef RUVIA_ENABLE_HTTP2
-    if (state_value.connection_index_ < connections_.size()) {
-        connection(state_value.connection_index_).release_response_data(state_value);
+    if (auto* const conn = find_connection(state_value)) {
+        conn->release_response_data(state_value);
     } else {
         state_value.http2_data_credit_.reset();
     }
@@ -1043,14 +1348,43 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
+http3_client_connection* http_client_pool::find_http3_connection(const http_client_response_state& state_value) noexcept {
+    if (state_value.connection_index_ >= http3_connections_.size()) {
+        return nullptr;
+    }
+    auto* const connection_value = http3_connections_[state_value.connection_index_].get();
+    return connection_value != nullptr && connection_value->serial() == state_value.connection_serial_
+               ? connection_value
+               : nullptr;
+}
+
+void http_client_pool::release_http3_connection(http3_client_connection& connection_value) noexcept {
+    if (connection_value.users_ == 0) {
+        std::terminate();
+    }
+    --connection_value.users_;
+    if (connection_value.users_ == 0 && connection_value.idle()) {
+        mark_idle(connection_value.idle_order_, true);
+    }
+    if (connection_value.reclaimable()) {
+        connection_retired();
+    } else {
+        admission_changed();
+    }
+}
+
 task<bool> http_client_pool::execute_http3(const http_client_request_storage& request,
     const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
-    http_client_response_state& state, std::size_t slot_index) {
-    if (slots_.closing()) {
-        throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
-    }
+    http_client_response_state& state, request_admission& admission) {
+    require_open();
     const bool required = config_.protocol_ == http_client_protocol::http3_only;
     if (!required && config_.protocol_ != http_client_protocol::negotiate) {
+        co_return false;
+    }
+    const auto& route = request.route();
+    // The Alt-Svc cache belongs to the alias route: requests with route
+    // overrides neither record nor consume it, and Upgrade stays on HTTP/1.1.
+    if (!required && (!route.alias_route_ || request.is_upgrade())) {
         co_return false;
     }
     const auto now = std::chrono::steady_clock::now();
@@ -1060,40 +1394,59 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     }
     // Another response can replace the cache while DNS or the handshake waits.
     // The selected endpoint is therefore owned across suspension; TLS always
-    // verifies config_.host_, never this advertised transport name.
+    // verifies the route's server name, never this advertised transport name.
     const bool configured_endpoint = required || config_.dial_overridden_;
-    std::pmr::string host(configured_endpoint ? std::string_view(config_.dial_host_) : std::string_view(alternative_services_.front().host_), process_resource());
-    const auto port = configured_endpoint ? config_.dial_port_ : alternative_services_.front().port_;
-    if (http3_connections_.empty()) {
-        http3_connections_.resize(config_.connection_count_);
-    }
-    std::size_t selected = 0;
-    std::size_t capacity = 0;
-    for (std::size_t index = 0; index < config_.connection_count_; ++index) {
-        const auto available = http3_connections_[index] ? http3_connections_[index]->available() : config_.http3_.max_concurrent_streams_;
-        if (available > capacity) {
-            capacity = available;
-            selected = index;
-        }
-    }
-    if (request.options_.fresh_connection_) {
-        selected = config_.connection_count_ + slot_index;
-        if (http3_connections_.size() <= selected) {
-            http3_connections_.resize(selected + 1);
-        }
-    }
-    if (!http3_connections_[selected]) {
-        http3_connections_[selected] = make_pmr_object<http3_client_connection>(process_resource(), *this, selected);
-    }
-    struct fresh_retirement final {
-        http3_client_connection* connection_;
-        ~fresh_retirement() {
-            if (connection_) {
-                connection_->close();
+    std::pmr::string host(configured_endpoint ? route.dial_host_ : std::string_view(alternative_services_.front().host_), process_resource());
+    const auto port = configured_endpoint ? route.dial_port_ : alternative_services_.front().port_;
+    const bool fresh = request.options_.fresh_connection_;
+    http3_client_connection* selected = nullptr;
+    {
+        admission_waiter waiter(*this, state, stop);
+        for (;;) {
+            throw_if_admission_ended(stop, state);
+            for (auto& owner : http3_connections_) {
+                if (!fresh && owner && owner->serves(host, port, route.server_name_) &&
+                    (owner->available() != 0 || owner->connecting())) {
+                    selected = owner.get();
+                    break;
+                }
             }
+            if (selected == nullptr && admits_new_connection()) {
+                start_reclaimer();
+                if (!http3_tls_) {
+                    http3_tls_ = make_pmr_object<http3_client_tls>(process_resource(), *this);
+                }
+                const auto index = free_connection_position(http3_connections_);
+                http3_connections_[index] = make_pmr_object<http3_client_connection>(process_resource(), *this,
+                    *http3_tls_, index, ++next_connection_serial_, host, port, route.server_name_);
+                ++open_connections_;
+                selected = http3_connections_[index].get();
+                selected->fresh_ = fresh;
+            }
+            if (selected != nullptr) {
+                break;
+            }
+            co_await wait_for_admission(acquire_timeout);
         }
-    } retirement{request.options_.fresh_connection_ ? http3_connections_[selected].get() : nullptr};
-    const auto used = co_await http3_connections_[selected]->execute(request, host, port, !required, timeout, acquire_timeout, stop, state);
+    }
+    if (selected->idle_order_ != 0) {
+        idle_multiplexed_ -= idle_multiplexed_ != 0 ? 1U : 0U;
+        selected->idle_order_ = 0;
+    }
+    ++selected->users_;
+    admission.admit();
+    struct connection_use final {
+        http_client_pool& pool_;
+        http3_client_connection& connection_;
+        bool fresh_;
+        ~connection_use() {
+            if (fresh_) {
+                connection_.close();
+            }
+            pool_.release_http3_connection(connection_);
+        }
+    } use{*this, *selected, fresh};
+    const auto used = co_await selected->execute(request, !required, timeout, acquire_timeout, stop, state);
     if (!used) {
         std::erase_if(alternative_services_, [&](const alternative_service& service) { return service.host_ == host && service.port_ == port; });
     }
@@ -1133,11 +1486,14 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
 }
 
 task<bool> http_client_pool::send_http3_datagram(http_client_response_state& state, std::string_view payload) {
-    if (!state.tunnel_ || state.transport_ != http_client_response_transport::http3 || state.connection_index_ >= http3_connections_.size() || !http3_connections_[state.connection_index_]) {
+    auto* const connection_value = state.tunnel_ && state.transport_ == http_client_response_transport::http3
+                                       ? find_http3_connection(state)
+                                       : nullptr;
+    if (connection_value == nullptr) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP/3 tunnel output closed");
     }
     auto lane = claim_operation_lane(state.tunnel_->output_.operation_active_, "HTTP/3 tunnel output is already active");
-    co_return co_await http3_connections_[state.connection_index_]->send_datagram(state, std::as_bytes(std::span(payload.data(), payload.size())));
+    co_return co_await connection_value->send_datagram(state, std::as_bytes(std::span(payload.data(), payload.size())));
 }
 #endif
 
@@ -1145,7 +1501,7 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
     operation_options options, stop_token host_stop) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
-    if (slots_.closing()) {
+    if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
     const auto timeout = operation_timeout(config_.connect_timeout_).constrained_by(options.timeout_);
@@ -1154,10 +1510,19 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
     if (options.stop_token_.stop_requested()) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP/3 migration cancelled");
     }
+    // Connections may be created or reclaimed while one migrates: each is
+    // found again by position and serial.
+    std::pmr::vector<std::pair<std::size_t, std::uint64_t>> active(process_resource());
+    for (std::size_t index = 0; index != http3_connections_.size(); ++index) {
+        if (http3_connections_[index] && http3_connections_[index]->active()) {
+            active.emplace_back(index, http3_connections_[index]->serial());
+        }
+    }
     bool migrated = false;
-    for (auto& connection : http3_connections_) {
-        if (connection && connection->active()) {
-            co_await connection->migrate(local_address, port, timeout, options.stop_token_);
+    for (const auto& [index, serial] : active) {
+        if (index < http3_connections_.size() && http3_connections_[index] &&
+            http3_connections_[index]->serial() == serial && http3_connections_[index]->active()) {
+            co_await http3_connections_[index]->migrate(local_address, port, timeout, options.stop_token_);
             migrated = true;
         }
     }

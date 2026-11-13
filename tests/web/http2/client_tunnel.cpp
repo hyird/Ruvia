@@ -101,7 +101,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
         const auto& worker_value = attachment.loop().handle();
         auto& observation_value = *observation;
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
         const auto client_origin = client.client();
         try {
             for (unsigned round = 0; round != 4; ++round) {
@@ -248,7 +248,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
         std::unique_ptr<ruvia::task<void>> cold;
         {
             const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
-            ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
+            ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http2_only});
             const auto client_origin = client.client();
             try {
                 auto result_value = co_await client_origin.connect("proxy.test").protocol("test-capsules").target("/capsules").open({.max_chunk_bytes_ = 1024});
@@ -388,7 +388,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5), .protocol_ = ruvia::http_client_protocol::http2_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5), .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
             auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
             if (!opened.tunnel()) {
@@ -490,7 +490,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
     auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_count_ = 1,
+                                                         .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(5),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         auto opened = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();
@@ -607,7 +607,7 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
         const auto& worker_value = attachment.loop().handle();
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_count_ = 1,
+                                                         .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(5),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         auto opened1 = co_await client.client().udp("/.well-known/masque/udp/target.test/53/").open();

@@ -429,7 +429,7 @@ void exercise_abandon_during_drain() {
     const auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_count_ = 1,
+                                                         .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(5),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {
@@ -437,18 +437,22 @@ void exercise_abandon_during_drain() {
             EXPECT_TRUE(held.status() == ruvia::http_status::ok);
             {
                 auto exchange = co_await client.client().post("/abandon").upload({.content_length_ = 7});
-                for (unsigned i = 0; i != 100 && client.client().stats().in_flight_requests_ != 2; ++i) {
+                // The peer's single stream and max_open_ leave the upload
+                // buffered for admission, its head never submitted.
+                for (unsigned i = 0; i != 100 && client.client().stats().buffered_requests_ != 1; ++i) {
                     (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
                 }
-                EXPECT_EQ(client.client().stats().in_flight_requests_, 2U);
+                EXPECT_EQ(client.client().stats().buffered_requests_, 1U);
+                EXPECT_EQ(client.client().stats().in_flight_requests_, 1U);
                 peer.drain();
                 co_await peer.wait_ready();
                 (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(50));
             }
-            for (unsigned i = 0; i != 100 && client.client().stats().in_flight_requests_ != 1; ++i) {
+            for (unsigned i = 0; i != 100 && client.client().stats().buffered_requests_ != 0; ++i) {
                 (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
             }
             EXPECT_EQ(client.client().stats().in_flight_requests_, 1U);
+            EXPECT_EQ(client.client().stats().buffered_requests_, 0U);
             EXPECT_TRUE(!held.stream().complete());
         } catch (...) {
             failure = std::current_exception();
@@ -483,7 +487,7 @@ void exercise(response_mode mode) {
     const auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                         .connection_count_ = 1,
+                                                         .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(2),
                                                          .protocol_ = ruvia::http_client_protocol::http2_only});
         try {

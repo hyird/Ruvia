@@ -271,7 +271,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
         };
         tasks.spawn(serve());
         const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_count_ = 1, .request_timeout_ = std::chrono::seconds(5)});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .connection_limits_ = {.max_open_ = 1}, .request_timeout_ = std::chrono::seconds(5)});
         try {
             {
                 auto result_value = co_await client.client().connect("target.test:443").open();

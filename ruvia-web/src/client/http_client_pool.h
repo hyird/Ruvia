@@ -33,7 +33,6 @@
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_result_budget.h"
-#include "integration/slot_pool.h"
 
 namespace ruvia::detail {
 
@@ -52,23 +51,12 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 [[nodiscard]] bool can_retry_reused_connection_request(std::optional<http_client_error::code_type> failure,
     const http_client_request_storage& request, const http_client_response_state& response) noexcept;
 
-// Request admission over the pool's fixed lease slots, with HTTP client
-// errors for every non-acquired outcome. Slot deadlines and slot cancellation
-// are unused: connections and streams own their own.
-struct http_client_slot_policy final {
-    using owner_type = http_client_pool;
-    enum class deadline_kind_type : std::uint8_t { request };
-    [[noreturn]] static void throw_acquire_failure(const http_client_pool& pool, worker_wait_status status);
-    [[noreturn]] static void throw_aborted(const http_client_pool& pool, pool_slot_abort_reason reason);
-    static void expire_slot(http_client_pool&, std::size_t, deadline_kind_type) noexcept {}
-    static void cancel_slot(http_client_pool&, std::size_t) noexcept {}
-};
-
 // One origin client on one worker: request admission and buffering limits,
-// connection scheduling across fixed TCP slots, origin
-// policy (cookies, automatic headers, push acceptance) and statistics. Wire
-// protocols run in http_client_connection (HTTP/2 session),
-// and http1_client_exchange.
+// on-demand connections keyed by route (dial host, dial port, TLS server name,
+// ALPN offer) with open and idle bounds, origin policy (cookies, automatic
+// headers, push acceptance) and statistics. Wire protocols run in
+// http_client_connection (HTTP/2 session), http1_client_exchange and
+// http3_client_connection.
 class http_client_pool final {
 public:
     // Process-lifetime storage backs the pool and its retained responses.
@@ -163,6 +151,11 @@ public:
     void record_idle_connection_with_pending_data() noexcept {
         ++idle_connections_with_pending_data_;
     }
+    // A connection gained capacity or settled its protocol: admission waiters
+    // re-check.
+    void admission_changed() noexcept;
+    // A connection closed or one of its tasks ended: it may be reclaimable.
+    void connection_retired() noexcept;
     // The origin answered HTTP_1_1_REQUIRED (RFC 9113 section 7) to a
     // negotiate client: every later connect of this pool offers only
     // http/1.1, like Pingora's prefer_h1.
@@ -178,8 +171,10 @@ public:
 #endif
 
 private:
-    using slot_pool_type = slot_pool<http_client_slot_policy>;
+    struct request_admission;
+    struct admission_waiter;
     void require_accepting() const;
+    void require_open() const;
     void validate_addresses(const client_resolve_result& result) const;
     void install_addresses(client_resolve_result result);
     void schedule_dns_refresh();
@@ -196,6 +191,31 @@ private:
         http_client_request_storage request, operation_options options, http_client_response_state* state);
     [[nodiscard]] task<void> execute_request_into(
         http_client_request_storage request, operation_options options, http_client_response_state* state);
+    // Routes the request to a reusable connection of its route, a new one
+    // within max_open_, or waits within the acquisition bound. The returned
+    // connection counts this request among its users_.
+    [[nodiscard]] task<http_client_connection*> acquire_tcp_connection(const http_client_request_storage& request,
+        const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& state,
+        request_admission& admission);
+    void release_tcp_connection(http_client_connection& connection) noexcept;
+    [[nodiscard]] task<void> execute_tcp_request(const http_client_request_storage& request,
+        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+        http_client_response_state& state, request_admission& admission);
+    // One wait for admission_changed(), the acquisition deadline or a stop;
+    // the caller re-checks every condition. Throws timeout once the bound expired.
+    [[nodiscard]] task<void> wait_for_admission(const operation_timeout& acquire_timeout);
+    [[nodiscard]] bool requires_http11_connection(const http_client_request_storage& request) const noexcept;
+    void throw_if_admission_ended(const stop_token& stop, const http_client_response_state& state) const;
+    // A new connection fits within max_open_, possibly after closing the least
+    // recently used idle connection (reclaimed later).
+    [[nodiscard]] bool admits_new_connection() noexcept;
+    [[nodiscard]] bool close_least_recent_idle(std::optional<bool> multiplexed) noexcept;
+    void mark_idle(std::uint64_t& idle_order, bool multiplexed) noexcept;
+    void enforce_idle_limits() noexcept;
+    void start_reclaimer();
+    [[nodiscard]] task<void> run_reclaimer();
+    void reclaim_connections() noexcept;
+    [[nodiscard]] http_client_connection* find_connection(const http_client_response_state& state) noexcept;
     [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
         http_client_response_state& state_value);
@@ -210,10 +230,6 @@ private:
     // Spawns the request driver for `state_value`, which the caller's response owns.
     void spawn_request(http_client_request_storage request, operation_options options,
         http_client_response_state& state_value);
-    [[nodiscard]] http_client_connection& connection(std::size_t index) noexcept {
-        return *connections_[index];
-    }
-    [[nodiscard]] http_client_connection& connection_for_request(std::size_t index) noexcept;
 
 #ifdef RUVIA_ENABLE_HTTP3
     struct alternative_service final {
@@ -223,7 +239,9 @@ private:
     };
     [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
-        stop_token stop, http_client_response_state& state, std::size_t slot_index);
+        stop_token stop, http_client_response_state& state, request_admission& admission);
+    [[nodiscard]] http3_client_connection* find_http3_connection(const http_client_response_state& state) noexcept;
+    void release_http3_connection(http3_client_connection& connection) noexcept;
 #endif
     asio::io_context& io_context_;
     worker_handle worker_;
@@ -242,14 +260,27 @@ private:
     http_client_response_memory_domain::owner response_memory_{};
     client_wire_counters wire_counters_;
     asio::ssl::context tls_context_;
-    slot_pool_type slots_;
     std::shared_ptr<http_client_cancellation_target> cancellation_target_;
     task_scope background_tasks_;
+    // Owners stay at one address; a null entry is a free position.
     std::pmr::vector<connection_owner_type> connections_;
 #ifdef RUVIA_ENABLE_HTTP3
     std::pmr::vector<alternative_service> alternative_services_{process_resource()};
+    // Created with the first HTTP/3 connection.
+    std::unique_ptr<http3_client_tls, pmr_object_deleter<http3_client_tls>> http3_tls_{nullptr, pmr_object_deleter<http3_client_tls>{process_resource()}};
     std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> http3_connections_{process_resource()};
 #endif
+    worker_signal admission_signal_;
+    worker_signal reclaim_signal_;
+    admission_waiter* admission_waiters_{};
+    std::size_t open_connections_{0};
+    // Upper bounds of the idle connections, recounted when exceeded.
+    std::size_t idle_http1_{0};
+    std::size_t idle_multiplexed_{0};
+    std::uint64_t next_connection_serial_{0};
+    std::uint64_t idle_clock_{0};
+    bool closing_{false};
+    bool reclaimer_started_{false};
     std::size_t requests_buffered_{0};
     std::size_t requests_in_flight_{0};
     std::size_t completed_requests_{0};

@@ -321,9 +321,10 @@ private:
 };
 #endif
 
-// One fixed TCP slot of an http_client_pool: its transport, the HTTP/1 parse
-// buffers and the HTTP/2 session with its stream registry. HTTP/1 exchanges
-// run through http1_client_exchange; the pool owns admission and policy.
+// One physical connection owner of an http_client_pool for one route: its
+// transport, the HTTP/1 parse buffers and the HTTP/2 session with its stream
+// registry. Reconnects keep the route. HTTP/1 exchanges run through
+// http1_client_exchange; the pool owns admission, policy and reclamation.
 // Worker-affine and address-stable.
 class http_client_connection final {
 public:
@@ -373,7 +374,11 @@ public:
     };
 #endif
 
-    http_client_connection(http_client_pool& pool, std::size_t index);
+    // `server_name` is the TLS SNI and verified name (empty for http);
+    // `http11_only` offers only http/1.1 over TLS for HTTP/1.1-only exchanges.
+    http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
+        std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
+        bool http11_only);
     void capture_connection_info(http_client_response_state& response, bool reused) const;
     void retire_addresses() noexcept;
     [[nodiscard]] std::uint64_t connection_id() const noexcept {
@@ -386,6 +391,20 @@ public:
     [[nodiscard]] std::size_t index() const noexcept {
         return index_;
     }
+    [[nodiscard]] std::uint64_t serial() const noexcept {
+        return serial_;
+    }
+    // The route is the alias default, authenticated for the alias origin.
+    [[nodiscard]] bool alias_route() const noexcept {
+        return alias_route_;
+    }
+    [[nodiscard]] bool serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
+        bool http11_only) const noexcept;
+    // Kept between uses: an HTTP/1 connection between exchanges, or an HTTP/2
+    // session admitting streams without any.
+    [[nodiscard]] bool idle() const noexcept;
+    // Nothing runs on or borrows this owner any longer; the pool may destroy it.
+    [[nodiscard]] bool reclaimable() const noexcept;
 #ifdef RUVIA_ENABLE_HTTP2
     // Advisory only; the worker-affine request driver consumes the selected
     // capacity synchronously before another request can select it.
@@ -419,6 +438,8 @@ public:
     // watched: peer EOF, reset or unsolicited bytes close it at once.
     void begin_idle() noexcept;
     void end_idle() noexcept;
+    // Closes a connection nothing uses; an HTTP/2 session sends GOAWAY first.
+    void close_idle() noexcept;
     // Applies the retention policy to both buffers. Only between exchanges,
     // when no transport operation borrows their storage.
     void retain_idle_buffers() noexcept;
@@ -462,8 +483,18 @@ public:
     [[nodiscard]] task<void> deliver_http2_informational(std::uint32_t stream_id);
     [[nodiscard]] std::optional<timeout_duration> http2_write_timeout() const noexcept;
     void on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept;
+    // http2_client_session handler: request-stream capacity grew, or the last
+    // session task ended.
+    void on_http2_capacity() noexcept;
+    void on_http2_stopped() noexcept;
 #endif
 
+private:
+    // The route's transport names; transport_ borrows them, so they precede it.
+    std::pmr::string dial_host_;
+    std::pmr::string server_name_;
+
+public:
     client_tcp_transport transport_;
     http_io_buffer read_buffer_;
     http_io_buffer write_buffer_;
@@ -485,6 +516,12 @@ public:
     bool retired_{false};
     bool address_retired_{false};
     bool fresh_{false};
+    const bool http11_only_;
+    // Requests the pool routed here that have not released it yet.
+    std::size_t users_{0};
+    // Order in which the connection last turned idle (larger is newer); 0
+    // while it is in use or after it closed.
+    std::uint64_t idle_order_{0};
 
 private:
 #ifdef RUVIA_ENABLE_HTTP2
@@ -504,7 +541,6 @@ private:
     void schedule_http2_stream_timer(http2_stream& stream);
     void arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream);
 #endif
-    void close_idle() noexcept;
 #ifdef RUVIA_ENABLE_HTTP2
     // Client close of a session that admits no further request: GOAWAY first
     // (RFC 9113 section 6.8), bounded by the session.
@@ -529,6 +565,8 @@ private:
 
     http_client_pool& pool_;
     std::size_t index_;
+    std::uint64_t serial_;
+    bool alias_route_;
     std::uint64_t connection_id_{};
     std::pmr::string peer_ip_{process_resource()};
 #ifdef RUVIA_ENABLE_HTTP2

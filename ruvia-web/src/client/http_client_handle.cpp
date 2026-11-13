@@ -560,7 +560,8 @@ task<http_client_tunnel_result> http_client_handle::dispatch_udp(const http_clie
         fields = heap_fields;
     }
     // The dispatch owns fields before temporary preparation storage dies.
-    return dispatch_connect({.authority_ = pool_->config().authority_, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config, request_options);
+    const std::string_view authority = request_options.authority_ ? std::string_view(*request_options.authority_) : std::string_view(pool_->config().authority_);
+    return dispatch_connect({.authority_ = authority, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config, request_options);
 }
 
 task<http_client_tunnel_result> http_client_handle::dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options) const {

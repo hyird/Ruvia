@@ -84,6 +84,18 @@ struct http_client_request_options final {
     bool fresh_connection_{false};
     http_client_phase_timeouts timeouts_;
     std::shared_ptr<http_client_informational_callback> informational_;
+    // 请求级路由覆盖；未设字段继承 alias，scheme 始终来自 alias 的 base_url_。
+    // authority_：逻辑 Host / :authority（host[:port]，无 userinfo）。不同于
+    // alias authority 时，Cookie jar 与 Alt-Svc 不参与，跨 origin 重定向丢弃全部覆盖。
+    std::optional<std::pmr::string> authority_;
+    // 物理拨号目标；域名只在新建连接时解析，并经 address_validator_ 校验。
+    std::optional<std::pmr::string> dial_host_;
+    std::optional<port_number> dial_port_;
+    // TLS SNI 与证书校验名，默认取有效 authority 的 host（IP 字面量不发 SNI，
+    // 按 IP SAN 校验）。连接按 (拨号 host, 拨号端口, server name, ALPN) 复用，
+    // Host / :authority 不入键：HTTP/2/3 连接上发送其他 authority 时，调用方
+    // 负责该证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。
+    std::optional<std::pmr::string> server_name_;
 };
 
 enum class http_client_response_framing : std::uint8_t {
@@ -182,19 +194,35 @@ struct http_client_http3_config final {
     std::size_t max_stream_output_bytes_{256 * 1024};
 };
 
+// Connections are created on demand per route (dial host, dial port, TLS server
+// name, ALPN offer); none exist before the first request.
+struct http_client_connection_limits final {
+    // Physical connections of every route and protocol, including dialing and
+    // idle ones (like Go's MaxConnsPerHost). At the limit, the least recently
+    // used idle connection is closed for a new dial; without one, requests wait
+    // within acquire_timeout_. nullopt leaves the count unbounded.
+    std::optional<std::size_t> max_open_;
+    // Idle connections retained across all routes; beyond these, the least
+    // recently used idle connection of that kind closes at once.
+    std::size_t max_idle_http1_{64};
+    // HTTP/2 and HTTP/3 connections without streams.
+    std::size_t max_idle_multiplexed_{64};
+};
+
 // Per-origin configuration. Standalone owners and application workers use the
 // same isolated transport, TLS, cookie and connection limits for each alias.
 struct http_client_config final {
     borrowed_text alias_{"default"};
     borrowed_text base_url_{};
-    // 仅控制物理拨号；逻辑 origin、默认 SNI 和证书验证名始终来自 base_url_。
+    // 仅控制物理拨号；逻辑 origin、默认 SNI 和证书验证名来自 base_url_，
+    // 请求可经 http_client_request_options 逐请求覆盖。
     std::optional<borrowed_text> dial_host_;
     std::optional<port_number> dial_port_;
     // 接收已经解析的数值地址；拒绝的候选绝不交给 connect。
     std::function<bool(std::string_view, std::uint16_t)> address_validator_;
     std::optional<timeout_duration> dns_refresh_interval_;
     bool decode_content_{true};
-    std::size_t connection_count_{1};
+    http_client_connection_limits connection_limits_{};
     std::size_t max_concurrent_http2_streams_per_connection_{100};
     std::size_t max_buffered_requests_{1024};
     std::size_t max_cookies_{256};
@@ -210,7 +238,7 @@ struct http_client_config final {
     // credit) is not inactive. Reads during a streaming upload are bounded too.
     // Expiry fails the response with timeout within request_timeout_.
     std::optional<timeout_duration> read_timeout_{30000};
-    // Total deadline of one exchange, from slot acquisition through connect,
+    // Total deadline of one exchange, from admission through connect,
     // request transfer, response head and the complete body, including the
     // time the body producer waits for a slow consumer (read(), pipe_to()) to
     // drain max_response_bytes_ of buffered body. Expiry fails the response
@@ -219,11 +247,11 @@ struct http_client_config final {
     // Accepted WebSockets have no implicit total lifetime limit; their active
     // operations retain read/write, heartbeat, close and explicit operation bounds.
     std::optional<timeout_duration> request_timeout_{30000};
-    // Bound of the wait for a free connection slot, within request_timeout_,
-    // including the wait for the slot's reconnect (a draining HTTP/2 session
-    // retiring first) and for HTTP/2 stream capacity below the peer's
-    // SETTINGS_MAX_CONCURRENT_STREAMS. Applies even when request_timeout_ is
-    // nullopt.
+    // Bound of the wait for connection admission, within request_timeout_:
+    // a max_open_ slot, a connection of the request's route still negotiating
+    // its protocol, a draining HTTP/2 session retiring before its reconnect, and
+    // HTTP/2 stream capacity below the peer's SETTINGS_MAX_CONCURRENT_STREAMS.
+    // Applies even when request_timeout_ is nullopt.
     std::optional<timeout_duration> acquire_timeout_{5000};
     // A pooled HTTP/1 connection between exchanges, or an HTTP/2 connection
     // without streams, closes once idle this long. Independently, an idle
@@ -328,7 +356,11 @@ private:
 };
 
 struct http_client_stats final {
+    // Requests waiting for a connection: a max_open_ slot, a connection of
+    // their route still negotiating, HTTP/2/3 stream capacity, or an HTTP/1
+    // connection's serial exchange. Bounded by max_buffered_requests_.
     std::size_t buffered_requests_{0};
+    // Requests a connection carries.
     std::size_t in_flight_requests_{0};
     std::size_t completed_requests_{0};
     std::size_t failed_requests_{0};
@@ -343,6 +375,11 @@ struct http_client_stats final {
     // request. A TLS record can carry close_notify, post-handshake control data
     // or an unsolicited response.
     std::size_t idle_connections_with_pending_data_{0};
+    // Connection owners of every route and protocol: dialing, in use, idle, or
+    // closed while a request still unwinds; reclaimed once nothing borrows them.
+    std::size_t open_connections_{0};
+    // HTTP/1 connections between exchanges and HTTP/2/3 ones without streams.
+    std::size_t idle_connections_{0};
     std::size_t dropped_advertisements_{0};
     std::size_t received_pushes_{0};
     std::size_t rejected_pushes_{0};

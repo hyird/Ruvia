@@ -76,7 +76,8 @@ prepare_http1_request_head(
     client_prepared_request_scratch scratch(process_resource());
     auto source = pool.policy().prepare_request(request, scratch);
     const auto headers = static_cast<std::span<const http_header_view>>(source.headers_);
-    auto origin = pool.origin();
+    // Host comes from the request route (its authority override, else the alias).
+    auto origin = request.route().origin_;
     const bool connect_udp = request.udp_tunnel();
     if (connect_udp) {
         const auto authority = parse_http_authority(borrowed_text(request.tunnel_authority()));

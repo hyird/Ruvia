@@ -1024,7 +1024,19 @@ public:
     RUVIA_GET("/resumption/body", body);
     RUVIA_GET("/resumption/advertise", advertise);
     RUVIA_GET("/resumption/reprioritize", reprioritize);
+    RUVIA_GET("/resumption/route", route);
     RUVIA_ROUTES_END
+
+    // What the origin saw of an outbound request route: TLS server name,
+    // :authority, the QUIC connection and whether the request was early data.
+    ruvia::task<ruvia::http_response> route(ruvia::context& context) {
+        const auto* tls = context.conn().tls();
+        std::pmr::string result(tls != nullptr ? tls->server_name() : std::string_view(), context.arena());
+        result.append("|").append(context.req().authority()).append("|");
+        result.append(std::to_string(context.conn().id())).append("|");
+        result.append(context.early_data() ? "early" : "one-rtt");
+        co_return context.text(std::move(result));
+    }
 
     ruvia::task<ruvia::http_response> safe(ruvia::context& context) {
         co_return context.text(context.early_data() ? "early" : "one-rtt");
@@ -1103,7 +1115,7 @@ public:
           retry_udp_(io_),
           base_url_("https://localhost:" + std::pmr::string(std::to_string(enabled_udp_.endpoint().port()), ruvia::process_resource())),
           retry_base_url_("https://localhost:" + std::pmr::string(std::to_string(retry_udp_.endpoint().port()), ruvia::process_resource())),
-          identity_("localhost"),
+          identity_("localhost", "DNS:localhost,DNS:a.localhost,DNS:b.localhost,DNS:c.localhost"),
           app_(ruvia::app()) {
         const auto& key = identity_.private_key_file();
         app_.server({.worker_count_ = 4})
@@ -1535,10 +1547,10 @@ ruvia::task<void> run_resumption_lane(ruvia::http_client_handle c,
 
 ruvia::task<void> exercise_concurrent_early_data_and_retry_worker(ruvia::event_loop loop,
     ruvia::http_client_config config, ruvia::http_client_config retry_config) {
-    config.connection_count_ = 2;
+    config.connection_limits_.max_open_ = 2;
     config.http3_.enable_early_data_ = true;
     config.advertisements_.receive_origins_ = true;
-    retry_config.connection_count_ = 2;
+    retry_config.connection_limits_.max_open_ = 2;
     ruvia::http_client owner(loop, config);
     ruvia::http_client retry_owner(loop, retry_config);
     std::exception_ptr err;
@@ -1563,7 +1575,170 @@ ruvia::task<void> exercise_concurrent_early_data_and_retry_worker(ruvia::event_l
     }
 }
 
+struct route_observation final {
+    std::pmr::string server_name_;
+    std::pmr::string authority_;
+    std::pmr::string origin_connection_;
+    bool early_{false};
+    std::uint64_t client_connection_{};
+    bool reused_{false};
+};
+
+ruvia::task<route_observation> observe_route(ruvia::http_client_handle client, ruvia::http_client_request_options options) {
+    auto response = co_await client.get("/resumption/route").configure(std::move(options)).send();
+    EXPECT_TRUE(response.ok());
+    EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http3);
+    const auto body = co_await response.text();
+    const auto text = body.text();
+    const auto first = text.find('|');
+    const auto second = text.find('|', first + 1);
+    const auto third = text.find('|', second + 1);
+    route_observation observed;
+    observed.server_name_ = text.substr(0, first);
+    observed.authority_ = text.substr(first + 1, second - first - 1);
+    observed.origin_connection_ = text.substr(second + 1, third - second - 1);
+    observed.early_ = text.substr(third + 1) == "early";
+    observed.client_connection_ = response.connection_info().id_;
+    observed.reused_ = response.connection_info().reused_;
+    co_return observed;
+}
+
+[[nodiscard]] ruvia::http_client_request_options route_options(std::string_view authority,
+    std::optional<std::string_view> server_name = std::nullopt, std::optional<std::string_view> dial_host = std::nullopt) {
+    ruvia::http_client_request_options options;
+    options.authority_.emplace(authority);
+    if (server_name) {
+        options.server_name_.emplace(*server_name);
+    }
+    if (dial_host) {
+        options.dial_host_.emplace(*dial_host);
+    }
+    return options;
+}
+
+ruvia::task<void> exercise_outbound_routes(ruvia::event_loop loop, ruvia::http_client_config config, std::uint16_t port) {
+    config.http3_.enable_early_data_ = false;
+    config.idle_timeout_ = 10s;
+    ruvia::http_client owner(loop, config);
+    std::exception_ptr failure;
+    try {
+        const auto client = owner.client();
+        const auto authority = [port](std::string_view host) {
+            return std::pmr::string(host, ruvia::process_resource()).append(":").append(std::to_string(port));
+        };
+        const auto a = co_await observe_route(client, route_options(authority("a.localhost")));
+        EXPECT_EQ(a.server_name_, "a.localhost");
+        EXPECT_EQ(a.authority_, authority("a.localhost"));
+        EXPECT_FALSE(a.reused_);
+        const auto again = co_await observe_route(client, route_options(authority("a.localhost")));
+        EXPECT_TRUE(again.reused_);
+        EXPECT_EQ(again.client_connection_, a.client_connection_);
+        EXPECT_EQ(again.origin_connection_, a.origin_connection_);
+        // :authority is not part of the connection key: the same server name
+        // carries another authority on the same QUIC connection.
+        const auto shared = co_await observe_route(client, route_options(authority("c.localhost"), "a.localhost"));
+        EXPECT_EQ(shared.server_name_, "a.localhost");
+        EXPECT_EQ(shared.authority_, authority("c.localhost"));
+        EXPECT_EQ(shared.client_connection_, a.client_connection_);
+        EXPECT_EQ(shared.origin_connection_, a.origin_connection_);
+        const auto b = co_await observe_route(client, route_options(authority("b.localhost")));
+        EXPECT_EQ(b.server_name_, "b.localhost");
+        EXPECT_EQ(b.authority_, authority("b.localhost"));
+        EXPECT_FALSE(b.reused_);
+        EXPECT_NE(b.client_connection_, a.client_connection_);
+        EXPECT_NE(b.origin_connection_, a.origin_connection_);
+        EXPECT_EQ(client.stats().open_connections_, 2U);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await owner.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+// Each idle period retires the QUIC connection and lets the pool reclaim its
+// owner; resumption state survives only in the pool's per-route ticket cache.
+ruvia::task<route_observation> observe_after_idle(ruvia::event_loop& loop, ruvia::http_client_handle client,
+    ruvia::http_client_request_options options) {
+    (void)co_await ruvia::sleep_for(loop.handle(), 250ms);
+    co_return co_await observe_route(client, std::move(options));
+}
+
+ruvia::task<void> exercise_route_tickets(ruvia::event_loop loop, ruvia::http_client_config config, std::uint16_t port) {
+    config.http3_.enable_early_data_ = true;
+    ruvia::http_client owner(loop, config);
+    std::exception_ptr failure;
+    try {
+        const auto client = owner.client();
+        const auto authority = std::pmr::string("a.localhost:", ruvia::process_resource()).append(std::to_string(port));
+        const auto first = co_await observe_route(client, route_options(authority));
+        EXPECT_FALSE(first.early_);
+        // The route's own ticket resumes it with 0-RTT on a new connection.
+        bool resumed = false;
+        for (int attempt = 0; attempt != 8 && !resumed; ++attempt) {
+            resumed = (co_await observe_after_idle(loop, client, route_options(authority))).early_;
+        }
+        EXPECT_TRUE(resumed);
+        // The same server name and endpoint reached through another dial host
+        // is another route: route A's ticket is never offered, so its first
+        // request cannot be early data even though the origin would accept it.
+        const auto other_dial = co_await observe_after_idle(loop, client, route_options(authority, std::nullopt, "127.0.0.1"));
+        EXPECT_EQ(other_dial.server_name_, "a.localhost");
+        EXPECT_FALSE(other_dial.early_);
+        // Another server name on the same dial target starts without a ticket too.
+        const auto other_name = co_await observe_after_idle(loop, client,
+            route_options(std::pmr::string("b.localhost:", ruvia::process_resource()).append(std::to_string(port))));
+        EXPECT_EQ(other_name.server_name_, "b.localhost");
+        EXPECT_FALSE(other_name.early_);
+        // Route A still resumes from its own ticket afterwards.
+        resumed = false;
+        for (int attempt = 0; attempt != 8 && !resumed; ++attempt) {
+            resumed = (co_await observe_after_idle(loop, client, route_options(authority))).early_;
+        }
+        EXPECT_TRUE(resumed);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await owner.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 }  // namespace http3_resumption_test
+
+TEST(Ruvia, http3_outbound_request_routes_send_their_authority_and_server_name_per_connection) {
+    auto& server = http3_resumption_test::server::shared();
+    ruvia::blocking_pool blocking;
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &blocking});
+    loops.start();
+    try {
+        loops.loop(0).start(http3_resumption_test::exercise_outbound_routes(loops.loop(0), server.outbound_config(), server.enabled_endpoint().port())).get();
+    } catch (...) {
+        loops.stop();
+        loops.join();
+        throw;
+    }
+    loops.stop();
+    loops.join();
+}
+
+TEST(Ruvia, http3_outbound_session_tickets_resume_only_their_route) {
+    auto& server = http3_resumption_test::server::shared();
+    ruvia::blocking_pool blocking;
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &blocking});
+    loops.start();
+    try {
+        loops.loop(0).start(http3_resumption_test::exercise_route_tickets(loops.loop(0), server.outbound_config(), server.enabled_endpoint().port())).get();
+    } catch (...) {
+        loops.stop();
+        loops.join();
+        throw;
+    }
+    loops.stop();
+    loops.join();
+}
 
 TEST(Ruvia, http3_outbound_idle_reconnect_serves_requests_and_bounds_425_retries) {
     const auto config = http3_resumption_test::server::shared().outbound_config();

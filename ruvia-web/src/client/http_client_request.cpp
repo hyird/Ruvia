@@ -14,6 +14,8 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
+#include "client/client_tls.h"
+#include "client/http_client_config_storage.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_registry.h"
 #include "client/http_client_request_storage.h"
@@ -60,7 +62,8 @@ http_client_request_storage::http_client_request_storage(
       headers_(method_.get_allocator().resource()),
       body_(std::string_view{}, method_.get_allocator().resource()),
       tunnel_authority_(method_.get_allocator().resource()),
-      tunnel_protocol_(method_.get_allocator().resource()) {}
+      tunnel_protocol_(method_.get_allocator().resource()),
+      route_authority_(method_.get_allocator().resource()) {}
 
 http_client_request_storage::http_client_request_storage(http_client_request_storage&& other) noexcept
     : options_(std::move(other.options_)),
@@ -77,7 +80,8 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
       is_upgrade_(other.is_upgrade_),
       tunnel_(std::exchange(other.tunnel_, nullptr)),
       has_body_(std::exchange(other.has_body_, false)),
-      upload_(std::exchange(other.upload_, nullptr)) {
+      upload_(std::exchange(other.upload_, nullptr)),
+      route_authority_(other.route_authority_.get_allocator().resource()) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
@@ -94,6 +98,90 @@ http_client_request_storage& http_client_request_storage::set_body(std::string_v
     body_.assign(body);
     has_body_ = true;
     return *this;
+}
+
+namespace {
+// host[:port] without userinfo, like the authority of base_url_.
+[[nodiscard]] http_authority_view parse_route_authority(std::string_view authority) {
+    const auto parsed = parse_http_authority(borrowed_text(authority));
+    if (!parsed || authority.find_first_of("@/?#") != std::string_view::npos || parsed->host().empty() ||
+        parsed->port_kind() == http_authority_port_kind::empty || parsed->port() == 0) {
+        throw std::invalid_argument("HTTP request authority must be host[:port]");
+    }
+    auto host = parsed->host();
+    if (host.starts_with('[')) {
+        host = host.substr(1, host.size() - 2);
+    }
+    validate_client_origin_host(host, "HTTP request authority host must not be empty", "HTTP request authority host is invalid");
+    return *parsed;
+}
+}  // namespace
+
+void validate_http_client_route_options(const http_client_request_options& options) {
+    if (options.authority_) {
+        (void)parse_route_authority(*options.authority_);
+    }
+    if (options.dial_host_) {
+        validate_client_origin_host(*options.dial_host_, "HTTP request dial host must not be empty", "HTTP request dial host is invalid");
+    }
+    if (options.dial_port_ && options.dial_port_->value() == 0) {
+        throw std::invalid_argument("HTTP request dial port must be positive");
+    }
+    if (options.server_name_) {
+        validate_client_origin_host(*options.server_name_, "HTTP request TLS server name must not be empty", "HTTP request TLS server name is invalid");
+    }
+}
+
+void http_client_request_storage::resolve_route(const http_client_config_storage& config) {
+    validate_http_client_route_options(options_);
+    const bool https = config.scheme_ == http_scheme::https;
+    if (options_.server_name_ && !https) {
+        throw std::invalid_argument("HTTP request TLS server name requires an https origin");
+    }
+    const port_number default_port = https ? 443 : 80;
+    http_client_route route{.origin_ = config.origin(),
+        .authority_ = config.authority_,
+        .dial_host_ = config.dial_host_,
+        .dial_port_ = config.dial_port_,
+        .server_name_ = {},
+        .alias_origin_ = true,
+        .alias_transport_ = true,
+        .alias_route_ = true};
+    std::string_view authority_host;
+    if (options_.authority_) {
+        const auto parsed = parse_route_authority(*options_.authority_);
+        const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(default_port)};
+        route.origin_ = https ? http_origin_view::https(origin) : http_origin_view::http(origin);
+        route_authority_ = make_http_origin_authority(route.origin_, route_authority_.get_allocator().resource());
+        route.authority_ = route_authority_;
+        route.alias_origin_ = http_authorities_equal(borrowed_text(route.authority_), borrowed_text(std::string_view(config.authority_)), default_port);
+        authority_host = parsed.host();
+        if (authority_host.starts_with('[')) {
+            authority_host = authority_host.substr(1, authority_host.size() - 2);
+        }
+    }
+    if (is_tunnel_ && !is_upgrade_ && options_.authority_) {
+        if (websocket_ != nullptr) {
+            // The alias authority named by the WebSocket handshake follows the override.
+            tunnel_authority_.assign(route.authority_);
+        } else if (tunnel_protocol_.empty() || !http_authorities_equal(borrowed_text(std::string_view(tunnel_authority_)), borrowed_text(route.authority_), default_port)) {
+            throw std::invalid_argument("a CONNECT request names its own authority");
+        }
+    }
+    if (options_.dial_host_) {
+        route.dial_host_ = *options_.dial_host_;
+    }
+    if (options_.dial_port_) {
+        route.dial_port_ = options_.dial_port_->value();
+    }
+    const auto alias_server_name = https ? config.tls_.tls_host(config.host_) : std::string_view{};
+    route.server_name_ = options_.server_name_           ? std::string_view(*options_.server_name_)
+                         : !route.alias_origin_ && https ? authority_host
+                                                         : alias_server_name;
+    route.alias_transport_ = http_ascii_equals_ignore_case(route.dial_host_, config.dial_host_) &&
+                             route.dial_port_ == config.dial_port_ && http_ascii_equals_ignore_case(route.server_name_, alias_server_name);
+    route.alias_route_ = route.alias_origin_ && route.alias_transport_;
+    route_.emplace(route);
 }
 
 }  // namespace detail
@@ -170,6 +258,25 @@ task<void> pipe_response(http_client_response response, task<void> body, respons
         }
         co_await output.end(trailers);
     }
+}
+
+// The origin a request addresses: its authority override, else the alias.
+// Redirect targets resolve against it.
+[[nodiscard]] http_origin_view request_origin(const http_client_handle& client, const http_client_request_options& options) {
+    if (!options.authority_) {
+        return client.origin();
+    }
+    const auto parsed = detail::parse_route_authority(*options.authority_);
+    const bool https = client.scheme() == http_scheme::https;
+    const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(https ? 443 : 80)};
+    return https ? http_origin_view::https(origin) : http_origin_view::http(origin);
+}
+
+void clear_route_overrides(http_client_request_options& options) noexcept {
+    options.authority_.reset();
+    options.dial_host_.reset();
+    options.dial_port_.reset();
+    options.server_name_.reset();
 }
 
 // A task frame may bind exactly one scope. This outer frame binds the
@@ -283,6 +390,7 @@ http_client_request& http_client_request::configure(http_client_request_options 
         options.field_source_ != http_request_field_source::forwarded) {
         throw std::invalid_argument("invalid HTTP request field source");
     }
+    detail::validate_http_client_route_options(options);
     request_options_ = std::move(options);
     return *this;
 }
@@ -416,7 +524,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
         if (!location) {
             co_return response;
         }
-        auto resolved = resolve_http_client_redirect_target(request.client_.origin(),
+        auto resolved = resolve_http_client_redirect_target(request_origin(request.client_, request.request_options_),
             {.current_target_ = request.target_, .location_ = *location, .resource_ = request.client_.resource_});
         auto* next = std::get_if<http_client_resolved_redirect>(&resolved);
         if (next == nullptr) {
@@ -465,6 +573,8 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
             if (next_pool == nullptr) {
                 co_return response;
             }
+            // Route overrides belong to the origin that set them.
+            clear_route_overrides(request.request_options_);
         }
         const http_client_request_view view{
             .method_ = request.method_,
@@ -559,6 +669,7 @@ http_client_connect_request& http_client_connect_request::configure(http_client_
         options.field_source_ != http_request_field_source::forwarded) {
         throw std::invalid_argument("invalid HTTP request field source");
     }
+    detail::validate_http_client_route_options(options);
     request_options_ = std::move(options);
     return *this;
 }

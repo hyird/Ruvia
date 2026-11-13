@@ -399,8 +399,9 @@ private:
 
 // A worker-affine, independently owned observation. Its metadata survives
 // client shutdown and later observations, and expires when this owner dies.
-// Destroy before the event_loop retires. A slot identifies the fixed client
-// pool position, not a persistent connection across reconnects.
+// Destroy before the event_loop retires. A slot identifies the pool position
+// of the observing connection owner, not a persistent connection: positions
+// are reused once their owner is reclaimed.
 class http_client_advertisement final {
 public:
     http_client_advertisement(http_client_advertisement&& other) noexcept;

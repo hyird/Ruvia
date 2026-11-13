@@ -319,6 +319,7 @@ void http2_client_session::publish_state() noexcept {
         usable() ? connection_->available_request_streams(std::numeric_limits<std::size_t>::max()) : 0;
     if (capacity > request_capacity_) {
         capacity_signal_.notify();
+        handler_.on_http2_capacity();
     }
     request_capacity_ = capacity;
 }
@@ -329,6 +330,9 @@ void http2_client_session::finish_task(std::uint64_t generation) noexcept {
     }
     --session_tasks_;
     state_signal_.notify();
+    if (session_tasks_ == 0) {
+        handler_.on_http2_stopped();
+    }
 }
 
 http2_client_session::task_guard::~task_guard() {
@@ -1029,6 +1033,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(request.method());
         state_value.connection_index_ = index_;
+        state_value.connection_serial_ = serial_;
         state_value.connection_generation_ = generation_;
         state_value.request_id_ = stream.request_id_;
         register_http2_stream(stream);
@@ -1075,7 +1080,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                                        ? connection.submit_request_head(::ruvia::http2_regular_request_head_view{
                                              .method_ = source_value.method_,
                                              .scheme_ = scheme,
-                                             .authority_ = borrowed_text(std::string_view(config.authority_)),
+                                             .authority_ = borrowed_text(request.route().authority_),
                                              .target_ = source_value.target_,
                                              .headers_ = headers,
                                              .content_ = content,
@@ -1294,7 +1299,9 @@ struct http_client_pool::http2_push_driver final {
 
 void http_client_pool::accept_http2_push(http_client_connection& connection, const http2_push_promise_event& promise) {
     const bool https = config_.scheme_ == http_scheme::https;
-    if (!config_.push_.enabled_ || pushes_.size() >= config_.push_.max_queued_pushes_ ||
+    // Only a connection authenticated for the alias route speaks for its
+    // origin (RFC 9113 section 8.4).
+    if (!config_.push_.enabled_ || !connection.alias_route() || pushes_.size() >= config_.push_.max_queued_pushes_ ||
         active_pushes_ >= config_.push_.max_concurrent_pushes_ ||
         !http_ascii_equals_ignore_case(promise.request_.scheme_, https ? "https" : "http") ||
         !http_authorities_equal(borrowed_text(promise.request_.authority_),
@@ -1310,6 +1317,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         state_value.transport_ = http_client_response_transport::http2;
         state_value.request_method_ = classify_http_method(promise.request_.method_);
         state_value.connection_index_ = connection.index();
+        state_value.connection_serial_ = connection.serial();
         state_value.connection_generation_ = connection.generation_;
         state_value.stream_id_ = promise.promised_stream_id_;
         state_value.request_id_ = connection.next_http2_request_id();

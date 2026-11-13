@@ -405,6 +405,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
+- **Upgrade 协议选择**：`negotiate` 的 HTTPS origin 上，`upgrade()` 复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；`http2_only`、`http3_only` 返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
 
 句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
@@ -424,6 +425,11 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 | 回源能力 | 入口与契约 |
 | --- | --- |
 | 拨号与身份分离 | `base_url_` 决定 Host / `:authority` 及默认 SNI、证书验证名；`dial_host_` / `dial_port_` 只覆盖物理目标。`tls_.server_name_` 可进一步覆盖 TLS 名称，不改 HTTP authority |
+| 请求级路由覆盖 | `http_client_request_options` 的 `authority_`（`host[:port]`，拒绝 userinfo）、`dial_host_` / `dial_port_`、`server_name_` 逐请求覆盖 alias 默认值；未设字段继承 alias，scheme 不可改。Host / `:authority` 取有效 authority，SNI 与证书名默认取其 host（IP 字面量不发 SNI、按 IP SAN 校验）；请求级拨号域名只在新建连接时解析并经 `address_validator_` |
+| 连接复用键 | 连接按 `(拨号 host, 拨号端口, TLS server name, ALPN 报价)` 复用，Host / `:authority` 不入键：HTTP/1 keep-alive 可跨 Host 复用；HTTP/2、HTTP/3 同一连接上发送其他 authority 时，由调用方保证所选证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。每个 alias 只有一个 TLS 上下文，QUIC 会话票据按路由隔离 |
+| 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；任何路由覆盖的请求既不记录也不使用 Alt-Svc，Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
+| 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
+| 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
 | SSRF 策略 | `address_validator_(numeric_ip, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
 | 原样编码流 | origin 的 `decode_content_ = false`，或请求 `.decode_content(false)`：保留 `Content-Encoding` / `Content-Length`，不等待完整正文便交付首块；默认仍自动解码 |
 | 转发字段 | `.field_source(http_request_field_source::forwarded)` 使用协议层接收/转发语义，不套用自生成字段的发送方限制；分帧与歧义校验不放松 |
@@ -437,15 +443,16 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 - **总期限独立**：阶段覆盖不改变 `request_timeout_` 或宿主取消。总期限仍计入慢下游与 1xx 回调等待；代理若不需要整体时限，须在 origin 配置中显式设为 `nullopt`。读无活动预算在等待调用方消费正文时暂停。
 - **1xx 背压边界**：HTTP/2、HTTP/3 只背压当前响应，不阻塞其他流；回调异常终止该交换。回调不得反过来等待本交换，或依赖它释放池容量的操作。
 - **地址退役**：刷新失败保留旧快照；地址集合改变时关闭空闲连接和隧道，活动 HTTP/1 完成本次后关闭，HTTP/2、HTTP/3 停止接新流并排空。等待旧连接退役仍计入 acquire 预算。
-- **独立连接预算**：fresh 请求仍受总请求准入限制，但占用额外独立槽位；`connection_count_` 只限定业务复用池，不是全部物理 socket 的硬上限。
+- **独立连接预算**：fresh 请求的独立连接同样计入 `max_open_`，用后关闭并回收。
+- **协商同路由**：同一路由的连接仍在协商协议且可能为 HTTP/2 时，新请求等待其结果再选择复用或新建，计入 acquire 预算。
 
 ### 5.3 协议选择与扩展
 
 `http_client_config::protocol_` 可限定为 `http1_only`、`http2_only` 或 `http3_only`。TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；自动协商可在旧服务端使用 HTTP/1.1，`http2_only` 不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
 
-`negotiate` 模式从 HTTPS 响应的 `Alt-Svc` 缓存 `h3` 替代地址，后续请求尝试 QUIC，证书身份仍按原始 origin 校验。替代端点在请求发送前连接失败时淘汰该缓存项并回落至原站 TCP/TLS；显式 `http3_only` 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
+`negotiate` 模式从 alias 路由 HTTPS 响应的 `Alt-Svc` 缓存 `h3` 替代地址，后续 alias 路由请求尝试 QUIC，证书身份仍按原始 origin 校验；带路由覆盖的请求只走 TCP，`http3_only` 的覆盖请求按其路由直接建立 QUIC 连接。替代端点在请求发送前连接失败时淘汰该缓存项并回落至原站 TCP/TLS；显式 `http3_only` 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
 
-客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
+客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有同一路由（拨号目标与 server name）已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试；票据按最久未用淘汰，条目数上限同 `max_idle_multiplexed_`（至少 1）。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 
 - **路径迁移**：沿用 ngtcp2 路径验证并保留原连接，不自动重放失败请求。CID 容量见[监听器文档](web-guide.md#ruvialisten_config-与-ruviatls_config)。
 - **迁移期限**：握手确认、CID 补充等待与路径验证共用 `connect_timeout_` 和 `with_options()` 中更紧的整体期限。

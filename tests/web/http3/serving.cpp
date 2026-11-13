@@ -737,7 +737,8 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         .dial_host_ = "127.0.0.1",
         .dial_port_ = port};
     config.protocol_ = protocol;
-    config.connection_count_ = 1;
+    // Unbounded open connections: fresh connections then never evict the
+    // pooled one this test expects to reuse.
     config.request_timeout_ = 5s;
     config.tls_.ca_file_ = ca_file;
     config.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
@@ -965,7 +966,7 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
     const auto make_client_config = [&](ruvia::http_client_protocol protocol) {
         ruvia::http_client_config cfg{.base_url_ = base_url};
         cfg.protocol_ = protocol;
-        cfg.connection_count_ = protocol == ruvia::http_client_protocol::http1_only ? 4 : 1;
+        cfg.connection_limits_.max_open_ = protocol == ruvia::http_client_protocol::http1_only ? 4 : 1;
         cfg.connect_timeout_ = 5s;
         cfg.acquire_timeout_ = 5s;
         cfg.read_timeout_ = 5s;
@@ -1049,7 +1050,7 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
     const auto make_cfg = [&](ruvia::http_client_protocol protocol) {
         ruvia::http_client_config cfg{.base_url_ = base_url};
         cfg.protocol_ = protocol;
-        cfg.connection_count_ = 1;
+        cfg.connection_limits_.max_open_ = 1;
         cfg.connect_timeout_ = 5s;
         cfg.acquire_timeout_ = 5s;
         cfg.request_timeout_ = 10s;

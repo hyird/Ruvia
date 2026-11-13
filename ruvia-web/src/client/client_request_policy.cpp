@@ -148,9 +148,11 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
 }
 
 bool client_request_policy::addresses_origin(const http_client_request_storage& request) const noexcept {
-    return !request.is_tunnel() || request.is_upgrade() ||
-           http_authorities_equal(borrowed_text(request.tunnel_authority()),
-               borrowed_text(std::string_view(config_.authority_)), config_.scheme_ == http_scheme::https ? 443 : 80);
+    if (!request.is_tunnel() || request.is_upgrade()) {
+        return request.route().alias_origin_;
+    }
+    return http_authorities_equal(borrowed_text(request.tunnel_authority()),
+        borrowed_text(std::string_view(config_.authority_)), config_.scheme_ == http_scheme::https ? 443 : 80);
 }
 
 std::size_t client_request_policy::storage_bytes(std::string_view name, std::string_view value,

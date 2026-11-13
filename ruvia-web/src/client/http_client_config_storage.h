@@ -114,22 +114,11 @@ inline void validate_client_user_agent(std::string_view user_agent) {
     detail::ensure_positive_optional_durations("HTTP DNS refresh interval must be positive", config.dns_refresh_interval_);
     validate_client_origin_host(
         host, "http client host must not be empty", "http client host is invalid");
-    detail::ensure_positive_size(
-        config.connection_count_, "http client connection count must be greater than zero");
+    if (config.connection_limits_.max_open_ && *config.connection_limits_.max_open_ == 0) {
+        throw std::invalid_argument("http client open connection limit must be greater than zero");
+    }
     detail::ensure_positive_size(config.max_concurrent_http2_streams_per_connection_,
         "http client HTTP/2 stream limit per connection must be greater than zero");
-    std::size_t stream_capacity = config.protocol_ == http_client_protocol::http1_only ? 1 : config.max_concurrent_http2_streams_per_connection_;
-#ifdef RUVIA_ENABLE_HTTP3
-    if (config.protocol_ == http_client_protocol::http3_only) {
-        stream_capacity = config.http3_.max_concurrent_streams_;
-    } else if (config.protocol_ == http_client_protocol::negotiate &&
-               config.http3_.max_concurrent_streams_ > stream_capacity) {
-        stream_capacity = config.http3_.max_concurrent_streams_;
-    }
-#endif
-    if (stream_capacity > std::numeric_limits<std::size_t>::max() / config.connection_count_) {
-        throw std::invalid_argument("HTTP client connection and stream capacity is too large");
-    }
     detail::ensure_positive_size(
         config.max_buffered_requests_, "http client buffered request limit must be greater than zero");
     detail::ensure_positive_size(config.max_cookies_, "http client cookie limit must be greater than zero");
@@ -193,7 +182,7 @@ struct http_client_config_storage final {
     http_scheme scheme_;
     std::uint16_t port_;
     std::pmr::string authority_;
-    std::size_t connection_count_;
+    http_client_connection_limits connection_limits_;
     std::size_t max_concurrent_http2_streams_per_connection_;
     std::size_t max_buffered_requests_;
     std::size_t max_cookies_;
@@ -287,7 +276,7 @@ private:
           scheme_(origin_value.scheme()),
           port_(origin_value.port()),
           authority_(make_http_origin_authority(origin(), resource)),
-          connection_count_(source_value.connection_count_),
+          connection_limits_(source_value.connection_limits_),
           max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
           max_buffered_requests_(source_value.max_buffered_requests_),
           max_cookies_(source_value.max_cookies_),

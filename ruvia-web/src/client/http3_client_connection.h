@@ -1,9 +1,17 @@
 #pragma once
 
 #ifdef RUVIA_ENABLE_HTTP3
+#include <array>
+#include <cstddef>
+#include <cstdint>
 #include <memory>
+#include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
+#include <vector>
+
+#include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_timeout.h"
@@ -16,16 +24,47 @@ class http_client_pool;
 class http_client_request_storage;
 class http_client_response_state;
 
-// Worker-affine UDP/TLS/QUIC session. The pool keeps this owner alive through
-// join(), including cancellation completions of both UDP directions.
+// The QUIC endpoint and TLS identity of one HTTP/3 connection owner.
+struct http3_client_route final {
+    std::pmr::string host_;
+    std::uint16_t port_;
+    std::pmr::string server_name_;
+};
+
+// QUIC TLS shared by one pool's HTTP/3 connections: one SSL_CTX and resumption
+// tickets isolated per route, so a ticket never resumes another server name or
+// dial target. Least recently used routes give way beyond the idle bound.
+class http3_client_tls final {
+public:
+    struct ticket;
+    explicit http3_client_tls(http_client_pool& pool);
+    ~http3_client_tls();
+    http3_client_tls(const http3_client_tls&) = delete;
+    http3_client_tls& operator=(const http3_client_tls&) = delete;
+    [[nodiscard]] ticket* find(const http3_client_route& route) noexcept;
+    [[nodiscard]] ticket& store(const http3_client_route& route);
+    // A DNS change retires the endpoints remembered for 0-RTT.
+    void forget_endpoints() noexcept;
+
+    asio::ssl::context context_;
+
+private:
+    std::pmr::vector<ticket> tickets_;
+    std::size_t capacity_;
+    std::uint64_t clock_{};
+};
+
+// Worker-affine UDP/TLS/QUIC session owner of one route. The pool keeps this
+// owner alive until it is reclaimable, and through join() on shutdown,
+// including cancellation completions of both UDP directions.
 class http3_client_connection final {
 public:
-    http3_client_connection(http_client_pool& pool, std::size_t index);
+    http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index, std::uint64_t serial,
+        std::string_view host, std::uint16_t port, std::string_view server_name);
     ~http3_client_connection();
     http3_client_connection(const http3_client_connection&) = delete;
     http3_client_connection& operator=(const http3_client_connection&) = delete;
-    [[nodiscard]] task<bool> execute(const http_client_request_storage& request,
-        std::string_view host, std::uint16_t port, bool fallback,
+    [[nodiscard]] task<bool> execute(const http_client_request_storage& request, bool fallback,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop, http_client_response_state& response);
     void close() noexcept;
@@ -42,15 +81,33 @@ public:
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port,
         const operation_timeout& timeout, stop_token stop);
     [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
+    [[nodiscard]] std::uint64_t serial() const noexcept {
+        return serial_;
+    }
+    [[nodiscard]] bool serves(std::string_view host, std::uint16_t port, std::string_view server_name) const noexcept;
+    // An endpoint selection (resolve and handshake race) is in progress;
+    // further requests of the route queue behind it.
+    [[nodiscard]] bool connecting() const noexcept;
+    // An open session without streams.
+    [[nodiscard]] bool idle() const noexcept;
+    // Nothing runs on or borrows this owner any longer; the pool may destroy it.
+    [[nodiscard]] bool reclaimable() const noexcept;
+
+    bool fresh_{false};
+    // Requests the pool routed here that have not released it yet.
+    std::size_t users_{0};
+    // Order in which the owner last turned idle (larger is newer); 0 in use.
+    std::uint64_t idle_order_{0};
 
 private:
-    struct tls_state;
     class session;
     class address_race;
-    [[nodiscard]] task<void> select_endpoint(bool allow_early, std::string_view host, std::uint16_t port,
+    [[nodiscard]] task<void> select_endpoint(bool allow_early,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop, http_client_response_state& response);
-    std::unique_ptr<tls_state, pmr_object_deleter<tls_state>> tls_;
+    http3_client_tls& tls_;
+    http3_client_route route_;
+    std::uint64_t serial_;
     std::unique_ptr<session, pmr_object_deleter<session>> session_;
     std::unique_ptr<address_race, pmr_object_deleter<address_race>> race_;
 };

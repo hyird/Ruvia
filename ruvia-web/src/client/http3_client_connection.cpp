@@ -28,6 +28,7 @@
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
+#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_known_method.h"
 
 #include "client/client_happy_eyeballs.h"
@@ -91,38 +92,92 @@ void require_accepted(http3_status status) {
            code == error_code::resolve_failed || code == error_code::tls_failed ||
            code == error_code::protocol_unavailable || code == error_code::timeout;
 }
+struct free_ticket final {
+    void operator()(SSL_SESSION* value) const noexcept {
+        SSL_SESSION_free(value);
+    }
+};
 }  // namespace
 
-struct http3_client_connection::tls_state final {
-    struct free_ticket {
-        void operator()(SSL_SESSION* value) const noexcept {
-            SSL_SESSION_free(value);
-        }
-    };
-    explicit tls_state(http_client_pool& pool)
-        : context_(asio::ssl::context::tls_client),
-          ticket_host_(process_resource()) {
-        initialize_quic_crypto();
-        configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
-        if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1 ||
-            SSL_CTX_set_max_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
-            throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
-        }
-        SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+struct http3_client_tls::ticket final {
+    explicit ticket(const http3_client_route& route)
+        : host_(route.host_, process_resource()),
+          port_(route.port_),
+          server_name_(route.server_name_, process_resource()) {}
+    [[nodiscard]] bool names(const http3_client_route& route) const noexcept {
+        return port_ == route.port_ && host_ == route.host_ && server_name_ == route.server_name_;
     }
-    asio::ssl::context context_;
-    std::pmr::string ticket_host_;
-    std::uint16_t ticket_port_{};
-    std::array<std::uint8_t, 4096> ticket_params_{};
-    std::size_t ticket_params_size_{};
-    http3_peer_settings ticket_settings_{};
-    bool ticket_settings_valid_{};
-    std::unique_ptr<SSL_SESSION, free_ticket> ticket_;
+    std::pmr::string host_;
+    std::uint16_t port_;
+    std::pmr::string server_name_;
+    std::array<std::uint8_t, 4096> params_{};
+    std::size_t params_size_{};
+    http3_peer_settings settings_{};
+    bool settings_valid_{};
+    std::unique_ptr<SSL_SESSION, free_ticket> session_;
+    // The authenticated endpoint that issued the ticket: a later connection of
+    // the route may send 0-RTT there without another address race.
+    std::optional<asio::ip::udp::endpoint> endpoint_;
+    std::uint64_t last_used_{};
 };
+
+http3_client_tls::http3_client_tls(http_client_pool& pool)
+    : context_(asio::ssl::context::tls_client),
+      tickets_(process_resource()),
+      capacity_((std::max)(pool.config().connection_limits_.max_idle_multiplexed_, std::size_t{1})) {
+    initialize_quic_crypto();
+    configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
+    if (SSL_CTX_set_min_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1 ||
+        SSL_CTX_set_max_proto_version(context_.native_handle(), TLS1_3_VERSION) != 1) {
+        throw http_client_error(error_code::tls_failed, "QUIC requires TLS 1.3");
+    }
+    SSL_CTX_set_session_cache_mode(context_.native_handle(), SSL_SESS_CACHE_CLIENT | SSL_SESS_CACHE_NO_INTERNAL_STORE);
+}
+
+http3_client_tls::~http3_client_tls() = default;
+
+http3_client_tls::ticket* http3_client_tls::find(const http3_client_route& route) noexcept {
+    for (auto& entry : tickets_) {
+        if (entry.names(route)) {
+            entry.last_used_ = ++clock_;
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+http3_client_tls::ticket& http3_client_tls::store(const http3_client_route& route) {
+    if (auto* existing = find(route)) {
+        return *existing;
+    }
+    if (tickets_.size() < capacity_) {
+        auto& entry = tickets_.emplace_back(route);
+        entry.last_used_ = ++clock_;
+        return entry;
+    }
+    // Bounded like Go's LRU client session cache: the least recently used
+    // route's ticket gives way.
+    auto& oldest = *std::ranges::min_element(tickets_, {}, &ticket::last_used_);
+    ticket replacement(route);
+    oldest.host_.swap(replacement.host_);
+    oldest.server_name_.swap(replacement.server_name_);
+    oldest.port_ = route.port_;
+    oldest.params_size_ = 0;
+    oldest.settings_valid_ = false;
+    oldest.session_.reset();
+    oldest.endpoint_.reset();
+    oldest.last_used_ = ++clock_;
+    return oldest;
+}
+
+void http3_client_tls::forget_endpoints() noexcept {
+    for (auto& entry : tickets_) {
+        entry.endpoint_.reset();
+    }
+}
 
 class http3_client_connection::session final {
 public:
-    using free_ticket = tls_state::free_ticket;
     struct operation_lease final {
         explicit operation_lease(session& owner) noexcept
             : owner_(owner) {
@@ -133,6 +188,9 @@ public:
             owner_.changed_.notify();
             if (owner_.race_signal_) {
                 owner_.race_signal_->notify();
+            }
+            if (owner_.borrowed_operations_ == 0) {
+                owner_.pool_.connection_retired();
             }
         }
         session& owner_;
@@ -166,9 +224,10 @@ public:
         bool request_end_flushed_{};
         std::optional<std::uint64_t> stop_sending_error_;
     };
-    session(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
+    session(http_client_pool& pool, http3_client_tls& shared_tls, const http3_client_route& route, std::size_t index)
         : pool_(pool),
-          tls_state_(shared_tls),
+          shared_tls_(shared_tls),
+          route_(route),
           index_(index),
           connect_slots_(1, pool.worker(), process_resource()),
           changed_(pool.worker()),
@@ -179,7 +238,7 @@ public:
           socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
           old_socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
           packet_(process_resource()) {
-        SSL_CTX_sess_set_new_cb(tls_state_.context_.native_handle(), save_ticket);
+        SSL_CTX_sess_set_new_cb(shared_tls_.context_.native_handle(), save_ticket);
         streams_.reserve(pool.config().http3_.max_concurrent_streams_);
     }
     ~session() {
@@ -197,23 +256,36 @@ public:
         if (!self.quic_ || SSL_get_verify_result(tls) != X509_V_OK) {
             return 0;
         }
+        // Tickets resume only the route that issued them: never another
+        // server name or dial target.
+        http3_client_tls::ticket* entry = nullptr;
+        try {
+            entry = &self.shared_tls_.store(self.route_);
+        } catch (...) {
+            return 0;
+        }
         const auto size = ngtcp2_conn_encode_0rtt_transport_params2(self.quic_->native_handle(),
-            self.tls_state_.ticket_params_.data(), self.tls_state_.ticket_params_.size());
+            entry->params_.data(), entry->params_.size());
         if (size < 0) {
+            entry->session_.reset();
+            entry->params_size_ = 0;
             return 0;
         }
         // SSL_free marks its current session non-resumable when QUIC closes
         // without TLS close_notify. Keep the cache independent of that SSL.
         auto* saved = SSL_SESSION_dup(ticket);
         if (saved == nullptr) {
+            entry->session_.reset();
+            entry->params_size_ = 0;
             return 0;
         }
-        self.tls_state_.ticket_.reset(saved);
-        self.tls_state_.ticket_params_size_ = static_cast<std::size_t>(size);
-        self.tls_state_.ticket_settings_valid_ = false;
+        entry->session_.reset(saved);
+        entry->endpoint_ = self.remote_;
+        entry->params_size_ = static_cast<std::size_t>(size);
+        entry->settings_valid_ = false;
         if (const auto settings = self.quic_->http3().peer_settings()) {
-            self.tls_state_.ticket_settings_ = *settings;
-            self.tls_state_.ticket_settings_valid_ = true;
+            entry->settings_ = *settings;
+            entry->settings_valid_ = true;
         }
         return 0;
     }
@@ -454,7 +526,7 @@ public:
         const http3_regular_request_head_view head{
             .method_ = request.method(),
             .scheme_ = "https",
-            .authority_ = pool_.config().authority_,
+            .authority_ = request.route().authority_,
             .target_ = request.target(),
             .headers_ = headers,
             .content_length_ = content_length,
@@ -749,10 +821,10 @@ public:
                 }
             }
         }
-        if (tls_state_.ticket_) {
+        if (auto* entry = shared_tls_.find(route_); entry != nullptr && entry->session_) {
             if (const auto settings = quic_->http3().peer_settings()) {
-                tls_state_.ticket_settings_ = *settings;
-                tls_state_.ticket_settings_valid_ = true;
+                entry->settings_ = *settings;
+                entry->settings_valid_ = true;
             }
         }
         changed_.notify();
@@ -824,6 +896,9 @@ public:
         changed_.notify();
         if (race_signal_) {
             race_signal_->notify();
+        }
+        if (io_tasks_ == 0) {
+            pool_.connection_retired();
         }
     }
     void arm_expiry() {
@@ -906,8 +981,11 @@ public:
         if (race_signal_) {
             race_signal_->notify();
         }
+        if (io_tasks_ == 0) {
+            pool_.connection_retired();
+        }
     }
-    task<void> connect(stream& item, std::string_view host, std::uint16_t port, bool allow_early,
+    task<void> connect(stream& item, std::string_view host, bool allow_early,
         const operation_timeout& acquire_timeout, stop_token stop) {
         const auto slot = co_await connect_slots_.acquire(acquire_timeout.remaining(), stop);
         if (!slot.has_value()) {
@@ -1010,9 +1088,8 @@ public:
         connect_duration_ = std::chrono::steady_clock::now() - connect_started;
         tls_started_at_ = std::chrono::steady_clock::now();
         tls_duration_ = {};
-        tls_.reset(SSL_new(tls_state_.context_.native_handle()));
-        const auto identity = pool_.config().tls_.server_name_ ? std::string_view(*pool_.config().tls_.server_name_) : std::string_view(pool_.config().host_);
-        if (!tls_ || prepare_client_tls_stream(*tls_, identity, {}) != client_tls_setup_error::none ||
+        tls_.reset(SSL_new(shared_tls_.context_.native_handle()));
+        if (!tls_ || prepare_client_tls_stream(*tls_, route_.server_name_, {}) != client_tls_setup_error::none ||
             ngtcp2_crypto_ossl_configure_client_session(tls_.get()) != 0) {
             throw http_client_error(error_code::tls_failed, "HTTP/3 TLS setup failed");
         }
@@ -1024,21 +1101,14 @@ public:
         reference_.user_data = this;
         SSL_set_app_data(tls_.get(), &reference_);
         SSL_set_connect_state(tls_.get());
-        const bool same_endpoint = tls_state_.ticket_host_ == host && tls_state_.ticket_port_ == port;
-        if (tls_state_.ticket_ && same_endpoint) {
+        auto* const ticket = shared_tls_.find(route_);
+        if (ticket != nullptr && ticket->session_) {
             // The next SSL must not mutate the cached copy on its teardown.
-            std::unique_ptr<SSL_SESSION, free_ticket> restored(SSL_SESSION_dup(tls_state_.ticket_.get()));
+            std::unique_ptr<SSL_SESSION, free_ticket> restored(SSL_SESSION_dup(ticket->session_.get()));
             if (!restored || SSL_set_session(tls_.get(), restored.get()) != 1) {
-                tls_state_.ticket_.reset();
+                ticket->session_.reset();
             }
         }
-        if (!same_endpoint) {
-            tls_state_.ticket_.reset();
-            tls_state_.ticket_params_size_ = 0;
-            tls_state_.ticket_settings_valid_ = false;
-        }
-        tls_state_.ticket_host_.assign(host);
-        tls_state_.ticket_port_ = port;
         ngtcp2_crypto_ossl_ctx* crypto = nullptr;
         if (ngtcp2_crypto_ossl_ctx_new(&crypto, tls_.get()) != 0) {
             throw http_client_error(error_code::tls_failed, "HTTP/3 crypto setup failed");
@@ -1092,15 +1162,15 @@ public:
                 .enable_h3_datagram_ = true}};
         quic_.emplace(http3_quic_connection::client(options));
         quic_->set_tls_native_handle(crypto_.get());
-        if (allow_early && config.http3_.enable_early_data_ && tls_state_.ticket_ &&
-            tls_state_.ticket_params_size_ && tls_state_.ticket_settings_valid_ &&
-            SSL_SESSION_get_max_early_data(tls_state_.ticket_.get()) != 0) {
+        if (allow_early && config.http3_.enable_early_data_ && ticket != nullptr && ticket->session_ &&
+            ticket->params_size_ && ticket->settings_valid_ &&
+            SSL_SESSION_get_max_early_data(ticket->session_.get()) != 0) {
             if (SSL_set_quic_tls_early_data_enabled(tls_.get(), 1) != 1) {
                 throw http_client_error(error_code::tls_failed, "cannot enable QUIC early data");
             }
             early_started_ = quic_->start_early_http3(
-                                 std::as_bytes(std::span(tls_state_.ticket_params_.data(), tls_state_.ticket_params_size_)),
-                                 tls_state_.ticket_settings_) == http3_quic_status::accepted;
+                                 std::as_bytes(std::span(ticket->params_.data(), ticket->params_size_)),
+                                 ticket->settings_) == http3_quic_status::accepted;
         }
         next_nonzero_id(generation_);
         connection_id_ = pool_.next_connection_id();
@@ -1207,7 +1277,8 @@ public:
     }
 
     http_client_pool& pool_;
-    tls_state& tls_state_;
+    http3_client_tls& shared_tls_;
+    const http3_client_route& route_;
     std::size_t index_;
     pool_lease_scheduler connect_slots_;
     worker_signal changed_;
@@ -1251,9 +1322,10 @@ public:
         std::unique_ptr<session, pmr_object_deleter<session>> connection_{nullptr, pmr_object_deleter<session>{nullptr}};
         bool running_{false};
     };
-    address_race(http_client_pool& pool, tls_state& shared_tls, std::size_t index)
+    address_race(http_client_pool& pool, http3_client_tls& shared_tls, const http3_client_route& route, std::size_t index)
         : pool_(pool),
-          tls_state_(shared_tls),
+          shared_tls_(shared_tls),
+          route_(route),
           index_(index),
           resolver_(pool.worker()),
           selection_(1, pool.worker(), process_resource()),
@@ -1284,7 +1356,7 @@ public:
         }
         return false;
     }
-    [[nodiscard]] task<void> run_candidate(std::size_t index, std::string_view host, std::uint16_t port,
+    [[nodiscard]] task<void> run_candidate(std::size_t index, std::string_view host,
         operation_timeout bound, http_client_response_state& response) {
         auto& entry = candidates_[index];
         auto& connection = *entry.connection_;
@@ -1293,7 +1365,7 @@ public:
         try {
             connection.streams_.push_back(&item);
             registered = true;
-            co_await connection.connect(item, host, port, false, bound, {});
+            co_await connection.connect(item, host, false, bound, {});
             if (!reason_ && !winner_ && !response.abandoned_) {
                 winner_ = index;
             }
@@ -1324,7 +1396,8 @@ public:
             });
     }
     http_client_pool& pool_;
-    tls_state& tls_state_;
+    http3_client_tls& shared_tls_;
+    const http3_client_route& route_;
     std::size_t index_;
     client_host_resolver resolver_;
     pool_lease_scheduler selection_;
@@ -1343,10 +1416,12 @@ public:
     worker_timer_registration delay_;
 };
 
-task<void> http3_client_connection::select_endpoint(bool allow_early, std::string_view host, std::uint16_t port,
+task<void> http3_client_connection::select_endpoint(bool allow_early,
     const operation_timeout& timeout, const operation_timeout& acquire_timeout,
     stop_token stop, http_client_response_state& response) {
     auto& race = *race_;
+    const std::string_view host = route_.host_;
+    const auto port = route_.port_;
     const auto acquired = co_await race.selection_.acquire(acquire_timeout.remaining(), stop);
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/3 endpoint selection");
@@ -1368,11 +1443,14 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
     if (session_ && session_->usable()) {
         co_return;
     }
-    // A previously authenticated endpoint can send a safe request in 0-RTT.
-    // An initial address race never sends request bytes on multiple paths.
-    if (session_ && session_->streams_.empty() && allow_early && race.pool_.config().http3_.enable_early_data_ &&
-        tls_->ticket_ && session_->connect_endpoint_ && tls_->ticket_host_ == host && tls_->ticket_port_ == port) {
-        co_return;
+    // A previously authenticated endpoint of this route can send a safe
+    // request in 0-RTT, also after its earlier owner was reclaimed. An
+    // initial address race never sends request bytes on multiple paths.
+    if (session_ && session_->streams_.empty() && allow_early && race.pool_.config().http3_.enable_early_data_) {
+        if (const auto* ticket = tls_.find(route_); ticket != nullptr && ticket->session_ && ticket->endpoint_) {
+            session_->connect_endpoint_ = *ticket->endpoint_;
+            co_return;
+        }
     }
     const auto selection_started = std::chrono::steady_clock::now();
     race.selecting_ = true;
@@ -1462,7 +1540,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                         entry.connection_ = std::move(retained);
                     } else {
                         entry.connection_ = make_pmr_object<session>(
-                            process_resource(), race.pool_, race.tls_state_, race.index_);
+                            process_resource(), race.pool_, race.shared_tls_, race.route_, race.index_);
                     }
                     entry.connection_->connect_endpoint_ = *next;
                     entry.connection_->race_signal_ = &race.changed_;
@@ -1485,7 +1563,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early, std::strin
                     }
                     entry.running_ = true;
                     try {
-                        race.pool_.tasks().spawn(race.run_candidate(index, host, port, candidate_bound, response));
+                        race.pool_.tasks().spawn(race.run_candidate(index, host, candidate_bound, response));
                     } catch (...) {
                         entry.running_ = false;
                         entry.connection_->close();
@@ -1593,11 +1671,30 @@ bool http3_client_connection::active() const noexcept {
     return session_ && session_->usable() && session_->quic_->handshake_completed();
 }
 
-http3_client_connection::http3_client_connection(http_client_pool& pool, std::size_t index)
-    : tls_(make_pmr_object<tls_state>(process_resource(), pool)),
-      session_(make_pmr_object<session>(process_resource(), pool, *tls_, index)),
-      race_(make_pmr_object<address_race>(process_resource(), pool, *tls_, index)) {}
+http3_client_connection::http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index,
+    std::uint64_t serial, std::string_view host, std::uint16_t port, std::string_view server_name)
+    : tls_(tls),
+      route_{.host_ = std::pmr::string(host, process_resource()), .port_ = port, .server_name_ = std::pmr::string(server_name, process_resource())},
+      serial_(serial),
+      session_(make_pmr_object<session>(process_resource(), pool, tls_, route_, index)),
+      race_(make_pmr_object<address_race>(process_resource(), pool, tls_, route_, index)) {}
 http3_client_connection::~http3_client_connection() = default;
+bool http3_client_connection::serves(std::string_view host, std::uint16_t port, std::string_view server_name) const noexcept {
+    return !fresh_ && !race_->retired_ && route_.port_ == port && http_ascii_equals_ignore_case(route_.host_, host) &&
+           http_ascii_equals_ignore_case(route_.server_name_, server_name);
+}
+bool http3_client_connection::connecting() const noexcept {
+    return race_->selecting_;
+}
+bool http3_client_connection::idle() const noexcept {
+    return !race_->selecting_ && session_ && session_->usable() && session_->streams_.empty();
+}
+bool http3_client_connection::reclaimable() const noexcept {
+    if (users_ != 0 || race_->selecting_ || race_->pending()) {
+        return false;
+    }
+    return !session_ || (!session_->open_ && session_->io_tasks_ == 0 && session_->borrowed_operations_ == 0 && session_->streams_.empty());
+}
 void http3_client_connection::close() noexcept {
     race_->cancel(error_code::io_error);
     if (session_) {
@@ -1703,9 +1800,10 @@ void http3_client_connection::release_data(http_client_response_state& response)
     }
 }
 
-task<bool> http3_client_connection::execute(const http_client_request_storage& request,
-    std::string_view host, std::uint16_t port, bool fallback, const operation_timeout& timeout,
-    const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& response) {
+task<bool> http3_client_connection::execute(const http_client_request_storage& request, bool fallback,
+    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+    http_client_response_state& response) {
+    const std::string_view host = route_.host_;
     if (request.is_upgrade()) {
         throw http_client_error(error_code::protocol_unavailable, "HTTP/1 Upgrade is unavailable over HTTP/3");
     }
@@ -1715,7 +1813,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     const bool may_send_early = !request.options_.fresh_connection_ && is_http_method_safe(request.method()) &&
                                 !request.has_body() && request.output() == nullptr && !request.is_tunnel();
     try {
-        co_await select_endpoint(may_send_early, host, port, timeout, acquire_timeout, stop, response);
+        co_await select_endpoint(may_send_early, timeout, acquire_timeout, stop, response);
     } catch (...) {
         if (can_fallback_from_http3(
                 std::current_exception(), fallback, stop, response, timeout, race_->retired_)) {
@@ -1732,6 +1830,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     self.idle_timer_.cancel();
     response.transport_ = http_client_response_transport::http3;
     response.connection_index_ = self.index_;
+    response.connection_serial_ = serial_;
     response.request_method_ = classify_http_method(request.method());
     struct registration final {
         session& owner_;
@@ -1764,7 +1863,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     cancellation.arm(stop);
     self.schedule(item);
     try {
-        co_await self.connect(item, host, port, may_send_early, acquire_timeout, stop);
+        co_await self.connect(item, host, may_send_early, acquire_timeout, stop);
     } catch (...) {
         if (can_fallback_from_http3(
                 std::current_exception(), fallback, stop, response, timeout, self.retired_)) {
@@ -1936,7 +2035,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
         response.discard_response_body();
         if (!self.usable()) {
             co_await self.connect(
-                item, host, port, false, timeout.constrained_by(response.effective_acquire_timeout_), stop);
+                item, host, false, timeout.constrained_by(response.effective_acquire_timeout_), stop);
             response.connection_generation_ = self.generation_;
             self.capture_connection_info(response, false);
         }

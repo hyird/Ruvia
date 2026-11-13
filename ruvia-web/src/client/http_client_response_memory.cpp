@@ -224,6 +224,7 @@ void http_client_response_state::detach_transport_bindings() noexcept {
     http3_data_credit_ = 0;
 #endif
     connection_index_ = 0;
+    connection_serial_ = 0;
     request_id_ = 0;
     cancellation_id_ = 0;
     stream_id_ = 0;

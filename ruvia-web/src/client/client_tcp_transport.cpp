@@ -230,7 +230,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     }
     client_resolve_result resolved;
     if (endpoint_.resolve_) {
-        resolved = co_await endpoint_.resolve_(endpoint_.resolve_context_, resolver_, timeout);
+        resolved = co_await endpoint_.resolve_(endpoint_.resolve_context_, resolver_, timeout, endpoint_.host_, endpoint_.port_);
     } else if (literal_endpoint_) {
         resolved.literal_ = literal_endpoint_;
     } else {
@@ -297,7 +297,7 @@ task<client_transport_result> client_tcp_transport::connect(const operation_time
     }
     tls_started_ = true;
     if (const auto prepared =
-            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.tls_->tls_host(endpoint_.identity_host_.empty() ? endpoint_.host_ : endpoint_.identity_host_), endpoint_.alpn_);
+            prepare_client_tls_stream(*stream_.native_handle(), endpoint_.identity_host_.empty() ? endpoint_.tls_->tls_host(endpoint_.host_) : endpoint_.identity_host_, endpoint_.alpn_);
         prepared != client_tls_setup_error::none) {
         (void)clear(read_);
         co_return client_transport_result{.status_ = client_transport_status::tls_failed,

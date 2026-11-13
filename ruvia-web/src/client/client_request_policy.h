@@ -41,7 +41,8 @@ public:
     [[nodiscard]] http_client_request_view prepare_request(
         const http_client_request_storage& request, client_prepared_request_scratch& scratch);
     // Stored and configured cookies belong to the fixed origin: false for a
-    // tunnel whose authority names another host or port.
+    // request whose authority override or tunnel authority names another
+    // host or port. Requires a resolved request route.
     [[nodiscard]] bool addresses_origin(const http_client_request_storage& request) const noexcept;
     // Retains the Set-Cookie fields of a final head received for an origin
     // request with `request_target`.
