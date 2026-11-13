@@ -41,10 +41,6 @@ inline asio::io_context& new_test_io_context() {
     return registry.emplace_back();
 }
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 class scoped_temp_directory final {
 public:
     explicit scoped_temp_directory(std::string_view prefix = "ruvia-test") {
@@ -76,10 +72,6 @@ public:
 private:
     std::filesystem::path path_;
 };
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 // Start roots on their handle's owner and drain every root. The roots use
 // their own stop sources when exercising cancellation.

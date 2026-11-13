@@ -15,9 +15,7 @@ ruvia_add_example(ruvia_example_api_surface web/api_surface.cpp)
 target_compile_definitions(ruvia_example_api_surface PRIVATE
     RUVIA_EXAMPLES_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/web")
 ruvia_add_example(ruvia_example_models_validation web/models_validation.cpp)
-ruvia_add_example(ruvia_example_streaming web/streaming.cpp)
 ruvia_add_example(ruvia_example_http_client web/http_client.cpp)
-ruvia_add_example(ruvia_example_runtime_config web/runtime_config.cpp)
 
 if(RUVIA_ENABLE_JWT)
     ruvia_add_example(ruvia_example_auth_jwt web/auth_jwt.cpp)
@@ -25,10 +23,6 @@ endif()
 
 if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
     ruvia_add_example(ruvia_example_database web/database.cpp)
-endif()
-
-if(RUVIA_ENABLE_POSTGRESQL)
-    ruvia_add_example(ruvia_example_orm web/orm.cpp)
 endif()
 
 if(RUVIA_ENABLE_REDIS)

@@ -135,9 +135,7 @@ http_response_coding_selection http_response_coding_selection_for(const http_req
         });
     return http_response_coding_selection::select(qualities);
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 
 template <typename field_type>
@@ -221,9 +219,7 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
 std::optional<std::string_view> http_request_trailers::field(std::string_view name) const& noexcept {
     return detail::find_last_http_header<http_header>(fields_, name);
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 
 [[nodiscard]] http_target_origin classify_reg_name(std::string_view host, bool decoded) noexcept {
@@ -324,9 +320,6 @@ http_target_origin decide_http_target_origin(
     return certificate_check(authority);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 struct http_authority_view_access final {
@@ -550,9 +543,7 @@ http_max_forwards_result parse_http_max_forwards(
     const http_request& request, std::uint64_t max_saturation) noexcept {
     return parse_max_forwards_from_headers(request.headers(), max_saturation);
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 
 [[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
@@ -1207,9 +1198,6 @@ bool parse_request_target(
     return parse_absolute_target(method, target, output);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 std::uint16_t http_uri_scheme_default_port(std::string_view scheme) noexcept {
     if (http_ascii_equals_ignore_case(scheme, "https")) {
         return http_scheme_default_port(http_scheme::https);
@@ -1493,9 +1481,6 @@ bool is_valid_http_serialized_origin(std::string_view value) noexcept {
     return !default_port.has_value() || std::get<0>(port_value) != *default_port;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 constexpr auto npos = std::string_view::npos;
@@ -2340,9 +2325,6 @@ void http_response::add_vary_token(std::string_view token) {
     headers_.add_vary_token(token);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 constexpr std::string_view crlf = "\r\n";
@@ -2450,10 +2432,6 @@ prepare_http1_interim_response_head(const http_interim_response_head& response, 
             ? http1_interim_connection_disposition::close_after_interim_response
             : http1_interim_connection_disposition::unchanged);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 const http_representation_response_plan::full_type* http_representation_response_plan::full() const& noexcept {
     return std::get_if<full_type>(&value_);
@@ -2576,10 +2554,6 @@ http_representation_response_plan plan_http_representation_response(
     return http_representation_response_plan(ranges, headers.has_if_range_);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
     http_response response, http_response_stream_commit_plan commit_plan) {
     if (response.status() != commit_plan.response_status()) {
@@ -2630,10 +2604,6 @@ namespace ruvia {
 
     return http_response_stream_head(std::move(response), commit_plan);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, http_content_length representation_length_value,
@@ -3942,9 +3912,6 @@ void http_response_headers::erase_later_set_cookie_headers(http_response_header&
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Every insertion path validates one field line completely, so a serialized
@@ -4480,9 +4447,6 @@ void http_response_headers::add_vary_token(std::string_view token) {
     publish_header(prepared);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 using ruvia::detail::classify_http_request_line_prefix;
@@ -5503,10 +5467,6 @@ http1_response_head_plan prepare_http1_upgrade_response_head(http_response& resp
         http1_request_connection_plan::http11_close());
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other)
     : heap_(other.heap_) {
 }
@@ -5633,10 +5593,6 @@ bool http_response_head_buffer::can_append_on_stack(std::size_t size) const noex
     const auto* const stack_state = std::get_if<stack_state_type>(&state_);
     return stack_state != nullptr && size <= stack_.size() - stack_state->used_;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -6036,10 +5992,6 @@ http1_chunk_decode_result http1_chunked_body_decoder::fail(
     return http1_chunk_decode_result::make_failure(consumed_bytes, error);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 // One zlib stage is an implementation detail of the coding sequence, not a
@@ -6422,10 +6374,6 @@ http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_in
     }
     return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(0));
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 std::string_view http1_client_response_body_error_message(http1_client_response_body_error error) noexcept {
     switch (error) {
@@ -6936,9 +6884,6 @@ private:
 // The protocol failure a received Close payload commits, or nullopt when it is legal.
 [[nodiscard]] std::optional<websocket_protocol_failure> websocket_close_payload_failure(
     std::string_view payload_value) noexcept;
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 websocket_encoded_close_payload::websocket_encoded_close_payload(
     websocket_close_code code, std::string_view reason) noexcept
@@ -8168,10 +8113,6 @@ websocket_close_submit_status websocket_connection::submit_close(
     return websocket_close_submit_status::accepted;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 websocket_deflate_codecs::~websocket_deflate_codecs() {
     for (auto* codec : deflaters_) {
         delete codec;
@@ -8595,9 +8536,6 @@ void encode_websocket_accept(websocket_accept_key_type& output, std::string_view
     http_base64_encode(output.data(), std::span<const std::uint8_t>(digest));
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // A Sec-WebSocket-Key is the canonical padded base64 of a 16-byte nonce
@@ -8703,9 +8641,6 @@ websocket_handshake_validation_result validate_websocket_handshake(const http_re
     return websocket_headers.finish(options);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 using error_type = websocket_client_handshake_error;
 std::optional<websocket_compression> parse_response_extension(std::string_view text, const websocket_client_deflate_offer& deflate) {
@@ -8988,13 +8923,10 @@ std::variant<websocket_client_negotiation_result_view, error_type> validate_webs
     return validate(fields, negotiation.offered_subprotocols_, negotiation.deflate_, extended);
 }
 }  // namespace detail
-}  // namespace ruvia
 
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
 // and which codec a decode or encode of that coding runs on.
-
-namespace ruvia {
 
 std::string_view http_content_coding_token(http_content_coding coding) noexcept {
     switch (coding) {
@@ -9659,11 +9591,7 @@ bool zlib_deflate_stream::encode(std::string_view input, std::string& output, in
     }
 }
 
-}  // namespace ruvia::detail
-
 // gzip (RFC 1952) and zlib-wrapped deflate through zlib, with tracked working memory.
-
-namespace ruvia::detail {
 
 static std::variant<std::string, http_content_decode_error> decode_zlib_content(std::string_view input,
     std::size_t max_decoded_bytes, int window_bits,
@@ -9755,8 +9683,6 @@ std::optional<std::string> encode_deflate_content(
         max_encoded_bytes, zlib_content_format::deflate);
 }
 
-}  // namespace ruvia::detail
-
 // Brotli (RFC 7932) state with tracked working memory.
 // Brotli retains the allocator context as its opaque pointer, so these types are
 // pinned: owners embed them in storage whose address never changes.
@@ -9764,8 +9690,6 @@ std::optional<std::string> encode_deflate_content(
 // Construction rethrows an allocation failure captured during initialization.
 // Any other Brotli refusal leaves the stream uninitialized so each owner maps it
 // into its own error contract.
-
-namespace ruvia::detail {
 
 // Decoder whose native working memory is bounded by the caller's decoded-size
 // cap rather than by the window and metablock sizes the peer declares: a
@@ -9828,10 +9752,6 @@ private:
     http_c_library_memory allocation_;
     BrotliEncoderState* state_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -10019,8 +9939,6 @@ std::optional<std::string> encode_brotli_content(
         BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
 }
 
-}  // namespace ruvia::detail
-
 // zstd (RFC 8878) state with tracked working memory and
 // whose window never exceeds the 8 MiB HTTP limit of RFC 9659. zstd
 // retains the allocator context as its opaque pointer, so these types are
@@ -10029,8 +9947,6 @@ std::optional<std::string> encode_brotli_content(
 // Construction rethrows an allocation failure captured during initialization.
 // Any other zstd refusal leaves the stream uninitialized so each owner maps it
 // into its own error contract.
-
-namespace ruvia::detail {
 
 class zstd_decoder_stream final {
 public:
@@ -10086,10 +10002,6 @@ private:
     http_c_library_memory allocation_;
     ZSTD_CCtx* context_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -11436,13 +11348,9 @@ private:
     });
 }
 
-}  // namespace ruvia::detail
-
 // The multipart state machine: find the next delimiter, read one part's header
 // block, then hand out that part's body in chunks -- driven entirely by what is
 // currently buffered, so a caller may feed the body in any pieces.
-
-namespace ruvia::detail {
 
 enum class http_multipart_delimiter_kind : std::uint8_t {
     no_match,
@@ -12258,9 +12166,6 @@ multipart_poll_result multipart_parser::read_body_chunk() {
     return multipart_poll_result::make_need_input();
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Keeps every offset and size representable as a pointer difference.
@@ -12938,10 +12843,6 @@ struct http1_client_request_field_facts final {
 [[nodiscard]] bool analyze_http1_client_request_fields(std::span<const http_header_view> headers,
     http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
     http_request_field_source source) noexcept;
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 struct http1_client_request_prepare_result_access final {
     using result_type = std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
@@ -13690,9 +13591,7 @@ void http1_request_content_writer::commit_finish() {
     finishing_ = false;
     finished_ = true;
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 // The one application-header policy of the client handshake: the request
 // writer owns every protocol-managed field (Host, framing, Expect and the
@@ -14469,14 +14368,10 @@ http1_client_response_planning_result_type plan_http1_client_response(
         discards_content);
 }
 
-}  // namespace ruvia::detail
-
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
 // quoted-string forms, and validating a Content-Type field. Matching a media
 // type against an Accept media-range lives in http_accept_match.cpp.
-
-namespace ruvia::detail {
 
 struct http_media_type_parts final {
     std::string_view type_;
@@ -14670,9 +14565,6 @@ bool http_parse_media_type(value_type&&, http_media_type_parts&, http_media_type
 template <http_temporary_owning_char_string value_type>
 bool is_valid_http_content_type_field_value(value_type&&) = delete;
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct http_field_definition final {
@@ -14887,10 +14779,6 @@ bool is_http_method_idempotent(std::string_view method) noexcept {
     return is_http_method_safe(method) || method == "PUT" || method == "DELETE";
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 bool is_http_hop_by_hop_field_name(std::string_view field_name) noexcept {
     switch (field_name.size()) {
         case 2U:
@@ -15016,9 +14904,6 @@ bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) n
 bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept {
     return detail::is_forbidden_response_trailer_name(field_name);
 }
-}  // namespace ruvia
-
-namespace ruvia {
 
 http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
     return http_conditional_headers{
@@ -15280,9 +15165,6 @@ void http_accept_match::update_token(std::string_view field, std::string_view of
         field, offered, mode == http_accept_token_match_mode::language_prefix, specificity_, quality_);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 using item_type = detail::http_structured_item;
 
@@ -15844,9 +15726,6 @@ http_response_trailer_section validate_http_response_trailers(
     return http_response_trailer_section(trailers);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Parse a delta-seconds value (RFC 9111 section 1.2.2): an optionally DQUOTE-wrapped non-negative
@@ -17039,9 +16918,6 @@ std::optional<std::time_t> parse_http_date(std::string_view value) noexcept {
     return parse_asctime_date(value);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 constexpr std::string_view v1_signature = "PROXY ";
@@ -17418,9 +17294,6 @@ void proxy_protocol_parser::finish_v2() {
     state_ = proxy_protocol_parser_state::finished;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] std::optional<std::uint32_t> parse_zone(std::string_view text) noexcept {
@@ -17610,10 +17483,6 @@ bool ip_cidr::contains(std::string_view address_text) const noexcept {
     const auto parsed = ip_address::parse(address_text);
     return parsed.has_value() && contains(*parsed);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 http_connect_udp_target::http_connect_udp_target(std::string host, port_number port) noexcept
     : host_(std::move(host)),
@@ -17949,9 +17818,7 @@ http1_response_head_plan prepare_http1_connect_udp_response_head(const http_resp
     }
     return http1_close_delimited_response_stream_head_plan(plan_http_response_body(http_known_method::get, response.status()), http1_request_connection_plan::http11_close());
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.
 constexpr std::string_view udp_payload_context_id{"\0", 1};
@@ -18192,9 +18059,7 @@ std::variant<std::optional<http_udp_datagram_view>, http_datagram_error> http_da
     }
     return *udp;
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 
 [[nodiscard]] constexpr std::uint32_t rotl32(std::uint32_t value, unsigned int shift) noexcept {
@@ -19200,10 +19065,6 @@ set_cookie_plan::written_fields set_cookie_plan::write_fields(char* cursor_value
     return fields;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 bool is_valid_cookie_value(std::string_view value) noexcept {
     // cookie-value = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE ); the quotes
     // are part of the value (RFC 6265 section 4.1.1).
@@ -19594,9 +19455,6 @@ std::string http_cookie_jar::cookie_header(std::string_view request_target,
     return output;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 std::pair<std::string_view, std::string_view> split_attribute(std::string_view value) noexcept {
@@ -19853,9 +19711,6 @@ std::optional<http_set_cookie_view> parse_set_cookie(std::string_view value) noe
     return result;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] bool is_valid_cors_origin_value(std::string_view origin) noexcept {
@@ -20479,9 +20334,6 @@ bool http_cors_policy::apply_response_headers(
     return true;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // "[2001:db8::1]:443" -> "2001:db8::1"; "192.0.2.1:8080" -> "192.0.2.1".

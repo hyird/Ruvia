@@ -2214,9 +2214,6 @@ task<client_transport_result> client_tcp_transport::write(
     return write_buffers(buffers, timeout);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct client_tls_preparation final {
@@ -2437,10 +2434,6 @@ std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) n
     return {static_cast<int>(error), category};
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker,
     const asio::ip::tcp::socket::executor_type& executor,
     const asio::ip::tcp::resolver::results_type& addresses)
@@ -2599,9 +2592,6 @@ task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 struct client_host_resolver::query final {
     std::string host_;
     std::uint16_t port_;
@@ -2685,9 +2675,6 @@ void client_host_resolver::cancel() noexcept {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] std::string owned_host(const tcp_client_config& config) {
@@ -3070,9 +3057,6 @@ template <typename policy, typename input_type>
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 struct http_client_upload_end_input final {
     http_client_response pin_;
     std::vector<http_header> fields_;
@@ -3260,9 +3244,7 @@ task<http_client_response> http_client_exchange::response(operation_options oper
     return state_value->upload_->response_.receive(
         http_client_response(state_value), "HTTP request failed before response head", std::move(operation));
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 void require_output(detail::http_client_response_state* state_value, bool finishing) {
     if (state_value == nullptr) {
@@ -4286,10 +4268,6 @@ void http_client_response_state::detach_transport_bindings() noexcept {
     space_signal_.notify();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 http_client_result_budget_domain::http_client_result_budget_domain(http_client_result_budget_config config)
     : max_retained_bytes_(config.max_retained_bytes_),
       max_in_flight_bytes_(config.max_in_flight_bytes_) {
@@ -4485,10 +4463,6 @@ http_client_worker_services make_http_client_worker_services(const http_client_w
         .limits_ = std::make_shared<http_client_worker_limits>(config)};
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 client_request_policy::client_request_policy(const http_client_config_storage& config)
     : config_(config),
       jar_(config.scheme_, config.host_,
@@ -4608,9 +4582,6 @@ void client_request_policy::retain_response_cookies(
     jar_.retain_response_cookies(request_target, headers);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // An encoded body must be collected to FIN before any bytes can be returned
@@ -4813,10 +4784,6 @@ void finish_http_client_response_body(http_client_response_state& state_value, c
         throw_body_decoding_timeout();
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class http_client_advertisement_memory final {
 public:
@@ -6481,9 +6448,6 @@ task<void> http_client_ref::migrate(std::string_view local_address, std::uint16_
     throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP/3 support is disabled");
 #endif
 }
-}  // namespace ruvia
-
-namespace ruvia {
 
 const std::error_category& http_client_category() noexcept {
     class category final : public std::error_category {

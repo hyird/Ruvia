@@ -164,10 +164,6 @@ private:
     std::array<bool, http2_data_output_credit_slots> cancelled_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class http2_body_queue_store_status : std::uint8_t {
     stored,
     backlog_overflow,
@@ -273,10 +269,6 @@ private:
     inbound_buffer_reservation active_reservation_;
     bool ended_{false};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 enum class http2_request_body_store_status : std::uint8_t {
     stored,
@@ -656,10 +648,6 @@ private:
     std::size_t tunnel_count_{0};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class http2_send_window_wait_status : std::uint8_t {
     ready,
     aborted,
@@ -765,10 +753,6 @@ private:
     response_file_io file_io_;
     multiplexed_file_read_limiter file_reads_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 class route_table;
 
@@ -945,9 +929,6 @@ private:
     multiplexed_drain_timer drain_timer_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // Product limit on a drain's wait for the PING round trip before the final
@@ -2378,9 +2359,6 @@ task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream,
         stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] http2_stream_data_write_status classify_aborted_write(
@@ -2514,9 +2492,6 @@ task<http2_stream_data_write_status> write_http2_stream_data(
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 [[nodiscard]] bool data_write_failed(http2_stream_data_write_status status) noexcept {
@@ -2719,10 +2694,6 @@ task<multiplexed_buffered_response_write_result> http2_buffered_response_writer:
     // An empty write plan committed END_STREAM with the response head above.
     co_return multiplexed_buffered_response_write_result{.committed_status_ = committed_status};
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 

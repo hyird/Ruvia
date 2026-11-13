@@ -121,9 +121,6 @@ private:
     const http3_request_head& head, const http_request& request,
     websocket_handshake_validation_options options = {}) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
 class http3_connection;
 class http3_quic_connection;
 namespace detail {
@@ -1071,10 +1068,6 @@ private:
     std::string_view authority, std::string_view target, borrowed_http_headers headers = {},
     http_request_field_source source = http_request_field_source::generated);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http3_quic_status : std::uint8_t {
     accepted,
     would_block,
@@ -1329,9 +1322,6 @@ private:
     std::span<std::byte> output,
     std::size_t max_packet_bytes) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
 struct http3_fingerprint_options final {
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};

@@ -186,10 +186,6 @@ private:
     bool stop_applied_{};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class external_context_attachment_service;
 struct event_loop_state;
 
@@ -1828,9 +1824,6 @@ bool worker_group::settle(bool reached, const char* phase) {
     return false;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 std::size_t default_loop_count() noexcept {
@@ -1995,9 +1988,6 @@ event_loop event_loop_pool::loop_for(std::string_view key) const noexcept {
     return loop_for(worker_selection_hash(key));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Routes through the loop while it is alive, or to the unhandled-failure
@@ -3379,13 +3369,9 @@ post_status worker_ref::post_factory(move_only_function<move_only_function<void(
     return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::worker_stopping;
 }
 
-}  // namespace ruvia
-
 // The dispatcher's timer heap: registering a deadline, cancelling one from any
 // thread, re-arming the single asio timer, and firing everything due on the
 // worker.
-
-namespace ruvia {
 
 void worker_timer_cancellation::cancel() const noexcept {
     if (dispatcher_ != nullptr && generation_ != 0) {
@@ -4084,10 +4070,6 @@ void task_scope::rethrow_failure() {
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 stop_state_ref stop_state::create() {
@@ -4274,10 +4256,6 @@ stop_group::stop_group(std::span<const stop_token> parents)
     register_parent(*first, parents_[0]);
     register_parent(*second, parents_[1]);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Keeps a reentrant join from publishing retirement during frame/capability
 // cleanup. Its registration is a value, not a frame-owner base class.
@@ -4671,9 +4649,6 @@ void scoped_operation_registration::retire_frame() noexcept {
 }
 
 }  // namespace detail
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -4989,9 +4964,6 @@ void collect_thread_heap() noexcept {
     mi_collect(true);
 #endif
 }
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -5124,10 +5096,6 @@ std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
     }
     return asio::ip::address(address);
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Bounded single-thread FIFO ring. All slots are constructed at startup and stay
 // constructed; no queue operation allocates afterwards. Payload assignment may
@@ -5283,10 +5251,6 @@ private:
     std::size_t size_{0};
     bool prepared_{false};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -5643,10 +5607,6 @@ void blocking_pool::join() {
     const auto owner = impl_;
     owner->join();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class pool_lease_scheduler::impl_type final {
 public:

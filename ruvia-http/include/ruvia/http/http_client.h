@@ -99,8 +99,6 @@ private:
     std::optional<std::uint64_t> content_length_;
 };
 
-}  // namespace ruvia
-
 // Outbound HTTP client protocol models.
 //
 // OWNERSHIP: these are transport-free HTTP values. http_origin_view and
@@ -108,8 +106,6 @@ private:
 // parsed header storage. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
-
-namespace ruvia {
 
 // Transport-independent sender policy for RFC 9110's only standardized
 // request expectation. HTTP/1 and HTTP/2 writers both own generation of the
@@ -275,16 +271,12 @@ struct http_client_tunnel_request_view final {
     borrowed_http_headers headers_{};
 };
 
-}  // namespace ruvia
-
 // Outbound HTTP redirect protocol helpers.
 //
 // These values contain no transport policy: redirect limits, cross-origin
 // authorization, connection selection, and retries remain owned by the external
 // I/O runtime. The helpers only classify HTTP response fields, apply the RFC
 // method/content rewrite rules, and resolve one HTTP(S) URI-reference.
-
-namespace ruvia {
 
 enum class http_unique_header_status : std::uint8_t {
     absent,
@@ -444,10 +436,6 @@ private:
 resolve_http_client_redirect_target(
     const http_origin_view& origin, http_client_redirect_target_options options);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 enum class http1_client_initial_content_state : std::uint8_t {
@@ -492,10 +480,6 @@ private:
     detail::http1_client_initial_content_state content_state_{
         detail::http1_client_initial_content_state::complete};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Request-target form of a non-CONNECT request line (RFC 9112 section 3.2).
 // CONNECT always uses authority-form through prepare_connect().
@@ -783,9 +767,6 @@ public:
         http1_client_request_wire_policy policy = {}) const;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 enum class http1_request_content_write_error : std::uint8_t {
     awaiting_continue,
     stopped,
@@ -857,9 +838,6 @@ private:
     std::size_t pending_{0};
     bool gated_{false}, stopped_{false}, writing_{false}, finishing_{false}, finished_{false};
 };
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 
@@ -1294,9 +1272,6 @@ private:
     std::optional<detail::http1_client_parsed_status_line> status_line_;
     std::size_t status_line_end_{0};
 };
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http1_client_response_body_error : unsigned char {
     invalid_framing,
@@ -1515,10 +1490,6 @@ private:
     bool trailers_reported_{false};
     transfer_phase_type transfer_phase_{transfer_phase_type::needs_framed_input};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // awaiting_peer_eof: a client completed the close handshake and, per RFC 6455
 // section 7.1.1, leaves closing the transport to the server. Its driver keeps
@@ -1919,10 +1890,6 @@ private:
     value_type value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 class zlib_deflate_stream;
 class zlib_inflate_stream;
@@ -1977,10 +1944,6 @@ private:
         deflaters_{};
     detail::zlib_inflate_stream* inflater_{nullptr};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class websocket_feed_status : std::uint8_t { accepted,
     inactive,
@@ -2455,9 +2418,6 @@ private:
 [[nodiscard]] websocket_server_handshake make_websocket_server_handshake(
     const http_request& request, websocket_server_handshake_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
 struct websocket_client_negotiation_config_view final {
     borrowed_span<std::string_view> subprotocols_{};
     websocket_client_deflate_offer deflate_{};

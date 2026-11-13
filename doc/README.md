@@ -140,7 +140,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 ## 4. 示例程序全集索引
 
-仓库 `examples/web/` 下包含 10 个可独立运行的示例程序（开启 `-DRUVIA_BUILD_EXAMPLES=ON` 构建）：
+仓库 `examples/web/` 下包含 7 个可独立运行的示例程序（开启 `-DRUVIA_BUILD_EXAMPLES=ON` 构建，与 `ruvia-web` 7 个公开头文件一一对应）：
 
 后端示例通过 `backend_config.h` 共享启动配置：先加载可执行文件旁的 `.env`，进程环境优先；`RUVIA_DB_*` 选择 SQL 连接，`RUVIA_REDIS_*` 选择 Redis 连接（包括 `DATABASE`、认证与 TLS）。ORM 查询缓存使用独立前缀 `RUVIA_ORM_CACHE_REDIS_*`。
 
@@ -148,13 +148,10 @@ ruvia_link_controllers(my_service user_controllers)
 
 | 示例文件 | CMake Target | 所需开关 | 核心演示内容 |
 | --- | --- | --- | --- |
-| [basic_http.cpp](../examples/web/basic_http.cpp) | `ruvia_example_basic_http` | 默认 | 控制器与嵌套路由组、中间件、路径参数 `:id` 与通配符 `*`、Query/Header/Cookie 读取、文本/JSON/重定向/错误响应、`url_for`、全局与前缀级 `on_error` / `on_not_found` |
-| [api_surface.cpp](../examples/web/api_surface.cpp) | `ruvia_example_api_surface` | 默认 | `context` / `context_request` / `http_response` 完整接口、中间件职责链、`body_limit<N>`、`bind_request_state`、子请求 `c.dispatch(...)`、`csrf_protection`、静态文件 `c.file()` / `static_root` / `document_root` 以及 `test_app` 内存无 Socket 测试 |
+| [basic_http.cpp](../examples/web/basic_http.cpp) | `ruvia_example_basic_http` | 默认 | 控制器与嵌套路由组、中间件、`.env` 加载、全局与前缀中间件、连接与入站缓冲预算、协商压缩、CORS、TLS / mTLS / SNI、`security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`stats()`、生命周期与日志钩子、Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递与 `c.run_blocking(...)` 阻塞池卸载 |
+| [api_surface.cpp](../examples/web/api_surface.cpp) | `ruvia_example_api_surface` | 默认 | `context` / `context_request` / `http_response` 完整接口、中间件职责链、`body_limit<N>`、`bind_request_state`、子请求 `c.dispatch(...)`、`csrf_protection`、静态文件 `c.file()` / `static_root` / `document_root`、`test_app` 内存无 Socket 测试、流式请求体/Multipart、分块文本流、SSE、WebSocket（`RUVIA_GET_WS`）、`103 Early Hints`、HTTP/2 Server Push、Trailer 以及 `CONNECT` / `CONNECT-UDP` 隧道 |
 | [models_validation.cpp](../examples/web/models_validation.cpp) | `ruvia_example_models_validation` | 默认 | `RUVIA_MODEL` 声明、字段校验规则宏、递归模型 `boxed_array`、`ruvia::bytes` Base64、从 JSON/Form/Query/Path/Header/Cookie 自动绑定校验、独立使用 `from_json` / `to_json` / `from_form`、零拷贝动态 JSON 视图 `json_object` / `json_value` 与命令式 `ruvia::validator` |
-| [streaming.cpp](../examples/web/streaming.cpp) | `ruvia_example_streaming` | 默认 | 流式请求体 `body_reader()`、流式 Multipart `multipart_reader()`、分块文本流 `stream_text()`、SSE `stream_sse()`、WebSocket 服务端路由（`RUVIA_GET_WS`）、`103 Early Hints`（`c.inform`）、RFC 9218 优先级（`c.priority`）、HTTP/2 Server Push（`c.push`）、`ORIGIN` / `ALTSVC` 通告、请求/响应 Trailer 以及 HTTP/1.1 & HTTP/2 `CONNECT` 与 RFC 9298 `CONNECT-UDP` 隧道 |
 | [http_client.cpp](../examples/web/http_client.cpp) | `ruvia_example_http_client` | 默认 | 独立事件循环与路由内出站 HTTP 客户端、请求策略、流式响应、隧道与出站 WebSocket 会话 |
-| [runtime_config.cpp](../examples/web/runtime_config.cpp) | `ruvia_example_runtime_config` | 默认 | `.env` 加载、全局与前缀中间件、连接与入站缓冲预算、协商压缩、CORS、TLS / mTLS / SNI、`security_headers_middleware`、全局与路由级 `rate_limit`、健康与就绪探针、`trusted_proxies`、`stats()`、生命周期与日志钩子、Worker 局部状态 `use_worker_state<T>()`、跨 Worker 任务投递与 `c.run_blocking(...)` 阻塞池卸载 |
 | [auth_jwt.cpp](../examples/web/auth_jwt.cpp) | `ruvia_example_auth_jwt` | `RUVIA_ENABLE_JWT` | HMAC-SHA256/384/512 JWT 签发 `jwt_sign`、Bearer 提取 `jwt_bearer_token`、校验 `jwt_verify` 与鉴权中间件 |
-| [database.cpp](../examples/web/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::migrate`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream`、事务、离线 SQL 构建器 `db_query`、Schema DDL 构建器 `db_schema`、PL/pgSQL 过程块 `db_procedure` 与 TimescaleDB 策略生成 |
-| [orm.cpp](../examples/web/orm.cpp) | `ruvia_example_orm` | `RUVIA_ENABLE_POSTGRESQL` | PostgreSQL 强类型 ORM：实体与投影宏、`STORED` 生成列、一对多/多对一/一对一/多对多实体关系、`query_builder`、窗口函数、`RETURNING`、事务隔离级别与只读事务、事务抢占、Redis 查询缓存以及自管 `event_loop_pool` 数据访问 |
+| [database.cpp](../examples/web/database.cpp) | `ruvia_example_database` | `MARIADB` 或 `POSTGRESQL` | 数据库连接池配置、启动迁移 `db_migrator::migrate`、参数化查询、编译期 SQL 校验模板、流式游标 `query_stream`、事务、离线 SQL 构建器 `db_query`、Schema DDL 构建器 `db_schema`、PL/pgSQL 过程块 `db_procedure`、PostgreSQL 强类型 ORM（实体、生成列、关联关系、`query_builder`、查询缓存）与自管 `event_loop_pool` 数据访问 |
 | [redis.cpp](../examples/web/redis.cpp) | `ruvia_example_redis` | `RUVIA_ENABLE_REDIS` | Redis 默认与命名别名池、String/Hash/List/Set/ZSet、SCAN 游标、`pipeline()`、`transaction()`、Lua 脚本、`blpop` / `brpop`、`RUVIA_REDIS_ENTITY` RediSearch 索引、Redis Streams 消费者组、`subscription()` Pub/Sub 以及服务端会话中间件 `session_middleware` |

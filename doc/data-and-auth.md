@@ -12,7 +12,7 @@
 ## 1. SQL 数据库连接池、直接查询与事务
 
 头文件：`"ruvia/web/db.h"`。
-参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/orm.cpp](../examples/web/orm.cpp)。
+参考示例：[examples/web/database.cpp](../examples/web/database.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
@@ -227,7 +227,7 @@ auto report = co_await migrator.migrate(migrations);
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
 头文件：`"ruvia/web/db.h"`。
-参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)。
+参考示例：[examples/web/database.cpp](../examples/web/database.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 

@@ -2401,10 +2401,6 @@ http3_submit_status submit_http3_websocket_client_request(http3_connection& conn
                                                      });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 http3_request_head::http3_request_head(std::int64_t stream_id, std::vector<http_header> fields,
     bool stream_ended, bool early_data)
     : fields_(std::move(fields)),
@@ -2632,9 +2628,6 @@ http_request http3_request_head::build_request(borrowed_text body) const& {
     });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 http3_fingerprint_collector::http3_fingerprint_collector(http3_fingerprint_options options)
     : max_frames_(options.max_frames_),
       max_bytes_(options.max_bytes_) {}
@@ -2759,9 +2752,7 @@ void http3_fingerprint_collector::observe_field(const http3_field_metadata& fiel
         phase_ = phase::failed;
     }
 }
-}  // namespace ruvia
 
-namespace ruvia {
 namespace {
 
 [[nodiscard]] http3_connection_options resolve_http3_options(const http3_quic_connection_options& options,

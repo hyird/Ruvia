@@ -475,10 +475,6 @@ application& application::on_not_found(scoped_not_found_handler_options options)
         });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 web_worker_context::web_worker_context(const worker_ref& worker_value,
     const detail::worker_client_registry_view& client_registries,
     const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept
@@ -962,9 +958,6 @@ dispatch_response test_app::request(const test_request& request) {
     return impl_->event_loop_.start(impl_->execute_request(request)).get();
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 void add_shutdown_signals(asio::signal_set& signals) {
@@ -5945,9 +5938,6 @@ void observe_tls_client_hello(SSL& tls, const tls_client_hello_observation& obse
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // In-memory PEM text of a tls_identity_config, borrowed while it is parsed.
@@ -6294,9 +6284,6 @@ void configure_http_server_client_certificates(SSL_CTX& context_value,
         static_cast<int>(http_server_tls_verify_mode(client_certificates->requirement_)), nullptr);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // The identity set is immutable and shared, not copied.
@@ -6378,9 +6365,6 @@ void http_server_session_config::adopt_tls_identities(
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 #if defined(_WIN32)
@@ -6508,10 +6492,6 @@ inherited_listener_sockets::~inherited_listener_sockets() {
         close_native_socket(socket);
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -6711,9 +6691,6 @@ void validate_server_limits(const server_config& config) {
     return validated_http_server_configuration(listeners, std::move(options));
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 using snapshot_owner = std::unique_ptr<static_root>;
@@ -6931,10 +6908,6 @@ task<void> static_root_runtime::refresh(const stop_token& stop) {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 web_worker_runtime::web_worker_runtime(const validated_http_server_configuration& configuration,
     const route_table& routes_value, worker_capability_definitions capabilities, blocking_pool* pool,
     std::size_t worker_index
@@ -7089,9 +7062,6 @@ task<void> web_worker_runtime::run_worker() {
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 void configure_accepted_socket(asio::ip::tcp::socket& socket) {
@@ -9223,9 +9193,6 @@ std::unique_ptr<connection_work_set> make_connection_work_set() {
     return std::make_unique<connection_work_set>();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 // Total time allowed for a graceful close: flushing TLS close_notify and
@@ -9320,10 +9287,6 @@ task<void> close_http_connection_gracefully(server_tls_stream& stream, http_conn
     connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(stream.lowest_layer(), &stream, mode, scanner, worker_value);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 namespace {
 
@@ -9568,10 +9531,6 @@ bool response_file_source::file_bytes_pending() const noexcept {
     }
     return false;
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // The byte stream behind one server_connection: the accepted TCP socket, or
 // the TLS stream whose writes leave through `tls_output`. Reads land in one
@@ -9864,10 +9823,6 @@ template task<void> worker_connections::serve_connection<inbound_socket_stream>(
     inbound_socket_stream&, tcp_socket_type&, server_connection_fields);
 template task<void> worker_connections::serve_connection<server_tls_stream>(
     server_tls_stream&, tcp_socket_type&, server_connection_fields);
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 struct request_stream_access final {
     [[nodiscard]] static request_stream make(context& context_value, response_stream_writer& response,
@@ -10382,9 +10337,7 @@ task<http_request_admission> admit_and_dispatch_buffered_request(const route_tab
     }
     co_return admission;
 }
-}  // namespace ruvia::detail
 
-namespace ruvia::detail {
 namespace {
 
 // A coded representation is worth sending only when strictly smaller than
@@ -10610,10 +10563,6 @@ task<http_response_compression_status> compress_response_offloaded(http_response
         co_return http_response_compression_status::failed;
     }
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) noexcept {
     return connection_transport(
@@ -11129,10 +11078,6 @@ bool connection_scanner::impl_type::write_stalled(const entry& entry_value, std:
            timeout_expired(options_.write_timeout_, now - entry_value.write_progress_ms_);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Connection-private ownership of the Web product's request-count policy.
 // HTTP still owns persistence and response framing; this connection state keeps
 // an optional saturating remaining-response budget, contributes one typed close policy
@@ -11215,10 +11160,6 @@ private:
     const http_server_worker_state& worker_state_;
     bool request_input_ended_{false};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline constexpr std::size_t chunked_encoded_buffer_bytes = max_http_header_bytes;
 
@@ -12009,10 +11950,6 @@ struct http1_route_dispatch final {
     bool request_pipelined_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Commits a framework response that ends the connection: a rejection, a
 // failed route, or a route response the connection cannot outlive. The
 // response is the framework's own (an error or exception handler's output):
@@ -12054,10 +11991,6 @@ template <typename make_completion_type>
             return http1_session_request_completion::make_buffered_closing(committed);
         });
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 template <typename stream_type>
 struct http_lazy_buffered_body_route_state final {
@@ -12185,10 +12118,6 @@ template <typename stream_type>
     return finalize_buffered_route_response(
         response, connection_plan, request_sequence, request_head.header_bytes() + body_bytes.value_or(0));
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // HTTP/1 流式响应的读侧终止检测：请求体完整消费后由 route 自动启动（同 Go
 // net/http background read）。单独到达的请求遇对端 FIN/RST 请求当前请求的 stop。
@@ -12905,10 +12834,6 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         connection_plan, *committed_status, request_bytes.size() - pipeline.read_buffer_suffix_bytes_);
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Serialized output still bounded by one coalesced write. A pipelined
 // connection holds small buffered responses back while their successors are
 // already buffered, then sends them with the response that ends the run.
@@ -13045,9 +12970,6 @@ private:
     connection_write_outcome written_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 // Reads more of a cleartext connection's first bytes, which so far match the
 // prior-knowledge client preface (RFC 9113 §3.4), under the request-header
 // deadlines. Returns false when the read ends the connection. Once the preface
@@ -14184,10 +14106,6 @@ template task<http_connection_close> worker_connections::run_http2<server_tls_st
     server_tls_stream&, tcp_socket_type&, context_services);
 #endif
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 enum class route_segment_kind { literal,
     param,
     wildcard };
@@ -14589,9 +14507,6 @@ void detail::router::build_extension_index() {
     });
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // How much of a route's request-path space one path-scoped middleware covers.
@@ -14838,9 +14753,6 @@ void detail::router::build_url_patterns() {
     patterns.erase(duplicates.begin(), duplicates.end());
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 struct dynamic_route_upper_bounds final {
@@ -15019,12 +14931,8 @@ void detail::router::insert_dynamic(compiled_route_plan::dynamic_node_type& root
     }
 }
 
-}  // namespace ruvia
-
 // Substitute parameters and percent-encode path values while preserving the
 // same segments used to build and resolve the registered route.
-
-namespace ruvia {
 
 namespace {
 
@@ -15174,10 +15082,6 @@ std::string detail::route_table::url_for(std::string_view pattern,
     }
     return url;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 detail::route_handler detail::resolved_route::handler() const noexcept {
     return callback_access::make<task<http_response>(context&)>(
@@ -15615,13 +15519,9 @@ const detail::route_entry* detail::route_table::find_dynamic_route(
     return &plan_->routes_[route_index];
 }
 
-}  // namespace ruvia
-
 // Choosing what answers a request: the matched route, a 405 with Allow, the
 // document-root fallback, or nothing -- and running a buffered handler once one
 // is chosen.
-
-namespace ruvia {
 
 namespace {
 
@@ -15850,13 +15750,9 @@ task<http_response> detail::route_table::dispatch_bound_buffered(const resolved_
     co_return co_await finalize_failure(context_value, exception);
 }
 
-}  // namespace ruvia
-
 // Turning a failed request into a response: the error a thrown exception really
 // carries, the metadata that survives onto the response, and the scoped error /
 // not-found handlers that get the last word.
-
-namespace ruvia {
 
 namespace {
 
@@ -16087,10 +15983,6 @@ detail::http_not_found_handler_ref detail::route_table::not_found_handler_for(
     return handler != nullptr ? handler : plan_->not_found_handler_;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 
 struct next_access final {
@@ -16311,13 +16203,9 @@ task<http_response> detail::route_table::finalize_failure(context& context_value
     co_return detail::context_access::release_response(context_value);
 }
 
-}  // namespace ruvia
-
 // Running a route that streams its response: binding the writer to the context
 // for the handler's lifetime, producing the head the HTTP/1 sink commits, and
 // unwinding when the handler throws after bytes are already on the wire.
-
-namespace ruvia {
 
 namespace {
 
@@ -16992,13 +16880,9 @@ task<void> ruvia::router::dispatch(request_stream& stream) & {
     return make_scoped_operation(stream.operation_scope_, detail::router_state::dispatch(state_, stream));
 }
 
-}  // namespace ruvia
-
 // The route-registration surface a controller sees. Each call builds the
 // endpoint its route kind runs and hands it, with the scope's prefix and
 // middlewares, to the router's single registration path.
-
-namespace ruvia {
 
 using namespace detail;
 
@@ -17219,13 +17103,6 @@ std::vector<controller_registrar> seal_controller_registrars() {
     registrars = state_value.registrars_;
     return registrars;
 }
-
-}  // namespace detail
-
-}  // namespace ruvia
-
-namespace ruvia {
-namespace detail {
 
 void context_session_state::bind(const session_middleware* owner_value) {
     if (available_) {
@@ -19006,9 +18883,6 @@ std::optional<static_file_representation> select_static_file_representation(cons
     return std::nullopt;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 [[nodiscard]] http_error_info normalize_http_error_info(http_error_info error) noexcept {
@@ -19406,10 +19280,6 @@ task<void> csrf_protection::invoke(context& c, next& next_value) {
     }
     co_await next_value();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace {
 
@@ -20195,10 +20065,6 @@ task<void> websocket_message_writer::submit_owned(
         final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace {
 
 [[nodiscard]] std::string_view byte_body_view(std::span<const std::byte> body) noexcept {
@@ -20557,9 +20423,7 @@ http_response make_readiness_response(context& context_value, readiness_response
     body.push_back('}');
     return detail::context_access::make_owned_json_response(context_value, body);
 }
-}  // namespace ruvia
 
-namespace ruvia {
 void context::advertise_origins(std::span<const std::string_view> origins) {
     if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
         throw std::logic_error("ORIGIN requires an HTTPS connection with advertisement output");
@@ -20978,9 +20842,6 @@ conn_info detail::context_services::resolve_conn_info(const http_request& reques
     return resolved;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace {
 
 // Copies the file a borrowed path names into `output` in NUL-terminated
@@ -21610,10 +21471,6 @@ task<http_response> detail::context_access::static_file_resolved(
     return serve_static_file(
         context_value, root, *served, base_entry, std::string(content_type_value));
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 
@@ -23283,9 +23140,6 @@ task<void> tls_tunnel_output::join() {
     co_await tasks_.join();
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 using security_callback = int (*)(const SSL*, const SSL_CTX*, int, int, int, void*, void*);
@@ -23684,9 +23538,6 @@ bool tls_served_certificate::check(const http_target_origin& origin) const noexc
     return X509_check_ip(certificate_, address.data(), address.size(), 0) == 1;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 namespace {
 
 struct ssl_context_deleter final {

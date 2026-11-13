@@ -688,10 +688,6 @@ private:
     std::vector<redis_value> array_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class redis_session;
 
 namespace detail {
@@ -2378,9 +2374,7 @@ concept redis_entity_schema = requires(const entity& value) {
     requires redis_columns<typename entity::columns_type>;
     { entity::prefix() } -> std::convertible_to<std::string_view>;
 };
-}  // namespace detail
 
-namespace detail {
 struct redis_predicate_access final {
     // Null for an empty predicate.
     static const redis_predicate_storage* storage(const redis_predicate& predicate) noexcept {
@@ -2495,10 +2489,6 @@ private:
     }
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 #define RUVIA_REDIS_COLUMN(name, value_type, ...) ::ruvia::redis_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
 
 // set<field>() 检查整数范围与有限浮点溢出；整数列不隐式接受浮点输入。
@@ -2521,10 +2511,6 @@ namespace ruvia {
         }                                                                                                              \
         RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                         \
     };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class redis_order_direction : std::uint8_t {
     asc,

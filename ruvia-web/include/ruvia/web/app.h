@@ -162,10 +162,6 @@ private:
     std::unique_ptr<detail::static_root_state, state_deleter_type> state_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class process_signal_handler_policy : std::uint8_t {
     external_owner,
     install,
@@ -735,9 +731,7 @@ using connection_failure_callback = move_only_function<void(const connection_fai
 // and throws std::logic_error.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using app_hook = move_only_function<void()>;
-}  // namespace ruvia
 
-namespace ruvia {
 namespace detail {
 class prepared_listener_state;
 struct prepared_listener_access;
@@ -769,10 +763,6 @@ private:
     std::shared_ptr<detail::prepared_listener_state> state_;
     friend struct detail::prepared_listener_access;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class connection_event final {
 public:
@@ -844,10 +834,6 @@ using connection_close_callback_ref = callback_ref<void(const connection_event&,
 using connection_admission_callback = move_only_function<bool(const connection_event&) noexcept>;
 using connection_open_callback = move_only_function<std::shared_ptr<void>(const connection_event&)>;
 using connection_close_callback = move_only_function<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 template <typename stream_type>
@@ -1009,10 +995,6 @@ using connection_callback_ref = callback_ref<task<void>(server_connection&)>;
 // server cancelled (timeouts or host shutdown).
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using connection_callback = move_only_function<task<void>(server_connection&)>;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 struct server_observation_access;
@@ -1214,10 +1196,6 @@ using http2_headers_callback = move_only_function<void(const http2_headers_recor
 using http3_frame_callback = move_only_function<void(const http3_frame_record&) noexcept>;
 using http3_field_callback = move_only_function<void(const http3_field_record&) noexcept>;
 #endif
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class request_stream;
 class router;
@@ -1460,10 +1438,6 @@ private:
 // 空函数指针与目标析构重入的契约同 access_log_callback。
 using request_stream_callback = move_only_function<task<void>(request_stream&)>;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 namespace detail {
 class http_server_state;
 class http_server_group_state;
@@ -1667,9 +1641,6 @@ private:
     std::shared_ptr<detail::http_server_group_state> state_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 struct env_state;
@@ -1806,10 +1777,6 @@ std::optional<t_type> env::parse_arithmetic_value(std::string_view value) noexce
 
     return parsed_value;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 
@@ -2223,8 +2190,6 @@ private:
 
 application& app();
 
-}  // namespace ruvia
-
 // In-memory testing facade for applications built on Ruvia -- the actix
 // test_request / Hono app.request() analog. test_app collects every controller
 // linked into the binary (the same macro registration path application::run() uses),
@@ -2243,8 +2208,6 @@ application& app();
 // Streaming/SSE/websocket routes and handlers that await worker-bound
 // services (db(), redis(), run_blocking()) need a running server; drive those
 // through a real loopback server instead.
-
-namespace ruvia {
 
 class test_app;
 

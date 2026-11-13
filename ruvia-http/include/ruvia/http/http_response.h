@@ -160,9 +160,6 @@ private:
 // precompression: text/*, +json, +xml, and common text/font/wasm/icon media
 // types, excluding any type naming a zip container.
 [[nodiscard]] bool is_http_media_type_compressible(std::string_view content_type_value) noexcept;
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A codec that could not run (for example its native state could not be
 // created or reset, or the library reported an internal error). It is an
@@ -247,9 +244,6 @@ struct http_content_decode_options final {
 [[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options);
-}  // namespace ruvia
-
-namespace ruvia {
 
 struct http_content_encoder_options final {
     std::size_t max_encoded_bytes_{(std::numeric_limits<std::size_t>::max)()};
@@ -532,10 +526,6 @@ inline void http_stream_encoder_lease::discard() noexcept {
     }
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Returns the media type before any parameters. The view borrows the input;
 // owning string temporaries cannot be passed through borrowed_text.
 [[nodiscard]] std::string_view http_media_type_only(borrowed_text value) noexcept;
@@ -583,13 +573,9 @@ private:
     std::size_t parameter_specificity_{0};
 };
 
-}  // namespace ruvia
-
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
 // request expresses, and the response coding the server picks from them.
 // gzip and its deprecated x-gzip spelling share one case-insensitive weight.
-
-namespace ruvia {
 
 class http_request;
 
@@ -959,10 +945,6 @@ enum class http_response_content_coding_status : std::uint8_t {
     std::span<const http_content_coding> candidates) noexcept;
 [[nodiscard]] std::optional<http_content_coding> negotiate_http_content_coding(
     const http_request& request, std::span<const http_content_coding> candidates) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 struct multipart_part_access;
@@ -1410,10 +1392,6 @@ private:
 template <detail::http_temporary_owning_char_string body_type>
 std::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct sse_message final {
     // SSE messages may be retained before they are formatted. Keep their text
     // zero-copy while preventing a temporary owning string from leaving an
@@ -1581,10 +1559,6 @@ private:
     sse_parser_state state_{sse_parser_state::active};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Platform-native path text (wchar_t on Windows, char elsewhere), as carried
 // by response file bodies.
 using http_native_path_char_type = std::filesystem::path::value_type;
@@ -1608,10 +1582,6 @@ inline void http_assign_native_path(http_native_path_string_type& output, const 
 [[nodiscard]] inline std::filesystem::path http_make_path_from_native_path(const http_native_path_string_type& path) {
     return http_make_path_from_native_path(path.c_str());
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Opaque runtime-supplied identity of the file whose metadata was used to
 // frame a response. HTTP transports this token; the runtime validates it after
@@ -1758,10 +1728,6 @@ struct http_response_body_segment_view final {
     std::string_view bytes_{};
     std::optional<http_response_file_view> file_{};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A byte range already resolved against the selected representation.
 struct http_byte_range final {
@@ -1967,10 +1933,6 @@ private:
     bool complete_{false};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Owns copied framing metadata and ordered file-slice descriptors. Observed
 // views borrow the plan. Construction and clone propagate allocation failures.
 class http_multipart_byte_range_plan final {
@@ -2044,10 +2006,6 @@ private:
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, http_content_length representation_length,
     std::string_view media_type, std::string_view boundary);
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_request;
 
@@ -2143,10 +2101,6 @@ private:
 [[nodiscard]] http_representation_response_plan plan_http_representation_response(
     const http_request& request, http_selected_representation_metadata representation,
     http_representation_response_options options = {});
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http_connect_udp_error : std::uint8_t;
 class http1_response_head_plan;
@@ -2951,10 +2905,6 @@ private:
     detail::http_response_body body_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http_origin_view;
 enum class cookie_prefix : std::uint8_t {
     secure,  // serializes the name as "__Secure-<name>"; requires secure
@@ -3299,10 +3249,6 @@ private:
     std::size_t cookie_bytes_{0};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_set_cookie_attribute : std::uint8_t {
     secure = 1U << 0,
     partitioned = 1U << 1,
@@ -3388,10 +3334,6 @@ private:
 template <detail::http_temporary_owning_char_string value_type>
 std::optional<http_set_cookie_view> parse_set_cookie(value_type&&) = delete;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Wire width of an RFC 9110 IMF-fixdate, e.g. "Sun, 06 Nov 1994 08:49:37 GMT".
 inline constexpr std::size_t http_imf_fixdate_size = 29;
 
@@ -3402,10 +3344,6 @@ inline constexpr std::size_t http_imf_fixdate_size = 29;
 // Parse an HTTP-date (RFC 7231 section 7.1.1.1: IMF-fixdate / RFC 850 / asctime) as used by Date,
 // Expires, Last-Modified, If-Modified-Since. Returns std::nullopt if malformed.
 [[nodiscard]] std::optional<std::time_t> parse_http_date(std::string_view value) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_response;
 class http_response_headers;
@@ -3846,10 +3784,6 @@ void merge_http_304_response_headers(
 void merge_http_304_response_headers(
     http_response& cached_response, const http_response& not_modified_response);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct http_conditional_method_plan final {
     bool evaluates_preconditions_;
     bool uses_not_modified_response_;
@@ -3938,9 +3872,6 @@ struct http_etag_preconditions final {
 [[nodiscard]] bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] std::string weaken_http_etag(std::string_view etag);
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Case-insensitive set of field/option tokens parsed from one or more
 // Connection header lines (RFC 9110 section 7.6.1).
@@ -4020,10 +3951,6 @@ template <http_header_field_source headers_type>
 
 [[nodiscard]] bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) noexcept;
 [[nodiscard]] bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 struct http_cors_policy_config final {
     bool allow_any_origin_{false};
@@ -4147,10 +4074,6 @@ void merge_http_vary_tokens(
     std::vector<http_header>& headers, std::span<const std::string_view> tokens);
 void merge_http_vary_token(std::vector<http_header>& headers, std::string_view token);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_transfer_coding : std::uint8_t { gzip,
     deflate };
 
@@ -4211,9 +4134,6 @@ private:
     std::array<http_transfer_coding, max_transfer_codings> data_{};
     std::size_t size_{0};
 };
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http_transfer_coding_decode_error : std::uint8_t {
     invalid_content,
@@ -4373,10 +4293,6 @@ private:
     impl_type* impl_{nullptr};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 inline constexpr std::string_view http1_chunk_data_terminator = "\r\n";
 inline constexpr std::string_view http1_last_chunk_prefix = "0\r\n";
 inline constexpr std::string_view http1_trailer_section_terminator = "\r\n";
@@ -4406,10 +4322,6 @@ private:
     std::array<char, sizeof(std::size_t) * 2 + 2> storage_;
     std::size_t offset_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A request-body failure detected by a server driver while enforcing the
 // HTTP-owned content contract. The driver supplies runtime byte limits and I/O
@@ -4479,10 +4391,6 @@ enum class http_request_body_failure : std::uint8_t {
                ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
                : std::nullopt;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http1_chunk_decode_error : std::uint8_t {
     invalid_framing,
@@ -4713,10 +4621,6 @@ private:
         http_status::bad_request, "invalid_chunked_body", "invalid chunked request body");
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http1_server_request_parse_state;
 
 // Whether the runtime consumed the complete request message before attempting
@@ -4835,10 +4739,6 @@ private:
     http_request_expectations expectations_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Whether a connection is reused after a completed HTTP/1 exchange. Both the
 // client request writer and the server response planner express the same wire
 // decision with this single shared policy: allow_reuse keeps the connection
@@ -4907,10 +4807,6 @@ private:
     http1_request_connection_plan plan, http1_request_body_consumption consumption) noexcept {
     return consumption == http1_request_body_consumption::complete ? plan : plan.require_close();
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http1_server_request_parse_failure_source : std::uint8_t { request_line,
     message };
@@ -5039,10 +4935,6 @@ private:
     progress progress_{http1_server_need_request_head{}};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // An HTTP/1 response head this endpoint cannot send: an interim, final,
 // CONNECT or CONNECT-UDP head that breaks a message rule (RFC 9110, RFC 9112)
 // or the head size bound. It reports an application or runtime bug, never a
@@ -5051,10 +4943,6 @@ class http1_response_head_error final : public std::invalid_argument {
 public:
     using std::invalid_argument::invalid_argument;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 inline constexpr std::size_t response_head_stack_bytes = 512;
 inline constexpr std::size_t response_head_retained_heap_bytes = std::size_t{4} * 1024;
@@ -5137,10 +5025,6 @@ private:
     std::string heap_;
     std::variant<stack_state_type, heap_state_type> state_{stack_state_type{}};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http1_response_head_plan;
 class http1_buffered_response_plan;
@@ -5303,12 +5187,8 @@ static_assert(sizeof(http1_buffered_response_plan) == sizeof(http1_response_head
             http1_response_head_plan::buffered_framing(write_plan.content_length())));
 }
 
-}  // namespace ruvia
-
 // Stable, non-detail entry points for HTTP response serialization plans. The
 // plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
-
-namespace ruvia {
 
 namespace detail {
 
@@ -5367,10 +5247,6 @@ template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 http_response_trailer_section validate_http_response_trailers(
     std::initializer_list<http_header_view>) = delete;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Immutable, bodyless response-head view for 1xx progress messages that precede
 // a final response. 101 is deliberately excluded: switching protocols transfers
@@ -5452,10 +5328,6 @@ private:
 // represented by http_interim_response_head.
 [[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
 prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http_response_stream_framing : std::uint8_t {
     http1_chunked,
@@ -5594,9 +5466,6 @@ private:
 // changes.
 [[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
     http_response response, http_response_stream_commit_plan commit_plan);
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http1_response_stream_plan final {
 public:
@@ -5773,9 +5642,6 @@ private:
 [[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(
     http_response& response, const http_request& request);
 
-}  // namespace ruvia
-
-namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {
     borrowed_text target_{};
@@ -5845,9 +5711,7 @@ struct http_connect_udp_request_view final {
 // The HTTP/1 head plan of a response prepare_http_connect_udp_response()
 // produced; throws http1_response_head_error for any other response.
 [[nodiscard]] http1_response_head_plan prepare_http1_connect_udp_response_head(const http_response& response);
-}  // namespace ruvia
 
-namespace ruvia {
 enum class http_capsule_codec_error : std::uint8_t { need_more_data,
     value_out_of_range,
     output_too_small };

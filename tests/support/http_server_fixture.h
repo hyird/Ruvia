@@ -174,10 +174,6 @@ private:
     asio::ip::tcp::endpoint endpoint_;
 };
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 // Selects a free loopback UDP port and keeps other test fixtures off it until
 // every server using it has stopped.
 //
@@ -258,10 +254,6 @@ private:
     asio::ip::udp::endpoint endpoint_;
 };
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 inline int sign_tls_certificate(X509* certificate, EVP_PKEY* key) {
     const auto context_value = std::unique_ptr<EVP_MD_CTX, decltype(&EVP_MD_CTX_free)>(
         EVP_MD_CTX_new(), EVP_MD_CTX_free);
@@ -286,10 +278,6 @@ inline int write_tls_private_key(BIO* output, const EVP_PKEY* key,
     return PEM_write_bio_PrivateKey_ex(output, key, cipher.get(), encrypted ? bytes_value : nullptr,
         static_cast<int>(password.size()), nullptr, nullptr, nullptr, nullptr);
 }
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 class tls_identity final {
     scoped_temp_directory directory_{"ruvia-client-tls"};
@@ -357,10 +345,6 @@ private:
     std::filesystem::path private_key_file_;
 };
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 // Startup hooks remain caller-owned: application retains them across runs.
 
 class app_run final {
@@ -411,10 +395,6 @@ private:
     std::thread thread_;
 };
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 template <typename stream_type>
 [[nodiscard]] inline std::string read_to_end(stream_type& stream, asio::error_code& terminal_error) {
     std::string result{};
@@ -456,10 +436,6 @@ inline void wait_until(predicate_type predicate,
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
 }
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 class http_server_fixture final {
 public:
@@ -592,10 +568,6 @@ inline void reset_app_callbacks(application& app_value) {
         .blocking_pool(blocking_pool_options{});
 }
 
-}  // namespace ruvia::test
-
-namespace ruvia::test {
-
 template <typename callback_type>
 class context_callback final {
 public:
@@ -619,10 +591,6 @@ template <typename callback_type>
     app.use<context_callback<std::remove_reference_t<callback_type>>>(&callback);
     return app.request(request);
 }
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 // Stateful, isolated RESP store. All map access and connection teardown run on
 // its own event loop. Expiry is not simulated: these cases do not test time.
@@ -1900,10 +1868,6 @@ private:
     bool early_rejection_pending_{false};
     bool handshake_confirmed_{false};
 };
-
-}  // namespace ruvia::test
-
-namespace ruvia::test {
 
 // Blocking HTTP/3 client for malformed-request wire regressions. It drives
 // ngtcp2 and nghttp3 directly, so a request field section reaches the wire

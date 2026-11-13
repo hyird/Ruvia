@@ -269,10 +269,6 @@ private:
     std::span<const element_type> values_{};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Retention table: the most storage a reusable ruvia-http buffer keeps once it
 // is drained. Anything larger goes back to the allocator, so one large message
 // or head never stays pinned to an idle connection or worker, while buffers
@@ -393,10 +389,6 @@ private:
     std::size_t end_{0};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // A transport-neutral 16-bit port value shared by HTTP authorities and Web
 // endpoint configurations. Zero is representable; each consumer owns its
 // zero-port policy. Absence remains optional, distinct from an explicit zero.
@@ -443,10 +435,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<port_number>);
 static_assert(sizeof(port_number) == sizeof(std::uint16_t));
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class ip_address_family : std::uint8_t {
     ipv4,
@@ -574,10 +562,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<ip_cidr>);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Maximum decimal digits of a std::uint64_t (18446744073709551615).
 inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
 
@@ -650,10 +634,6 @@ void http_append_formatted_finite_number(std::string& output, number_type value,
     http_append_formatted_number(output, value, format_error_message);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct utf8_sequence final {
     // Bytes of the well-formed sequence, or of the maximal subpart (Unicode 3.9,
     // definition D93b) that precedes the first ill-formed byte; always >= 1.
@@ -716,9 +696,6 @@ struct utf8_sequence final {
     return true;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 [[nodiscard]] inline std::size_t http_forward_encoded_groups(
@@ -812,10 +789,6 @@ inline void http_append_lower_hex(std::string& output, std::span<const unsigned 
 inline void http_append_lower_hex(std::string& output, std::string_view bytes) {
     http_append_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // RFC 4648 section 4 (standard) and section 5 (URL-safe) alphabets.
 inline constexpr std::string_view http_base64_alphabet =
@@ -1005,10 +978,6 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     }
     return out;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class url_decode_mode : std::uint8_t { percent,
     form };
@@ -1212,10 +1181,6 @@ template <typename visitor_type>
     }
     return true;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A validated HTTP status-code value. The complete 100..599 extension space is
 // representable, while arbitrary integers cannot leak into protocol APIs.
@@ -1601,10 +1566,6 @@ namespace detail {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 inline constexpr std::size_t max_http_header_bytes = std::size_t{64} * 1024;
 // Field lines per HTTP/1 head or trailer section (the http_field_section_budget
 // rule), received and generated, beside the max_http_header_bytes byte cap. The
@@ -1615,10 +1576,6 @@ inline constexpr std::size_t default_max_buffered_body_bytes = std::size_t{16} *
 inline constexpr std::size_t default_max_websocket_message_bytes = std::size_t{16} * 1024 * 1024;
 // Bytes one SSE event may buffer while sse_parser assembles it.
 inline constexpr std::size_t default_max_sse_event_bytes = std::size_t{16} * 1024 * 1024;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // A protocol byte ceiling with no numeric sentinel: the default is unlimited,
 // while a configured limit is always strictly positive.
@@ -1669,10 +1626,6 @@ private:
 
     std::optional<std::size_t> maximum_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // An HTTP protocol primitive rejected input with a response status that a
 // server driver may map onto its own application error model. `code` is a
@@ -1730,10 +1683,6 @@ enum class http_parse_error : std::uint8_t {
 
 [[nodiscard]] http_protocol_error http_parse_protocol_error(http_parse_error error) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 [[nodiscard]] constexpr unsigned char http_ascii_to_lower(unsigned char c) noexcept {
     return c >= 'A' && c <= 'Z' ? static_cast<unsigned char>(c + ('a' - 'A')) : c;
 }
@@ -1752,14 +1701,10 @@ namespace ruvia {
     return true;
 }
 
-}  // namespace ruvia
-
 // The single owner of HTTP field-line syntax (RFC 9110 section 5): token and
 // field-content byte classes and the normalized field name/value predicates.
 // Field-specific grammars build on these; field-line OWS belongs to wire
 // parsers, so normalized values never start or end with SP or HTAB.
-
-namespace ruvia {
 
 // OWS / BWS byte: SP or HTAB (RFC 9110 section 5.6.3).
 [[nodiscard]] constexpr bool is_http_ows_char(char c) noexcept {
@@ -2247,9 +2192,6 @@ enum class http_protocol_version : std::uint8_t {
     http3,
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 enum class http_scheme : std::uint8_t {
     http,
     https,
@@ -2284,10 +2226,6 @@ enum class http_known_method : std::uint8_t {
 // recognized even though it is intentionally not a routable fixed enum member.
 [[nodiscard]] bool is_http_method_safe(std::string_view method) noexcept;
 [[nodiscard]] bool is_http_method_idempotent(std::string_view method) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // An owned field returned by protocol parsers and events. The same value type
 // represents initial fields and trailers for requests and responses.
@@ -2554,10 +2492,6 @@ private:
 };
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // RFC 9218 section 4.1: urgency is 0..7, defaulting to 3. Local numeric
 // inputs are checked before narrowing. Peer fields instead use the tolerant
 // parser below, which ignores out-of-range values as required by section 4.
@@ -2643,10 +2577,6 @@ template <http_header_field_source headers_type>
 [[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 struct http_push_request_view final {
     borrowed_text method_{"GET"};
     borrowed_text scheme_{"https"};
@@ -2685,9 +2615,6 @@ enum class http2_push_submit_error : std::uint8_t {
     invalid_request,
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 // Encoders validate limits before allocation and write into the final owned result.
 struct http_origin_advertisement final {
     std::vector<std::string> origins_;
@@ -2730,9 +2657,6 @@ decode_http2_alternative_service(std::uint32_t stream_id, std::span<const char> 
 [[nodiscard]] std::variant<std::vector<char>, http_connection_advertisement_error>
 encode_http2_alternative_service_frame(std::uint32_t stream_id, std::string_view origin, std::string_view field_value,
     std::uint32_t max_frame_size = 16384);
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Outbound Content-Length in 0..UINT64_MAX. Checked before narrowing so
 // negative inputs cannot wrap into huge finite lengths.
@@ -2807,10 +2731,6 @@ enum class http_request_content_semantics : std::uint8_t {
     }
     return true;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // One outbound content contract for an HTTP/2 or HTTP/3 request head: it
 // determines both the generated Content-Length and whether the head ends the
@@ -2902,10 +2822,6 @@ private:
     value_type value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Request fields the HTTP protocol layer generates or interprets itself when it
 // frames and transports a request: Host (RFC 9110 section 7.2), message framing
 // (Content-Length, Transfer-Encoding, Trailer; RFC 9110 sections 6.5 and 8.6),
@@ -2923,10 +2839,6 @@ namespace ruvia {
 // 这不是响应首部或接收方校验器。调用方负责字段间重复及完整消息约束；
 // 返回 true 不代表整个请求可发送，不保留输入或跨调用状态。
 [[nodiscard]] bool is_valid_http_request_application_field(std::string_view name, std::string_view value) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_response_headers;
 
@@ -3253,10 +3165,6 @@ static_assert(sizeof(http_request_expectations) <= 1);
 static_assert(std::is_trivially_copyable_v<http_server_expectation_plan>);
 static_assert(sizeof(http_server_expectation_plan) <= 2);
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class http_request;
 
 // Validates an HTTP origin-form request target without allocating. The same
@@ -3415,9 +3323,6 @@ private:
 [[nodiscard]] http_max_forwards_result parse_http_max_forwards(
     const http_request& request,
     std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
-}  // namespace ruvia
-
-namespace ruvia {
 
 class http_request;
 
@@ -3564,10 +3469,6 @@ private:
 // The port is not compared: certificates name hosts, not ports. Allocation free.
 [[nodiscard]] http_target_origin decide_http_target_origin(
     const http_request& request, http_target_origin_connection connection) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class http_request_target_form : std::uint8_t {
     origin,
@@ -3843,9 +3744,6 @@ private:
 [[nodiscard]] http_request make_parsed_http_request(
     borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
     borrowed_span<std::byte> body = {});
-}  // namespace ruvia
-
-namespace ruvia {
 
 // HAProxy PROXY protocol, versions 1 and 2
 // (https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt).
@@ -4012,10 +3910,6 @@ private:
     proxy_protocol_parser_state state_{proxy_protocol_parser_state::active};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class http_forwarded_header_kind : std::uint8_t {
     auto_detect,
     rfc7239_forwarded,
@@ -4140,9 +4034,6 @@ private:
     return extractor.resolve(peer_ip, request);
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 [[nodiscard]] constexpr bool is_tls_grease_value(std::uint16_t value) noexcept {
     return (value & 0x0f0fU) == 0x0a0aU && (value >> 8U) == (value & 0xffU);
 }

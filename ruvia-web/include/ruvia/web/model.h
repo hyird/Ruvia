@@ -84,10 +84,6 @@ template <detail::parsed_integer t_type>
     return value;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 template <std::size_t n>
 struct fixed_string {
     char value_[n]{};
@@ -294,10 +290,6 @@ using route_stream_handler = callback_ref<task<void>(context&)>;
 using route_middleware = callback_ref<task<void>(context&, next&)>;
 
 }  // namespace detail
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class context;
 class validator;
@@ -569,10 +561,6 @@ template <std::floating_point t_type = double>
     }
     return convert_decimal_number<t_type>(text, saw_non_zero);
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 inline constexpr std::size_t max_json_depth = 64;
 
@@ -2993,10 +2981,6 @@ template <fixed_string pattern>
     return match_pattern_plan_from(compiled_pattern_plan<pattern>::value, value, 0, 0, budget);
 }
 
-}  // namespace ruvia::detail::model
-
-namespace ruvia::detail::model {
-
 template <auto bound, fixed_string error_message>
 struct min final {
     static_assert(std::is_arithmetic_v<decltype(bound)> && !std::is_same_v<decltype(bound), bool>,
@@ -3973,10 +3957,6 @@ private:
     bool present_{false};
     std::optional<field_value_type> value_;
 };
-
-}  // namespace ruvia::detail::model
-
-namespace ruvia::detail::model {
 
 template <typename t_type>
 using field_option_tuple_type =
@@ -5565,10 +5545,6 @@ template <text_scalar t_type>
     }
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 // Shared owning value storage. Backend descriptors and relations stay with
 // their backend.
 template <typename t_type>
@@ -6031,10 +6007,6 @@ public:
 private:
     std::vector<entity_type> rows_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class validation_target : std::uint8_t { json,
     form,

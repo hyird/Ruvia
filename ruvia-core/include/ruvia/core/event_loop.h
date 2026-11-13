@@ -248,10 +248,6 @@ private:
     const operations* operations_{nullptr};
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // Converts directly from the original count domain to the requested tick type.
 // Integral counts up to uintmax_t width stay exact, rounding positive fractions
 // upward and saturating at both bounds. Other conversions use long double;
@@ -531,10 +527,6 @@ private:
 
     friend class detail::worker_dispatcher;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class stop_token;
 class stop_source;
@@ -925,10 +917,6 @@ private:
     std::vector<stop_registration> extra_parents_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // The bound of one operation: either a positive relative limit that starts
 // when the operation starts, or an absolute steady-clock deadline, which may
 // already have passed. A value is valid by construction: the relative
@@ -1009,10 +997,6 @@ private:
     std::variant<std::chrono::milliseconds, clock_type::time_point> value_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // The single per-operation input of every cold wait and outbound operation.
 // timeout_ bounds the operation end to end: a relative limit starts when the
 // operation starts, an absolute deadline is used as given.
@@ -1055,10 +1039,6 @@ struct operation_options final {
     }
     return merged;
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // The resolved deadline of an operation that has started, shared across its
 // asynchronous phases. Phases that hand the remaining budget to a nested
@@ -1197,10 +1177,6 @@ private:
     state_type state_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // 64-bit FNV-1a parameters (non-cryptographic; dispatch and fingerprint use only).
 inline constexpr std::uint64_t fnv1a_offset_basis = 14695981039346656037ULL;
 inline constexpr std::uint64_t fnv1a_prime = 1099511628211ULL;
@@ -1222,9 +1198,6 @@ inline constexpr std::uint64_t fnv1a_prime = 1099511628211ULL;
     return hash;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 template <typename signature_type>
 class move_only_function;
 }  // namespace ruvia
@@ -1510,10 +1483,6 @@ private:
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 using worker_id_type = std::uint64_t;
 
 [[nodiscard]] constexpr std::uint64_t worker_selection_hash(std::string_view key) noexcept {
@@ -1764,10 +1733,6 @@ struct worker_ref_access {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class worker_runtime_state : std::uint8_t {
     ready,
     running,
@@ -1932,10 +1897,6 @@ private:
     std::unique_ptr<impl_type> impl_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class worker_runtime;
 
 // Sequences a set of worker_runtime owners through one lifecycle:
@@ -2009,10 +1970,6 @@ private:
     bool joined_{false};
     std::exception_ptr join_failure_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Owns only a detachable owner pointer and a stable worker_ref; queued work
 // retains the target so that releasing it never depends on the owner's lifetime.
@@ -2700,10 +2657,6 @@ template <typename state_type, typename... arg_types>
     return state_value;
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class one_shot_complete_status : std::uint8_t {
     completed,
     already_completed,
@@ -2999,9 +2952,6 @@ template <typename t_type>
     return std::pair(std::move(completion), one_shot_receiver<t_type>(std::move(state_value)));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
 class pool_lease_acquire;
 
 // Single-worker owner of pool slot leases and their asynchronous wait queue.
@@ -3090,10 +3040,6 @@ private:
     bool queued_{false};
     bool awaited_{false};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 enum class channel_send_status : std::uint8_t {
     sent,
@@ -3842,10 +3788,6 @@ template <typename t_type>
     return std::pair(std::move(sender), channel_receiver<t_type>(std::move(state_value)));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class task_scope final {
 public:
     // The worker is borrowed: the scope must not outlive the caller's
@@ -3953,10 +3895,6 @@ private:
     lifecycle_type lifecycle_;
     std::exception_ptr failure_{};
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class scoped_capability_registration;
 class worker_ref;
@@ -4069,9 +4007,6 @@ template <typename t_type>
     task_value.bind_scope(scope);
     return task_value;
 }
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Intrusive, allocation-free wake primitive for one worker. Every operation
 // which touches its waiter list is worker-affine; the worker_ref is therefore
@@ -4249,10 +4184,6 @@ inline void worker_signal::resume_scheduled(
     continuation.resume();
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 enum class timer_sleep_result : std::uint8_t {
     elapsed,
     // The sleep was cut short because a stop was requested: the worker is
@@ -4344,8 +4275,6 @@ private:
     stop_registration stop_registration_;
 };
 
-}  // namespace ruvia
-
 // Offloading blocking work off a worker thread.
 //
 // A Ruvia worker is one thread driving one io_context, and every connection it
@@ -4371,8 +4300,6 @@ private:
 // tasks that block until other tasks finish can occupy every one of them at
 // once and deadlock -- the queue would drain only once a running task returns,
 // and none can. Submitting without waiting is fine; waiting is not.
-
-namespace ruvia {
 
 struct blocking_pool_options final {
     // 0 selects half of std::thread::hardware_concurrency(), clamped to 2..8.
@@ -4811,10 +4738,6 @@ template <typename fn_type>
     return run_blocking(std::move(worker_value), operation_options{}, std::move(fn));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 // The completion argument of async_start(). Void tasks complete with
 // std::exception_ptr, which satisfies Asio's disposition concept directly;
 // value-returning tasks complete with the value first and the failure second,
@@ -5101,10 +5024,6 @@ template <typename result_type = void, typename initiate_type>
     return asio_completion_awaiter<result_type, std::decay_t<initiate_type>>(std::forward<initiate_type>(initiate));
 }
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class event_loop;
 
 namespace detail {
@@ -5366,10 +5285,6 @@ private:
     std::shared_ptr<detail::root_task_state<t_type>> state_;
     friend class event_loop;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 struct event_loop_state;
@@ -5709,10 +5624,6 @@ private:
 [[nodiscard]] event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options = {});
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class blocking_pool;
 
 struct event_loop_pool_options final {
@@ -5752,10 +5663,6 @@ private:
     struct impl_type;
     std::shared_ptr<impl_type> impl_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class event_loop;
 class worker_runtime;
@@ -5848,9 +5755,6 @@ private:
     wait_operation wait_awaiter_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
 namespace detail {
 
 template <typename t_type>
@@ -5884,10 +5788,6 @@ std::span<const std::byte> as_bytes(string_type&&) = delete;
 }
 template <detail::temporary_owning_byte_range range_type>
 std::string_view as_chars(range_type&&) = delete;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // UTF-8 text describing an error code, for every Ruvia message that embeds one.
 // On Windows, message() of std::system_category() and asio::system_category()
@@ -5941,10 +5841,6 @@ void report_unhandled_failure(
 // True for the same exception object, or for two std::exception objects of the
 // same dynamic type with the same what(): the same fault seen by several units.
 [[nodiscard]] bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept;
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Parse a complete textual IP address, rejecting embedded NUL bytes.
 [[nodiscard]] std::optional<asio::ip::address> parse_ip_address(std::string_view text);

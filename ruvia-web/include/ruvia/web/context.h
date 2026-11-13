@@ -195,9 +195,6 @@ template <typename t_type>
 request_binding_guard<t_type>::~request_binding_guard() noexcept {
     bindings_->pop(node_);
 }
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 // Startup-registered recipe for one per-worker state type: the erased user
 // factory plus the instance create/destroy pair. The factory runs once inside
@@ -392,10 +389,6 @@ private:
     bool initialized_{false};
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class worker_state_registry;
 
 // A request and a posted job borrow the same worker-owned capabilities. No
@@ -584,10 +577,6 @@ private:
     std::shared_ptr<detail::web_worker_dispatch> dispatch_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class context;
 
 // Declared before body admission, not executed as middleware. Route and
@@ -768,11 +757,7 @@ concept route_policy =
 template <typename modifier_type>
 concept route_modifier = middleware<modifier_type> || route_policy<modifier_type>;
 
-}  // namespace ruvia
-
 // Internal startup-time middleware descriptor.
-
-namespace ruvia {
 
 class context;
 
@@ -1131,10 +1116,6 @@ private:
     std::string header_name_;
 };
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class context;
 struct security_header final {
     std::string name_{};
@@ -1206,10 +1187,6 @@ private:
     std::string permissions_policy_;
     std::vector<http_header> custom_headers_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class context;
 
@@ -1762,10 +1739,6 @@ struct streaming_access final {
 
 }  // namespace detail
 
-}  // namespace ruvia
-
-namespace ruvia {
-
 class multipart_reader final {
 public:
     multipart_reader(body_reader& body_reader_value, multipart_parse_options options)
@@ -1838,10 +1811,6 @@ private:
 
     [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 namespace detail {
 class http_capsule_stream_state;
@@ -2182,9 +2151,6 @@ private:
     bool send_ended_{false};
     ::ruvia::operation_scope operations_;
 };
-}  // namespace ruvia
-
-namespace ruvia {
 
 struct websocket_heartbeat_config final {
     // Absence disables heartbeat. When ping is present and pong is absent,
@@ -2479,10 +2445,6 @@ private:
     bool compress_;
     scoped_capability_registration registration_;
 };
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 class context;
 class env;
@@ -3728,10 +3690,6 @@ namespace ruvia::detail {
     return depth;
 }
 
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
-
 class router;
 
 template <typename callback_type>
@@ -3805,11 +3763,7 @@ private:
     std::vector<worker_state_definition> worker_states_;
 };
 
-}  // namespace ruvia::detail
-
 // Internal startup-time controller registration contracts.
-
-namespace ruvia::detail {
 
 class router;
 
@@ -4003,10 +3957,6 @@ template <typename controller_type>
     return add_controller_registrar(
         {.create_ = &create_controller<controller_type>, .register_routes_ = &register_controller_routes<controller_type>});
 }
-
-}  // namespace ruvia::detail
-
-namespace ruvia::detail {
 
 template <typename member_type>
 struct context_task_result {

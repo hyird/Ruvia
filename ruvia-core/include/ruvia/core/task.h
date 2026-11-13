@@ -275,9 +275,6 @@ private:
 };
 
 }  // namespace detail
-}  // namespace ruvia
-
-namespace ruvia {
 
 class task_scope;
 
@@ -481,10 +478,6 @@ template <typename t_type>
 [[nodiscard]] task_awaiter<t_type> task<t_type>::operator co_await() && {
     return task_awaiter<t_type>{std::move(*this)};
 }
-
-}  // namespace ruvia
-
-namespace ruvia {
 
 // Collects the calling thread's mimalloc heap and forces the shared arenas to
 // purge. Live allocations are untouched. A completely idle thread never runs
