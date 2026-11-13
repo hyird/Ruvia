@@ -21,7 +21,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/model.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 namespace ruvia {
 
 namespace detail {

@@ -36,7 +36,7 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_response.h"
 
-#include "http_connection_fields.h"
+#include "http_internal.h"
 
 namespace ruvia {
 http_request& http_request::operator=(http_request&& other) noexcept {

@@ -23,7 +23,7 @@
 
 #include "ruvia/http/http_request.h"
 
-#include "http_connection_fields.h"
+#include "http_internal.h"
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

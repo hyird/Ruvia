@@ -23,13 +23,15 @@ function(ruvia_collect_cpp_sources out relative_dir exclude_regex)
     set(${out} ${_ruvia_sources} PARENT_SCOPE)
 endfunction()
 
-# Every component compiles its sources against its own src/pch.h.
+# Multi-unit components precompile their shared internal header.
 function(ruvia_configure_library target component)
     add_library(ruvia::${component} ALIAS ${target})
     set_target_properties(${target} PROPERTIES EXPORT_NAME ${component})
     target_compile_features(${target} PUBLIC cxx_std_20)
-    target_precompile_headers(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/pch.h")
-
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/src/${component}_internal.h")
+        target_precompile_headers(${target} PRIVATE
+            "${CMAKE_CURRENT_SOURCE_DIR}/src/${component}_internal.h")
+    endif()
     target_include_directories(${target}
         PUBLIC
             $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>

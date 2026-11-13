@@ -1,4 +1,4 @@
-#include "http_connection_fields.h"
+#include "http_internal.h"
 // HTTP/2 sans-I/O connection core.
 //
 // A pure protocol state machine: it never touches a socket, a coroutine, a timer,

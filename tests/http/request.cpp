@@ -457,10 +457,6 @@ concept request_allows_body = requires(request_type&& req) {
 static_assert(request_allows_body<const http_request&>);
 static_assert(!request_allows_body<http_request>);
 
-}  // namespace
-
-namespace {
-
 using ruvia::http_target_host_kind;
 using ruvia::http_target_origin;
 using ruvia::http_target_origin_action;

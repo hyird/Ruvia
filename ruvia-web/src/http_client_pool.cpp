@@ -44,7 +44,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 
 namespace ruvia::detail {
 namespace {

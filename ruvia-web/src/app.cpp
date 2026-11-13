@@ -25,7 +25,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 
 #if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"

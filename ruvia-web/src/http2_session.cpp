@@ -31,7 +31,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 
 namespace ruvia::detail {
 

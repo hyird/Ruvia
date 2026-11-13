@@ -26,8 +26,10 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include <asio.hpp>
@@ -43,6 +45,7 @@
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
 #include <asio/post.hpp>
+#include <asio/ssl.hpp>
 #include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 #include <openssl/bio.h>
@@ -92,7 +95,6 @@
 #endif
 
 #include <cassert>
-#include <variant>
 
 #include <asio/bind_executor.hpp>
 #include <asio/io_context.hpp>

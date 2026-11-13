@@ -36,7 +36,7 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 
 #if !defined(_WIN32)
 #include <fcntl.h>

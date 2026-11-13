@@ -6537,10 +6537,6 @@ static_assert(!ws_subprotocol_set_accepts_append_list<std::string>);
 static_assert(ws_subprotocol_set_accepts_append_offered_list<const std::string&>);
 static_assert(!ws_subprotocol_set_accepts_append_offered_list<std::string>);
 
-}  // namespace
-
-namespace {
-
 constexpr std::array<std::uint8_t, 16> nonce{
     't', 'h', 'e', ' ', 's', 'a', 'm', 'p', 'l', 'e', ' ', 'n', 'o', 'n', 'c', 'e'};
 
@@ -6938,9 +6934,6 @@ static_assert(ws_client_negotiation_accepts_fields<const std::vector<ruvia::http
 static_assert(!ws_client_negotiation_accepts_fields<std::vector<ruvia::http_header>>);
 static_assert(!ws_client_negotiation_accepts_fields<std::array<ruvia::http_header, 1>>);
 
-}  // namespace
-
-namespace {
 using namespace ruvia;
 
 bool zero_mask(void*, websocket_mask_key_type& key) noexcept {
@@ -6981,18 +6974,12 @@ struct server_endpoint final {
     websocket_connection protocol_;
 };
 
-}  // namespace
-
 // A direction without context takeover produces the same wire bytes whether
 // it borrows the shared codecs or owns a per-connection codec, and with the
 // shared codecs the connection's resource never holds codec state.
 
-namespace {
 using namespace ruvia;
 
-}  // namespace
-
-namespace {
 using namespace ruvia;
 
 struct mask_source {

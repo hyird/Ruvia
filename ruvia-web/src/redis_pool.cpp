@@ -30,7 +30,7 @@
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis.h"
 
-#include "route_table.h"
+#include "web_internal.h"
 namespace ruvia::detail {
 namespace {
 

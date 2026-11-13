@@ -5242,14 +5242,10 @@ static_assert(regular_request_view_accepts_headers<const std::vector<ruvia::http
 static_assert(!regular_request_view_accepts_headers<std::vector<ruvia::http_header_view>>);
 static_assert(!regular_request_view_accepts_headers<std::array<ruvia::http_header_view, 1>>);
 
-}  // namespace
-
 // Server-side CONNECT data before the accept/reject decision, graceful drain
 // round trip, SETTINGS_ENABLE_CONNECT_PROTOCOL from a client, and extension frames
 // on an established tunnel (RFC 9113 sections 5.5, 6.8, 8.5; RFC 8441 section 3;
 // RFC 9298 section 5 as updated by RFC 9931).
-
-namespace {
 
 constexpr std::uint8_t end_stream_flag = 0x1;
 constexpr std::uint8_t end_headers_flag = 0x4;
