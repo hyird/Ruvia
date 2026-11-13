@@ -450,6 +450,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
 - **Upgrade 协议选择**：`upgrade()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
+- **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `cancelled` 区分原因。
 
 句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样只返回句柄（取句柄规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_handle)）；句柄的 `with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
@@ -479,7 +480,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 | 请求级路由覆盖 | `http_client_request_options` 的 `authority_`（`host[:port]`，拒绝 userinfo）、`dial_host_` / `dial_port_`、`server_name_` 逐请求覆盖 alias 默认值；未设字段继承 alias，scheme 不可改。Host / `:authority` 取有效 authority，SNI 与证书名默认取其 host（IP 字面量不发 SNI、按 IP SAN 校验）；请求级拨号域名只在新建连接时解析并经 `address_validator_` |
 | 连接复用键 | 连接按 `(拨号 host, 拨号端口, TLS server name, ALPN 报价)` 复用，Host / `:authority` 不入键：HTTP/1 keep-alive 可跨 Host 复用；HTTP/2、HTTP/3 同一连接上发送其他 authority 时，由调用方保证所选证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。每个 alias 只有一个 TLS 上下文，QUIC 会话票据按路由隔离 |
 | 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；Alt-Svc 按实际路由记录与使用（见 5.3），Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
-| 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 Alt-Svc、无 DNS 快照（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`redirect_policy` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
+| 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 DNS 快照；Alt-Svc 照常按实际路由学习，替代端点同样经 `address_validator_` 校验（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`redirect_policy` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
 | 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
 | 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
 | SSRF 策略 | `address_validator_(numeric_ip, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |

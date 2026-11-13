@@ -164,6 +164,13 @@ task<void> http_client_request_body_writer::end(std::span<const http_header_view
 bool http_client_request_body_writer::complete() const noexcept {
     return state_ == nullptr || state_->upload_->output_.ended_;
 }
+bool http_client_request_body_writer::writable() const noexcept {
+    if (state_ == nullptr || !state_->upload_) {
+        return false;
+    }
+    const auto& output = state_->upload_->output_;
+    return !output.stopped_ && !output.ended_ && !output.end_requested_;
+}
 void http_client_request_body_writer::abandon() & noexcept {
     if (state_ == nullptr || !state_->upload_ || state_->upload_->output_.ended_ || state_->upload_->output_.stopped_) {
         return;

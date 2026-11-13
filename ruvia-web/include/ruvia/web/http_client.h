@@ -492,6 +492,11 @@ public:
     [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
     task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
+    // Whether write() and end() may still start: false once the content ended
+    // or end() started, after abandon(), and once the exchange stopped the
+    // upload itself (an early final response that completes the exchange, or a
+    // failure). A false result never turns a later response into a failure.
+    [[nodiscard]] bool writable() const noexcept;
     // Stops sending without failing the exchange: the request content stays
     // incomplete and response() remains consumable. HTTP/1 closes the
     // connection after the response; HTTP/2 and HTTP/3 end only the sending

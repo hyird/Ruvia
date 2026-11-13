@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -16,6 +17,7 @@
 #include <system_error>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio/buffer.hpp>
 #include <asio/co_spawn.hpp>
@@ -511,6 +513,67 @@ TEST(Ruvia, http_client_unreachable_alt_svc_falls_back_to_tcp_and_rests) {
         }
     });
 }
+
+TEST(Ruvia, http_client_origin_less_alias_follows_alt_svc_per_route) {
+    using namespace origin_routing_tests;
+    ruvia::test::tls_identity identity("origin.example");
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, &identity.context_);
+    asio::ip::udp::socket sink(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::size_t datagrams = 0;
+    bool sink_done = false;
+    asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        std::array<char, 2048> bytes{};
+        asio::ip::udp::endpoint sender;
+        for (;;) {
+            std::error_code error;
+            (void)co_await sink.async_receive_from(asio::buffer(bytes), sender, asio::redirect_error(asio::use_awaitable, error));
+            if (error) {
+                break;
+            }
+            ++datagrams;
+        }
+        sink_done = true; }, asio::detached);
+    const auto alternative_port = sink.local_endpoint().port();
+    peer.alt_svc_ = "h3=\":" + std::to_string(alternative_port) + "\"";
+    std::vector<std::uint16_t> validated_ports;
+    ruvia::http_client_config config{.base_url_ = "https://"};
+    config.address_validator_ = [&validated_ports](std::string_view, std::uint16_t port) {
+        validated_ports.push_back(port);
+        return true;
+    };
+    config.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = true};
+    config.connect_timeout_ = 300ms;
+    config.request_timeout_ = 5s;
+    config.tls_.ca_file_ = identity.ca_file_;
+    const auto route = [&peer] {
+        ruvia::http_client_request_options options;
+        options.authority_ = std::pmr::string("origin.example");
+        options.dial_host_ = std::pmr::string("127.0.0.1");
+        options.dial_port_ = ruvia::port_number(peer.port());
+        return options;
+    };
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        auto learned = co_await client.client().get("/learn").configure(route()).send();
+        EXPECT_TRUE(learned.protocol_version() == ruvia::http_protocol_version::http11);
+        (void)co_await learned.text();
+        // The route's advertised alternative is tried, then TCP serves the request.
+        auto fallback = co_await client.client().get("/fallback").configure(route()).send();
+        EXPECT_TRUE(fallback.protocol_version() == ruvia::http_protocol_version::http11);
+        const auto body = co_await fallback.text();
+        EXPECT_EQ(body.text(), "/fallback");
+        (void)co_await ruvia::sleep_for(worker, 100ms);
+        EXPECT_NE(datagrams, 0U);
+        std::error_code ignored;
+        sink.close(ignored);
+        while (!sink_done) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+        }
+    });
+    // The advertised endpoint passed the alias's address validator before dialing.
+    EXPECT_NE(std::ranges::find(validated_ports, alternative_port), validated_ports.end());
+}
 #endif
 
 TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_without_preallocation) {
@@ -661,11 +724,14 @@ TEST(Ruvia, http1_client_abandoned_upload_keeps_the_early_response) {
     config.request_timeout_ = 5s;
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
         auto exchange = co_await client.client().post("/early").upload();
+        EXPECT_TRUE(exchange.body().writable());
         co_await exchange.body().write(std::string_view("partial"));
         auto response = co_await exchange.response();
         EXPECT_TRUE(response.ok());
         exchange.body().abandon();
         EXPECT_FALSE(exchange.body().complete());
+        EXPECT_FALSE(exchange.body().writable());
+        EXPECT_THROW((void)exchange.body().write(std::string_view("late")), ruvia::http_client_error);
         const auto body = co_await response.text();
         EXPECT_EQ(body.text(), "/early");
         // The unfinished request leaves the connection unusable.

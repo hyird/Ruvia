@@ -5,6 +5,7 @@
 #include <map>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
@@ -23,6 +24,7 @@
 #include "client/http_client_response_memory.h"
 #include "client/http_client_worker_limits.h"
 #include "integration/named_capability.h"
+#include "tls/tls_credential.h"
 
 namespace ruvia::detail {
 
@@ -70,6 +72,9 @@ private:
     };
     using alias_map_type = std::pmr::map<std::pmr::string, alias_binding, std::less<>>;
     struct origin_preparation;
+    // Startup aliases without a ca_file_ share system_trust_.
+    [[nodiscard]] http_client_config_storage startup_config(const http_client_definition_type& definition);
+    [[nodiscard]] http_client_config_storage startup_config(const http_client_config& config);
     using preparation_owner_type = std::unique_ptr<origin_preparation, pmr_object_deleter<origin_preparation>>;
 
     [[nodiscard]] task<void> prepare_origin(preparation_owner_type input, operation_options options);
@@ -88,6 +93,9 @@ private:
     alias_map_type aliases_;
     task_scope retirements_;
     stop_source preparation_stop_;
+    // The system trust store, read once for every alias without a ca_file_:
+    // OpenSSL shares one X509_STORE across their contexts.
+    std::optional<tls_trust_store> system_trust_;
     std::size_t next_origin_order_{};
     bool closing_{false};
     operation_scope preparations_;

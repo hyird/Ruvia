@@ -77,8 +77,8 @@ inline void validate_http_client_versions(const http_client_versions& versions, 
     const auto scheme = spec.scheme_;
     if (url.empty()) {
         // An egress alias without a fixed origin: every destination comes
-        // from a request, so the dial addresses must pass a validator, and no
-        // origin-scoped state (cookies, Alt-Svc) exists.
+        // from a request, so the dial addresses (Alt-Svc alternatives included)
+        // must pass a validator, and no origin-scoped cookie jar exists.
         if (!config.address_validator_) {
             throw std::invalid_argument("HTTP client alias without a fixed origin requires an address_validator_");
         }

@@ -29,22 +29,18 @@ template <typename config_type>
     return process_resource();
 }
 
-[[nodiscard]] const http_client_config& client_config(const http_client_config& config) noexcept {
-    return config;
-}
-
-[[nodiscard]] const http_client_config_storage& client_config(const http_client_definition_type& definition) noexcept {
-    return definition.config_;
-}
 }  // namespace
 
 struct http_client_registry::origin_preparation final {
     origin_preparation(const http_client_config& source, const worker_handle& worker,
-        stop_token owner_stop, stop_token user_stop)
+        stop_token owner_stop, stop_token user_stop, const std::optional<tls_trust_store>& system_trust)
         : alias_(source.alias_.view(), process_resource()),
           config_(source, process_resource(), client_tls_files::keep_paths),
           cancellation_(owner_stop, user_stop) {
         if (config_.scheme_ == http_scheme::https) {
+            if (!config_.tls_.ca_file_.has_value()) {
+                config_.tls_.trust_store_ = system_trust;
+            }
             const auto password = source.tls_.identity_
                                       ? std::string_view(source.tls_.identity_->private_key_password_)
                                       : std::string_view{};
@@ -87,13 +83,33 @@ void http_client_registry::initialize(std::span<const config_type> configs) {
     for (const auto& config : configs) {
         auto pool = std::allocate_shared<http_client_pool>(
             std::pmr::polymorphic_allocator<http_client_pool>(process_resource()), io_context_, worker_,
-            http_client_config_storage(client_config(config), process_resource()), services_);
+            startup_config(config), services_);
         aliases_.emplace(std::pmr::string(std::string_view(config.alias_), process_resource()),
             alias_binding{std::move(pool), next_origin_order_++});
     }
 }
 
 http_client_registry::~http_client_registry() = default;
+
+http_client_config_storage http_client_registry::startup_config(const http_client_definition_type& definition) {
+    // Application definitions were parsed once for every worker.
+    return http_client_config_storage(definition.config_, process_resource());
+}
+
+http_client_config_storage http_client_registry::startup_config(const http_client_config& config) {
+    http_client_config_storage storage(config, process_resource(), client_tls_files::keep_paths);
+    if (storage.scheme_ == http_scheme::https) {
+        if (!storage.tls_.ca_file_.has_value()) {
+            if (!system_trust_.has_value()) {
+                system_trust_ = tls_trust_store::load_default();
+            }
+            storage.tls_.trust_store_ = system_trust_;
+        }
+        storage.tls_.parse_files(config.tls_.identity_ ? std::string_view(config.tls_.identity_->private_key_password_)
+                                                       : std::string_view{});
+    }
+    return storage;
+}
 
 void http_client_registry::require_mutable() const {
     if (!worker_.is_current()) {
@@ -109,7 +125,7 @@ task<void> http_client_registry::upsert(const http_client_config& config, operat
     validate_operation_options(options);
     validate_capability_alias(config.alias_.view(), "HTTP client alias must not be empty");
     auto input = make_pmr_object<origin_preparation>(
-        process_resource(), config, worker_, preparation_stop_.token(), options.stop_token_);
+        process_resource(), config, worker_, preparation_stop_.token(), options.stop_token_, system_trust_);
     return make_scoped_operation(preparations_, prepare_origin(std::move(input), std::move(options)));
 }
 
@@ -140,6 +156,9 @@ task<void> http_client_registry::prepare_origin(preparation_owner_type input, op
         require_prepared(stop, timeout);
         if (failure) {
             std::rethrow_exception(failure);
+        }
+        if (!input->config_.tls_.ca_file_.has_value() && !system_trust_.has_value()) {
+            system_trust_ = input->config_.tls_.trust_store_;
         }
     }
     auto replacement = std::allocate_shared<http_client_pool>(

@@ -92,6 +92,7 @@ struct client_tls_config_storage final {
 
     // Copies share the parsed trust store and identity; no file is re-read.
     client_tls_config_storage(const client_tls_config_storage& source_value, std::pmr::memory_resource* resource);
+    // Reads the client identity, and the trust store unless one was supplied.
     void parse_files(std::string_view private_key_password);
 
     // SNI and verified peer name: the configured override, else the origin host.

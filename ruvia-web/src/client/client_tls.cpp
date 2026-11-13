@@ -158,7 +158,10 @@ client_tls_config_storage::client_tls_config_storage(
 }
 
 void client_tls_config_storage::parse_files(std::string_view private_key_password) {
-    trust_store_ = ca_file_.has_value() ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default();
+    // An owner may supply its shared system trust store; it is never re-read here.
+    if (!trust_store_.has_value()) {
+        trust_store_ = ca_file_.has_value() ? load_tls_trust_store(*ca_file_) : tls_trust_store::load_default();
+    }
     if (identity_.has_value()) {
         certificate_ = load_tls_certificate(*identity_, private_key_password);
     }

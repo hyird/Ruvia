@@ -1386,9 +1386,10 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
 
 void http_client_pool::observe_alt_svc(const http_client_route& route, std::span<const http_header> fields) {
 #ifdef RUVIA_ENABLE_HTTP3
-    // Only TLS-authenticated responses of a fixed-origin alias, for requests
-    // that may use HTTP/3 beside a TCP version, advertise alternatives.
-    if (config_.scheme_ != http_scheme::https || !config_.fixed_origin_ || !route.versions_.http3_ ||
+    // Only TLS-authenticated responses, for requests that may use HTTP/3 beside
+    // a TCP version, advertise alternatives. Entries are keyed by the actual
+    // route, so an alias without a fixed origin learns them per destination.
+    if (config_.scheme_ != http_scheme::https || !route.versions_.http3_ ||
         (!route.versions_.http1_ && !route.versions_.http2_)) {
         return;
     }
@@ -1575,7 +1576,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         host.assign(route.dial_host_);
         port = route.dial_port_;
     } else {
-        if (request.is_upgrade() || !config_.fixed_origin_) {
+        if (request.is_upgrade()) {
             co_return false;
         }
         const auto now = std::chrono::steady_clock::now();
