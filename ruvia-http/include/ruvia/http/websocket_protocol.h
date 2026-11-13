@@ -198,7 +198,10 @@ enum class websocket_frame_submit_status : std::uint8_t {
     invalid_opcode,
     message_too_large,
     invalid_text_payload,
-    control_frame_too_large
+    control_frame_too_large,
+    // A fragmented data message is still open; only control frames and its
+    // own fragments may be submitted until its final fragment.
+    message_in_progress
 };
 enum class websocket_close_submit_status : std::uint8_t {
     accepted,

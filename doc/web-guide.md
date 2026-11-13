@@ -479,7 +479,7 @@ ruvia::app()
 | `respond(http_response)` | 接管响应的状态、首部、Cookie 与正文/文件，在回调返回后发送；不合并尚未消费的 `draft()`，也不立即提交到线面 |
 | `tunnel_requested()` | CONNECT / 扩展 CONNECT（RFC 9110 §9.3.6、RFC 8441、RFC 9220），或无正文且提供 `Upgrade` 的 HTTP/1.1 请求（RFC 9110 §7.8）时为 `true` |
 | `co_await accept_tunnel(status = http_status::ok, config = {})` | 提交成功头并返回 `http_tunnel*`：CONNECT 须为 2xx，HTTP/1.1 Upgrade 须为 `101`；`101` 只能选择客户端提供的协议。非隧道请求或响应已提交时抛 `std::logic_error`。`config` 为 `http_tunnel_route_config`，复用路由隧道的协商校验 |
-| `co_await accept_websocket(config = {})` | 对提供 WebSocket Upgrade / Extended CONNECT 的请求执行正常握手，返回借用的 `websocket*`；握手拒绝返回 `nullptr` 并选择错误响应 |
+| `co_await accept_websocket(config = {})` | 对提供 WebSocket Upgrade / Extended CONNECT 的请求执行正常握手，返回 `websocket_accept_result`：`session()` 为借用的 `websocket*`；握手拒绝时 `rejection()` 给出所选错误响应的 `status_` 与失败检查 `code_`（如缺失或不支持版本为 `400` / `unsupported_websocket_version`），该响应在回调返回后发出并按此状态记入访问日志 |
 | `stop_token()` | 应用停机时请求停止；非隧道请求还在客户端放弃时请求（HTTP/1 请求正文读完后连接断开，HTTP/2 / HTTP/3 流被重置） |
 | `reset()` / `reset(http2_error_code)` / `reset(http3_error_code)` | 提交前即可终结当前流；HTTP/1 关闭连接，HTTP/2、HTTP/3 默认分别为 CANCEL、H3_REQUEST_CANCELLED |
 

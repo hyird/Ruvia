@@ -1129,11 +1129,10 @@ task<void> http3_session::dispatch_one(std::int64_t stream_id) {
                     auto commit_websocket = [this, stream, signal, &request, &head, &admission, &options](
                                                 context& context_value, const websocket_route_endpoint& endpoint,
                                                 std::span<const http_header_view> headers)
-                        -> task<std::optional<websocket_upgrade_commit<http3_tunnel_transport>>> {
+                        -> task<websocket_upgrade_attempt<http3_tunnel_transport>> {
                         const auto validation = validate_http3_websocket_handshake(head, request, endpoint.handshake_validation());
                         if (const auto* failure = validation.failure()) {
-                            reject_request_stream_websocket(context_value, *failure);
-                            co_return std::nullopt;
+                            co_return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = codec().submit_websocket_handshake(stream->id(), request, validation,
                             {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});

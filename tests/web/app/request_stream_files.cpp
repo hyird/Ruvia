@@ -386,7 +386,7 @@ TEST(Ruvia, independent_request_stream_retires_unstarted_file_and_accept_tasks_w
     ruvia::static_root root(directory.path(), {.file_types_ = {.kind_ = ruvia::static_file_type_policy::kind::all}});
     std::array<std::optional<ruvia::task<ruvia::http_response>>, 2> files;
     std::optional<ruvia::task<ruvia::http_tunnel*>> tunnel;
-    std::optional<ruvia::task<ruvia::websocket*>> websocket;
+    std::optional<ruvia::task<ruvia::websocket_accept_result>> websocket;
     with_server([&](ruvia::request_stream& stream) -> ruvia::task<void> {
         files[0].emplace(stream.file({.path_ = path}));
         files[1].emplace(stream.static_file(root, {.relative_path_ = "cold.bin"}));

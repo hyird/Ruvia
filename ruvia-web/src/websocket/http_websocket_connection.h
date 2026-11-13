@@ -109,7 +109,8 @@ public:
     [[nodiscard]] task<std::optional<websocket_message>> read(operation_options options = {});
     // A cancelled or timed-out output operation aborts the session, since a
     // partly written frame cannot be withdrawn.
-    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, operation_options options = {});
+    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, websocket_write_extent extent,
+        operation_options options);
     // Claims only the write lane. A read already pending observes the peer
     // Close and returns nullopt; otherwise close() reads until it arrives.
     task<void> close(::ruvia::websocket_close_options options = {}, operation_options operation = {});
@@ -299,19 +300,28 @@ private:
     // could still copy or send.
     class borrowed_frame_guard_type final {
     public:
-        borrowed_frame_guard_type(
-            server_websocket_connection& connection, websocket_opcode opcode, std::string_view payload, bool compress)
+        borrowed_frame_guard_type(server_websocket_connection& connection, websocket_opcode opcode,
+            std::string_view payload, bool compress, websocket_write_extent extent)
             : connection_(&connection) {
+            const auto submit = [&](bool borrow) {
+                if (extent == websocket_write_extent::message) {
+                    return borrow ? connection.protocol_.submit_borrowed_frame(opcode, payload, compress)
+                                  : connection.protocol_.submit_frame(opcode, payload, compress);
+                }
+                const bool final = extent == websocket_write_extent::final_fragment;
+                return borrow ? connection.protocol_.submit_borrowed_fragment(opcode, payload, final, compress)
+                              : connection.protocol_.submit_fragment(opcode, payload, final, compress);
+            };
             const auto status = [&] {
                 if constexpr (native_stream) {
                     if constexpr (requires(stream_type& value) { value.next_layer(); }) {
                         if (payload.size() + 14 <= websocket_retained_buffer_bytes) {
-                            return connection.protocol_.submit_frame(opcode, payload, compress);
+                            return submit(false);
                         }
                     }
-                    return connection.protocol_.submit_borrowed_frame(opcode, payload, compress);
+                    return submit(true);
                 } else {
-                    return connection.protocol_.submit_frame(opcode, payload, compress);
+                    return submit(false);
                 }
             }();
             if (!connection.accept_submitted_frame(status)) {
@@ -389,7 +399,7 @@ private:
     void heartbeat_tick(std::int64_t now) noexcept;
     task<std::optional<websocket_message>> read_owned(read_guard_type read_guard, operation_options options);
     task<void> write_owned(websocket_opcode opcode, std::string_view payload, write_operation_lease_type write_lease,
-        bool compress, operation_options options);
+        bool compress, websocket_write_extent extent, operation_options options);
     task<void> close_owned(::ruvia::websocket_close_options options, operation_options operation,
         write_operation_lease_type write_lease);
     task<void> write_heartbeat_ping();
@@ -766,15 +776,16 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
 }
 
 template <typename stream_type>
-task<void> server_websocket_connection<stream_type>::write(
-    websocket_opcode opcode, std::string_view payload_value, bool compress, operation_options options) {
+task<void> server_websocket_connection<stream_type>::write(websocket_opcode opcode, std::string_view payload_value,
+    bool compress, websocket_write_extent extent, operation_options options) {
     require_current_worker();
-    return write_owned(opcode, payload_value, write_operation_lease_type(*this), compress, std::move(options));
+    return write_owned(opcode, payload_value, write_operation_lease_type(*this), compress, extent, std::move(options));
 }
 
 template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcode opcode,
-    std::string_view payload_value, write_operation_lease_type write_lease, bool compress, operation_options options) {
+    std::string_view payload_value, write_operation_lease_type write_lease, bool compress, websocket_write_extent extent,
+    operation_options options) {
     require_current_worker();
     std::optional<operation_interrupt> interrupted;
     {
@@ -792,7 +803,7 @@ task<void> server_websocket_connection<stream_type>::write_owned(websocket_opcod
             write_guard_type write_guard(*this);
             // The caller keeps the payload alive until this write completes, so an
             // uncompressed frame is gathered from it instead of being copied.
-            borrowed_frame_guard_type borrowed_frame(*this, opcode, payload_value, compress);
+            borrowed_frame_guard_type borrowed_frame(*this, opcode, payload_value, compress, extent);
             if (borrowed_frame.submitted()) {
                 co_await flush_protocol_output_now();
                 borrowed_frame.release();
@@ -936,6 +947,8 @@ bool server_websocket_connection<stream_type>::accept_submitted_frame(websocket_
             throw std::invalid_argument("websocket text payload is not valid UTF-8");
         case websocket_frame_submit_status::control_frame_too_large:
             throw std::invalid_argument("websocket control frame is too large");
+        case websocket_frame_submit_status::message_in_progress:
+            throw std::logic_error("a fragmented websocket message is in progress");
     }
     throw std::logic_error("unexpected websocket frame submit status");
 }

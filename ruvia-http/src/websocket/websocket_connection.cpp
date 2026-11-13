@@ -1,5 +1,6 @@
 #include "ruvia/http/websocket_connection.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -552,6 +553,78 @@ void add_saturating(std::uint64_t& total, std::size_t bytes_value) noexcept {
     total += bytes_value < remaining ? bytes_value : remaining;
 }
 
+// Where a data frame sits in its message (RFC 6455 section 5.4): only the
+// first frame carries the opcode, only the last one sets FIN.
+enum class websocket_fragment_position : std::uint8_t {
+    whole,
+    first,
+    middle,
+    last,
+};
+
+// UTF-8 of a text message submitted in fragments: a code point may straddle
+// fragments, so the bytes of one left incomplete wait for the next fragment.
+class websocket_utf8_fragments final {
+public:
+    [[nodiscard]] bool append(std::string_view fragment) noexcept {
+        std::size_t index = 0;
+        if (pending_size_ != 0) {
+            const auto lead = static_cast<unsigned char>(pending_[0]);
+            const std::size_t length = lead >= 0xF0 ? 4 : lead >= 0xE0 ? 3
+                                                                       : 2;
+            while (pending_size_ < length && index < fragment.size()) {
+                pending_[pending_size_++] = fragment[index++];
+            }
+            const auto sequence = scan_utf8_sequence(std::string_view(pending_.data(), pending_size_), 0);
+            if (pending_size_ < length) {
+                return sequence.length_ == pending_size_;
+            }
+            if (!sequence.well_formed_) {
+                return false;
+            }
+            pending_size_ = 0;
+        }
+        while (index < fragment.size()) {
+            const auto lead = static_cast<unsigned char>(fragment[index]);
+            if (lead < 0x80) {
+                ++index;
+                continue;
+            }
+            const auto sequence = scan_utf8_sequence(fragment, index);
+            if (sequence.well_formed_) {
+                index += sequence.length_;
+                continue;
+            }
+            // A valid lead and continuation bytes cut off by the fragment end.
+            if (index + sequence.length_ != fragment.size() || lead < 0xC2 || lead > 0xF4) {
+                return false;
+            }
+            for (; index < fragment.size(); ++index) {
+                pending_[pending_size_++] = fragment[index];
+            }
+        }
+        return true;
+    }
+
+    [[nodiscard]] bool complete() const noexcept {
+        return pending_size_ == 0;
+    }
+
+private:
+    std::array<char, 4> pending_{};
+    std::size_t pending_size_{0};
+};
+
+// The data message being submitted as fragments.
+struct websocket_outbound_fragments final {
+    websocket_opcode opcode_;
+    // RSV1 went out on the first frame: every fragment continues one
+    // permessage-deflate stream.
+    bool compressed_;
+    std::size_t size_;
+    websocket_utf8_fragments utf8_;
+};
+
 }  // namespace
 
 class websocket_connection::impl_type final {
@@ -657,7 +730,8 @@ public:
     }
 
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
-        websocket_payload_storage storage = websocket_payload_storage::copy) {
+        websocket_payload_storage storage = websocket_payload_storage::copy,
+        websocket_fragment_position position = websocket_fragment_position::whole) {
         std::optional<std::pmr::string> owned_payload;
         if (detail::http_text_overlaps(payload_value, out_buffer_.view())) {
             // A plan may be its own append source. Snapshot it before prepare()
@@ -672,8 +746,11 @@ public:
             throw std::runtime_error("failed to generate WebSocket client mask key");
         }
         const bool borrow = storage == websocket_payload_storage::borrow && !masked;
-        const auto header_size =
-            detail::encode_websocket_frame_header(header, opcode, payload_value.size(), rsv1, masked);
+        const bool continuation =
+            position == websocket_fragment_position::middle || position == websocket_fragment_position::last;
+        const bool final = position == websocket_fragment_position::whole || position == websocket_fragment_position::last;
+        const auto header_size = detail::encode_websocket_frame_header(header,
+            continuation ? std::uint8_t{0} : static_cast<std::uint8_t>(opcode), final, payload_value.size(), rsv1, masked);
         const auto mask_size = masked ? mask.size() : std::size_t{0};
         std::size_t additional_size = 0;
         for (const auto size : {borrowed_output_.size(), header_size, mask_size, borrow ? 0 : payload_value.size()}) {
@@ -759,6 +836,9 @@ public:
         if (!data_frame && !control_frame) {
             return websocket_frame_submit_status::invalid_opcode;
         }
+        if (data_frame && outbound_fragments_.has_value()) {
+            return websocket_frame_submit_status::message_in_progress;
+        }
         if (data_frame && message_limit_.exceeds(payload_value.size())) {
             return websocket_frame_submit_status::message_too_large;
         }
@@ -809,6 +889,77 @@ public:
         return websocket_frame_submit_status::accepted;
     }
 
+    [[nodiscard]] websocket_frame_submit_status submit_fragment(websocket_opcode opcode, std::string_view payload_value,
+        bool final, bool compress, websocket_payload_storage storage) {
+        if (close_phase_ != close_phase_type::open) {
+            return websocket_frame_submit_status::not_open;
+        }
+        if ((opcode != websocket_opcode::text && opcode != websocket_opcode::binary) ||
+            (outbound_fragments_.has_value() && outbound_fragments_->opcode_ != opcode)) {
+            return websocket_frame_submit_status::invalid_opcode;
+        }
+        const bool first = !outbound_fragments_.has_value();
+        const std::size_t sent = first ? 0 : outbound_fragments_->size_;
+        if (message_limit_.addition_exceeds(sent, payload_value.size())) {
+            return websocket_frame_submit_status::message_too_large;
+        }
+        auto utf8 = first ? websocket_utf8_fragments{} : outbound_fragments_->utf8_;
+        if (opcode == websocket_opcode::text && (!utf8.append(payload_value) || (final && !utf8.complete()))) {
+            return websocket_frame_submit_status::invalid_text_payload;
+        }
+        bool compressed = first ? compress && deflate_.has_value() : outbound_fragments_->compressed_;
+        const auto position = first ? (final ? websocket_fragment_position::whole : websocket_fragment_position::first)
+                                    : (final ? websocket_fragment_position::last : websocket_fragment_position::middle);
+        try {
+            if (compressed) {
+                outbound_deflated_.clear();
+                if (deflate_->compress_fragment(payload_value, first, final, outbound_deflated_)) {
+                    payload_value = outbound_deflated_;
+                } else if (first) {
+                    // Nothing went out yet: send this message uncompressed.
+                    compressed = false;
+                    deflate_->discard_compression();
+                } else {
+                    throw std::runtime_error("failed to compress a WebSocket message fragment");
+                }
+            }
+            append_frame(opcode, payload_value, first && compressed,
+                compressed ? websocket_payload_storage::copy : storage, position);
+        } catch (...) {
+            if (compressed) {
+                http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
+                // Earlier fragments already advanced the peer's inflater, so a
+                // later fragment cannot be retried; nor can the first one once
+                // resetting its trial fails.
+                bool reusable = first;
+                if (first) {
+                    try {
+                        deflate_->discard_compression();
+                    } catch (...) {
+                        reusable = false;
+                    }
+                }
+                if (!reusable) {
+                    close_phase_ = close_phase_type::transport_end_ready;
+                    record_termination(websocket_termination::aborted);
+                }
+            }
+            throw;
+        }
+        if (compressed) {
+            http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
+        }
+        if (final) {
+            outbound_fragments_.reset();
+        } else if (first) {
+            outbound_fragments_.emplace(websocket_outbound_fragments{opcode, compressed, payload_value.size(), utf8});
+        } else {
+            outbound_fragments_->size_ = sent + payload_value.size();
+            outbound_fragments_->utf8_ = utf8;
+        }
+        return websocket_frame_submit_status::accepted;
+    }
+
     std::pmr::memory_resource* resource_;
     std::optional<http_io_buffer> owned_input_;
     http_io_buffer* input_;
@@ -830,6 +981,7 @@ public:
     std::optional<detail::websocket_deflate> deflate_;
     std::pmr::string inbound_inflated_;
     std::pmr::string outbound_deflated_;
+    std::optional<websocket_outbound_fragments> outbound_fragments_;
 
     websocket_connection_role role_{websocket_connection_role::server};
     websocket_mask_key_generator_type mask_key_generator_{nullptr};
@@ -1124,6 +1276,16 @@ websocket_frame_submit_status websocket_connection::submit_frame(
 websocket_frame_submit_status websocket_connection::submit_borrowed_frame(
     websocket_opcode opcode, std::string_view payload_value, bool compress) {
     return impl_->submit_frame(opcode, payload_value, compress, websocket_payload_storage::borrow);
+}
+
+websocket_frame_submit_status websocket_connection::submit_fragment(
+    websocket_opcode opcode, std::string_view payload_value, bool final, bool compress) {
+    return impl_->submit_fragment(opcode, payload_value, final, compress, websocket_payload_storage::copy);
+}
+
+websocket_frame_submit_status websocket_connection::submit_borrowed_fragment(
+    websocket_opcode opcode, std::string_view payload_value, bool final, bool compress) {
+    return impl_->submit_fragment(opcode, payload_value, final, compress, websocket_payload_storage::borrow);
 }
 
 websocket_close_submit_status websocket_connection::submit_close(

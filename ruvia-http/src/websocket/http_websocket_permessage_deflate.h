@@ -70,6 +70,25 @@ public:
         return websocket_deflate_message(*deflater_, input, out, resource_);
     }
 
+    // Compresses one fragment of a message sent as several frames. The whole
+    // message is one DEFLATE stream, so it uses a private codec even where
+    // whole messages borrow the shared one, and starts from an empty
+    // dictionary at its first fragment unless context takeover applies.
+    bool compress_fragment(std::string_view input, bool first, bool final, std::pmr::string& out) {
+        if (deflater_ == nullptr) {
+            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_,
+                deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
+                deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
+            if (!deflater_->initialized()) {
+                deflater_.reset();
+                return false;
+            }
+        } else if (first && !send_takeover_ && !deflater_->reset()) {
+            return false;
+        }
+        return websocket_deflate_message(*deflater_, input, out, resource_, final);
+    }
+
     websocket_inflate_result decompress(
         std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit) {
         if (!receive_takeover_ && shared_ != nullptr) {

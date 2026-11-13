@@ -299,17 +299,17 @@ task<http_tunnel*> request_stream::accept_tunnel_impl(http_status_code status, h
     co_return co_await (*accept_tunnel_)(status, config);
 }
 
-task<websocket*> request_stream::accept_websocket(websocket_route_config config) & {
+task<websocket_accept_result> request_stream::accept_websocket(websocket_route_config config) & {
     return make_scoped_operation(operation_scope_, accept_websocket_impl(std::move(config)));
 }
 
-task<websocket*> request_stream::accept_websocket_impl(websocket_route_config config) {
+task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_route_config config) {
     // Validated before any state check so an invalid configuration selects nothing.
     const auto endpoint = detail::route_endpoint::websocket(process_resource(), nullptr, std::move(config));
     co_return co_await accept_websocket_endpoint(*endpoint.websocket());
 }
 
-task<websocket*> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
+task<websocket_accept_result> request_stream::accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint) {
     auto lease = detail::claim_operation_lane(detail::streaming_access::output_lane(response_),
         "response stream output operation is already in progress");
     if (accept_websocket_ == nullptr) {

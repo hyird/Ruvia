@@ -111,6 +111,25 @@ public:
     template <detail::http_temporary_owning_char_string payload_type>
     websocket_frame_submit_status submit_borrowed_frame(
         websocket_opcode opcode, payload_type&& payload, bool compress = true) = delete;
+    // One fragment of a data message sent as several frames (RFC 6455
+    // section 5.4). The first fragment opens the message with `opcode`, and
+    // with RSV1 when `compress` selects permessage-deflate; later fragments are
+    // continuation frames of the same opcode, and `final` ends the message.
+    // Ping, Pong and Close may be submitted between fragments; another data
+    // message reports message_in_progress until the final fragment. A
+    // compressed message continues one DEFLATE stream across its fragments,
+    // each ending at a sync flush (RFC 7692 section 7.2.1). Text is validated
+    // across fragment boundaries and the message limit covers the whole
+    // message. A rejected fragment leaves the message open.
+    [[nodiscard]] websocket_frame_submit_status submit_fragment(
+        websocket_opcode opcode, std::string_view payload, bool final, bool compress = true);
+    // submit_fragment() that borrows an uncompressed, unmasked payload like
+    // submit_borrowed_frame().
+    [[nodiscard]] websocket_frame_submit_status submit_borrowed_fragment(
+        websocket_opcode opcode, std::string_view payload, bool final, bool compress = true);
+    template <detail::http_temporary_owning_char_string payload_type>
+    websocket_frame_submit_status submit_borrowed_fragment(
+        websocket_opcode opcode, payload_type&& payload, bool final, bool compress = true) = delete;
     [[nodiscard]] websocket_close_submit_status submit_close(
         websocket_close_code code, std::string_view reason);
 

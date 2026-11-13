@@ -19,6 +19,7 @@ namespace ruvia {
 namespace detail {
 class http_client_websocket_state;
 }
+class http_client_websocket_message_writer;
 
 // Owns one WebSocket over the registered origin's HTTP/1 Upgrade or HTTP/2/3
 // Extended CONNECT. Moving preserves cold and running operations. Destruction
@@ -100,6 +101,12 @@ public:
     task<void> close(websocket_close_options = {}, operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
+    // A data message sent as several frames, with the contract of
+    // websocket::begin_text() / begin_binary().
+    [[nodiscard]] http_client_websocket_message_writer begin_text(websocket_send_options options = {}) &;
+    http_client_websocket_message_writer begin_text(websocket_send_options = {}) && = delete;
+    [[nodiscard]] http_client_websocket_message_writer begin_binary(websocket_send_options options = {}) &;
+    http_client_websocket_message_writer begin_binary(websocket_send_options = {}) && = delete;
 
     // Session state, read like the server websocket's accessors: use on the
     // origin's worker only (other workers terminate); a moved-from owner
@@ -126,10 +133,46 @@ private:
     friend class http_client_websocket_request;
     explicit http_client_websocket(std::shared_ptr<detail::http_client_websocket_state> state) noexcept;
     [[nodiscard]] task<void> write(websocket_opcode opcode, std::string_view payload,
-        websocket_send_options options, operation_options operation);
+        websocket_send_options options, operation_options operation,
+        detail::websocket_write_extent extent = detail::websocket_write_extent::message);
+    [[nodiscard]] http_client_websocket_message_writer begin_message(websocket_opcode opcode, websocket_send_options options);
     [[nodiscard]] task<void> write_owned(websocket_opcode opcode, std::pmr::string&& payload,
         websocket_send_options options, operation_options operation);
     std::shared_ptr<detail::http_client_websocket_state> state_;
+};
+
+// The client counterpart of websocket_message_writer, with the same contract.
+// It keeps the session alive; use and destroy it on the origin's worker.
+class http_client_websocket_message_writer final {
+public:
+    http_client_websocket_message_writer(http_client_websocket_message_writer&& other) noexcept;
+    http_client_websocket_message_writer& operator=(http_client_websocket_message_writer&&) = delete;
+    http_client_websocket_message_writer(const http_client_websocket_message_writer&) = delete;
+    http_client_websocket_message_writer& operator=(const http_client_websocket_message_writer&) = delete;
+    ~http_client_websocket_message_writer();
+
+    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
+    task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
+    task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+
+private:
+    friend class http_client_websocket;
+    http_client_websocket_message_writer(std::shared_ptr<detail::http_client_websocket_state> state,
+        std::uint64_t message_id, websocket_opcode opcode, websocket_send_options options) noexcept;
+    [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
+    [[nodiscard]] bool message_open() const noexcept;
+
+    std::shared_ptr<detail::http_client_websocket_state> state_;
+    std::uint64_t message_id_;
+    websocket_opcode opcode_;
+    websocket_send_options options_;
 };
 
 // Every input is owned before connect() returns its cold operation. The builder

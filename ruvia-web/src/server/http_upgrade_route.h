@@ -147,11 +147,25 @@ namespace ruvia::detail {
     };
 }
 
-inline void reject_request_stream_websocket(context& context_value, const websocket_handshake_failure& failure) {
-    auto response = context_value.error(copy_http_protocol_error_info(context_value.arena(), failure.protocol_error()));
+// Selects the refusal response the server sends after the callback returns.
+[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(
+    context& context_value, const websocket_handshake_failure& failure) {
+    const auto error = failure.protocol_error();
+    auto response = context_value.error(copy_http_protocol_error_info(context_value.arena(), error));
     failure.apply_required_response_headers(response);
+    const websocket_rejection rejection{response.status(), error.code()};
     context_access::set_response(context_value, std::move(response));
+    return rejection;
 }
+
+struct websocket_accept_access final {
+    [[nodiscard]] static websocket_accept_result accepted(websocket& session) noexcept {
+        return websocket_accept_result(session);
+    }
+    [[nodiscard]] static websocket_accept_result rejected(websocket_rejection rejection) noexcept {
+        return websocket_accept_result(rejection);
+    }
+};
 
 // `datagrams` is the route's http_tunnel_route_config::datagrams_, which
 // CONNECT-UDP (`udp`) always sets.
@@ -265,6 +279,10 @@ private:
     std::pmr::string subprotocol_;
 };
 
+// A committed upgrade, or the refusal its handshake check selected.
+template <typename stream_type>
+using websocket_upgrade_attempt = std::variant<websocket_upgrade_commit<stream_type>, websocket_rejection>;
+
 template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
 struct tunnel_upgrade_session_operation final {
     using session_type = http_tunnel_session<transport_type>;
@@ -318,13 +336,14 @@ struct tunnel_upgrade_session_operation final {
         co_return &session_->tunnel();
     }
 
-    [[nodiscard]] task<websocket*> accept_request_stream_websocket(
+    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(
         context& context_value, const websocket_route_endpoint& websocket_endpoint) {
         const auto headers = websocket_response_headers(context_value);
-        auto committed = co_await commit_websocket_(context_value, websocket_endpoint, headers);
-        if (!committed) {
-            co_return nullptr;
+        auto attempt = co_await commit_websocket_(context_value, websocket_endpoint, headers);
+        if (const auto* rejection = std::get_if<websocket_rejection>(&attempt)) {
+            co_return websocket_accept_access::rejected(*rejection);
         }
+        auto* committed = std::get_if<websocket_upgrade_commit<transport_type>>(&attempt);
         try {
             websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
                 websocket_endpoint.lifecycle(),
@@ -339,7 +358,7 @@ struct tunnel_upgrade_session_operation final {
         }
         websocket_.emplace(*websocket_session_);
         scanner_entry_.enter_long_lived();
-        co_return &websocket_->value_;
+        co_return websocket_accept_access::accepted(websocket_->value_);
     }
 
     [[nodiscard]] task<void> operator()(context& context_value) {
@@ -352,7 +371,7 @@ struct tunnel_upgrade_session_operation final {
                 return accept_request_stream_websocket(context_value, endpoint);
             };
             const auto websocket_accept_ref =
-                callback_access::bind<task<websocket*>(const websocket_route_endpoint&)>(accept_websocket);
+                callback_access::bind<task<websocket_accept_result>(const websocket_route_endpoint&)>(accept_websocket);
             std::exception_ptr failure;
             try {
                 co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);

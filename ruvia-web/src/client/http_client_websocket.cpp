@@ -170,16 +170,39 @@ public:
         state->heartbeat_timer_.cancel();
     }
 
+    // The open fragmented message, which owns the data lane until its final
+    // fragment; the sequence tells its writer apart from a later one.
+    [[nodiscard]] std::uint64_t begin_fragmented_message() {
+        require_current();
+        if (fragmented_message_active_) {
+            throw std::logic_error("a fragmented WebSocket message is already open");
+        }
+        fragmented_message_active_ = true;
+        return ++fragmented_message_sequence_;
+    }
+    [[nodiscard]] bool fragmented_message_active() const noexcept {
+        return fragmented_message_active_;
+    }
+    [[nodiscard]] bool fragmented_message_open(std::uint64_t id) const noexcept {
+        return fragmented_message_active_ && fragmented_message_sequence_ == id;
+    }
+    void end_fragmented_message() noexcept {
+        fragmented_message_active_ = false;
+    }
+
     static task<void> write(std::shared_ptr<http_client_websocket_state> state,
         websocket_opcode opcode, std::pmr::string payload, websocket_send_options options,
-        operation_options operation_options_value) {
+        operation_options operation_options_value, websocket_write_extent extent) {
         state->require_current();
         auto active = claim_operation_lane(state->write_active_, "concurrent WebSocket output operations are not supported");
         operation_guard operation(*state, operation_lane::write, std::move(operation_options_value));
         try {
             co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
             write_guard lane(*state);
-            const auto submitted = state->protocol_.submit_frame(opcode, payload, options.compress_);
+            const auto submitted = extent == websocket_write_extent::message
+                                       ? state->protocol_.submit_frame(opcode, payload, options.compress_)
+                                       : state->protocol_.submit_fragment(opcode, payload,
+                                             extent == websocket_write_extent::final_fragment, options.compress_);
             std::pmr::string(payload.get_allocator()).swap(payload);
             switch (submitted) {
                 case websocket_frame_submit_status::accepted:
@@ -199,6 +222,9 @@ public:
                 state->check();
             }
             throw;
+        }
+        if (extent == websocket_write_extent::final_fragment) {
+            state->end_fragmented_message();
         }
     }
 
@@ -697,6 +723,8 @@ private:
     websocket_peer_close_info peer_close_;
     std::optional<http_client_error::code_type> failure_;
     bool ended_{};
+    bool fragmented_message_active_{};
+    std::uint64_t fragmented_message_sequence_{};
     // close() has sent its Close: a pending read ends with nullopt.
     bool local_close_sent_{};
     std::optional<http_client_error::code_type> read_interrupt_;
@@ -756,19 +784,89 @@ void http_client_websocket::abort() & noexcept {
         state_->abort();
     }
 }
+namespace {
+void require_data_lane(const detail::http_client_websocket_state& state, websocket_opcode opcode,
+    detail::websocket_write_extent extent) {
+    if (extent == detail::websocket_write_extent::message && state.fragmented_message_active() &&
+        (opcode == websocket_opcode::text || opcode == websocket_opcode::binary)) {
+        throw std::logic_error("a fragmented WebSocket message is in progress");
+    }
+}
+}  // namespace
 task<void> http_client_websocket::write(websocket_opcode opcode, std::string_view payload,
-    websocket_send_options options, operation_options operation) {
+    websocket_send_options options, operation_options operation, detail::websocket_write_extent extent) {
     auto& state = require_websocket(state_);
     validate_operation_options(operation);
+    require_data_lane(state, opcode, extent);
     return detail::http_client_websocket_state::write(
-        state_, opcode, std::pmr::string(payload, state.resource()), options, std::move(operation));
+        state_, opcode, std::pmr::string(payload, state.resource()), options, std::move(operation), extent);
+}
+http_client_websocket_message_writer http_client_websocket::begin_text(websocket_send_options options) & {
+    return begin_message(websocket_opcode::text, options);
+}
+http_client_websocket_message_writer http_client_websocket::begin_binary(websocket_send_options options) & {
+    return begin_message(websocket_opcode::binary, options);
+}
+http_client_websocket_message_writer http_client_websocket::begin_message(websocket_opcode opcode, websocket_send_options options) {
+    auto& state = require_websocket(state_);
+    const auto id = state.begin_fragmented_message();
+    return http_client_websocket_message_writer(state_, id, opcode, options);
+}
+http_client_websocket_message_writer::http_client_websocket_message_writer(
+    std::shared_ptr<detail::http_client_websocket_state> state, std::uint64_t message_id, websocket_opcode opcode,
+    websocket_send_options options) noexcept
+    : state_(std::move(state)),
+      message_id_(message_id),
+      opcode_(opcode),
+      options_(options) {}
+http_client_websocket_message_writer::http_client_websocket_message_writer(http_client_websocket_message_writer&& other) noexcept
+    : state_(std::move(other.state_)),
+      message_id_(other.message_id_),
+      opcode_(other.opcode_),
+      options_(other.options_) {}
+http_client_websocket_message_writer::~http_client_websocket_message_writer() {
+    abort();
+}
+bool http_client_websocket_message_writer::message_open() const noexcept {
+    return state_ != nullptr && state_->fragmented_message_open(message_id_);
+}
+void http_client_websocket_message_writer::abort() & noexcept {
+    if (message_open()) {
+        // The peer cannot tell where an unfinished message ends.
+        state_->end_fragmented_message();
+        state_->abort();
+    }
+    state_.reset();
+}
+task<void> http_client_websocket_message_writer::write(std::string_view chunk, operation_options operation) & {
+    return submit(chunk, false, std::move(operation));
+}
+task<void> http_client_websocket_message_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
+    return submit(as_chars(chunk), false, std::move(operation));
+}
+task<void> http_client_websocket_message_writer::finish(std::string_view last_chunk, operation_options operation) & {
+    return submit(last_chunk, true, std::move(operation));
+}
+task<void> http_client_websocket_message_writer::finish(std::span<const std::byte> last_chunk, operation_options operation) & {
+    return submit(as_chars(last_chunk), true, std::move(operation));
+}
+task<void> http_client_websocket_message_writer::submit(std::string_view chunk, bool final, operation_options operation) {
+    if (!message_open()) {
+        throw std::logic_error("WebSocket message writer is finished");
+    }
+    state_->require_current();
+    validate_operation_options(operation);
+    return detail::http_client_websocket_state::write(state_, opcode_, std::pmr::string(chunk, state_->resource()),
+        options_, std::move(operation),
+        final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
 }
 task<void> http_client_websocket::write_owned(websocket_opcode opcode, std::pmr::string&& payload,
     websocket_send_options options, operation_options operation) {
     auto& state = require_websocket(state_);
     validate_operation_options(operation);
-    return detail::http_client_websocket_state::write(
-        state_, opcode, detail::rebind_owned_storage(payload, state.resource()), options, std::move(operation));
+    require_data_lane(state, opcode, detail::websocket_write_extent::message);
+    return detail::http_client_websocket_state::write(state_, opcode, detail::rebind_owned_storage(payload, state.resource()),
+        options, std::move(operation), detail::websocket_write_extent::message);
 }
 task<void> http_client_websocket::text(std::string_view payload, websocket_send_options options, operation_options operation) & {
     return write(websocket_opcode::text, payload, options, std::move(operation));

@@ -32,10 +32,12 @@ namespace ruvia::detail {
     return window_bits == 8 ? Z_HUFFMAN_ONLY : Z_DEFAULT_STRATEGY;
 }
 
-// Compresses a whole message, appending the raw-DEFLATE block to `out` with
-// the trailing 0x00 0x00 0xFF 0xFF flush marker removed (RFC 7692 §7.2.1).
+// Compresses a message, or one fragment of it, up to a sync flush and appends
+// the raw-DEFLATE blocks to `out`. At the message end the trailing
+// 0x00 0x00 0xFF 0xFF flush marker is removed (RFC 7692 §7.2.1); earlier
+// fragments keep it, which the receiver inflates as an empty stored block.
 [[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
-    std::pmr::string& out, std::pmr::memory_resource* resource = nullptr) {
+    std::pmr::string& out, std::pmr::memory_resource* resource = nullptr, bool message_end = true) {
     std::optional<std::pmr::string> owned_input;
     if (http_text_aliases_string(input, out)) {
         input = owned_input.emplace(
@@ -66,6 +68,9 @@ namespace ruvia::detail {
             !(stream.avail_in == 0 && supplied < input.size())) {
             return false;
         }
+    }
+    if (!message_end) {
+        return true;
     }
     if (out.size() - start >= 4) {
         out.resize(out.size() - 4);

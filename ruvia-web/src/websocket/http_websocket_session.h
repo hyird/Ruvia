@@ -23,8 +23,8 @@ template <typename connection_type>
 
 template <typename connection_type>
 task<void> websocket_write_thunk(void* target, websocket_opcode opcode, std::string_view payload_value, bool compress,
-    operation_options options) {
-    return static_cast<connection_type*>(target)->write(opcode, payload_value, compress, std::move(options));
+    websocket_write_extent extent, operation_options options) {
+    return static_cast<connection_type*>(target)->write(opcode, payload_value, compress, extent, std::move(options));
 }
 
 template <typename connection_type>

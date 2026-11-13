@@ -233,13 +233,12 @@ struct http1_tunnel_upgrade_commit final {
         return transport_type(dispatch_.stream_, tls_output_ ? &*tls_output_ : nullptr, &dispatch_.scanner_entry_);
     }
 
-    [[nodiscard]] task<std::optional<websocket_upgrade_commit<transport_type>>> accept_websocket(
+    [[nodiscard]] task<websocket_upgrade_attempt<transport_type>> accept_websocket(
         context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) const {
         const auto validation = validate_websocket_handshake(dispatch_.parsed_.request_,
             dispatch_.parsed_.body_plan_, endpoint.handshake_validation());
         if (const auto* failure = validation.failure()) {
-            reject_request_stream_websocket(context_value, *failure);
-            co_return std::nullopt;
+            co_return reject_request_stream_websocket(context_value, *failure);
         }
         const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
             {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()},

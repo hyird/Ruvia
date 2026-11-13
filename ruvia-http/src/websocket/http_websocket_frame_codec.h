@@ -149,11 +149,11 @@ private:
     return value;
 }
 
+// `opcode_bits` is 0 for a continuation frame (RFC 6455 section 5.4).
 [[nodiscard]] inline std::size_t encode_websocket_frame_header(websocket_frame_header_type& header_value,
-    websocket_opcode opcode, std::size_t payload_size, bool rsv1, bool masked) noexcept {
+    std::uint8_t opcode_bits, bool final, std::size_t payload_size, bool rsv1, bool masked) noexcept {
     std::size_t header_size = 0;
-    header_value[header_size++] =
-        static_cast<char>(0x80U | (rsv1 ? 0x40U : 0U) | static_cast<std::uint8_t>(opcode));
+    header_value[header_size++] = static_cast<char>((final ? 0x80U : 0U) | (rsv1 ? 0x40U : 0U) | opcode_bits);
     if (payload_size <= 125) {
         header_value[header_size++] = static_cast<char>((masked ? 0x80U : 0U) | payload_size);
     } else if (payload_size <= 0xFFFF) {

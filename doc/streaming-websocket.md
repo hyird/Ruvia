@@ -241,6 +241,7 @@ private:
 | `task<void> ping(std::string_view payload = {}, operation_options operation = {}) &` / `pong(…)` | 发送显式 `Ping` 或 `Pong` 控制帧（另有 `std::pmr::string&&` 重载） |
 | `task<void> close(websocket_close_options options = {}, operation_options operation = {}) &` | 发起或完成关闭握手，只占写通道（默认 `code_ = websocket_close_status::normal_closure`） |
 | `void abort() & noexcept` | 立即中止底层传输而不执行关闭握手 |
+| `websocket_message_writer begin_text(websocket_send_options options = {}) &` / `begin_binary(…)` | 开始一条分片发送的数据消息，见下文“分片发送” |
 | `std::string_view subprotocol() const& noexcept` | 获取握手协商选中的 WebSocket 子协议（未选中时为空视图） |
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` / `std::string_view peer_close_reason() const& noexcept` | 读取对端发送的 Close 帧状态码与 UTF-8 原因（收到对端 Close 帧后可用） |
 | `websocket_termination termination() const noexcept` | 会话结束原因；活动中为 `none`，首个原因胜出，`read()` 返回 `std::nullopt` 后稳定可读 |
@@ -251,6 +252,13 @@ private:
 - **输出中断**：输出操作或 `close()` 的 `operation` 超时、停止请求中止会话（已部分写出的帧无法撤回），记为 `timeout` / `aborted` 并抛同类 `std::system_error`；令牌在启动前已停止时不产生任何输出。
 - **优雅关闭**：`close()` 可与挂起的 `read()` 并发，Close 发出后由该读取继续解析输入；对端应答后读取返回 `std::nullopt`、记为 `local_close`，关闭握手超时则读取返回 `std::nullopt`、记为 `timeout`，`close()` 抛 `timed_out`。
 - **自行排空**：没有挂起读取时 `close()` 自己读到对端 Close，期间启动的 `read()` 抛 `std::logic_error`；未完成的 `send(websocket_message&&)` 借用读缓冲，此时 `close()` 抛 `std::logic_error`。
+
+分片发送（RFC 6455 §5.4）让调用方按站点级带宽预算等外部节奏发送大消息：
+
+- **写入器**：`begin_text()` / `begin_binary()` 返回只移动的 `websocket_message_writer`；`write(chunk, operation = {}) &` 每次发一个非 FIN 帧，传输层接收后完成；`finish(last_chunk = {}, operation = {}) &` 发 FIN 帧。
+- **数据通道**：`finish()` 完成前消息独占数据通道，`text()`、`binary()`、`send()` 与再次 `begin_*()` 抛 `std::logic_error`；`ping()`、`pong()`、`close()` 及自动控制帧可插在分片之间。
+- **帧规则**：首帧携带 opcode，后续为续帧（opcode 0）；`permessage-deflate` 下 RSV1 只在首帧，整条消息是一条跨分片的 DEFLATE 流，每块以 sync flush 结尾，末块去掉 `00 00 FF FF`；文本跨分片校验 UTF-8，消息上限按整条消息累计；`bytes_sent()` 随每个分片累计。
+- **未完成中止**：写入器析构或 `abort()` 时消息未完成即中止会话（对端无法得知消息边界），记为 `aborted`；写入器借用 `websocket`，随其失效。
 
 `websocket_termination`（`"ruvia/http/websocket_protocol.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
 
@@ -410,6 +418,7 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 - **结束与失败**：`read()` 在任一方完成关闭握手、或本端 `close()` 已发出 Close 后会话以任何方式结束时返回 `nullopt`；其余失败中止会话并抛 `http_client_error`，读取中断为 `cancelled` / `timeout`。
 - **选项继承**：逐次 `operation_options` 继承所属句柄的选项，超时只能收紧，提供的令牌替换继承的用户取消。
 - **消息转发**：`send(websocket_message&&)` 在返回冷操作前复制负载，不占读通道。
+- **分片发送**：`begin_text()` / `begin_binary()` 返回 `http_client_websocket_message_writer`，契约同服务端写入器；它持有会话状态，须在所属 worker 使用与销毁。
 - **访问器**：会话状态访问器与服务端同为 `noexcept`，跨 worker 使用终止进程，已移出的连接返回空值、`none`、`0` 与 `false`；传输元数据 `protocol_version()`、`connection_info()`、`worker()` 对已移出或跨 worker 的调用抛 `std::logic_error`。
 
 出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。

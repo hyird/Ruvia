@@ -483,7 +483,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
                     upgrade_marker::calls_ = 0;
                     {
                         auto session = co_await client.client().websocket("/ws/lobby").connect();
-                        co_await session.text(std::string_view("hello"));
+                        co_await session.text("hello");
                         const auto message = co_await session.read();
                         EXPECT_TRUE(message.has_value()) << label;
                         if (message) {

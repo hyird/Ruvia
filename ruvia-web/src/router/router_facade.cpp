@@ -378,8 +378,10 @@ private:
     static task<void> run_upgrade_terminal(request_stream& stream, const resolved_route& resolved, context& context_value) {
         const auto& endpoint = resolved.route().endpoint();
         if (const auto* websocket_endpoint = endpoint.websocket()) {
-            auto* session = co_await stream.accept_websocket_endpoint(*websocket_endpoint);
-            // A rejected handshake already selected its 400 answer.
+            const auto accepted = co_await stream.accept_websocket_endpoint(*websocket_endpoint);
+            auto* session = accepted.session();
+            // A rejected handshake already selected its error response, whose
+            // status the access log records when the server sends it.
             if (session == nullptr) {
                 co_return;
             }

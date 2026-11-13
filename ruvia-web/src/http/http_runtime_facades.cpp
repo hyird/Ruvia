@@ -51,26 +51,32 @@ ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target
     co_return co_await read(target, std::move(operation));
 }
 
-ruvia::task<void> write_websocket_payload(void* target,
-    ruvia::task<void> (*write)(void*, ruvia::websocket_opcode, std::string_view, bool, ruvia::operation_options),
-    ruvia::websocket_opcode opcode, std::pmr::string payload_value, bool& write_active, bool compress,
-    ruvia::operation_options operation) {
+using websocket_write_type = ruvia::task<void> (*)(void*, ruvia::websocket_opcode, std::string_view, bool,
+    ruvia::detail::websocket_write_extent, ruvia::operation_options);
+
+// The final fragment releases the data lane of its fragmented message.
+ruvia::task<void> write_websocket_payload(void* target, websocket_write_type write, ruvia::websocket_opcode opcode,
+    std::pmr::string payload_value, bool& write_active, bool compress, ruvia::detail::websocket_write_extent extent,
+    ruvia::operation_options operation, bool& fragmented_message_active) {
     auto lease = ruvia::detail::claim_operation_lane(write_active, "concurrent websocket output operations are not supported");
-    co_await write(target, opcode, payload_value, compress, std::move(operation));
+    co_await write(target, opcode, payload_value, compress, extent, std::move(operation));
+    if (extent == ruvia::detail::websocket_write_extent::final_fragment) {
+        fragmented_message_active = false;
+    }
 }
 
 // The read leases are claimed by the caller before this task exists: the
 // payload borrows the connection's read storage, and no read may run, even one
 // started while this operation is still unstarted, until the frame has been written.
-ruvia::task<void> write_websocket_message(void* target,
-    ruvia::task<void> (*write)(void*, ruvia::websocket_opcode, std::string_view, bool, ruvia::operation_options),
+ruvia::task<void> write_websocket_message(void* target, websocket_write_type write,
     ruvia::websocket_message message, ruvia::detail::operation_lane_lease read_lease,
     ruvia::detail::operation_lane_lease message_lease, bool& write_active, bool compress,
     ruvia::operation_options operation) {
     auto held_read = std::move(read_lease);
     auto held_message = std::move(message_lease);
     auto lease = ruvia::detail::claim_operation_lane(write_active, "concurrent websocket output operations are not supported");
-    co_await write(target, message.opcode(), message.payload(), compress, std::move(operation));
+    co_await write(target, message.opcode(), message.payload(), compress, ruvia::detail::websocket_write_extent::message,
+        std::move(operation));
 }
 
 ruvia::task<void> close_websocket_with_reason(void* target,
@@ -264,6 +270,9 @@ task<void> websocket::ping(std::string_view payload_value, operation_options ope
 task<void> websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
     require_active();
     validate_operation_options(operation);
+    if (fragmented_message_active_) {
+        throw std::logic_error("a fragmented websocket message is in progress");
+    }
     auto read_lease = detail::claim_operation_lane(read_active_, "websocket message send cannot overlap a read");
     auto message_lease = detail::claim_operation_lane(message_send_active_, "websocket message send is already pending");
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -340,18 +349,106 @@ std::uint64_t websocket::bytes_sent() const noexcept {
     return protocol_(target_).bytes_sent();
 }
 
-task<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress, operation_options operation) {
+task<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress, operation_options operation,
+    detail::websocket_write_extent extent) {
     require_active();
     std::pmr::string owned(payload_value, resource_);
-    return write(opcode, std::move(owned), compress, std::move(operation));
+    return write(opcode, std::move(owned), compress, std::move(operation), extent);
 }
 
-task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress, operation_options operation) {
+task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress, operation_options operation,
+    detail::websocket_write_extent extent) {
     require_active();
     validate_operation_options(operation);
+    if (extent == detail::websocket_write_extent::message && fragmented_message_active_ &&
+        (opcode == websocket_opcode::text || opcode == websocket_opcode::binary)) {
+        throw std::logic_error("a fragmented websocket message is in progress");
+    }
     auto owned = detail::rebind_owned_storage(payload_value, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress, std::move(operation)));
+        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress, extent,
+            std::move(operation), fragmented_message_active_));
+}
+
+websocket_message_writer websocket::begin_text(websocket_send_options options) & {
+    return begin_message(websocket_opcode::text, options.compress_);
+}
+
+websocket_message_writer websocket::begin_binary(websocket_send_options options) & {
+    return begin_message(websocket_opcode::binary, options.compress_);
+}
+
+websocket_message_writer websocket::begin_message(websocket_opcode opcode, bool compress) {
+    require_active();
+    if (fragmented_message_active_) {
+        throw std::logic_error("a fragmented websocket message is already open");
+    }
+    fragmented_message_active_ = true;
+    ++fragmented_message_sequence_;
+    return websocket_message_writer(*this, opcode, compress);
+}
+
+websocket_message_writer::websocket_message_writer(websocket& owner, websocket_opcode opcode, bool compress) noexcept
+    : owner_(&owner),
+      message_id_(owner.fragmented_message_sequence_),
+      opcode_(opcode),
+      compress_(compress),
+      registration_(owner.operation_scope_, this, &websocket_message_writer::expire_capability) {}
+
+websocket_message_writer::websocket_message_writer(websocket_message_writer&& other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)),
+      message_id_(other.message_id_),
+      opcode_(other.opcode_),
+      compress_(other.compress_),
+      registration_(std::move(other.registration_), this) {}
+
+websocket_message_writer::~websocket_message_writer() {
+    abort();
+}
+
+void websocket_message_writer::expire_capability(void* target) noexcept {
+    static_cast<websocket_message_writer*>(target)->owner_ = nullptr;
+}
+
+bool websocket_message_writer::message_open() const noexcept {
+    return owner_ != nullptr && owner_->fragmented_message_active_ &&
+           owner_->fragmented_message_sequence_ == message_id_;
+}
+
+void websocket_message_writer::abort() & noexcept {
+    if (!message_open()) {
+        owner_ = nullptr;
+        return;
+    }
+    // The peer cannot tell where an unfinished message ends.
+    auto* owner = std::exchange(owner_, nullptr);
+    owner->fragmented_message_active_ = false;
+    owner->abort();
+}
+
+task<void> websocket_message_writer::write(std::string_view chunk, operation_options operation) & {
+    return submit(chunk, false, std::move(operation));
+}
+
+task<void> websocket_message_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
+    return submit(as_chars(chunk), false, std::move(operation));
+}
+
+task<void> websocket_message_writer::finish(std::string_view last_chunk, operation_options operation) & {
+    return submit(last_chunk, true, std::move(operation));
+}
+
+task<void> websocket_message_writer::finish(std::span<const std::byte> last_chunk, operation_options operation) & {
+    return submit(as_chars(last_chunk), true, std::move(operation));
+}
+
+task<void> websocket_message_writer::submit(std::string_view chunk, bool final, operation_options operation) {
+    registration_.require_active();
+    if (!message_open()) {
+        throw std::logic_error("websocket message writer is finished");
+    }
+    return owner_->write(opcode_, chunk, compress_, std::move(operation),
+        final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
 }
 
 task<void> sse_writer::write(const sse_message& message) {

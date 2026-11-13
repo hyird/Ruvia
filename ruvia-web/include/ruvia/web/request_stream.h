@@ -53,7 +53,7 @@ class websocket_route_endpoint;
 using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>;
 // Negotiates against a validated endpoint the caller keeps alive until the
 // returned task completes.
-using request_stream_websocket_accept = callback_ref<task<websocket*>(const websocket_route_endpoint&)>;
+using request_stream_websocket_accept = callback_ref<task<websocket_accept_result>(const websocket_route_endpoint&)>;
 using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
@@ -232,8 +232,8 @@ public:
     // returns nullptr and selects the error response the server sends after
     // the callback returns. Any response/acceptance already selected throws
     // logic_error. The returned session is borrowed until the callback ends.
-    [[nodiscard]] task<websocket*> accept_websocket(websocket_route_config config = {}) &;
-    task<websocket*> accept_websocket(websocket_route_config = {}) && = delete;
+    [[nodiscard]] task<websocket_accept_result> accept_websocket(websocket_route_config config = {}) &;
+    task<websocket_accept_result> accept_websocket(websocket_route_config = {}) && = delete;
 
     // Requested when the application stops and, for a request that is not a
     // tunnel request, when the client abandons it (HTTP/1: the connection
@@ -256,9 +256,9 @@ private:
     }
 
     [[nodiscard]] task<http_tunnel*> accept_tunnel_impl(http_status_code status, http_tunnel_route_config config);
-    [[nodiscard]] task<websocket*> accept_websocket_impl(websocket_route_config config);
+    [[nodiscard]] task<websocket_accept_result> accept_websocket_impl(websocket_route_config config);
     // A router's WebSocket route reuses its frozen endpoint.
-    [[nodiscard]] task<websocket*> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
+    [[nodiscard]] task<websocket_accept_result> accept_websocket_endpoint(const detail::websocket_route_endpoint& endpoint);
     void require_unselected_response() const;
     void reset_impl(std::optional<std::uint64_t> error);
 

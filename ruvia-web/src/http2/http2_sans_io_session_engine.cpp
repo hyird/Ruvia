@@ -846,12 +846,11 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     auto commit_websocket = [this, stream_id, &request, &finish_upgrade_commit](
                                                 context& context_value, const websocket_route_endpoint& endpoint,
                                                 std::span<const http_header_view> headers)
-                        -> task<std::optional<websocket_upgrade_commit<http2_sans_io_tunnel_transport>>> {
+                        -> task<websocket_upgrade_attempt<http2_sans_io_tunnel_transport>> {
                         const auto validation = ruvia::validate_http2_websocket_handshake(
                             connection_, stream_id, request, endpoint.handshake_validation());
                         if (const auto* failure = validation.failure()) {
-                            reject_request_stream_websocket(context_value, *failure);
-                            co_return std::nullopt;
+                            co_return reject_request_stream_websocket(context_value, *failure);
                         }
                         const auto result = connection_.submit_websocket_handshake(stream_id, request, validation,
                             {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()});

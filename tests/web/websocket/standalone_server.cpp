@@ -73,7 +73,8 @@ struct observation final {
     unsigned cancelled_{};
     std::string_view scenario_{"startup"};
     std::optional<ruvia::task<std::optional<ruvia::websocket_message>>> expired_read_;
-    std::optional<ruvia::task<ruvia::websocket*>> expired_accept_;
+    std::optional<ruvia::task<ruvia::websocket_accept_result>> expired_accept_;
+    std::map<std::string, ruvia::websocket_rejection, std::less<>> rejections_;
     std::map<std::string, session_record, std::less<>> sessions_;
 
     void record(std::string_view path, const ruvia::websocket& websocket) {
@@ -152,6 +153,65 @@ ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ru
     EXPECT_TRUE(ended);
 }
 
+constexpr std::size_t fragment_count = 4;
+
+[[nodiscard]] std::string fragment_payload(std::size_t index) {
+    return std::string(3000, static_cast<char>('a' + index));
+}
+
+// Sends each message in fragment_count frames with a Ping between the first
+// two, uncompressed and then compressed.
+ruvia::task<void> send_fragmented(ruvia::websocket& websocket) {
+    for (const bool compress : {false, true}) {
+        auto message = websocket.begin_text({.compress_ = compress});
+        bool data_lane_held = false;
+        try {
+            co_await websocket.text("overlap");
+        } catch (const std::logic_error&) {
+            data_lane_held = true;
+        }
+        EXPECT_TRUE(data_lane_held);
+        for (std::size_t index = 0; index + 1 < fragment_count; ++index) {
+            co_await message.write(fragment_payload(index));
+            if (index == 0) {
+                co_await websocket.ping("between");
+            }
+        }
+        co_await message.finish(fragment_payload(fragment_count - 1));
+    }
+}
+
+// Reassembles one message from fragment frames, counting frames and the Ping.
+ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::size_t& data_frames, std::size_t& pings) {
+    std::string payload;
+    for (;;) {
+        auto frame = co_await peer.read_frame();
+        if (!frame) {
+            throw std::runtime_error("missing message fragment");
+        }
+        if (frame->opcode_ == 9U) {
+            EXPECT_TRUE(frame->final_);
+            ++pings;
+            continue;
+        }
+        EXPECT_EQ(frame->opcode_, data_frames == 0 ? 1U : 0U);
+        EXPECT_EQ(frame->compressed_, compressed && data_frames == 0);
+        ++data_frames;
+        payload += frame->payload_;
+        if (frame->final_) {
+            break;
+        }
+    }
+    if (!compressed) {
+        co_return payload;
+    }
+    ruvia::websocket_deflate_codecs codecs(ruvia::process_resource());
+    std::pmr::string inflated(ruvia::process_resource());
+    EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) ==
+                ruvia::websocket_inflate_result::ok);
+    co_return std::string(inflated);
+}
+
 ruvia::task<void> expect_client_read_cancelled(ruvia::task<std::optional<ruvia::websocket_message>> read, bool& cancelled) {
     try {
         (void)co_await std::move(read);
@@ -198,9 +258,11 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
     {
         auto discarded = request.accept_websocket(config);
     }
-    auto* websocket = co_await request.accept_websocket(std::move(config));
+    const auto accepted = co_await request.accept_websocket(std::move(config));
+    auto* websocket = accepted.session();
     if (websocket == nullptr) {
         ++observed.refused_;
+        observed.rejections_.insert_or_assign(std::string(path), *accepted.rejection());
         co_return;
     }
     EXPECT_EQ(websocket->subprotocol(), "standalone.v1");
@@ -232,6 +294,18 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         co_return;
     }
     if (path == "/close") {
+        co_return;
+    }
+    if (path == "/fragments") {
+        co_await send_fragmented(*websocket);
+        EXPECT_FALSE((co_await websocket->read()).has_value());
+        observed.record(path, *websocket);
+        co_return;
+    }
+    if (path == "/assemble") {
+        while (const auto message = co_await websocket->read()) {
+            co_await websocket->text(std::to_string(message->payload().size()) + (message->binary() ? ":binary" : ":text"));
+        }
         co_return;
     }
     if (path == "/graceful") {
@@ -411,6 +485,7 @@ public:
         unsigned opcode_;
         bool compressed_;
         std::string payload_;
+        bool final_;
     };
 
     ruvia::task<std::optional<frame>> read_frame() {
@@ -419,7 +494,6 @@ public:
         }
         const auto first = static_cast<unsigned char>(input_[0]);
         const auto second = static_cast<unsigned char>(input_[1]);
-        EXPECT_EQ(first & 0x80U, 0x80U);
         EXPECT_EQ(second & 0x80U, 0U);
         std::size_t size = second & 0x7fU;
         std::size_t offset = 2;
@@ -435,7 +509,7 @@ public:
         if (!(co_await fill(offset + size))) {
             throw std::runtime_error("truncated frame payload");
         }
-        frame result{first & 0x0fU, (first & 0x40U) != 0, input_.substr(offset, size)};
+        frame result{first & 0x0fU, (first & 0x40U) != 0, input_.substr(offset, size), (first & 0x80U) != 0};
         input_.erase(0, offset + size);
         co_return result;
     }
@@ -695,6 +769,62 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
     }
     co_await await_retirement(server, observed);
     {
+        observed.scenario_ = "/fragments";
+        wire_peer peer(io);
+        co_await peer.open(client, destination, "/fragments");
+        std::string expected;
+        for (std::size_t index = 0; index != fragment_count; ++index) {
+            expected += fragment_payload(index);
+        }
+        for (const bool compressed : {false, true}) {
+            std::size_t data_frames = 0;
+            std::size_t pings = 0;
+            const auto payload = co_await receive_fragmented(peer, compressed, data_frames, pings);
+            EXPECT_EQ(payload, expected);
+            EXPECT_EQ(data_frames, fragment_count);
+            EXPECT_EQ(pings, 1U);
+        }
+        co_await peer.write(masked_frame(8, std::string("\x03\xe8", 2)));
+        const auto close = co_await peer.read_frame();
+        EXPECT_TRUE(close && close->opcode_ == 8U);
+        co_await await_retirement(server, observed);
+        const auto counted = observed.session("/fragments");
+        // Two messages of fragment_count frames, the Pings and the Close echo.
+        EXPECT_GT(counted.sent_, 2 * fragment_payload(0).size());
+    }
+    {
+        observed.scenario_ = "/assemble";
+        auto websocket = co_await client.client().websocket("/assemble").subprotocol("standalone.v1").deflate({.compression_ = {.enabled_ = true}}).connect();
+        for (const bool compress : {false, true}) {
+            const auto sent_before = websocket.bytes_sent();
+            auto message = websocket.begin_binary({.compress_ = compress});
+            bool data_lane_held = false;
+            try {
+                co_await websocket.binary(std::as_bytes(std::span(std::string_view("overlap"))));
+            } catch (const std::logic_error&) {
+                data_lane_held = true;
+            }
+            EXPECT_TRUE(data_lane_held);
+            for (std::size_t index = 0; index + 1 < fragment_count; ++index) {
+                co_await message.write(fragment_payload(index));
+                if (index == 0) {
+                    co_await websocket.ping("between");
+                }
+                EXPECT_GT(websocket.bytes_sent(), sent_before);
+            }
+            co_await message.finish(fragment_payload(fragment_count - 1));
+            const auto reply = co_await websocket.read();
+            EXPECT_TRUE(reply && reply->payload() == std::to_string(fragment_count * fragment_payload(0).size()) + ":binary");
+        }
+        {
+            // An unfinished message cannot be completed later, so dropping it ends the session.
+            auto abandoned = websocket.begin_text();
+            co_await abandoned.write("partial");
+        }
+        EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::aborted);
+        co_await await_retirement(server, observed);
+    }
+    {
         observed.scenario_ = "/graceful";
         auto websocket = co_await client.client().websocket("/graceful").subprotocol("standalone.v1").connect();
         // The server stays silent until "start", so these client reads can
@@ -795,6 +925,23 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         rejection.get();
     }
     co_await await_retirement(server, observed);
+    {
+        // The callback reads the refusal the server sends: RFC 6455 section
+        // 4.4 answers an unsupported version with 400.
+        const auto found = observed.rejections_.find("/invalid-version");
+        EXPECT_TRUE(found != observed.rejections_.end());
+        if (found != observed.rejections_.end()) {
+            EXPECT_EQ(found->second.status_, ruvia::http_status::bad_request);
+            EXPECT_EQ(found->second.code_, "unsupported_websocket_version");
+        }
+        const auto subprotocol = observed.rejections_.find("/missing-subprotocol");
+        EXPECT_TRUE(subprotocol != observed.rejections_.end());
+        if (subprotocol != observed.rejections_.end()) {
+            EXPECT_EQ(subprotocol->second.status_, ruvia::http_status::bad_request);
+            EXPECT_EQ(subprotocol->second.code_, "unsupported_websocket_subprotocol");
+        }
+        observed.rejections_.clear();
+    }
     {
         observed.scenario_ = "/wire";
         wire_peer peer(io);

@@ -13,6 +13,7 @@
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <variant>
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -22,6 +23,7 @@
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
@@ -73,7 +75,56 @@ class websocket;
 namespace detail {
 template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(connection_type& connection, std::pmr::memory_resource& resource) noexcept;
+struct websocket_accept_access;
+// Whether a write submits a whole message or one fragment of one.
+enum class websocket_write_extent : std::uint8_t {
+    message,
+    fragment,
+    final_fragment,
+};
 }  // namespace detail
+
+class websocket_message_writer;
+
+// A handshake the server refused. The server sends the selected response,
+// with this status, after the request callback returns.
+struct websocket_rejection final {
+    http_status_code status_;
+    // The failed handshake check, as in the error response's code:
+    // invalid_websocket_handshake, unsupported_websocket_version or
+    // unsupported_websocket_subprotocol.
+    std::string_view code_;
+};
+
+// Outcome of accepting a WebSocket upgrade, fixed at construction: the
+// established session, borrowed until the request callback ends, or the
+// rejection.
+class websocket_accept_result final {
+public:
+    websocket_accept_result(const websocket_accept_result&) = delete;
+    websocket_accept_result& operator=(const websocket_accept_result&) = delete;
+    websocket_accept_result(websocket_accept_result&&) noexcept = default;
+    websocket_accept_result& operator=(websocket_accept_result&&) = delete;
+
+    // nullptr when the handshake was rejected.
+    [[nodiscard]] websocket* session() const noexcept {
+        const auto* accepted = std::get_if<websocket*>(&value_);
+        return accepted != nullptr ? *accepted : nullptr;
+    }
+    // nullptr when the session was established.
+    [[nodiscard]] const websocket_rejection* rejection() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<websocket_rejection>(&value_);
+    }
+    const websocket_rejection* rejection() const&& = delete;
+
+private:
+    friend struct detail::websocket_accept_access;
+    explicit websocket_accept_result(websocket& session) noexcept
+        : value_(&session) {}
+    explicit websocket_accept_result(websocket_rejection rejection) noexcept
+        : value_(rejection) {}
+    std::variant<websocket*, websocket_rejection> value_;
+};
 
 class websocket final {
 public:
@@ -176,6 +227,13 @@ public:
     void abort() & noexcept;
     void abort() && = delete;
 
+    /// Starts a data message sent as several frames; see websocket_message_writer.
+    /// Throws std::logic_error while another such message is open.
+    [[nodiscard]] websocket_message_writer begin_text(websocket_send_options options = {}) &;
+    websocket_message_writer begin_text(websocket_send_options = {}) && = delete;
+    [[nodiscard]] websocket_message_writer begin_binary(websocket_send_options options = {}) &;
+    websocket_message_writer begin_binary(websocket_send_options = {}) && = delete;
+
     [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
     }
@@ -195,12 +253,14 @@ public:
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
 
 private:
+    friend class websocket_message_writer;
     template <typename connection_type>
     friend websocket detail::make_websocket_facade(
         connection_type& connection, std::pmr::memory_resource& resource) noexcept;
 
     using read_type = task<std::optional<websocket_message>> (*)(void*, operation_options);
-    using write_type = task<void> (*)(void*, websocket_opcode, std::string_view, bool, operation_options);
+    using write_type = task<void> (*)(void*, websocket_opcode, std::string_view, bool, detail::websocket_write_extent,
+        operation_options);
     using close_type = task<void> (*)(void*, websocket_close_options, operation_options);
     using abort_type = void (*)(void*) noexcept;
     using peer_close_code_type = std::optional<std::uint16_t> (*)(void*) noexcept;
@@ -234,8 +294,11 @@ private:
         }
     }
 
-    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, operation_options operation);
-    task<void> write(websocket_opcode opcode, std::pmr::string&& payload, bool compress, operation_options operation);
+    task<void> write(websocket_opcode opcode, std::string_view payload, bool compress, operation_options operation,
+        detail::websocket_write_extent extent = detail::websocket_write_extent::message);
+    task<void> write(websocket_opcode opcode, std::pmr::string&& payload, bool compress, operation_options operation,
+        detail::websocket_write_extent extent = detail::websocket_write_extent::message);
+    websocket_message_writer begin_message(websocket_opcode opcode, bool compress);
 
     std::pmr::memory_resource* resource_;
     const worker_handle* worker_;
@@ -253,7 +316,56 @@ private:
     // A send(websocket_message&&) borrows read storage; close() cannot start
     // its own read under it.
     bool message_send_active_{false};
+    // A websocket_message_writer owns the data lane until its final fragment.
+    bool fragmented_message_active_{false};
+    // Identifies the open fragmented message to the writer that started it.
+    std::uint64_t fragmented_message_sequence_{0};
     ::ruvia::operation_scope operation_scope_;
+};
+
+/// A data message sent as several frames (RFC 6455 section 5.4), so that a
+/// caller can pace a large message, for example under a shared bandwidth
+/// budget. Each write() sends one non-final frame and completes once the
+/// transport accepted it; finish() sends the final frame. Fragments of a
+/// compressed message continue one permessage-deflate stream. Until finish()
+/// completes the message owns the data lane: text(), binary(), send() and
+/// another begin_*() throw std::logic_error, while ping(), pong(), close() and
+/// automatic control frames may go out between fragments. Fragment operations
+/// share the write lane with them and accept the same operation_options.
+/// Destroying or abort()ing an unfinished message aborts the session, since
+/// the peer could not tell where the message ends. The writer borrows the
+/// websocket and expires with it.
+class websocket_message_writer final {
+public:
+    websocket_message_writer(websocket_message_writer&& other) noexcept;
+    websocket_message_writer& operator=(websocket_message_writer&&) = delete;
+    websocket_message_writer(const websocket_message_writer&) = delete;
+    websocket_message_writer& operator=(const websocket_message_writer&) = delete;
+    ~websocket_message_writer();
+
+    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
+    task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
+    task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
+    void abort() & noexcept;
+    void abort() && = delete;
+
+private:
+    friend class websocket;
+    websocket_message_writer(websocket& owner, websocket_opcode opcode, bool compress) noexcept;
+    [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
+    [[nodiscard]] bool message_open() const noexcept;
+    static void expire_capability(void* target) noexcept;
+
+    websocket* owner_;
+    std::uint64_t message_id_;
+    websocket_opcode opcode_;
+    bool compress_;
+    scoped_capability_registration registration_;
 };
 
 }  // namespace ruvia
