@@ -47,13 +47,19 @@ template <typename connection_type>
 }
 
 template <typename connection_type>
+[[nodiscard]] const websocket_connection& websocket_protocol_thunk(void* target) noexcept {
+    return static_cast<connection_type*>(target)->protocol();
+}
+
+template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(
     connection_type& connection, std::pmr::memory_resource& resource) noexcept {
     return websocket(resource, connection.worker(), &connection, connection.subprotocol(),
         &websocket_read_thunk<connection_type>, &websocket_write_thunk<connection_type>,
         &websocket_close_thunk<connection_type>, &websocket_abort_thunk<connection_type>,
         &websocket_peer_close_code_thunk<connection_type>,
-        &websocket_peer_close_reason_thunk<connection_type>);
+        &websocket_peer_close_reason_thunk<connection_type>,
+        &websocket_protocol_thunk<connection_type>);
 }
 
 // The terminal handler borrows an established connection, but does not close it:

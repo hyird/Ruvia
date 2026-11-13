@@ -210,6 +210,30 @@ enum class websocket_close_submit_status : std::uint8_t {
 };
 enum class websocket_abort_disposition : std::uint8_t { abort_transport,
     no_transport_action };
+// Why a WebSocket session ended, as this endpoint observed it; none while it is
+// still active. The first cause wins: a later Close, EOF or abort never
+// replaces it. The peer Close status itself is the close event's.
+enum class websocket_termination : std::uint8_t {
+    none,
+    // The peer started the close handshake.
+    peer_close,
+    // The peer answered a locally started close handshake.
+    local_close,
+    // The transport ended without a Close frame (RFC 6455 section 7.1.5, 1006).
+    eof,
+    // An invalid frame or message (sent Close 1002).
+    protocol_error,
+    // A text message or Close reason that is not UTF-8 (sent Close 1007).
+    invalid_payload_data,
+    // A frame, message or inflated message above the receive limit (sent Close 1009).
+    message_too_large,
+    // A driver deadline: heartbeat Pong, close handshake or operation timeout.
+    timeout,
+    // Ended locally: abort(), a local failure or the session's teardown.
+    aborted,
+    // The transport failed to read or write.
+    io_error,
+};
 enum class websocket_output_consume_status : std::uint8_t { pending,
     drained,
     out_of_range };

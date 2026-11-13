@@ -24,6 +24,17 @@
 
 namespace ruvia::detail {
 
+// The termination an abort for `reason` records unless an earlier cause was.
+[[nodiscard]] constexpr websocket_termination websocket_abort_termination(http_client_error::code_type reason) noexcept {
+    if (reason == http_client_error::code_type::timeout) {
+        return websocket_termination::timeout;
+    }
+    if (reason == http_client_error::code_type::io_error || reason == http_client_error::code_type::tls_failed) {
+        return websocket_termination::io_error;
+    }
+    return websocket_termination::aborted;
+}
+
 class http_client_websocket_state final {
 public:
     http_client_websocket_state(http_client_tunnel tunnel, const worker_handle& worker,
@@ -74,6 +85,7 @@ public:
         if (!failure_ && !ended_) {
             failure_ = reason;
         }
+        (void)protocol_.abort(websocket_abort_termination(reason));
         heartbeat_timer_.cancel();
         tunnel_.abort();
         heartbeat_signal_.notify();
@@ -113,6 +125,9 @@ public:
     }
     const worker_handle& worker() const noexcept {
         return worker_;
+    }
+    const websocket_connection& protocol() const noexcept {
+        return protocol_;
     }
 
     static task<void> heartbeat(std::shared_ptr<http_client_websocket_state> state) {
@@ -385,7 +400,12 @@ private:
             if (!plan.bytes().empty()) {
                 constexpr std::size_t chunk_bytes = 16384;
                 const auto bytes = plan.bytes().substr(0, chunk_bytes);
-                co_await tunnel_.write(bytes);
+                try {
+                    co_await tunnel_.write(bytes);
+                } catch (const http_client_error& error) {
+                    record_transport_failure(error);
+                    throw;
+                }
                 touch_activity();
                 if (protocol_.consume_output(bytes.size()) == websocket_output_consume_status::out_of_range) {
                     std::terminate();
@@ -393,7 +413,12 @@ private:
                 continue;
             }
             if (plan.disposition() == websocket_transport_disposition::end_transport) {
-                co_await tunnel_.finish();
+                try {
+                    co_await tunnel_.finish();
+                } catch (const http_client_error& error) {
+                    record_transport_failure(error);
+                    throw;
+                }
                 protocol_.commit_transport_end();
                 ended_ = true;
                 heartbeat_timer_.cancel();
@@ -463,7 +488,13 @@ private:
                         }
                     });
             }
-            const auto bytes = co_await tunnel_.read();
+            std::optional<std::span<const std::byte>> bytes;
+            try {
+                bytes = co_await tunnel_.read();
+            } catch (const http_client_error& error) {
+                record_transport_failure(error);
+                throw;
+            }
             read_timer.cancel();
             if (!bytes) {
                 protocol_.notify_transport_eof();
@@ -509,6 +540,9 @@ private:
                     break;
                 }
             }
+        } catch (const http_client_error& error) {
+            record_transport_failure(error);
+            failure = std::current_exception();
         } catch (...) {
             failure = std::current_exception();
         }
@@ -528,6 +562,12 @@ private:
         write_guard lane(*this);
         co_await flush();
         lane.commit();
+    }
+
+    // Records why a tunnel operation failed before unwinding aborts the
+    // session, which would otherwise record only a local abort.
+    void record_transport_failure(const http_client_error& error) noexcept {
+        (void)protocol_.abort(websocket_abort_termination(error.code()));
     }
 
     worker_handle worker_;
@@ -567,6 +607,18 @@ detail::http_client_websocket_state& require_websocket(
     }
     state->require_current();
     return *state;
+}
+// Termination and byte counts read the protocol core without throwing:
+// moved-from owners have none, and other workers violate the session contract.
+const websocket_connection* websocket_protocol(
+    const std::shared_ptr<detail::http_client_websocket_state>& state) noexcept {
+    if (!state) {
+        return nullptr;
+    }
+    if (!state->worker().is_current()) {
+        std::terminate();
+    }
+    return &state->protocol();
 }
 }  // namespace
 
@@ -645,6 +697,18 @@ std::optional<std::uint16_t> http_client_websocket::peer_close_code() const {
 }
 std::string_view http_client_websocket::peer_close_reason() const& {
     return require_websocket(state_).peer_close_reason();
+}
+websocket_termination http_client_websocket::termination() const noexcept {
+    const auto* protocol = websocket_protocol(state_);
+    return protocol != nullptr ? protocol->termination() : websocket_termination::none;
+}
+std::uint64_t http_client_websocket::bytes_received() const noexcept {
+    const auto* protocol = websocket_protocol(state_);
+    return protocol != nullptr ? protocol->bytes_received() : 0;
+}
+std::uint64_t http_client_websocket::bytes_sent() const noexcept {
+    const auto* protocol = websocket_protocol(state_);
+    return protocol != nullptr ? protocol->bytes_sent() : 0;
 }
 const worker_handle& http_client_websocket::worker() const& {
     return require_websocket(state_).worker();

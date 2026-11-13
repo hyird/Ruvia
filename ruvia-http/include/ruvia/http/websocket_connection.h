@@ -85,9 +85,20 @@ public:
     websocket_output_plan output_plan() const&& = delete;
     [[nodiscard]] websocket_output_consume_status consume_output(std::size_t bytes) noexcept;
     void commit_transport_end() noexcept;
+    // Records eof as the termination unless an earlier cause was recorded.
     void notify_transport_eof() noexcept;
-    [[nodiscard]] websocket_abort_disposition abort() noexcept;
+    // `cause` tells why the driver aborts (none records aborted); an earlier
+    // termination cause is kept.
+    [[nodiscard]] websocket_abort_disposition abort(
+        websocket_termination cause = websocket_termination::aborted) noexcept;
     [[nodiscard]] websocket_liveness_mode liveness_mode() const noexcept;
+    [[nodiscard]] websocket_termination termination() const noexcept;
+    // RFC 6455 wire bytes of whole frames: header, mask key and payload as
+    // framed, so after permessage-deflate, data and control frames alike.
+    // Received counts every frame next_event() parsed; sent counts the output
+    // consume_output() acknowledged. Both saturate.
+    [[nodiscard]] std::uint64_t bytes_received() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
     // A failed submission preserves queued output and discards any unsent
     // compression history. It can be retried unless resetting the codec also
     // failed, in which case liveness_mode() reports inactive.

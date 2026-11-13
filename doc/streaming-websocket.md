@@ -234,7 +234,7 @@ private:
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<std::optional<websocket_message>> read() &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；收到对端 Close 帧或连接结束时返回 `std::nullopt` |
+| `task<std::optional<websocket_message>> read() &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；收到对端 Close 帧或连接结束时返回 `std::nullopt`，原因由 `termination()` 区分 |
 | `task<void> text(std::string_view payload, websocket_send_options options = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
 | `task<void> binary(std::string_view payload, websocket_send_options options = {}) &` | 发送二进制消息（另有 `std::pmr::string&&` 重载） |
 | `task<void> send(websocket_message&& message, websocket_send_options options = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前会占用读缓冲） |
@@ -243,6 +243,28 @@ private:
 | `std::string_view subprotocol() const& noexcept` | 获取握手协商选中的 WebSocket 子协议（未选中时为空视图） |
 | `std::optional<std::uint16_t> peer_close_code() const noexcept` / `std::string_view peer_close_reason() const& noexcept` | 读取对端发送的 Close 帧状态码与 UTF-8 原因（收到对端 Close 帧后可用） |
 | `void abort() noexcept` | 立即中止底层传输而不执行关闭握手 |
+| `websocket_termination termination() const noexcept` | 会话结束原因；活动中为 `none`，首个原因胜出，`read()` 返回 `std::nullopt` 后稳定可读 |
+| `std::uint64_t bytes_received() const noexcept` / `bytes_sent() const noexcept` | 双向线上 WebSocket 帧字节，会话结束后仍可读 |
+
+`websocket_termination`（`"ruvia/http/websocket_protocol.h"`）由协议核心 `websocket_connection` 单点记录；后续 Close、EOF 或 `abort()` 不覆盖已记录原因：
+
+| 取值 | 触发 |
+| --- | --- |
+| `none` | 会话仍活动 |
+| `peer_close` | 对端发起关闭握手；状态码与原因由 `peer_close_code()` / `peer_close_reason()` 给出 |
+| `local_close` | 本端 `close()` 发出 Close 后收到对端 Close |
+| `eof` | 对端未发 Close 即结束传输（含截断帧；HTTP/2、HTTP/3 下为流结束） |
+| `protocol_error` | 对端帧或消息违反 RFC 6455（如未掩码、保留 opcode、非法分片或控制帧），本端已发 `1002` |
+| `invalid_payload_data` | 文本消息或 Close 原因不是 UTF-8，本端已发 `1007` |
+| `message_too_large` | 帧声明、分片累计或解压后超过接收上限，本端已发 `1009` |
+| `timeout` | 心跳 Pong 或关闭握手超时；客户端另含读取与逐次操作超时 |
+| `aborted` | 本端 `abort()`、处理器结束拆除会话或本地故障 |
+| `io_error` | 传输读写失败，含连接或 HTTP/2、HTTP/3 流被重置；服务端 `write_timeout_` 由连接扫描器直接关闭套接字，同样记为 `io_error` |
+
+- **计数口径**：RFC 6455 帧线上字节，即帧头、掩码键与负载，含 Ping/Pong/Close 控制帧；`permessage-deflate` 下为压缩后负载。
+- **计数边界**：不含 HTTP 升级握手；HTTP/2、HTTP/3 下不含 DATA 帧头、QUIC 与 TLS 开销。
+- **计数时点**：接收方向计完整解析的帧，被拒绝的帧不计；发送方向计已成功交付传输的字节；两者单调饱和于 `std::uint64_t`。
+- **访问期限**：`websocket` 失效（请求处理结束）后访问器返回 `none` 与 `0`；需要会话最终值时在处理器内 `close()` 或读到 `std::nullopt` 后读取。
 
 `websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
 
@@ -377,7 +399,7 @@ co_return c.text(body.text());
 
 - **双向异常归属**：上传失败不追溯撤销已验证完整的响应；响应尚未完成时，导致交换失败的传输或解码异常仍由响应消费入口报告。
 
-WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。`receive()` 返回 `nullopt` 表示结束；返回消息借用连接的接收存储，视图在下一次 `receive()` 或 `close()` 前有效。连接不能跨 worker 使用。
+WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.deflate()`、`.lifecycle()` 和 `.max_message_bytes()` 配置握手与消息生命周期；origin、TLS 与协议选择沿用所属 HTTP 客户端，不另建一套注册入口。`receive()` 返回 `nullopt` 表示结束；返回消息借用连接的接收存储，视图在下一次 `receive()` 或 `close()` 前有效。连接不能跨 worker 使用。`termination()`、`bytes_received()` / `bytes_sent()` 与服务端同名访问器同口径（见 [3.2](#32-ruviawebsocket-与-ruviawebsocket_message-api)）；已移出的连接返回 `none` 与 `0`。
 
 出站传输及 WebSocket 握手错误统一抛出 `http_client_error`；`handshake_rejected` 可通过 `status()` 读取拒绝响应的 HTTP 状态，消息越限使用 `message_too_large`。配置非法抛出 `std::invalid_argument`，已消费构造器或并发占用同一读写通道等调用错误抛出 `std::logic_error`。WebSocket 的 `receive`、`send`、`ping`、`pong`、`close` 接受逐次操作选项，收紧超时或附加取消。
 

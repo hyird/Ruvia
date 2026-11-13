@@ -7,6 +7,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/task.h"
+#include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/multipart_reader.h"
@@ -292,6 +293,36 @@ std::string_view websocket::peer_close_reason() const& noexcept {
         return {};
     }
     return peer_close_reason_(target_);
+}
+
+websocket_termination websocket::termination() const noexcept {
+    if (!worker_->is_current()) {
+        std::terminate();
+    }
+    if (!operation_scope_.active()) {
+        return websocket_termination::none;
+    }
+    return protocol_(target_).termination();
+}
+
+std::uint64_t websocket::bytes_received() const noexcept {
+    if (!worker_->is_current()) {
+        std::terminate();
+    }
+    if (!operation_scope_.active()) {
+        return 0;
+    }
+    return protocol_(target_).bytes_received();
+}
+
+std::uint64_t websocket::bytes_sent() const noexcept {
+    if (!worker_->is_current()) {
+        std::terminate();
+    }
+    if (!operation_scope_.active()) {
+        return 0;
+    }
+    return protocol_(target_).bytes_sent();
 }
 
 task<void> websocket::write(websocket_opcode opcode, std::string_view payload_value, bool compress) {

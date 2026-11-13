@@ -169,6 +169,15 @@ public:
     [[nodiscard]] std::string_view peer_close_reason() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view peer_close_reason() const&& = delete;
 
+    /// Why the session ended; none while it is active. The first cause wins
+    /// and stays readable once read() has returned nullopt.
+    [[nodiscard]] websocket_termination termination() const noexcept;
+    /// RFC 6455 frame bytes on the wire (header, mask key and payload, after
+    /// permessage-deflate) of data and control frames; the HTTP upgrade and
+    /// the HTTP/2 or HTTP/3 framing that carries the frames are excluded.
+    [[nodiscard]] std::uint64_t bytes_received() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
+
 private:
     template <typename connection_type>
     friend websocket detail::make_websocket_facade(
@@ -180,11 +189,12 @@ private:
     using abort_type = void (*)(void*) noexcept;
     using peer_close_code_type = std::optional<std::uint16_t> (*)(void*) noexcept;
     using peer_close_reason_type = std::string_view (*)(void*) noexcept;
+    using protocol_type = const websocket_connection& (*)(void*) noexcept;
 
     websocket(std::pmr::memory_resource& resource, const worker_handle& worker_value, void* target,
         std::string_view subprotocol_value, read_type read, write_type write, close_type close,
         abort_type abort, peer_close_code_type peer_close_code,
-        peer_close_reason_type peer_close_reason) noexcept
+        peer_close_reason_type peer_close_reason, protocol_type protocol) noexcept
         : resource_(&resource),
           worker_(&worker_value),
           target_(target),
@@ -194,7 +204,8 @@ private:
           close_(close),
           abort_(abort),
           peer_close_code_(peer_close_code),
-          peer_close_reason_(peer_close_reason) {
+          peer_close_reason_(peer_close_reason),
+          protocol_(protocol) {
         operation_scope_.bind_worker(worker_value);
     }
 
@@ -220,6 +231,7 @@ private:
     abort_type abort_;
     peer_close_code_type peer_close_code_;
     peer_close_reason_type peer_close_reason_;
+    protocol_type protocol_;
     bool read_active_{false};
     bool write_active_{false};
     ::ruvia::operation_scope operation_scope_;

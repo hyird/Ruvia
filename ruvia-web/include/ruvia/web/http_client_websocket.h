@@ -1,6 +1,7 @@
 #pragma once
 
 #include <concepts>
+#include <cstdint>
 #include <initializer_list>
 #include <memory>
 #include <memory_resource>
@@ -86,6 +87,12 @@ public:
     [[nodiscard]] std::optional<std::uint16_t> peer_close_code() const;
     [[nodiscard]] std::string_view peer_close_reason() const& RUVIA_LIFETIMEBOUND;
     std::string_view peer_close_reason() const&& = delete;
+    // The server websocket's termination() and wire byte counts, with the same
+    // meaning; a moved-from owner reports none and zero. Use on the origin's
+    // worker only.
+    [[nodiscard]] websocket_termination termination() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_received() const noexcept;
+    [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
     [[nodiscard]] const worker_handle& worker() const& RUVIA_LIFETIMEBOUND;
     const worker_handle& worker() const&& = delete;
 

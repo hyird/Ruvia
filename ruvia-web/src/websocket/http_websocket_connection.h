@@ -104,7 +104,7 @@ public:
         if (!worker_->is_current()) {
             std::terminate();
         }
-        abort_transport();
+        abort_transport(websocket_termination::aborted);
     }
 
     [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -125,6 +125,13 @@ public:
         return peer_close_.reason();
     }
     std::string_view peer_close_reason() const&& = delete;
+
+    // The protocol core is the single owner of the termination cause and the
+    // wire byte counters.
+    [[nodiscard]] const websocket_connection& protocol() const& noexcept RUVIA_LIFETIMEBOUND {
+        return protocol_;
+    }
+    const websocket_connection& protocol() const&& = delete;
 
     void require_current_worker() const noexcept {
         if (!worker_->is_current()) {
@@ -246,7 +253,7 @@ private:
 
         ~borrowed_frame_guard_type() {
             if (connection_ != nullptr) {
-                connection_->abort_transport();
+                connection_->abort_transport(websocket_termination::aborted);
             }
         }
 
@@ -323,7 +330,8 @@ private:
     task<std::error_code> write_adapted(const websocket_output_plan& plan);
     auto write_bytes(const websocket_output_plan& plan);
     void close_stream() noexcept;
-    void abort_transport(bool force_transport = false) noexcept;
+    // `cause` is recorded unless an earlier termination cause was.
+    void abort_transport(websocket_termination cause, bool force_transport = false) noexcept;
     // Aborts the transport and retains the first background write failure.
     void fail_background(std::exception_ptr failure) noexcept;
     void record_peer_close(const websocket_close_event& close_event) noexcept {
@@ -390,7 +398,7 @@ void server_websocket_connection<stream_type>::heartbeat_tick(std::int64_t now) 
             return;
         case websocket_liveness_decision::abort_transport:
             // A heartbeat or close timeout closes the connection.
-            abort_transport();
+            abort_transport(websocket_termination::timeout);
             return;
         case websocket_liveness_decision::send_ping:
             break;
@@ -441,7 +449,7 @@ task<void> server_websocket_connection<stream_type>::write_heartbeat_ping() {
 
 template <typename stream_type>
 void server_websocket_connection<stream_type>::fail_background(std::exception_ptr failure) noexcept {
-    abort_transport();
+    abort_transport(websocket_termination::aborted);
     if (background_failure_ == nullptr) {
         background_failure_ = std::move(failure);
     }
@@ -524,7 +532,7 @@ task<std::optional<websocket_message>> server_websocket_connection<stream_type>:
                 throw std::logic_error("unexpected WebSocket protocol event");
             }
         } catch (...) {
-            abort_transport(true);
+            abort_transport(websocket_termination::aborted, true);
             throw;
         }
     }
@@ -536,7 +544,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
         try {
             co_return co_await stream_.read_more(buffer_);
         } catch (const inbound_transport_error&) {
-            abort_transport(true);
+            abort_transport(websocket_termination::io_error, true);
             throw;
         }
     } else {
@@ -581,7 +589,7 @@ task<bool> server_websocket_connection<stream_type>::read_more() {
             co_return false;
         }
         if (ec) {
-            abort_transport(true);
+            abort_transport(websocket_termination::io_error, true);
             throw inbound_transport_error(ec, "failed to read websocket bytes");
         }
         buffer_.commit(bytes_read);
@@ -691,7 +699,7 @@ task<void> server_websocket_connection<stream_type>::detach_and_drain_writes() {
     // part of the same structured drain. Force a transport abort when active
     // I/O remains even if the protocol already committed its normal close.
     const bool has_active_io = read_phase_ == read_phase_type::active || write_lane_.write_in_progress();
-    abort_transport(has_active_io);
+    abort_transport(websocket_termination::aborted, has_active_io);
     while (has_operations_to_drain()) {
         if (read_phase_ != read_phase_type::idle) {
             co_await reader_done_signal_.wait();
@@ -762,9 +770,10 @@ template <typename stream_type>
 task<void> server_websocket_connection<stream_type>::flush_protocol_output_now() {
     struct flush_abort_guard final {
         server_websocket_connection* connection_;
+        websocket_termination cause_{websocket_termination::aborted};
         ~flush_abort_guard() noexcept {
             if (connection_ != nullptr) {
-                connection_->abort_transport(true);
+                connection_->abort_transport(cause_, true);
             }
         }
     } guard{this};
@@ -789,6 +798,7 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
                 ec = co_await write_bytes(plan);
             }
             if (ec) {
+                guard.cause_ = websocket_termination::io_error;
                 throw inbound_transport_error(ec, "failed to write websocket bytes");
             }
         }
@@ -805,9 +815,9 @@ task<void> server_websocket_connection<stream_type>::flush_protocol_output_now()
 }
 
 template <typename stream_type>
-void server_websocket_connection<stream_type>::abort_transport(bool force_transport) noexcept {
+void server_websocket_connection<stream_type>::abort_transport(websocket_termination cause, bool force_transport) noexcept {
     liveness_state_ = websocket_liveness_idle{};
-    const auto disposition = protocol_.abort();
+    const auto disposition = protocol_.abort(cause);
     if (force_transport || disposition == websocket_abort_disposition::abort_transport) {
         close_stream();
         notify_write_idle();

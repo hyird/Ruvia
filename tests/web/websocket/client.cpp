@@ -129,13 +129,17 @@ void check_peer_exchange(bool reply_close,
     bool succeeded = false;
     bool protocol_error = false;
     bool returned_eof = false;
+    ruvia::websocket_termination termination{};
+    std::uint64_t bytes_received = 0;
+    std::uint64_t bytes_sent = 0;
     const auto run_client = [&]() -> ruvia::task<void> {
         const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url});
         std::exception_ptr failure;
+        std::optional<ruvia::http_client_websocket> websocket;
         try {
-            auto websocket = co_await client.client().websocket("/").connect();
-            const auto greeting = co_await websocket.receive();
+            websocket.emplace(co_await client.client().websocket("/").connect());
+            const auto greeting = co_await websocket->receive();
             if (truncated_frame) {
                 returned_eof = !greeting.has_value();
             } else {
@@ -144,19 +148,19 @@ void check_peer_exchange(bool reply_close,
                     EXPECT_EQ(greeting->payload(), std::string_view("hello"));
                 }
                 if (reply_close) {
-                    auto close_operation = websocket.close({});
+                    auto close_operation = websocket->close({});
                     ruvia::task_scope closing(client.worker());
                     closing.spawn(websocket_client_test::await_output(std::move(close_operation)));
                     const bool read_rejected = co_await websocket_client_test::rejects_running_operation(
-                        websocket.receive());
+                        websocket->receive());
                     const bool write_rejected = co_await websocket_client_test::rejects_running_operation(
-                        websocket.send("overlap"));
+                        websocket->send("overlap"));
                     const bool close_rejected = co_await websocket_client_test::rejects_running_operation(
-                        websocket.close({}));
+                        websocket->close({}));
                     co_await closing.join();
                     EXPECT_TRUE(read_rejected && write_rejected && close_rejected);
                 } else {
-                    co_await websocket.close({});
+                    co_await websocket->close({});
                 }
                 succeeded = true;
             }
@@ -168,6 +172,12 @@ void check_peer_exchange(bool reply_close,
         } catch (...) {
             failure = std::current_exception();
         }
+        if (websocket) {
+            termination = websocket->termination();
+            bytes_received = websocket->bytes_received();
+            bytes_sent = websocket->bytes_sent();
+        }
+        websocket.reset();
         co_await client.shutdown();
         peer.close();
         attachment.stop();
@@ -184,10 +194,19 @@ void check_peer_exchange(bool reply_close,
     if (truncated_frame) {
         EXPECT_TRUE(!returned_eof);
         EXPECT_TRUE(protocol_error);
+        EXPECT_TRUE(termination == ruvia::websocket_termination::eof);
+        EXPECT_EQ(bytes_received, 0U);
     } else {
         EXPECT_TRUE(saw_close);
         EXPECT_EQ(succeeded, reply_close);
         EXPECT_EQ(protocol_error, !reply_close);
+        // The peer answering Close completes the client's own handshake;
+        // otherwise its EOF ends the session.
+        EXPECT_TRUE(termination == (reply_close ? ruvia::websocket_termination::local_close : ruvia::websocket_termination::eof));
+        // Received "\x82\x05hello" (7 bytes) and the 4-byte Close echo; sent a
+        // masked Close carrying 1000 (2 + 4 + 2 bytes).
+        EXPECT_EQ(bytes_received, reply_close ? 11U : 7U);
+        EXPECT_EQ(bytes_sent, 8U);
     }
 }
 
@@ -265,6 +284,7 @@ void check_server_closes_first(bool client_initiates, bool server_closes) {
             EXPECT_EQ(websocket.peer_close_reason(), std::string_view("bye"));
             completed = true;
             completed_after_server_close = server_closed;
+            EXPECT_TRUE(websocket.termination() == (client_initiates ? ruvia::websocket_termination::local_close : ruvia::websocket_termination::peer_close));
         } catch (...) {
             failure = std::current_exception();
         }
@@ -1142,8 +1162,10 @@ void check_heartbeat_policy(bool enabled) {
                 EXPECT_TRUE(timed_out);
                 EXPECT_TRUE(std::chrono::steady_clock::now() - started < std::chrono::seconds(2));
                 EXPECT_TRUE(!websocket.connected());
+                EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::timeout);
             } else {
                 co_await websocket.close();
+                EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::local_close);
             }
         } catch (...) {
             failure = std::current_exception();
@@ -1167,10 +1189,126 @@ void check_heartbeat_policy(bool enabled) {
     EXPECT_TRUE(enabled ? pings != 0 : pings == 0);
 }
 
+enum class client_failure_scenario : std::uint8_t {
+    protocol_error,
+    message_too_large,
+    aborted,
+};
+
+// The peer sends the scenario's frame, then drains the client until it ends.
+void check_client_failure_termination(client_failure_scenario scenario) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
+    const auto worker = attachment.loop().handle();
+    ruvia::worker_signal peer_done(worker);
+    std::exception_ptr peer_failure;
+    std::pmr::string close_payload{ruvia::process_resource()};
+    const auto serve = [&]() -> asio::awaitable<void> {
+        auto socket = co_await peer.async_accept(asio::use_awaitable);
+        std::pmr::string request{ruvia::process_resource()};
+        co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
+        std::pmr::string response(make_server_handshake_response(request), ruvia::process_resource());
+        if (scenario == client_failure_scenario::protocol_error) {
+            // Reserved data opcode 0x3 (RFC 6455 section 5.2).
+            response.append("\x83\x00", 2);
+        } else if (scenario == client_failure_scenario::message_too_large) {
+            response.append("\x81\x05hello", 7);
+        }
+        co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
+        try {
+            for (;;) {
+                auto frame = co_await read_client_frame(socket);
+                if (frame.opcode_ == 0x8) {
+                    close_payload = std::move(frame.payload_);
+                }
+            }
+        } catch (const std::system_error& error) {
+            if (error.code() != asio::error::eof && error.code() != asio::error::connection_reset) {
+                throw;
+            }
+        }
+    };
+    asio::co_spawn(io, serve(), [&](std::exception_ptr failure) {
+        peer_failure = failure;
+        peer_done.notify();
+    });
+    ruvia::websocket_termination termination{};
+    std::uint64_t bytes_received = 0;
+    std::uint64_t bytes_sent = 0;
+    std::optional<ruvia::http_client_error::code_type> error_code;
+    const auto run = [&]() -> ruvia::task<void> {
+        const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
+        ruvia::http_client client(attachment.loop(), {.base_url_ = base_url, .read_timeout_ = std::chrono::seconds(5)});
+        std::exception_ptr failure;
+        try {
+            auto websocket = co_await client.client().websocket("/").max_message_bytes(4).connect();
+            EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::none);
+            if (scenario == client_failure_scenario::aborted) {
+                websocket.abort();
+            } else {
+                try {
+                    (void)co_await websocket.receive();
+                } catch (const ruvia::http_client_error& error) {
+                    error_code = error.code();
+                }
+            }
+            // A later abort keeps the first cause.
+            websocket.abort();
+            termination = websocket.termination();
+            bytes_received = websocket.bytes_received();
+            bytes_sent = websocket.bytes_sent();
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await client.shutdown();
+        peer.close();
+        co_await peer_done.wait();
+        attachment.stop();
+        if (failure) {
+            std::rethrow_exception(failure);
+        }
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    root.get();
+    if (peer_failure) {
+        std::rethrow_exception(peer_failure);
+    }
+    // A rejected frame is never counted; the failure Close carries only its
+    // status code (2 + 4 + 2 bytes).
+    EXPECT_EQ(bytes_received, 0U);
+    switch (scenario) {
+        case client_failure_scenario::protocol_error:
+            EXPECT_TRUE(termination == ruvia::websocket_termination::protocol_error);
+            EXPECT_TRUE(error_code == ruvia::http_client_error::code_type::protocol_error);
+            EXPECT_EQ(close_payload, std::string_view("\x03\xea", 2));
+            EXPECT_EQ(bytes_sent, 8U);
+            break;
+        case client_failure_scenario::message_too_large:
+            EXPECT_TRUE(termination == ruvia::websocket_termination::message_too_large);
+            EXPECT_TRUE(error_code == ruvia::http_client_error::code_type::protocol_error);
+            EXPECT_EQ(close_payload, std::string_view("\x03\xf1", 2));
+            EXPECT_EQ(bytes_sent, 8U);
+            break;
+        case client_failure_scenario::aborted:
+            EXPECT_TRUE(termination == ruvia::websocket_termination::aborted);
+            EXPECT_TRUE(close_payload.empty());
+            EXPECT_EQ(bytes_sent, 0U);
+            break;
+    }
+}
+
 }  // namespace
 
 TEST(Ruvia, websocket_client_active_receive_times_out_an_unanswered_heartbeat) {
     check_heartbeat_policy(true);
+}
+
+TEST(Ruvia, websocket_client_termination_reports_protocol_failures_and_local_abort) {
+    check_client_failure_termination(client_failure_scenario::protocol_error);
+    check_client_failure_termination(client_failure_scenario::message_too_large);
+    check_client_failure_termination(client_failure_scenario::aborted);
 }
 
 TEST(Ruvia, websocket_client_absent_ping_interval_disables_heartbeat) {

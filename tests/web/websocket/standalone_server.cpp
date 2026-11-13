@@ -6,7 +6,9 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
+#include <functional>
 #include <future>
+#include <map>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -53,6 +55,13 @@ struct target final {
     asio::ip::tcp::endpoint endpoint_;
 };
 
+// What the handler observed once its session ended.
+struct session_record final {
+    ruvia::websocket_termination termination_{};
+    std::uint64_t received_{};
+    std::uint64_t sent_{};
+};
+
 struct observation final {
     unsigned entered_{};
     unsigned retired_{};
@@ -62,6 +71,19 @@ struct observation final {
     std::string_view scenario_{"startup"};
     std::optional<ruvia::task<std::optional<ruvia::websocket_message>>> expired_read_;
     std::optional<ruvia::task<ruvia::websocket*>> expired_accept_;
+    std::map<std::string, session_record, std::less<>> sessions_;
+
+    void record(std::string_view path, const ruvia::websocket& websocket) {
+        sessions_.insert_or_assign(std::string(path),
+            session_record{websocket.termination(), websocket.bytes_received(), websocket.bytes_sent()});
+    }
+    [[nodiscard]] session_record session(std::string_view path) const {
+        const auto found = sessions_.find(path);
+        if (found == sessions_.end()) {
+            throw std::runtime_error("WebSocket session outcome was not recorded");
+        }
+        return found->second;
+    }
 };
 
 struct request_retirement final {
@@ -140,9 +162,35 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         // 本地接收上限不能限制本会话的发送方向。
         co_await websocket->text(std::string(1024, 'r'), {.compress_ = false});
         EXPECT_FALSE((co_await websocket->read()).has_value());
+        observed.record(path, *websocket);
         co_return;
     }
     if (path == "/close") {
+        co_return;
+    }
+    if (path == "/abort") {
+        // Abort after the peer has its handshake response.
+        EXPECT_TRUE((co_await websocket->read()).has_value());
+        websocket->abort();
+        observed.record(path, *websocket);
+        co_return;
+    }
+    if (path == "/eof" || path == "/invalid-frame" || path == "/invalid-utf8") {
+        EXPECT_FALSE((co_await websocket->read()).has_value());
+        observed.record(path, *websocket);
+        co_return;
+    }
+    if (path == "/count") {
+        // Echoes one message after a Ping, then reads until the peer's Close.
+        auto message = co_await websocket->read();
+        if (!message) {
+            throw std::runtime_error("missing counted message");
+        }
+        const std::string payload(message->payload());
+        co_await websocket->ping("abc");
+        co_await websocket->text(payload);
+        EXPECT_FALSE((co_await websocket->read()).has_value());
+        observed.record(path, *websocket);
         co_return;
     }
     if (path == "/fail") {
@@ -152,6 +200,9 @@ ruvia::task<void> serve(ruvia::request_stream& request, observation& observed) {
         try {
             EXPECT_FALSE((co_await websocket->read()).has_value());
         } catch (const std::system_error&) {
+        }
+        if (path == "/heartbeat") {
+            observed.record(path, *websocket);
         }
         if (request.stop_token().stop_requested()) {
             ++observed.cancelled_;
@@ -316,6 +367,16 @@ public:
         frame result{first & 0x0fU, (first & 0x40U) != 0, input_.substr(offset, size)};
         input_.erase(0, offset + size);
         co_return result;
+    }
+
+    // Ends the peer's sending direction without a Close frame.
+    ruvia::task<void> finish() {
+        if (result_) {
+            co_await result_->tunnel()->finish();
+        } else {
+            std::error_code ignored;
+            socket_.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
+        }
     }
 
     void abort() {
@@ -527,6 +588,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         EXPECT_FALSE(close->compressed_);
         EXPECT_EQ(close->payload_, std::string("\x03\xf1", 2));
         co_await await_retirement(server, observed);
+        EXPECT_TRUE(observed.session("/limit").termination_ == ruvia::websocket_termination::message_too_large);
     }
     {
         observed.scenario_ = "/exchange";
@@ -562,6 +624,36 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         EXPECT_EQ(websocket.peer_close_code(), 1000);
     }
     co_await await_retirement(server, observed);
+    // Masked text (2 + 4 + 5), automatic Pong to Ping "abc" (2 + 4 + 3) and a
+    // Close carrying 1000 (2 + 4 + 2) up; Ping (2 + 3), the echo (2 + 5) and
+    // the Close echo (2 + 2) down. Deflated payloads count as compressed.
+    for (const bool deflate : {false, true}) {
+        observed.scenario_ = "/count";
+        const std::string payload = deflate ? std::string(4096, 'c') : std::string("hello");
+        auto request = client.client().websocket("/count");
+        request.subprotocol("standalone.v1");
+        if (deflate) {
+            request.deflate({.compression_ = {.enabled_ = true}});
+        }
+        auto websocket = co_await request.connect();
+        co_await websocket.send(payload);
+        const auto echo = co_await websocket.receive();
+        EXPECT_TRUE(echo && echo->payload() == payload);
+        co_await websocket.close();
+        EXPECT_TRUE(websocket.termination() == ruvia::websocket_termination::local_close);
+        co_await await_retirement(server, observed);
+        const auto counted = observed.session("/count");
+        EXPECT_TRUE(counted.termination_ == ruvia::websocket_termination::peer_close);
+        EXPECT_EQ(websocket.bytes_sent(), counted.received_);
+        EXPECT_EQ(websocket.bytes_received(), counted.sent_);
+        if (deflate) {
+            EXPECT_LT(websocket.bytes_sent(), payload.size());
+            EXPECT_LT(websocket.bytes_received(), payload.size());
+        } else {
+            EXPECT_EQ(websocket.bytes_sent(), 11U + 9U + 8U);
+            EXPECT_EQ(websocket.bytes_received(), 5U + 7U + 4U);
+        }
+    }
     for (const auto path : {"/forbidden", "/missing-subprotocol", "/cold"}) {
         observed.scenario_ = path;
         bool rejected = false;
@@ -683,6 +775,9 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         EXPECT_TRUE(retired);
         EXPECT_LT(std::chrono::steady_clock::now() - start, 2s);
         co_await await_retirement(server, observed);
+        if (path == std::string_view("/heartbeat")) {
+            EXPECT_TRUE(observed.session(path).termination_ == ruvia::websocket_termination::timeout);
+        }
     }
     {
         observed.scenario_ = "/cancel";
@@ -691,6 +786,41 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         peer.abort();
     }
     co_await await_retirement(server, observed);
+    {
+        observed.scenario_ = "/abort";
+        wire_peer peer(io);
+        co_await peer.open(client, destination, "/abort");
+        co_await peer.write(masked_frame(1, "abort"));
+        co_await await_retirement(server, observed);
+        EXPECT_TRUE(observed.session("/abort").termination_ == ruvia::websocket_termination::aborted);
+    }
+    {
+        observed.scenario_ = "/eof";
+        wire_peer peer(io);
+        co_await peer.open(client, destination, "/eof");
+        co_await peer.finish();
+        co_await await_retirement(server, observed);
+        EXPECT_TRUE(observed.session("/eof").termination_ == ruvia::websocket_termination::eof);
+    }
+    // An unmasked client frame fails as 1002, a non-UTF-8 text message as 1007.
+    for (const auto path : {"/invalid-frame", "/invalid-utf8"}) {
+        observed.scenario_ = path;
+        const bool unmasked = path == std::string_view("/invalid-frame");
+        wire_peer peer(io);
+        co_await peer.open(client, destination, path);
+        co_await peer.write(unmasked ? std::string("\x81\x01x", 3) : masked_frame(1, "\xff"));
+        const auto close = co_await peer.read_frame();
+        if (!close) {
+            throw std::runtime_error("missing protocol failure Close");
+        }
+        EXPECT_EQ(close->opcode_, 8U);
+        EXPECT_EQ(close->payload_, unmasked ? std::string("\x03\xea", 2) : std::string("\x03\xef", 2));
+        co_await await_retirement(server, observed);
+        const auto failed = observed.session(path);
+        EXPECT_TRUE(failed.termination_ == (unmasked ? ruvia::websocket_termination::protocol_error : ruvia::websocket_termination::invalid_payload_data));
+        EXPECT_EQ(failed.received_, unmasked ? 0U : 7U);
+        EXPECT_EQ(failed.sent_, 4U);
+    }
 }
 }  // namespace standalone_websocket_test
 

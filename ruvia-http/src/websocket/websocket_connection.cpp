@@ -534,6 +534,24 @@ enum class websocket_payload_storage : std::uint8_t {
     borrow,
 };
 
+[[nodiscard]] constexpr websocket_termination websocket_failure_termination(
+    detail::websocket_protocol_failure failure) noexcept {
+    switch (failure) {
+        case detail::websocket_protocol_failure::protocol_error:
+            break;
+        case detail::websocket_protocol_failure::invalid_payload_data:
+            return websocket_termination::invalid_payload_data;
+        case detail::websocket_protocol_failure::message_too_large:
+            return websocket_termination::message_too_large;
+    }
+    return websocket_termination::protocol_error;
+}
+
+void add_saturating(std::uint64_t& total, std::size_t bytes_value) noexcept {
+    const auto remaining = std::numeric_limits<std::uint64_t>::max() - total;
+    total += bytes_value < remaining ? bytes_value : remaining;
+}
+
 }  // namespace
 
 class websocket_connection::impl_type final {
@@ -724,6 +742,12 @@ public:
         input_->consume(input_->size());
     }
 
+    void record_termination(websocket_termination cause) noexcept {
+        if (termination_ == websocket_termination::none) {
+            termination_ = cause;
+        }
+    }
+
     [[nodiscard]] websocket_frame_submit_status submit_frame(
         websocket_opcode opcode, std::string_view payload_value, bool compress, websocket_payload_storage storage) {
         if (close_phase_ != close_phase_type::open) {
@@ -771,6 +795,7 @@ public:
                     deflate_->discard_compression();
                 } catch (...) {
                     close_phase_ = close_phase_type::transport_end_ready;
+                    record_termination(websocket_termination::aborted);
                     throw;
                 }
             }
@@ -811,6 +836,9 @@ public:
     void* mask_key_context_{nullptr};
 
     close_phase_type close_phase_{close_phase_type::open};
+    websocket_termination termination_{websocket_termination::none};
+    std::uint64_t bytes_received_{0};
+    std::uint64_t bytes_sent_{0};
 };
 
 void websocket_connection::impl_deleter_type::operator()(impl_type* value) const noexcept {
@@ -887,6 +915,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
         const auto protocol_failure_event = [this](detail::websocket_protocol_failure failure) {
             const auto close_code = detail::websocket_protocol_failure_close_code(failure);
             impl_->fail(close_code);
+            impl_->record_termination(websocket_failure_termination(failure));
             return websocket_event::protocol_error(close_code);
         };
 
@@ -902,6 +931,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 return protocol_failure_event(failure->error());
             }
 
+            add_saturating(impl_->bytes_received_, impl_->pending_consume_);
             const auto& frame = *read.frame();
             const auto inbound = impl_->assembler_.accept(frame, impl_->receive_message_limit_);
             if (const auto* failure = inbound.failure()) {
@@ -931,8 +961,10 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 if (impl_->close_phase_ == close_phase_type::open) {
                     impl_->append_frame(websocket_opcode::close, payload_value);
                     impl_->close_phase_ = impl_->handshake_complete_phase();
+                    impl_->record_termination(websocket_termination::peer_close);
                 } else {
                     impl_->receive_peer_close();
+                    impl_->record_termination(websocket_termination::local_close);
                 }
                 return websocket_event::close(code, reason);
             }
@@ -982,6 +1014,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
         if (impl_->close_phase_ != close_phase_type::closed) {
             impl_->close_phase_ = close_phase_type::transport_end_ready;
         }
+        impl_->record_termination(websocket_termination::aborted);
         throw;
     }
 }
@@ -1022,6 +1055,7 @@ websocket_output_consume_status websocket_connection::consume_output(std::size_t
     if (bytes_value > owned && bytes_value - owned > impl_->borrowed_output_.size()) {
         return websocket_output_consume_status::out_of_range;
     }
+    add_saturating(impl_->bytes_sent_, bytes_value);
     if (bytes_value < owned) {
         impl_->out_buffer_.consume(bytes_value);
         return websocket_output_consume_status::pending;
@@ -1054,9 +1088,11 @@ void websocket_connection::notify_transport_eof() noexcept {
     if (impl_->close_phase_ != impl_type::close_phase_type::closed) {
         impl_->close_phase_ = impl_type::close_phase_type::transport_end_ready;
     }
+    impl_->record_termination(websocket_termination::eof);
 }
 
-websocket_abort_disposition websocket_connection::abort() noexcept {
+websocket_abort_disposition websocket_connection::abort(websocket_termination cause) noexcept {
+    impl_->record_termination(cause == websocket_termination::none ? websocket_termination::aborted : cause);
     if (impl_->close_phase_ == impl_type::close_phase_type::closed) {
         return websocket_abort_disposition::no_transport_action;
     }
@@ -1066,6 +1102,18 @@ websocket_abort_disposition websocket_connection::abort() noexcept {
 
 websocket_liveness_mode websocket_connection::liveness_mode() const noexcept {
     return impl_->liveness_mode();
+}
+
+websocket_termination websocket_connection::termination() const noexcept {
+    return impl_->termination_;
+}
+
+std::uint64_t websocket_connection::bytes_received() const noexcept {
+    return impl_->bytes_received_;
+}
+
+std::uint64_t websocket_connection::bytes_sent() const noexcept {
+    return impl_->bytes_sent_;
 }
 
 websocket_frame_submit_status websocket_connection::submit_frame(

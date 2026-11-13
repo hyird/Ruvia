@@ -736,6 +736,130 @@ TEST(Ruvia, ws_public_client_requires_entropy_and_handles_transport_end) {
     EXPECT_TRUE(eof.liveness_mode() == websocket_liveness_mode::inactive);
 }
 
+TEST(Ruvia, ws_public_wire_bytes_count_whole_frames_and_close_roles_fix_termination) {
+    mask_source source;
+    http_io_buffer client_input;
+    auto client_side = client(client_input, source);
+    http_io_buffer server_input;
+    websocket_connection server(server_input);
+    EXPECT_TRUE(client_side.termination() == websocket_termination::none);
+    EXPECT_TRUE(server.termination() == websocket_termination::none);
+
+    // Masked text "hello": 2-byte header, 4-byte mask key and 5 payload bytes.
+    EXPECT_TRUE(client_side.submit_frame(websocket_opcode::text, "hello") == websocket_frame_submit_status::accepted);
+    EXPECT_EQ(client_side.bytes_sent(), 0U);
+    const auto text = drain(client_side);
+    EXPECT_EQ(text.size(), 11U);
+    EXPECT_EQ(client_side.bytes_sent(), 11U);
+    // A frame counts once it is parsed whole.
+    server_input.append(std::string_view(text).substr(0, 4));
+    EXPECT_TRUE(!server.next_event());
+    EXPECT_EQ(server.bytes_received(), 0U);
+    server_input.append(std::string_view(text).substr(4));
+    const auto message = server.next_event();
+    EXPECT_TRUE(message && message->message() && message->message()->payload() == "hello");
+    EXPECT_EQ(server.bytes_received(), 11U);
+
+    // Ping "abc" (5 bytes) and the client's automatic masked Pong (9 bytes).
+    EXPECT_TRUE(server.submit_frame(websocket_opcode::ping, "abc") == websocket_frame_submit_status::accepted);
+    client_input.append(drain(server));
+    const auto ping = client_side.next_event();
+    EXPECT_TRUE(ping && ping->ping());
+    server_input.append(drain(client_side));
+    const auto pong = server.next_event();
+    EXPECT_TRUE(pong && pong->pong() && pong->pong()->payload() == "abc");
+
+    // Client-initiated Close 1000 (8 bytes), then the server echo (4 bytes).
+    EXPECT_TRUE(client_side.submit_close(websocket_close_status::normal_closure, {}) == websocket_close_submit_status::accepted);
+    server_input.append(drain(client_side));
+    const auto close = server.next_event();
+    EXPECT_TRUE(close && close->close() && close->close()->close_code() == 1000);
+    EXPECT_TRUE(server.termination() == websocket_termination::peer_close);
+    EXPECT_TRUE(client_side.termination() == websocket_termination::none);
+    client_input.append(drain(server));
+    const auto echoed = client_side.next_event();
+    EXPECT_TRUE(echoed && echoed->close());
+    EXPECT_TRUE(client_side.termination() == websocket_termination::local_close);
+
+    EXPECT_EQ(client_side.bytes_sent(), 11U + 9U + 8U);
+    EXPECT_EQ(server.bytes_received(), client_side.bytes_sent());
+    EXPECT_EQ(server.bytes_sent(), 5U + 4U);
+    EXPECT_EQ(client_side.bytes_received(), server.bytes_sent());
+
+    // The first cause survives the transport end and any later abort.
+    server.commit_transport_end();
+    EXPECT_TRUE(server.abort(websocket_termination::io_error) == websocket_abort_disposition::no_transport_action);
+    EXPECT_TRUE(server.termination() == websocket_termination::peer_close);
+    client_side.notify_transport_eof();
+    EXPECT_TRUE(client_side.abort(websocket_termination::timeout) == websocket_abort_disposition::abort_transport);
+    EXPECT_TRUE(client_side.termination() == websocket_termination::local_close);
+}
+
+TEST(Ruvia, ws_public_termination_reports_the_first_failure_cause) {
+    // An unmasked client frame fails as 1002 and is not counted as received.
+    http_io_buffer unmasked_input;
+    websocket_connection unmasked(unmasked_input);
+    unmasked_input.append(std::string_view("\x81\x01x", 3));
+    const auto unmasked_error = unmasked.next_event();
+    EXPECT_TRUE(unmasked_error && unmasked_error->protocol_error());
+    EXPECT_TRUE(unmasked.termination() == websocket_termination::protocol_error);
+    EXPECT_EQ(unmasked.bytes_received(), 0U);
+    unmasked.notify_transport_eof();
+    EXPECT_TRUE(unmasked.termination() == websocket_termination::protocol_error);
+
+    mask_source source;
+    http_io_buffer utf8_input;
+    auto utf8 = client(utf8_input, source);
+    utf8_input.append(std::string_view("\x81\x01\xff", 3));
+    const auto utf8_error = utf8.next_event();
+    EXPECT_TRUE(utf8_error && utf8_error->protocol_error() && utf8_error->protocol_error()->close_code() == 1007);
+    EXPECT_TRUE(utf8.termination() == websocket_termination::invalid_payload_data);
+
+    http_io_buffer limited_input;
+    auto limited = client(limited_input, source, protocol_byte_limit::limited(2));
+    limited_input.append(std::string_view(
+        "\x82\x03"
+        "abc",
+        5));
+    const auto large = limited.next_event();
+    EXPECT_TRUE(large && large->protocol_error() && large->protocol_error()->close_code() == 1009);
+    EXPECT_TRUE(limited.termination() == websocket_termination::message_too_large);
+
+    http_io_buffer eof_input;
+    auto eof = client(eof_input, source);
+    eof.notify_transport_eof();
+    EXPECT_TRUE(eof.termination() == websocket_termination::eof);
+    (void)eof.abort(websocket_termination::timeout);
+    EXPECT_TRUE(eof.termination() == websocket_termination::eof);
+
+    for (const auto cause : {websocket_termination::none, websocket_termination::aborted,
+             websocket_termination::timeout, websocket_termination::io_error}) {
+        http_io_buffer input;
+        websocket_connection connection(input);
+        EXPECT_TRUE(connection.abort(cause) == websocket_abort_disposition::abort_transport);
+        connection.notify_transport_eof();
+        EXPECT_TRUE(connection.termination() == (cause == websocket_termination::none ? websocket_termination::aborted : cause));
+    }
+}
+
+TEST(Ruvia, ws_public_wire_bytes_count_deflated_payloads) {
+    mask_source source;
+    const websocket_compression compression{.enabled_ = true};
+    http_io_buffer server_input;
+    websocket_connection server(server_input, {.compression_ = compression});
+    http_io_buffer client_input;
+    websocket_connection client_side(client_input, {.compression_ = compression, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &source});
+    const std::pmr::string payload_value(4096, 'x');
+    EXPECT_TRUE(server.submit_frame(websocket_opcode::text, payload_value) == websocket_frame_submit_status::accepted);
+    const auto wire = drain(server);
+    EXPECT_TRUE(wire.size() < payload_value.size());
+    EXPECT_EQ(server.bytes_sent(), wire.size());
+    client_input.append(wire);
+    const auto message = client_side.next_event();
+    EXPECT_TRUE(message && message->message() && message->message()->payload() == payload_value);
+    EXPECT_EQ(client_side.bytes_received(), wire.size());
+}
+
 TEST(Ruvia, ws_public_connection_reuses_buffers_and_releases_owned_memory) {
     counting_resource resource;
     mask_source source;
