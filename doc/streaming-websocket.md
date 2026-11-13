@@ -287,7 +287,8 @@ private:
 - **计数时点**：接收方向计完整解析的帧，被拒绝的帧不计；发送方向计已成功交付传输的字节；两者单调饱和于 `std::uint64_t`。
 - **访问期限**：`websocket` 失效（请求处理结束）后访问器返回 `none` 与 `0`；需要会话最终值时在处理器内 `close()` 或读到 `std::nullopt` 后读取。
 
-- **WebSocket 关闭码范围与校验**：`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
+- **WebSocket 关闭码范围与校验**：`websocket_close_options::code_` 与 Sans-I/O `websocket_connection::submit_close()` 共用受检值类型 `websocket_close_code`，拒绝隐式整数转换。使用 `websocket_close_status::{normal_closure, going_away, internal_error}` 常量，或通过 `websocket_close_code::from_value(input)` 在原始整数宽度校验；非法值抛 `std::invalid_argument`，`try_from_value(input)` 返回 `nullopt`，拒绝时尚未进入关闭操作。不要先转换成 `uint16_t`：`66536`、`-64536` 不能截断成正常关闭 `1000`。
+- **关闭码合法区间与原因校验**：可表示当前支持的 `1000..1003`、`1007..1014` 与 `3000..4999`，不允许本地哨兵码 `1005` / `1006` 或保留码上网；`1010` 仍只允许客户端主动发送（RFC 6455 §7.4.1）。接收事件的 `close_code()` 保留整数语义，包括未出示状态时的本地 `1005`，不能未经检查直接复用于发送。
 
 `websocket_message` 方法：
 - `opcode()`（`websocket_opcode::text` 或 `binary`）
@@ -367,7 +368,8 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 - **操作生命周期**：Capsule、Datagram 与 UDP 门面共享同一对读写通道租约，同方向拒绝重叠。销毁门面前必须等待已启动操作结束；未启动冷任务随门面销毁失效。
 - **输入与结果所有权**：切换输入或关闭时，先清除借用视图，再释放缓冲并重置输入游标。已交付的 `http_capsule` / `http_datagram` 独立拥有负载，不受后续读取、门面析构或客户端停机影响，但必须在所属 worker 上释放。
 
-- **未知 Capsule 流式跳过**：Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
+- **未知 Capsule 流式跳过**：Capsule 解析遵循 [RFC 9297 §3.2](https://www.rfc-editor.org/rfc/rfc9297.html#section-3.2)：读取方不使用的 Capsule 被静默丢弃并跳过，不缓冲、不触发回调，也不受 `http_capsule_config::max_capsule_length_` 约束——`datagrams()` 丢弃 `DATAGRAM` 以外的类型，`udp()` 还会丢弃 Context ID 非 0 的 `DATAGRAM`（RFC 9298 §4，长度上限在读出 Context ID 之后才判断）；`capsules()` 保留全部类型，因此上限作用于每个 Capsule。
+- **畸形 Capsule 复位与终止**：保留的 Capsule 超过上限、流在 Capsule 中途结束或 `DATAGRAM` 格式错误时按畸形消息处理（RFC 9297 §3.3）：读取抛出异常并中止隧道，HTTP/2 隧道以 `RST_STREAM(PROTOCOL_ERROR)` 复位该流（RFC 9113 §8.1.1），HTTP/1.1 关闭连接。
 
 HTTP/3 的畸形 Capsule 中止对应流并使用 `H3_MESSAGE_ERROR`；原生 HTTP Datagram 的关联前缀与 SETTINGS 错误由协议层按 RFC 9297 处理，不混同于 Capsule 流解析错误。
 
@@ -476,7 +478,8 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
 运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
-- **重定向策略与跨源凭据剥离**：自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
+- **重定向策略与跨源凭据剥离**：自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。
+- **重定向回调与跳数追踪**：`.on_redirect(bool(const http_client_redirect_hop&))` / `.on_redirect(task<bool>(const http_client_redirect_hop&, stop_token))` 在每一跳（含同源与跨源）跳转前回调源 origin、源/目标 URL、连接信息（`peer_ip_` 为强类型 `ip_address`）与重定向状态码，返回 `false` 立即停止跟随并返回当前重定向响应；后续跳发生连接或超时失败时，`http_client_error::redirect_hops()` / `followed_redirect()` 标识已完成的前序跳数。`upload()` 流式上传在收到将方法改写为 `GET`（丢弃请求体）的 `301`/`302`/`303` 响应时自动停止上传并继续按重定向策略跟随。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
 | 回源能力 | 入口与契约 |
 | --- | --- |

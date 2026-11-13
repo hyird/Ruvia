@@ -13,7 +13,7 @@ endfunction()
 
 function(ruvia_apply_test_support_includes name lib)
     target_include_directories(${name} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/support)
+        ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${name} PRIVATE
         RUVIA_TEST_TEMP_ROOT="${PROJECT_SOURCE_DIR}/build/test-tmp")
     if(NOT "${lib}" STREQUAL "ruvia::core" AND NOT "${lib}" STREQUAL "ruvia::http" AND NOT "${lib}" STREQUAL "ruvia::web")
@@ -26,7 +26,7 @@ function(ruvia_add_test name lib)
     if(NOT test_SOURCES)
         message(FATAL_ERROR "test executable ${name} requires SOURCES")
     endif()
-    add_executable(${name} ${test_SOURCES} support/test_main.cpp)
+    add_executable(${name} ${test_SOURCES} test_main.cpp)
     target_link_libraries(${name} PRIVATE ${lib} GTest::gtest)
     ruvia_apply_test_support_includes(${name} ${lib})
     ruvia_apply_test_warnings(${name})
