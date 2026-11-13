@@ -5,7 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 namespace ruvia {
 

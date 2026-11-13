@@ -6,8 +6,8 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {

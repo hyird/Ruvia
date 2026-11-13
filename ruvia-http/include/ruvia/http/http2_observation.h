@@ -8,8 +8,7 @@
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http2_types.h"
-
+#include "ruvia/http/http2_framing.h"
 namespace ruvia {
 
 // A complete received frame, before its final payload fragment is processed.

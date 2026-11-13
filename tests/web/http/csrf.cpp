@@ -1,5 +1,3 @@
-#include "ruvia/web/csrf.h"
-
 #include <gtest/gtest.h>
 
 #include <cstdint>
@@ -8,7 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/testing.h"

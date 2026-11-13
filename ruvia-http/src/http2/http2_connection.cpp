@@ -8,11 +8,10 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/http_priority.h"
 
-#include "memory/http_c_library_memory.h"
-
+#include "http_wire_sink.h"
 namespace ruvia::detail {
 
 namespace {

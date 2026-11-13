@@ -16,7 +16,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
-#include "ruvia/http/http_push.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"

@@ -1,5 +1,3 @@
-#include "field/http_field_kind.h"
-
 #include <algorithm>
 #include <array>
 #include <bit>
@@ -12,14 +10,12 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_conditional_request.h"
-#include "ruvia/http/http_date.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hop_by_hop.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_priority.h"
-#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response.h"
 
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
@@ -32,16 +28,13 @@
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_values.h"
-#include "ruvia/http/http_protocol_managed_fields.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "coding/http_content_coding.h"
+#include "coding/http_zlib_stream.h"
 #include "field/http_connection_fields.h"
-#include "field/http_request_field_validation.h"
-#include "field/http_structured_fields.h"
 #include "http1/http_header_block_parser.h"
-#include "parser/http_request_target.h"
-#include "request/http_request_access.h"
+#include "http_request_access.h"
+#include "parser/http_uri_grammar.h"
 #include "response/http_response_header_state.h"
 
 namespace ruvia::detail {

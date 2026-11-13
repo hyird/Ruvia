@@ -11,7 +11,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_error.h"

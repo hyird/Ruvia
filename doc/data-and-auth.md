@@ -11,7 +11,7 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_session.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_mapping.h"`、`"ruvia/web/db/db_schema.h"`）。
+聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_session.h"`、`"ruvia/web/db/db_entity.h"`、`"ruvia/web/db/db_schema.h"`）。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
@@ -194,7 +194,7 @@ auto report = co_await migrator.migrate(migrations);
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
-  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/entity_rows.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
+  `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/model.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
@@ -359,7 +359,7 @@ mixed.with("samples", samples).from_cte("samples")
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
-### 3.5 独立字段与实体映射（`"ruvia/web/db/db_mapping.h"`）
+### 3.5 独立字段与实体映射（`"ruvia/web/db/db_entity.h"`）
 
 | 公开入口 | 结果与边界 |
 | --- | --- |
@@ -553,14 +553,14 @@ auto reply = co_await redis.command(std::move(command));
 
 ---
 
-## 5. JWT 认证（`"ruvia/web/auth/jwt.h"`）
+## 5. JWT 认证（`"ruvia/web/jwt.h"`）
 
 参考示例：[examples/web/auth_jwt.cpp](../examples/web/auth_jwt.cpp)。
 
 支持 `jwt_algorithm::hs256`、`hs384`、`hs512`。遵循 RFC 7518 密钥最小长度要求（HS256 至少 32 字节、HS384 至少 48 字节、HS512 至少 64 字节）：
 
 ```cpp
-#include "ruvia/web/auth/jwt.h"
+#include "ruvia/web/jwt.h"
 
 // 1. 签发 Token：
 inline constexpr std::array<ruvia::jwt_claim_view, 1> custom_claims{{

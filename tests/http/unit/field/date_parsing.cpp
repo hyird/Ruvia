@@ -8,8 +8,6 @@
 #include <utility>
 
 #include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_date.h"
-
 namespace {
 
 std::string format_date(std::time_t time) {

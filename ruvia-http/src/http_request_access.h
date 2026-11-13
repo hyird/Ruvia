@@ -8,12 +8,9 @@
 #include <string_view>
 
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 
-#include "field/http_field_kind.h"
-#include "field/http_request_field_validation.h"
-
+#include "field/http_connection_fields.h"
 namespace ruvia::detail {
 
 struct http_request_access final {

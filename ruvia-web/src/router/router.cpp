@@ -12,7 +12,7 @@
 
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_connect_udp.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 

@@ -5,7 +5,7 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_mapping.h"
+#include "ruvia/web/db/db_entity.h"
 
 #include "backend_client_fixture.h"
 #include "test_io_context.h"

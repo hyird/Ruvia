@@ -12,7 +12,7 @@
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/websocket_client_negotiation.h"
+#include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client_types.h"
 
 namespace ruvia::detail {

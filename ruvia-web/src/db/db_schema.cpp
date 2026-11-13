@@ -6,7 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_sql_format.h"

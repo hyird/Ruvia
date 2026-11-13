@@ -24,8 +24,7 @@
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/tls_config.h"
 
-#include "tls/tls_credential.h"
-
+#include "tls/tls_protocol_policy.h"
 namespace ruvia::detail {
 
 #if defined(_WIN32)

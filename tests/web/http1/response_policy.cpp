@@ -29,7 +29,6 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/security_headers.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/streaming.h"

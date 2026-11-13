@@ -1,5 +1,3 @@
-#include "ruvia/core/memory.h"
-
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define RUVIA_SANITIZER_ALLOCATOR 1
 #elif defined(__has_feature)

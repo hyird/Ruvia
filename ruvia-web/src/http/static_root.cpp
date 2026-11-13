@@ -21,8 +21,8 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_content_codec.h"
-#include "ruvia/http/http_date.h"
+#include "ruvia/http/http_cache.h"
+#include "ruvia/http/http_content_coding.h"
 
 #include "http/inline_http_header_views.h"
 #include "http/static_file_variant.h"

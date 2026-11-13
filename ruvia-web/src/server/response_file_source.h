@@ -14,7 +14,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_file.h"
 

@@ -19,7 +19,6 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_signal.h"

@@ -23,7 +23,6 @@
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_fingerprint.h"
 #include "ruvia/http/http_hop_by_hop.h"
-#include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/http/http_request_target.h"
 
 namespace {

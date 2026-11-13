@@ -14,9 +14,9 @@
 #include <string_view>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/auth/jwt.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
+#include "ruvia/web/jwt.h"
 
 namespace {
 

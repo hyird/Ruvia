@@ -21,7 +21,7 @@
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
-#include "ratelimit/rate_limiter.h"
+#include "http/inline_http_header_views.h"
 #include "router/route_table.h"
 #include "server/config_validation.h"
 #include "server/http_server_options.h"

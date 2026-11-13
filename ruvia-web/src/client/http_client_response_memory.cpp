@@ -1,18 +1,36 @@
 #include "client/http_client_response_memory.h"
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <exception>
 #include <limits>
 #include <memory>
 #include <new>
 #include <optional>
+#include <ranges>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
+#include <vector>
 
+#include "ruvia/core/operation_deadline.h"
+#include "ruvia/http/cookies.h"
+#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_values.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/http_client_types.h"
 
+#include "client/client_tls.h"
+#include "client/http_client_config_storage.h"
 #include "client/http_client_pool.h"
+#include "client/http_client_request_storage.h"
 #include "client/http_client_response_state.h"
 
 namespace ruvia::detail {
@@ -419,6 +437,335 @@ void http_client_worker_limits::end_dns_refresh() noexcept {
 http_client_worker_services make_http_client_worker_services(const http_client_worker_config& config) {
     return {.result_budget_ = std::make_shared<http_client_result_budget_domain>(config.result_budget_),
         .limits_ = std::make_shared<http_client_worker_limits>(config)};
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+client_request_policy::client_request_policy(const http_client_config_storage& config)
+    : config_(config),
+      jar_(config.scheme_, config.host_,
+          {.max_cookies_ = config.max_cookies_,
+              .max_cookie_bytes_ = config.max_cookie_bytes_}) {
+    for (const auto& cookie : config.cookies_) {
+        jar_.add_configured_cookie(cookie.name(), cookie.value());
+    }
+}
+
+bool client_request_policy::addresses_origin(const http_client_request_storage& request) const noexcept {
+    return (!request.is_tunnel() || request.is_upgrade()) && request.route().alias_origin_;
+}
+
+http_client_request_view client_request_policy::prepare_request(
+    const http_client_request_storage& request, client_prepared_request_scratch& scratch) {
+    const auto& input_headers = request.headers();
+    const auto max_prepared_headers = input_headers.size() + 2;
+    http_header_view* prepared_begin = scratch.inline_headers_.data();
+    if (max_prepared_headers > scratch.inline_headers_.size()) {
+        scratch.overflow_headers_.resize(max_prepared_headers);
+        prepared_begin = scratch.overflow_headers_.data();
+    }
+    std::size_t index = 0;
+    bool add_user_agent = !config_.user_agent_.empty();
+    scratch.overflow_cookie_header_.clear();
+    std::size_t inline_cookie_size = 0;
+    bool cookie_overflowed = false;
+    // RFC 6265 section 4.2.1: cookie-pairs are joined by "; ".
+    const auto ensure_cookie_space = [&](std::size_t count) -> char* {
+        const auto current_size = cookie_overflowed ? scratch.overflow_cookie_header_.size() : inline_cookie_size;
+        const auto separator_bytes = current_size == 0 ? std::size_t{0} : std::size_t{2};
+        const auto total_needed = separator_bytes + count;
+        if (total_needed == 0) {
+            return scratch.inline_cookie_header_.data();
+        }
+        if (!cookie_overflowed && total_needed <= scratch.inline_cookie_header_.size() - inline_cookie_size) {
+            char* cursor = scratch.inline_cookie_header_.data() + inline_cookie_size;
+            if (separator_bytes != 0) {
+                *cursor++ = ';';
+                *cursor++ = ' ';
+            }
+            inline_cookie_size += total_needed;
+            return cursor;
+        }
+        if (!cookie_overflowed) {
+            scratch.overflow_cookie_header_.reserve(
+                std::max(inline_cookie_size + total_needed, scratch.inline_cookie_header_.size() * 2));
+            scratch.overflow_cookie_header_.append(scratch.inline_cookie_header_.data(), inline_cookie_size);
+            cookie_overflowed = true;
+        }
+        const auto old_size = scratch.overflow_cookie_header_.size();
+        if (old_size + total_needed > scratch.overflow_cookie_header_.capacity()) {
+            scratch.overflow_cookie_header_.reserve(
+                std::max(old_size + total_needed, scratch.overflow_cookie_header_.capacity() * 2));
+        }
+        scratch.overflow_cookie_header_.resize(old_size + total_needed);
+        char* cursor = scratch.overflow_cookie_header_.data() + old_size;
+        if (separator_bytes != 0) {
+            *cursor++ = ';';
+            *cursor++ = ' ';
+        }
+        return cursor;
+    };
+    // Request storage preserves caller field-name spelling.
+    for (const auto& field : input_headers) {
+        const auto name = field.name();
+        if (add_user_agent && name.size() == 10U && http_ascii_equals_ignore_case(name, "user-agent")) {
+            add_user_agent = false;
+        }
+        if (name.size() == 6U && http_ascii_equals_ignore_case(name, "cookie")) {
+            const auto value = field.value();
+            std::ranges::copy(value, ensure_cookie_space(value.size()));
+            continue;
+        }
+        prepared_begin[index++] = http_header_view{name, field.value()};
+    }
+
+    // RFC 9110 §9.3.8: TRACE reflects the request, so stored credentials stay
+    // out; caller-written Cookie fields above remain the caller's choice.
+    // Stored cookies belong to the fixed origin (RFC 6265 §5.4): a tunnel to
+    // another authority carries none. Empty jars have no expiry or path
+    // constraints to inspect.
+    if (!jar_.empty() && request.method() != "TRACE" && addresses_origin(request)) {
+        const bool include_received =
+            config_.received_cookies_ != http_client_received_cookie_policy::ignore;
+        jar_.visit_matching_cookies(request.target(), include_received,
+            std::chrono::system_clock::now(),
+            [&](std::string_view name, std::string_view value) {
+                const auto pair_size = cookie_request_pair_size(name, value);
+                (void)write_cookie_request_pair(ensure_cookie_space(pair_size), name, value);
+            });
+    }
+    const auto cookie_header_view =
+        cookie_overflowed ? std::string_view(scratch.overflow_cookie_header_)
+                          : std::string_view(scratch.inline_cookie_header_.data(), inline_cookie_size);
+    if (add_user_agent) {
+        prepared_begin[index++] = http_header_view{"user-agent", config_.user_agent_};
+    }
+    if (!cookie_header_view.empty()) {
+        prepared_begin[index++] = http_header_view{"cookie", cookie_header_view};
+    }
+    http_client_request_view result;
+    result.method_ = request.method();
+    result.target_ = request.target();
+    result.headers_ = std::span<const http_header_view>(prepared_begin, index);
+    result.content_ = request.has_body() ? http_client_request_content_view::bytes(request.body())
+                                         : http_client_request_content_view::none();
+    return result;
+}
+
+void client_request_policy::retain_response_cookies(
+    std::string_view request_target, std::span<const http_header> headers) {
+    if (config_.received_cookies_ == http_client_received_cookie_policy::ignore) {
+        return;
+    }
+    jar_.retain_response_cookies(request_target, headers);
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+namespace {
+
+// An encoded body must be collected to FIN before any bytes can be returned
+// to the consumer.
+void configure_http_client_response_decoding(http_client_response_state& state_value) {
+    state_value.body_decode_required_ = false;
+    state_value.content_coding_.reset();
+    const auto* plan = state_value.response_body_plan_ ? &*state_value.response_body_plan_ : nullptr;
+    // A 206 body (single range or multipart/byteranges) holds slices of the
+    // encoded representation that cannot be decoded alone (RFC 9110 §14,
+    // §15.3.7); it is exposed as received, with Content-Encoding kept.
+    if (!state_value.decode_content_ || plan == nullptr || plan->body_suppressed() || !plan->status_allows_body() ||
+        plan->content_semantics() != http_response_content_semantics::with_content ||
+        state_value.status_.status() == http_status::partial_content) {
+        return;
+    }
+    // Parsed once with the final head; decoding reuses this result at FIN.
+    auto& parsed_coding = state_value.content_coding_.emplace(
+        parse_http_content_coding_headers(state_value.headers_));
+    // Content codings are an open registry (RFC 9110 §8.4.1, §16.6.1), and a
+    // request without Accept-Encoding accepts every coding (§12.5.3). A
+    // syntactically valid stack this client cannot fully decode is therefore
+    // exposed as received, with Content-Encoding kept, like a 206 body.
+    if (const auto* unsupported = parsed_coding.unsupported()) {
+        if (!unsupported->depth_exceeded()) {
+            state_value.content_coding_.reset();
+            return;
+        }
+    }
+    const bool transforms_body = std::ranges::any_of(parsed_coding.codings(), [](http_content_coding coding) {
+        return coding != http_content_coding::identity;
+    });
+    state_value.body_decode_required_ =
+        parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr || transforms_body;
+    if (state_value.body_decode_required_) {
+        state_value.collect_all_ = true;
+    } else {
+        state_value.content_coding_.reset();
+    }
+}
+
+// Uses the parser-computed body plan and keeps decoded output bounded by the
+// response's configured byte limit.
+void decode_http_client_response_body(http_client_response_state& state_value,
+    bool content_semantics_present, std::size_t max_decoded_bytes) {
+    if (!content_semantics_present || !state_value.body_decode_required_) {
+        return;
+    }
+    try {
+        const auto& parsed_coding = *state_value.content_coding_;
+        if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
+            throw http_client_error(make_error_code(http_client_errc::protocol_error),
+                "invalid HTTP response Content-Encoding");
+        }
+        // Encoded bytes are never exposed, so the unread part of buffered_ and
+        // pending_ together are the whole body. Decode in place when one holds it.
+        const auto buffered_bytes = state_value.buffered_.size() - state_value.offset_;
+        std::string joined;
+        std::string_view encoded;
+        if (state_value.pending_.empty()) {
+            encoded = std::string_view(state_value.buffered_).substr(state_value.offset_);
+        } else if (buffered_bytes == 0) {
+            encoded = state_value.pending_;
+        } else {
+            if (state_value.pending_.size() > std::numeric_limits<std::size_t>::max() - buffered_bytes) {
+                throw http_client_error(make_error_code(http_client_errc::response_too_large),
+                    "HTTP response exceeds configured byte limit");
+            }
+            joined.reserve(buffered_bytes + state_value.pending_.size());
+            joined.append(state_value.buffered_.data() + state_value.offset_, buffered_bytes);
+            joined.append(state_value.pending_);
+            encoded = joined;
+        }
+
+        const auto decoded_limit = std::min(max_decoded_bytes, state_value.buffered_limit_);
+        auto decoded = decode_http_content(
+            parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit});
+        if (auto* decoded_body = std::get_if<std::string>(&decoded)) {
+            std::string empty_buffered;
+            std::string empty_pending;
+            state_value.buffered_.swap(empty_buffered);
+            state_value.pending_.swap(empty_pending);
+            state_value.buffered_.swap(*decoded_body);
+            state_value.offset_ = 0;
+            state_value.body_decode_required_ = false;
+            state_value.content_coding_.reset();
+            std::erase_if(state_value.headers_, [](const http_header& field) noexcept {
+                return http_ascii_equals_ignore_case(field.name(), "Content-Encoding") ||
+                       http_ascii_equals_ignore_case(field.name(), "Content-Length");
+            });
+            state_value.notify_producer_space();
+            return;
+        }
+        const auto* failure = std::get_if<http_content_decode_error>(&decoded);
+        if (failure != nullptr && *failure == http_content_decode_error::decoded_size_exceeded) {
+            throw http_client_error(make_error_code(http_client_errc::response_too_large),
+                "HTTP response exceeds configured byte limit");
+        }
+        throw http_client_error(make_error_code(http_client_errc::protocol_error),
+            "invalid HTTP response Content-Encoding");
+    } catch (...) {
+        // Encoded bytes were never exposed: the head selected collection before
+        // waking any consumer. Release that retained input on every decode error.
+        state_value.content_coding_.reset();
+        state_value.discard_response_body();
+        throw;
+    }
+}
+
+[[noreturn]] void throw_body_decoding_timeout() {
+    throw http_client_error(std::make_error_code(std::errc::timed_out), "HTTP response body decoding timed out");
+}
+
+}  // namespace
+
+void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket,
+    http_status_code status, std::span<const http_header> headers, bool stream_ended,
+    std::string_view error_message) {
+    if (!status.is_successful() || stream_ended) {
+        throw http_client_error(make_error_code(http_client_errc::handshake_rejected), error_message, status);
+    }
+    const auto negotiated = websocket.negotiation_.validate_fields(headers);
+    const auto* selected = std::get_if<websocket_client_negotiation_result_view>(&negotiated);
+    if (selected == nullptr) {
+        throw http_client_error(make_error_code(http_client_errc::handshake_rejected), error_message, status);
+    }
+    websocket.selected_subprotocol_.assign(selected->selected_subprotocol_);
+    websocket.compression_ = selected->compression_;
+}
+
+void retain_http_client_binary_response_head(http_client_response_state& state_value, http_client_response_head&& head) {
+    const auto status = head.status();
+    state_value.content_length_ = head.content_length();
+    auto fields = std::move(head).take_headers();
+    state_value.headers_ = std::move(fields);
+    const auto body_plan = plan_http_response_body(state_value.request_method_, status);
+    state_value.framing_ = body_plan.content_semantics() == http_response_content_semantics::connect_tunnel
+                               ? http_client_response_framing::tunnel
+                           : body_plan.body_suppressed() ? http_client_response_framing::none
+                                                         : http_client_response_framing::stream;
+}
+
+void publish_http_client_final_head(
+    http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head) {
+    if (state_value.upload_ && !state_value.upload_->output_.ended_) {
+        const auto status = head.status_.status();
+        const bool rewrite_upload_redirect =
+            state_value.upload_->redirect_request_ != nullptr &&
+            (status == http_status::see_other ||
+                ((status == http_status::moved_permanently || status == http_status::found) &&
+                    state_value.request_method_ == http_known_method::post));
+        if (head.request_content_signal_ == http_client_request_content_signal::exchange_complete ||
+            rewrite_upload_redirect) {
+            if (rewrite_upload_redirect) {
+                state_value.upload_->abandoned_ = true;
+            }
+            state_value.upload_->output_.stop();
+        }
+    }
+    state_value.status_ = head.status_;
+    state_value.protocol_version_ = head.protocol_version_;
+    state_value.response_body_plan_ = plan_http_response_body(state_value.request_method_, state_value.status_.status());
+    // A received final head changes the jar before consumers can issue
+    // another request, regardless of body completion or abandonment.
+    if (head.origin_target_) {
+        policy.retain_response_cookies(*head.origin_target_, state_value.headers_);
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    if (state_value.route_ != nullptr && state_value.pool_ != nullptr) {
+        state_value.pool_->observe_alt_svc(*state_value.route_, state_value.headers_);
+    }
+#endif
+    auto* const tunnel = state_value.tunnel_ ? &*state_value.tunnel_ : nullptr;
+    if (tunnel != nullptr) {
+        if (head.opens_tunnel_ && tunnel->udp_ &&
+            validate_http_connect_udp_response(
+                state_value.protocol_version_, state_value.status_.status().value(), state_value.headers_)
+                .has_value()) {
+            throw http_client_error(make_error_code(http_client_errc::protocol_error), "invalid CONNECT-UDP response head");
+        }
+        tunnel->accepted_ = head.opens_tunnel_;
+        if (!tunnel->accepted_) {
+            tunnel->output_.stop();
+        }
+    }
+    if (tunnel == nullptr || !tunnel->accepted_) {
+        configure_http_client_response_decoding(state_value);
+    }
+    state_value.head_ready_ = true;
+    state_value.head_signal_.notify();
+}
+
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
+    bool content_semantics_present, std::size_t max_decoded_bytes) {
+    if (timeout.expired()) {
+        throw_body_decoding_timeout();
+    }
+    decode_http_client_response_body(state_value, content_semantics_present, max_decoded_bytes);
+    if (timeout.expired()) {
+        throw_body_decoding_timeout();
+    }
 }
 
 }  // namespace ruvia::detail

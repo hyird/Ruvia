@@ -6,8 +6,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http1_chunked_framing.h"
-
+#include "ruvia/http/http1_chunked_body_decoder.h"
 TEST(Ruvia, http1_chunk_header_encodes_lowercase_hex_and_crlf) {
     const ruvia::http1_chunk_header zero(0);
     const ruvia::http1_chunk_header fifteen(15);

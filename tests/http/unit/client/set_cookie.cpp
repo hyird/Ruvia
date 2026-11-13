@@ -11,8 +11,6 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_set_cookie.h"
-
 TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
     std::uint64_t state_value = 0x5345'5443'4F4F'4B49ULL;
     const auto next_value = [&state_value]() {

@@ -23,10 +23,8 @@
 #include <variant>
 #include <vector>
 
-#include "coding/http_content_coding.h"
 #include "coding/http_zlib_stream.h"
-#include "memory/http_c_library_memory.h"
-
+#include "http_wire_sink.h"
 // Brotli (RFC 7932) state with tracked working memory.
 // Brotli retains the allocator context as its opaque pointer, so these types are
 // pinned: owners embed them in storage whose address never changes.

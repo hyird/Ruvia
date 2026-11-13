@@ -10,8 +10,6 @@
 #include <utility>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_set_cookie.h"
-
 namespace {
 
 // True if a public cookie plan rejects the options.

@@ -13,10 +13,8 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "field/http_connection_fields.h"
-#include "parser/http_request_target.h"
+#include "http_request_access.h"
 #include "parser/http_uri_grammar.h"
-#include "request/http_request_access.h"
-
 namespace ruvia {
 
 http_connect_udp_target::http_connect_udp_target(std::string host, port_number port) noexcept

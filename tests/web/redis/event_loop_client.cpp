@@ -33,7 +33,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/redis/redis_repository.h"
 #include "ruvia/web/redis/redis_session.h"

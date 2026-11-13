@@ -1,5 +1,4 @@
-#include "ruvia/web/auth/jwt.h"
-
+#include "ruvia/web/jwt.h"
 #ifdef RUVIA_ENABLE_JWT
 
 #include <algorithm>
@@ -25,8 +24,6 @@
 #include "ruvia/http/http_utf8.h"
 #include "ruvia/web/model.h"
 
-#include "auth/constant_time.h"
-#include "auth/cookie_signature.h"
 #include "http/inline_http_header_views.h"
 
 namespace ruvia {

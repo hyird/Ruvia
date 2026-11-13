@@ -7,15 +7,13 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_client_response_head.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_status.h"
 
 #include "field/http_connection_fields.h"
-#include "field/http_field_kind.h"
-#include "http1/http_client_response_head.h"
 #include "http1/http_header_block_parser.h"
 #include "response/http_response_header_state.h"
 

@@ -1,5 +1,3 @@
-#include "ruvia/web/security_headers.h"
-
 #include <gtest/gtest.h>
 
 #include <bit>
@@ -10,6 +8,7 @@
 #include <vector>
 
 #include "ruvia/web/context.h"
+#include "ruvia/web/middleware.h"
 
 #include "context_request_fixture.h"
 

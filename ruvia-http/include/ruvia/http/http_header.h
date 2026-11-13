@@ -2,6 +2,7 @@
 
 #include <concepts>
 #include <cstddef>
+#include <cstdint>
 #include <cstring>
 #include <initializer_list>
 #include <iterator>
@@ -16,6 +17,58 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
+
+namespace ruvia {
+
+// Protocol version is HTTP message control data, not a borrowed wire token.
+// HTTP/1 carries it in the start-line; HTTP/2 and HTTP/3 establish it from
+// connection framing even though no textual version appears in a field block.
+enum class http_protocol_version : std::uint8_t {
+    http10,
+    http11,
+    http2,
+    http3,
+};
+
+}  // namespace ruvia
+
+namespace ruvia {
+enum class http_scheme : std::uint8_t {
+    http,
+    https,
+};
+
+enum class http_known_method : std::uint8_t {
+    get,
+    post,
+    put,
+    delete_value,
+    patch,
+    head,
+    options,
+    connect,
+    unknown
+};
+
+[[nodiscard]] constexpr std::uint32_t http_known_method_bit(http_known_method method) noexcept {
+    return method == http_known_method::unknown
+               ? 0U
+               : (std::uint32_t{1} << static_cast<std::uint32_t>(method));
+}
+
+// HTTP methods are an extensible, case-sensitive token space. http_known_method is
+// only the framework's fixed semantic classification; it is never the wire value.
+[[nodiscard]] http_known_method classify_http_method(std::string_view method) noexcept;
+[[nodiscard]] std::string_view known_http_method_token(http_known_method method) noexcept;
+[[nodiscard]] bool is_valid_http_method_token(std::string_view method) noexcept;
+
+// RFC 9110 method properties over the exact, case-sensitive wire token. Unknown
+// extension methods are conservatively neither safe nor idempotent; TRACE is
+// recognized even though it is intentionally not a routable fixed enum member.
+[[nodiscard]] bool is_http_method_safe(std::string_view method) noexcept;
+[[nodiscard]] bool is_http_method_idempotent(std::string_view method) noexcept;
+
+}  // namespace ruvia
 
 namespace ruvia {
 

@@ -12,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_runtime.h"

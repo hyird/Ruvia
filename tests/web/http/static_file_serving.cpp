@@ -29,7 +29,6 @@
 #include <gtest/gtest.h>
 
 #include "ruvia/http/http_cache.h"
-#include "ruvia/http/http_date.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/static_files.h"

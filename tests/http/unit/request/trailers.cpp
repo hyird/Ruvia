@@ -9,8 +9,8 @@
 #include <variant>
 
 #include "ruvia/http/http1_chunked_body_decoder.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_server.h"
 
 namespace {

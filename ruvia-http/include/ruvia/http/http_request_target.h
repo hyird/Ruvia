@@ -10,7 +10,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/port_number.h"
 

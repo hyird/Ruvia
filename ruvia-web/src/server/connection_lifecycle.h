@@ -23,7 +23,7 @@
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/server_config.h"
 
-#include "ratelimit/rate_limiter.h"
+#include "http/inline_http_header_views.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
 

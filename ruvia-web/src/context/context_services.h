@@ -19,7 +19,6 @@
 #include "ruvia/http/http_client_ip.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
-#include "ruvia/http/http_push.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/streaming.h"

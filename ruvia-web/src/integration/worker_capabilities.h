@@ -21,7 +21,7 @@
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_registry.h"
 #endif
-#include "ratelimit/rate_limiter.h"
+#include "http/inline_http_header_views.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis/redis_registry.h"
 #endif

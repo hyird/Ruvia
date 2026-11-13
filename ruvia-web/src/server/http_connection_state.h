@@ -15,14 +15,12 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http1_server_semantics.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_known_method.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_head_buffer.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
 #include "integration/request_io_metrics.h"

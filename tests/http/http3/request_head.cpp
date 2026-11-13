@@ -13,12 +13,11 @@
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_trailers.h"
 
 #include "http3_relay.h"
 #include "http3_wire.h"

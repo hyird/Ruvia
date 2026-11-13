@@ -21,7 +21,6 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
 
 #if defined(__unix__)

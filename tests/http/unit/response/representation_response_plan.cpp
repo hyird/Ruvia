@@ -8,9 +8,8 @@
 #include <vector>
 
 #include "ruvia/http/http1_server_request_parser.h"
+#include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_multipart_byte_range_plan.h"
-#include "ruvia/http/http_representation_response_plan.h"
 #include "ruvia/http/http_request.h"
 
 namespace {

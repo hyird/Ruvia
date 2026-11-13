@@ -3,9 +3,8 @@
 #include <algorithm>
 #include <stdexcept>
 
-#include "field/http_structured_fields.h"
-#include "wire/quic_varint.h"
-
+#include "field/http_connection_fields.h"
+#include "http_wire_sink.h"
 namespace ruvia {
 namespace {
 // CONNECT-UDP context ID 0 (RFC 9298 section 5) as its one-byte variable-length integer.

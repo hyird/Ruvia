@@ -59,7 +59,7 @@ if(NOT RUVIA_ENABLE_REDIS)
     list(APPEND _ruvia_web_excluded_header_patterns "/redis/")
 endif()
 if(NOT RUVIA_ENABLE_JWT)
-    list(APPEND _ruvia_web_excluded_header_patterns "/auth/")
+    list(APPEND _ruvia_web_excluded_header_patterns "/jwt\\.h$")
 endif()
 list(JOIN _ruvia_web_excluded_header_patterns "|" _ruvia_web_excluded_header_regex)
 

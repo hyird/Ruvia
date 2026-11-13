@@ -2,9 +2,9 @@
 
 #include <cstdint>
 
-#include "ruvia/http/http1_request_connection_plan.h"
-#include "ruvia/http/http1_response_head_plan.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 
 TEST(Ruvia, response_write_plan_unifies_method_status_and_body_size) {

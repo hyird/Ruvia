@@ -13,15 +13,14 @@
 #include <vector>
 
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_client_response_head.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/websocket_client_negotiation.h"
+#include "ruvia/http/websocket_handshake.h"
 
-#include "http1/http_client_response_head.h"
+#include "http1/http_header_block_parser.h"
 #include "http2/http2_connection.h"
-#include "parser/http_header_descriptor_storage.h"
-#include "request/http_request_access.h"
-#include "websocket/http_websocket_handshake_fields.h"
+#include "http_request_access.h"
+#include "parser/http_uri_grammar.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 namespace ruvia {

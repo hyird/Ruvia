@@ -28,10 +28,8 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_file.h"
-#include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 
 #include "server/connection_lifecycle.h"

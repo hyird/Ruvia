@@ -8,12 +8,10 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http1_response_head_error.h"
-#include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/port_number.h"
 
 namespace ruvia {

@@ -12,7 +12,6 @@
 
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 // Execution of compiled db_query statements: one deadline and one chain for a
 // query, or a query and its count, run directly or through the result cache.

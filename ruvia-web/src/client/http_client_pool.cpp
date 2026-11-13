@@ -16,7 +16,7 @@
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_tunnel.h"
 

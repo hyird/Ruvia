@@ -11,8 +11,8 @@
 #include <stdexcept>
 #include <type_traits>
 
-#include "ruvia/core/duration.h"
 #include "ruvia/core/operation_options.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace {
 

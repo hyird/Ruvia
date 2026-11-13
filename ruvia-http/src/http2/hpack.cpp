@@ -8,7 +8,7 @@
 #include <new>
 #include <stdexcept>
 
-#include "memory/http_c_library_memory.h"
+#include "http_wire_sink.h"
 #include "response/http_response_header_state.h"
 
 namespace ruvia {

@@ -1,18 +1,25 @@
 #include "ruvia/http/http1_chunked_body_decoder.h"
 
+#include <zlib.h>
+
 #include <algorithm>
+#include <array>
+#include <cstddef>
 #include <limits>
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 
+#include "ruvia/http/http1_client_response_body_decoder.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 
+#include "coding/http_zlib_stream.h"
 #include "http1/http_header_block_parser.h"
 
 namespace ruvia {
@@ -413,6 +420,821 @@ http1_chunk_decode_result http1_chunked_body_decoder::fail(
     std::size_t consumed_bytes, http1_chunk_decode_error error) noexcept {
     state_ = error;
     return http1_chunk_decode_result::make_failure(consumed_bytes, error);
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+namespace detail {
+
+// One zlib stage is an implementation detail of the coding sequence, not a
+// second public decoder. Its address must stay fixed for the pinned zlib stream.
+class transfer_coding_decoder final {
+public:
+    transfer_coding_decoder(http_transfer_coding coding, protocol_byte_limit decoded_limit);
+    transfer_coding_decoder(const transfer_coding_decoder&) = delete;
+    transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
+    [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] http_transfer_coding_decode_result finish_input() noexcept;
+    [[nodiscard]] bool received_input() const noexcept {
+        return received_input_;
+    }
+
+private:
+    struct inflate_step_result {
+        std::size_t consumed_{0};
+        std::size_t produced_{0};
+        int status_{Z_OK};
+    };
+    struct active final {};
+    struct gzip_member_boundary final {};
+    struct completed final {};
+    using state = std::variant<active, gzip_member_boundary, completed>;
+    [[nodiscard]] inflate_step_result inflate_step(std::string_view input, std::span<char> output) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result need_input(std::size_t consumed) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result output(std::size_t consumed, std::string_view bytes) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result complete(std::size_t consumed) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result fail(std::size_t consumed, http_transfer_coding_decode_error error) noexcept;
+    [[nodiscard]] static http_transfer_coding_decode_result fail_decoder(std::size_t consumed) noexcept;
+    zlib_inflate_stream stream_;
+    state state_{active{}};
+    protocol_byte_limit body_limit_;
+    std::size_t decoded_bytes_{0};
+    // An empty coded body carries no content and completes at framing EOF.
+    bool received_input_{false};
+    http_transfer_coding coding_;
+};
+
+namespace {
+
+[[nodiscard]] int transfer_coding_window_bits(http_transfer_coding coding) {
+    switch (coding) {
+        case http_transfer_coding::gzip:
+            return 15 + 16;
+        case http_transfer_coding::deflate:
+            return 15;
+        default:
+            throw std::invalid_argument("unsupported HTTP transfer coding");
+    }
+}
+
+}  // namespace
+
+transfer_coding_decoder::transfer_coding_decoder(
+    http_transfer_coding coding, protocol_byte_limit decoded_limit)
+    : stream_(transfer_coding_window_bits(coding)),
+      body_limit_(decoded_limit),
+      coding_(coding) {
+    if (!stream_.initialized()) {
+        throw std::runtime_error("failed to initialize transfer-coding decoder");
+    }
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::decode(
+    std::string_view input, std::span<char> output_buffer) noexcept {
+    if (std::holds_alternative<completed>(state_)) {
+        return input.empty() ? complete(0) : fail(0, http_transfer_coding_decode_error::invalid_content);
+    }
+
+    std::size_t consumed = 0;
+    std::size_t produced = 0;
+    for (;;) {
+        if (std::holds_alternative<gzip_member_boundary>(state_)) {
+            if (consumed == input.size()) {
+                return produced != 0
+                           ? output(consumed, std::string_view(output_buffer.data(), produced))
+                           : need_input(consumed);
+            }
+            if (!stream_.reset()) {
+                return fail_decoder(consumed);
+            }
+            state_.emplace<active>();
+        }
+
+        const auto window_bytes =
+            std::min<std::size_t>(input.size() - consumed, (std::numeric_limits<uInt>::max)());
+        const auto step = inflate_step(input.substr(consumed), output_buffer.subspan(produced));
+        consumed += step.consumed_;
+        received_input_ = received_input_ || step.consumed_ != 0;
+        if (body_limit_.addition_exceeds(decoded_bytes_, step.produced_)) {
+            return fail(consumed, http_transfer_coding_decode_error::decoded_size_exceeded);
+        }
+        decoded_bytes_ += step.produced_;
+        produced += step.produced_;
+
+        if (step.status_ == Z_STREAM_END) {
+            if (coding_ != http_transfer_coding::gzip) {
+                if (consumed != input.size()) {
+                    return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+                }
+                state_.emplace<completed>();
+                return produced != 0
+                           ? output(consumed, std::string_view(output_buffer.data(), produced))
+                           : complete(consumed);
+            }
+
+            // RFC 1952 gzip data is a series of members. A member boundary is
+            // not the end of the transfer coding: another member can arrive in
+            // the same HTTP chunk or in a later one. Only framing EOF, reported
+            // through finish_input(), commits this boundary as complete.
+            state_.emplace<gzip_member_boundary>();
+            if (produced == output_buffer.size()) {
+                return output(consumed, std::string_view(output_buffer.data(), produced));
+            }
+            continue;
+        }
+
+        if (step.status_ != Z_OK && step.status_ != Z_BUF_ERROR) {
+            if (step.status_ == Z_DATA_ERROR || step.status_ == Z_NEED_DICT) {
+                return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+            }
+            return fail_decoder(consumed);
+        }
+
+        if (produced != 0) {
+            return output(consumed, std::string_view(output_buffer.data(), produced));
+        }
+        if (consumed != input.size()) {
+            // zlib sees at most one uInt window per step; a window that was
+            // consumed without output (RFC 1952 FNAME/FCOMMENT bytes) is not
+            // corrupt, the remaining input needs another step.
+            if (step.consumed_ == window_bytes) {
+                continue;
+            }
+            return fail(consumed, http_transfer_coding_decode_error::invalid_content);
+        }
+        return need_input(consumed);
+    }
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::finish_input() noexcept {
+    if (std::holds_alternative<completed>(state_) ||
+        std::holds_alternative<gzip_member_boundary>(state_) ||
+        (std::holds_alternative<active>(state_) && !received_input_)) {
+        state_.emplace<completed>();
+        return complete(0);
+    }
+    return fail(0, http_transfer_coding_decode_error::invalid_content);
+}
+
+transfer_coding_decoder::inflate_step_result transfer_coding_decoder::inflate_step(
+    std::string_view input, std::span<char> output) noexcept {
+    const auto input_bytes = std::min<std::size_t>(input.size(), (std::numeric_limits<uInt>::max)());
+    auto& stream = stream_.native();
+    stream.next_in =
+        input_bytes == 0 ? Z_NULL : reinterpret_cast<Bytef*>(const_cast<char*>(input.data()));
+    stream.avail_in = static_cast<uInt>(input_bytes);
+    const auto output_bytes =
+        std::min<std::size_t>(output.size(), (std::numeric_limits<uInt>::max)());
+    stream.next_out = reinterpret_cast<Bytef*>(output.data());
+    stream.avail_out = static_cast<uInt>(output_bytes);
+
+    const auto status = inflate(&stream, Z_NO_FLUSH);
+    const auto consumed = input_bytes - stream.avail_in;
+    const auto produced = output_bytes - stream.avail_out;
+    stream.next_in = Z_NULL;
+    stream.avail_in = 0;
+    stream.next_out = Z_NULL;
+    stream.avail_out = 0;
+    return inflate_step_result{consumed, produced, status};
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::need_input(std::size_t consumed) noexcept {
+    return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(consumed));
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::output(
+    std::size_t consumed, std::string_view bytes_value) noexcept {
+    return http_transfer_coding_decode_result(http_transfer_coding_decode_output_view(consumed, bytes_value));
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::complete(std::size_t consumed) noexcept {
+    return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(consumed));
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::fail(
+    std::size_t consumed, http_transfer_coding_decode_error error) noexcept {
+    return http_transfer_coding_decode_result(http_transfer_coding_decode_failure(consumed, error));
+}
+
+http_transfer_coding_decode_result transfer_coding_decoder::fail_decoder(std::size_t consumed) noexcept {
+    return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
+}
+
+}  // namespace detail
+
+namespace {
+
+constexpr std::size_t transfer_coding_scratch_bytes = 4096;
+
+struct transfer_coding_scratch_buffer final {
+    // Stage output bounds valid bytes to [begin_, end_), so default construction
+    // leaves the 4 KiB storage uninitialized instead of zero-filling it.
+    std::array<char, transfer_coding_scratch_bytes> bytes_;
+};
+
+struct transfer_coding_stage final {
+    transfer_coding_stage(http_transfer_coding coding, protocol_byte_limit decoded_limit)
+        : decoder_(coding, decoded_limit) {}
+
+    detail::transfer_coding_decoder decoder_;
+    std::size_t begin_{0};
+    std::size_t end_{0};
+    bool complete_{false};
+};
+
+}  // namespace
+
+struct http_transfer_coding_stack_decoder::impl_type final {
+    impl_type(std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit)
+        : stage_count_(codings.size()) {
+        std::size_t index = 0;
+        for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
+            stages_[index++].emplace(*coding, decoded_limit);
+        }
+    }
+    std::array<std::optional<transfer_coding_stage>, max_transfer_codings> stages_{};
+    std::size_t stage_count_{0};
+    // Only inter-stage edges own scratch. The final stage writes directly to
+    // the caller's buffer, so a one-coding sequence uses no internal scratch.
+    std::array<transfer_coding_scratch_buffer, max_transfer_codings - 1> buffers_;
+    std::optional<http_transfer_coding_decode_error> failure_;
+    bool decoder_failed_{false};
+};
+
+http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(
+    std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit) {
+    if (codings.empty() || codings.size() > max_transfer_codings) {
+        throw std::invalid_argument("invalid transfer-coding stack length");
+    }
+    impl_ = new impl_type(codings, decoded_limit);
+}
+
+http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
+    delete impl_;
+}
+
+http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(
+    std::string_view input, std::span<char> output_buffer) noexcept {
+    const auto failed = [this](std::size_t consumed) {
+        if (impl_->decoder_failed_) {
+            return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(consumed));
+        }
+        return http_transfer_coding_decode_result(
+            http_transfer_coding_decode_failure(consumed, *impl_->failure_));
+    };
+    if (impl_->decoder_failed_ || impl_->failure_.has_value()) {
+        return failed(0);
+    }
+    if (output_buffer.empty()) {
+        impl_->decoder_failed_ = true;
+        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
+    }
+
+    std::size_t wire_consumed = 0;
+    for (;;) {
+        bool progressed = false;
+        for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+            auto& stage = *impl_->stages_[index];
+            if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
+                continue;
+            }
+            std::string_view layer_input;
+            if (index == 0) {
+                layer_input = input.substr(wire_consumed);
+            } else {
+                auto& previous = *impl_->stages_[index - 1];
+                layer_input = std::string_view(
+                    impl_->buffers_[index - 1].bytes_.data() + previous.begin_,
+                    previous.end_ - previous.begin_);
+            }
+            if (stage.complete_) {
+                if (!layer_input.empty()) {
+                    impl_->failure_ = http_transfer_coding_decode_error::invalid_content;
+                    return failed(wire_consumed);
+                }
+                continue;
+            }
+            const auto output = index + 1 == impl_->stage_count_
+                                    ? output_buffer
+                                    : std::span<char>(impl_->buffers_[index].bytes_);
+            const auto decoded = stage.decoder_.decode(layer_input, output);
+            const auto consumed = decoded.consumed_bytes();
+            if (index == 0) {
+                wire_consumed += consumed;
+            } else {
+                auto& previous = *impl_->stages_[index - 1];
+                previous.begin_ += consumed;
+                if (previous.begin_ == previous.end_) {
+                    previous.begin_ = 0;
+                    previous.end_ = 0;
+                }
+            }
+            progressed = progressed || consumed != 0;
+            if (const auto* bytes = decoded.output()) {
+                progressed = true;
+                if (index + 1 == impl_->stage_count_) {
+                    return http_transfer_coding_decode_result(
+                        http_transfer_coding_decode_output_view(wire_consumed, bytes->bytes()));
+                }
+                stage.begin_ = 0;
+                stage.end_ = bytes->bytes().size();
+                continue;
+            }
+            if (const auto* protocol_failure = decoded.failure()) {
+                impl_->failure_ = protocol_failure->error();
+                return failed(wire_consumed);
+            }
+            if (decoded.decoder_failure() != nullptr) {
+                impl_->decoder_failed_ = true;
+                return failed(wire_consumed);
+            }
+            if (decoded.complete() != nullptr) {
+                stage.complete_ = true;
+                progressed = true;
+            }
+        }
+
+        bool all_complete = true;
+        bool pending = false;
+        for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+            const auto& stage = *impl_->stages_[index];
+            all_complete = all_complete && stage.complete_;
+            pending = pending || (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_);
+        }
+        if (all_complete && !pending) {
+            return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(wire_consumed));
+        }
+        if (!progressed) {
+            return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(wire_consumed));
+        }
+    }
+}
+
+http_transfer_coding_decode_result http_transfer_coding_stack_decoder::finish_input() noexcept {
+    if (impl_->decoder_failed_) {
+        return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
+    }
+    if (impl_->failure_.has_value()) {
+        return http_transfer_coding_decode_result(
+            http_transfer_coding_decode_failure(0, *impl_->failure_));
+    }
+    const bool wire_received_input = impl_->stages_[0]->decoder_.received_input();
+    for (std::size_t index = 0; index < impl_->stage_count_; ++index) {
+        auto& stage = *impl_->stages_[index];
+        if (index + 1 < impl_->stage_count_ && stage.begin_ != stage.end_) {
+            return http_transfer_coding_decode_result(http_transfer_coding_decode_need_input(0));
+        }
+        if (stage.complete_) {
+            continue;
+        }
+        if (index > 0 && wire_received_input && !stage.decoder_.received_input()) {
+            impl_->failure_ = http_transfer_coding_decode_error::invalid_content;
+            return http_transfer_coding_decode_result(
+                http_transfer_coding_decode_failure(0, *impl_->failure_));
+        }
+        const auto finished = stage.decoder_.finish_input();
+        if (const auto* protocol_failure = finished.failure()) {
+            impl_->failure_ = protocol_failure->error();
+            return http_transfer_coding_decode_result(
+                http_transfer_coding_decode_failure(0, *impl_->failure_));
+        }
+        if (finished.decoder_failure() != nullptr) {
+            impl_->decoder_failed_ = true;
+            return http_transfer_coding_decode_result(http_transfer_coding_decoder_failure(0));
+        }
+        stage.complete_ = true;
+    }
+    return http_transfer_coding_decode_result(http_transfer_coding_decode_complete(0));
+}
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+std::string_view http1_client_response_body_error_message(http1_client_response_body_error error) noexcept {
+    switch (error) {
+        case http1_client_response_body_error::invalid_framing:
+            return "invalid HTTP/1 response body framing";
+        case http1_client_response_body_error::invalid_transfer_coding:
+            return "invalid HTTP/1 response transfer coding";
+        case http1_client_response_body_error::incomplete_body:
+            return "incomplete HTTP/1 response body";
+    }
+    return "invalid HTTP/1 response body";
+}
+
+http1_client_response_body_decoder::http1_client_response_body_decoder(
+    http1_client_response_plan plan) {
+    if (plan.informational() || plan.connect_tunnel() || plan.protocol_upgrade()) {
+        throw std::invalid_argument("HTTP/1 response plan has no ordinary message body");
+    }
+    if (const auto* without = plan.without_content()) {
+        framing_ = framing_type::no_body;
+        persistence_ = without->persistence();
+        return;
+    }
+    // A discarding (205) plan carries the same framings as an ordinary one,
+    // but its content is never emitted, so it is never transfer-decoded.
+    discard_content_ = plan.discards_content();
+    const auto configure_coding = [this](const http_transfer_codings& codings) {
+        if (!codings.empty() && !discard_content_) {
+            transfer_.emplace(std::span<const http_transfer_coding>(
+                                  codings.data(), codings.size()),
+                protocol_byte_limit::unlimited());
+        }
+    };
+    if (const auto* known = plan.known_length()) {
+        framing_ = framing_type::fixed;
+        remaining_ = known->content_length();
+        persistence_ = known->persistence();
+    } else if (const auto* chunked = plan.chunked()) {
+        framing_ = framing_type::chunked;
+        persistence_ = chunked->persistence();
+        configure_coding(chunked->transfer_codings());
+        chunked_.emplace(http1_chunked_body_decoder_config{.obs_fold_ = http1_trailer_obs_fold::accept,
+            .trailer_message_ = http1_trailer_message::response});
+    } else if (const auto* close = plan.close_delimited()) {
+        framing_ = framing_type::close_delimited;
+        configure_coding(close->transfer_codings());
+    } else {
+        throw std::invalid_argument("unsupported HTTP/1 response plan");
+    }
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::decode(
+    std::string_view available, std::span<char> scratch) {
+    if (scratch.empty()) {
+        throw std::invalid_argument("HTTP/1 response body decoder scratch must be non-empty");
+    }
+    if (terminal_) {
+        return replay_terminal();
+    }
+    return step(available, scratch, eof_);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::finish_input(
+    std::string_view available, std::span<char> scratch) {
+    if (scratch.empty()) {
+        throw std::invalid_argument("HTTP/1 response body decoder scratch must be non-empty");
+    }
+    if (terminal_) {
+        return replay_terminal();
+    }
+    eof_ = true;
+    return step(available, scratch, true);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    if (!discard_content_) {
+        return step_content(available, scratch, eof);
+    }
+    // RFC 9110 section 15.3.6 forbids only generating 205 content: consume
+    // what the framing delimits without emitting it, then report the next
+    // non-output result over every byte consumed by this call.
+    std::size_t discarded = 0;
+    for (;;) {
+        const auto result_value = step_content(available.substr(discarded), scratch, eof);
+        if (result_value.output() == nullptr) {
+            return with_consumed_prefix(result_value, discarded);
+        }
+        discarded += result_value.consumed_bytes();
+    }
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_content(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    if (trailers_reported_) {
+        return finish_transfer(0, scratch);
+    }
+    // A full output step can leave inflate output buffered after consuming
+    // all wire input. Drain it before asking framing or transport for more.
+    if (transfer_ && transfer_phase_ == transfer_phase_type::drain_output) {
+        const auto pending = drive_transfer({}, 0, scratch);
+        if (pending.need_input() == nullptr) {
+            return pending;
+        }
+    }
+    switch (framing_) {
+        case framing_type::fixed:
+            return step_fixed(available, scratch, eof);
+        case framing_type::close_delimited:
+            return step_close_delimited(available, scratch, eof);
+        case framing_type::chunked:
+            return step_chunked(available, scratch, eof);
+        case framing_type::no_body:
+            break;
+    }
+    return complete(0);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_fixed(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    if (remaining_ == 0) {
+        return complete(0);
+    }
+    if (available.empty()) {
+        return need_input_or_incomplete(0, eof);
+    }
+    const auto output_length = std::min({remaining_, available.size(), scratch.size()});
+    remaining_ -= output_length;
+    return emit(output_length, available.substr(0, output_length));
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_close_delimited(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    if (!transfer_) {
+        if (available.empty()) {
+            return eof ? complete(0) : need_input(0);
+        }
+        const auto output_length = std::min(available.size(), scratch.size());
+        return emit(output_length, available.substr(0, output_length));
+    }
+    std::size_t consumed = 0;
+    for (;;) {
+        const auto rest = available.substr(consumed);
+        if (transfer_phase_ == transfer_phase_type::ended) {
+            // The connection close is the only valid framing end after the
+            // transfer coding completed.
+            if (!rest.empty()) {
+                return fail(http1_client_response_body_error::invalid_transfer_coding, consumed);
+            }
+            return eof ? complete(consumed) : need_input(consumed);
+        }
+        if (rest.empty()) {
+            return eof ? finish_transfer(consumed, scratch) : need_input(consumed);
+        }
+        const auto driven = drive_transfer(rest, consumed, scratch);
+        const auto input_consumed = driven.consumed_bytes() - consumed;
+        consumed += input_consumed;
+        if (driven.need_input() == nullptr) {
+            return driven;
+        }
+        if (input_consumed == 0 && transfer_phase_ != transfer_phase_type::ended) {
+            return need_input_or_incomplete(consumed, eof);
+        }
+    }
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::step_chunked(
+    std::string_view available, std::span<char> scratch, bool eof) {
+    std::size_t consumed = 0;
+    for (;;) {
+        if (auto pending = drain_pending_chunk(available, consumed, scratch, eof)) {
+            return *pending;
+        }
+        const auto rest = available.substr(consumed);
+        const auto decoded = chunked_->decode(rest,
+            transfer_ ? (std::numeric_limits<std::size_t>::max)() : scratch.size());
+        const auto chunk_consumed = consumed + decoded.consumed_bytes();
+        if (decoded.failure() != nullptr) {
+            return fail(http1_client_response_body_error::invalid_framing, chunk_consumed);
+        }
+        if (decoded.need_more() != nullptr) {
+            return need_input_or_incomplete(chunk_consumed, eof);
+        }
+        if (const auto* complete = decoded.complete()) {
+            trailers_reported_ = true;
+            return validated_trailers(chunk_consumed, complete->trailers());
+        }
+        const auto body = decoded.body_chunk()->bytes();
+        if (!transfer_) {
+            return emit(chunk_consumed, body);
+        }
+        // The chunk decoder already consumed the whole chunk, but the transfer
+        // decoder may take only part of its data. Track the rest as wire bytes
+        // so the caller keeps the unconsumed suffix without a borrowed view.
+        consumed += static_cast<std::size_t>(body.data() - rest.data());
+        pending_body_bytes_ = body.size();
+        pending_delimiter_bytes_ = chunk_consumed - consumed - body.size();
+    }
+}
+
+// Feeds pending chunk data to the transfer decoder and then skips the chunk
+// delimiter. Returns nothing once both are consumed and framing can continue.
+std::optional<http1_client_response_body_decoder::result_type>
+http1_client_response_body_decoder::drain_pending_chunk(
+    std::string_view available, std::size_t& consumed, std::span<char> scratch, bool eof) {
+    if (pending_body_bytes_ != 0) {
+        const auto input = available.substr(consumed, std::min(pending_body_bytes_, available.size() - consumed));
+        const auto driven = drive_transfer(input, consumed, scratch);
+        const auto input_consumed = driven.consumed_bytes() - consumed;
+        pending_body_bytes_ -= input_consumed;
+        consumed += input_consumed;
+        if (pending_body_bytes_ == 0) {
+            consume_pending_delimiter(available, consumed);
+        }
+        if (driven.need_input() == nullptr) {
+            return with_consumed(driven, consumed);
+        }
+        if (pending_body_bytes_ != 0 || consumed == available.size()) {
+            return need_input_or_incomplete(consumed, eof);
+        }
+    } else {
+        consume_pending_delimiter(available, consumed);
+    }
+    if (pending_delimiter_bytes_ != 0) {
+        return need_input_or_incomplete(consumed, eof);
+    }
+    return std::nullopt;
+}
+
+// The chunk decoder already validated these delimiter bytes.
+void http1_client_response_body_decoder::consume_pending_delimiter(
+    std::string_view available, std::size_t& consumed) noexcept {
+    const auto bytes = std::min(pending_delimiter_bytes_, available.size() - consumed);
+    consumed += bytes;
+    pending_delimiter_bytes_ -= bytes;
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::drive_transfer(
+    std::string_view input, std::size_t wire_prefix, std::span<char> scratch) {
+    const auto decoded = transfer_->decode(input, scratch);
+    const auto consumed = wire_prefix + decoded.consumed_bytes();
+    if (const auto* output = decoded.output()) {
+        return emit_transfer_output(consumed, output->bytes());
+    }
+    if (decoded.need_input() != nullptr) {
+        transfer_phase_ = transfer_phase_type::needs_framed_input;
+        return need_input(consumed);
+    }
+    if (decoded.complete() != nullptr) {
+        transfer_phase_ = transfer_phase_type::ended;
+        return need_input(consumed);
+    }
+    if (decoded.failure() != nullptr) {
+        return fail(http1_client_response_body_error::invalid_transfer_coding, consumed);
+    }
+    return decoder_failure(consumed);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::finish_transfer(
+    std::size_t consumed, std::span<char> scratch) {
+    if (!transfer_) {
+        return complete(consumed);
+    }
+    // Buffered output drains before framing EOF is committed to the decoder.
+    auto decoded = transfer_->decode({}, scratch);
+    if (decoded.need_input() != nullptr) {
+        decoded = transfer_->finish_input();
+    }
+    if (const auto* output = decoded.output()) {
+        return emit_transfer_output(consumed, output->bytes());
+    }
+    if (decoded.complete() != nullptr) {
+        transfer_phase_ = transfer_phase_type::ended;
+        return complete(consumed);
+    }
+    if (decoded.decoder_failure() != nullptr) {
+        return decoder_failure(consumed);
+    }
+    return fail(http1_client_response_body_error::incomplete_body, consumed);
+}
+
+http1_client_response_body_decoder::result_type
+http1_client_response_body_decoder::replay_terminal() const noexcept {
+    return std::visit([](const auto& payload_value) -> result_type {
+        using t_type = std::decay_t<decltype(payload_value)>;
+        if constexpr (std::is_same_v<t_type, complete_type>) {
+            return result_type(complete_type(0, payload_value.persistence()));
+        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
+            return result_type(protocol_failure_type(0, payload_value.error()));
+        } else {
+            static_assert(std::is_same_v<t_type, decoder_failure_type>);
+            return result_type(decoder_failure_type(0));
+        }
+    },
+        *terminal_);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::need_input(
+    std::size_t consumed) const noexcept {
+    return result_type(need_input_type(consumed));
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::need_input_or_incomplete(
+    std::size_t consumed, bool eof) {
+    if (eof) {
+        return fail(http1_client_response_body_error::incomplete_body, consumed);
+    }
+    return need_input(consumed);
+}
+
+// The single emission point.
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::emit(
+    std::size_t consumed, std::string_view bytes_value) {
+    return result_type(output_view_type(consumed, bytes_value));
+}
+
+// Transfer output borrows scratch and must be drained before more framed input.
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::emit_transfer_output(
+    std::size_t consumed, std::string_view bytes_value) {
+    transfer_phase_ = transfer_phase_type::drain_output;
+    return emit(consumed, bytes_value);
+}
+
+// Re-reports a transfer result with the wire bytes consumed after its input,
+// such as the chunk delimiter that follows the final chunk data.
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::with_consumed(
+    const result_type& result, std::size_t consumed) noexcept {
+    return std::visit([consumed](const auto& payload_value) -> result_type {
+        using t_type = std::decay_t<decltype(payload_value)>;
+        if constexpr (std::is_same_v<t_type, output_view_type>) {
+            return result_type(output_view_type(consumed, payload_value.bytes()));
+        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
+            return result_type(protocol_failure_type(consumed, payload_value.error()));
+        } else if constexpr (std::is_same_v<t_type, decoder_failure_type>) {
+            return result_type(decoder_failure_type(consumed));
+        } else {
+            return result_type(payload_value);
+        }
+    },
+        result.value_);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::with_consumed_prefix(
+    const result_type& result, std::size_t prefix) noexcept {
+    return std::visit([prefix](const auto& payload_value) -> result_type {
+        using t_type = std::decay_t<decltype(payload_value)>;
+        const auto consumed = prefix + payload_value.consumed_bytes();
+        if constexpr (std::is_same_v<t_type, need_input_type>) {
+            return result_type(need_input_type(consumed));
+        } else if constexpr (std::is_same_v<t_type, output_view_type>) {
+            return result_type(output_view_type(consumed, payload_value.bytes()));
+        } else if constexpr (std::is_same_v<t_type, validated_trailers_view_type>) {
+            return result_type(validated_trailers_view_type(consumed, payload_value.fields()));
+        } else if constexpr (std::is_same_v<t_type, complete_type>) {
+            return result_type(complete_type(consumed, payload_value.persistence()));
+        } else if constexpr (std::is_same_v<t_type, protocol_failure_type>) {
+            return result_type(protocol_failure_type(consumed, payload_value.error()));
+        } else {
+            static_assert(std::is_same_v<t_type, decoder_failure_type>);
+            return result_type(decoder_failure_type(consumed));
+        }
+    },
+        result.value_);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::validated_trailers(
+    std::size_t consumed, std::span<const http_header> fields) {
+    return result_type(validated_trailers_view_type(consumed, fields));
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::complete(
+    std::size_t consumed) {
+    const auto completed = complete_type(consumed, persistence_);
+    terminal_ = completed;
+    return result_type(completed);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::fail(
+    http1_client_response_body_error error, std::size_t consumed) {
+    const auto failure = protocol_failure_type(consumed, error);
+    terminal_ = failure;
+    return result_type(failure);
+}
+
+http1_client_response_body_decoder::result_type http1_client_response_body_decoder::decoder_failure(
+    std::size_t consumed) {
+    const auto failure = decoder_failure_type(consumed);
+    terminal_ = failure;
+    return result_type(failure);
+}
+
+std::size_t http1_client_response_body_decoder::result_type::consumed_bytes() const noexcept {
+    return std::visit([](const auto& payload_value) { return payload_value.consumed_bytes(); }, value_);
+}
+
+const http1_client_response_body_decoder::need_input_type*
+http1_client_response_body_decoder::result_type::need_input() const& noexcept {
+    return std::get_if<need_input_type>(&value_);
+}
+
+const http1_client_response_body_decoder::output_view_type*
+http1_client_response_body_decoder::result_type::output() const& noexcept {
+    return std::get_if<output_view_type>(&value_);
+}
+
+const http1_client_response_body_decoder::validated_trailers_view_type*
+http1_client_response_body_decoder::result_type::trailers() const& noexcept {
+    return std::get_if<validated_trailers_view_type>(&value_);
+}
+
+const http1_client_response_body_decoder::complete_type*
+http1_client_response_body_decoder::result_type::complete() const& noexcept {
+    return std::get_if<complete_type>(&value_);
+}
+
+const http1_client_response_body_decoder::protocol_failure_type*
+http1_client_response_body_decoder::result_type::protocol_failure() const& noexcept {
+    return std::get_if<protocol_failure_type>(&value_);
+}
+
+const http1_client_response_body_decoder::decoder_failure_type*
+http1_client_response_body_decoder::result_type::decoder_failure() const& noexcept {
+    return std::get_if<decoder_failure_type>(&value_);
 }
 
 }  // namespace ruvia

@@ -8,8 +8,7 @@
 #include <utility>
 
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/http_connection_advertisement.h"
-
+#include "ruvia/http/http_priority.h"
 TEST(Ruvia, http_connection_advertisement_origin_frames_preserve_results) {
     const std::array<std::string_view, 2> origins{"https://example.test", "https://other.test"};
     const auto retained = ruvia::encode_http2_origin_frame(origins, 16384);

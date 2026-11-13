@@ -20,8 +20,7 @@
 #include "client/http_client_config_storage.h"
 #include "client/http_client_response_memory.h"
 #include "integration/named_capability.h"
-#include "tls/tls_credential.h"
-
+#include "tls/tls_protocol_policy.h"
 namespace ruvia::detail {
 
 class http_client_pool;

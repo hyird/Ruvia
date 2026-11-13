@@ -5,8 +5,6 @@
 #include <string>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_set_cookie.h"
-
 TEST(Ruvia, cookie_plan_serialization_emits_fields_without_attributes) {
     const ruvia::cookie_options options{.path_ = ""};
     const ruvia::set_cookie_plan plan("sid", "value", options);

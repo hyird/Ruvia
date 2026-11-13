@@ -14,24 +14,18 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_connection_advertisement.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/http_connection_fields.h"
-#include "field/http_date_calendar.h"
-#include "field/http_field_kind.h"
-#include "field/http_request_field_validation.h"
-#include "parser/http_request_target.h"
+#include "parser/http_uri_grammar.h"
 #include "response/http_response_header_state.h"
-#include "websocket/http_websocket_handshake_fields.h"
-
 namespace ruvia::detail {
 
 // RFC 9113 §6.5.2 / RFC 9114 §4.2.2: decoded fields, including

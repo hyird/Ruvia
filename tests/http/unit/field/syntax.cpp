@@ -3,12 +3,10 @@
 #include <string>
 #include <string_view>
 
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_protocol_managed_fields.h"
-
 namespace {
 
 using ruvia::classify_http_method;

@@ -17,15 +17,12 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_set_cookie.h"
 
 #include "field/http_connection_fields.h"
+#include "http_wire_sink.h"
 #include "response/http_response_header_state.h"
-#include "wire/http_wire_sink.h"
-
 namespace ruvia::detail {
 
 template <std::size_t n>

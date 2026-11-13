@@ -19,8 +19,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/event_loop_pool.h"
-
+#include "ruvia/core/event_loop.h"
 namespace ruvia::test::asio_task_tests {
 
 struct alignas(4096) aligned_result final {

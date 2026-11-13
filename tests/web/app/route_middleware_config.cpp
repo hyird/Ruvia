@@ -11,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"

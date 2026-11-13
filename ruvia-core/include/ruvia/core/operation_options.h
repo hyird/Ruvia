@@ -8,8 +8,8 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/duration.h"
 #include "ruvia/core/stop_token.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
 

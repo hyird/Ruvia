@@ -6,7 +6,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
@@ -14,17 +13,13 @@
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
 #include "field/http_connection_fields.h"
-#include "field/http_date_calendar.h"
-#include "memory/http_c_library_memory.h"
-#include "request/http_request_access.h"
+#include "http_request_access.h"
+#include "http_wire_sink.h"
 #include "response/http_response_header_state.h"
-#include "wire/http_wire_sink.h"
-
 namespace ruvia::detail {
 
 namespace {

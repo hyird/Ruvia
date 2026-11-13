@@ -10,7 +10,6 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"

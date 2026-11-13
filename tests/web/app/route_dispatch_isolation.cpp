@@ -12,7 +12,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"

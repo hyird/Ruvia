@@ -33,7 +33,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_connection_advertisement.h"
+#include "ruvia/http/http_priority.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"

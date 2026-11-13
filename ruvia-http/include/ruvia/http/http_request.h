@@ -15,10 +15,7 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_protocol_version.h"
-
 namespace ruvia {
 
 enum class http_request_target_form : std::uint8_t {

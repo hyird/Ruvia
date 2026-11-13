@@ -17,8 +17,7 @@
 #include <vector>
 
 #include "ruvia/web/db/db_types.h"
-#include "ruvia/web/entity_rows.h"
-
+#include "ruvia/web/model.h"
 namespace ruvia {
 
 namespace detail {

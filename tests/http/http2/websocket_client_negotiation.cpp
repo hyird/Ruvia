@@ -1,5 +1,3 @@
-#include "ruvia/http/websocket_client_negotiation.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -15,8 +13,8 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/http_client_response_head.h"
-
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/websocket_handshake.h"
 namespace {
 
 // A 2xx response head carrying `fields` (CRLF-terminated lines), as an RFC 8441

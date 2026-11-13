@@ -11,7 +11,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/context.h"
 // Internal startup-time controller registration contracts.
 

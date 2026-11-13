@@ -15,7 +15,6 @@
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 
 // Pipelining of buffered statements outside transactions, shared by the

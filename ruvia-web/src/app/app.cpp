@@ -7,7 +7,7 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/http/http_native_path.h"
+#include "ruvia/http/http_response_file.h"
 #include "ruvia/web/router.h"
 #include "ruvia/web/server_config.h"
 

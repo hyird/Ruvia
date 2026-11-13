@@ -15,9 +15,9 @@
 #include "ruvia/web/error.h"
 
 #include "context/context_services.h"
+#include "http/inline_http_header_views.h"
 #include "http/static_file_variant.h"
 #include "integration/request_io_metrics.h"
-#include "ratelimit/rate_limiter.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_response_compression.h"

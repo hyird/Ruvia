@@ -9,8 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "memory/http_c_library_memory.h"
-
+#include "http_wire_sink.h"
 namespace ruvia {
 namespace {
 

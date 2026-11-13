@@ -23,7 +23,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/security_headers.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/session.h"
 #include "ruvia/web/static_files.h"
 #include "ruvia/web/testing.h"

@@ -16,10 +16,9 @@
 #include <openssl/types.h>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_content_encoder.h"
-#include "ruvia/http/websocket_deflate_codecs.h"
+#include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/server_config.h"

@@ -20,7 +20,6 @@
 #include <vector>
 
 #include "ruvia/web/db/db_entity.h"
-#include "ruvia/web/db/db_mapping.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_session.h"

@@ -8,8 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_content_codec.h"
-
+#include "ruvia/http/http_content_coding.h"
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;
 using ruvia::http_content_coding;

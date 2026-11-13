@@ -13,7 +13,7 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "client/http_client_connection.h"

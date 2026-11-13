@@ -12,8 +12,7 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_base64.h"
-#include "ruvia/http/websocket_client_negotiation.h"
-
+#include "ruvia/http/websocket_handshake.h"
 namespace {
 
 constexpr std::array<std::uint8_t, 16> nonce{

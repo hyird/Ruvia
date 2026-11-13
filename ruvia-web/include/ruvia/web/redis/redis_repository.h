@@ -28,7 +28,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/entity_rows.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis/redis_session.h"

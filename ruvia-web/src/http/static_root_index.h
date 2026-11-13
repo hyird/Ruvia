@@ -20,7 +20,6 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_hex.h"
-#include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/web/static_files.h"
 

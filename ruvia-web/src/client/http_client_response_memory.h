@@ -16,9 +16,7 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client_types.h"
 

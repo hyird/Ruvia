@@ -13,7 +13,6 @@
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 
-#include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"
 
 namespace ruvia {

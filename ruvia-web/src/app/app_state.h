@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_native_path.h"
+#include "ruvia/http/http_response_file.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/router.h"
 

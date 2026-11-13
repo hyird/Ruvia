@@ -16,7 +16,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/redis/redis_session.h"
 

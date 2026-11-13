@@ -14,10 +14,8 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_known_method.h"
-#include "ruvia/http/http_multipart_byte_range_plan.h"
-#include "ruvia/http/http_native_path.h"
-#include "ruvia/http/http_protocol_version.h"
+#include "ruvia/http/http_byte_range.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/http/http_status.h"
 

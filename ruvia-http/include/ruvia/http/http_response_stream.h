@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <utility>
 
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 

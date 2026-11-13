@@ -17,7 +17,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
 #include "ruvia/web/fixed_string.h"
 

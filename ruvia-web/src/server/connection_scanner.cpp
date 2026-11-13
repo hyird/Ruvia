@@ -5,8 +5,8 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory.h"
 #include "ruvia/core/socket.h"
+#include "ruvia/core/task.h"
 
 #include "server/connection_lifecycle.h"
 #include "server/connection_scanner.h"

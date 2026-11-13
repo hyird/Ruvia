@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_schema.h"

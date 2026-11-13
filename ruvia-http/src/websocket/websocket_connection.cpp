@@ -19,8 +19,7 @@
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
-#include "memory/http_c_library_memory.h"
-#include "websocket/http_websocket_frame_codec.h"
+#include "http_wire_sink.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 
 // The Close frame payload (RFC 6455 section 5.5.1): encoding the one an
@@ -30,9 +29,6 @@
 
 #include <exception>
 
-#include "ruvia/http/websocket_deflate_codecs.h"
-
-#include "coding/http_content_coding.h"
 #include "coding/http_zlib_stream.h"
 
 namespace ruvia::detail {

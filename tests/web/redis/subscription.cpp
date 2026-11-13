@@ -27,7 +27,7 @@
 #include <asio/use_future.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"

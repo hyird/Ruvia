@@ -15,8 +15,6 @@
 #include <vector>
 
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http3_request_head.h"
-
 namespace ruvia::test {
 
 // Stream data delivered to the peer whose QUIC acknowledgement has not been

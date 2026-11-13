@@ -20,34 +20,24 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/http_request_trailers.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_coding.h"
+#include "coding/http_zlib_stream.h"
 #include "field/http_connection_fields.h"
-#include "field/http_date_calendar.h"
-#include "field/http_field_kind.h"
-#include "field/http_request_field_validation.h"
-#include "http1/http_client_response_head.h"
-#include "memory/http_c_library_memory.h"
-#include "parser/http_header_descriptor_storage.h"
-#include "parser/http_request_target.h"
-#include "request/http_request_access.h"
+#include "http1/http_header_block_parser.h"
+#include "http_request_access.h"
+#include "http_wire_sink.h"
+#include "parser/http_uri_grammar.h"
 #include "response/http_binary_response_fields.h"
 #include "response/http_response_header_state.h"
-#include "websocket/http_websocket_handshake_fields.h"
 #include "websocket/http_websocket_permessage_deflate.h"
-#include "wire/quic_varint.h"
-
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

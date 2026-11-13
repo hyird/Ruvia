@@ -9,10 +9,9 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http1_client_exchange_state.h"
-#include "ruvia/http/http_client_response_head.h"
-#include "ruvia/http/http_transfer_coding.h"
-
+#include "ruvia/http/http1_client_request_writer.h"
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 namespace ruvia {
 
 namespace detail {

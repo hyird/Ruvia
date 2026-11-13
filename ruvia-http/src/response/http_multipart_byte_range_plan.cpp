@@ -1,14 +1,12 @@
-#include "ruvia/http/http_multipart_byte_range_plan.h"
-
 #include <limits>
 #include <stdexcept>
 
 #include "ruvia/http/http_accept_match.h"
+#include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/multipart_parser.h"
 
-#include "field/http_field_kind.h"
-
+#include "field/http_connection_fields.h"
 namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(

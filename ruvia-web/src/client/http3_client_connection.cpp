@@ -25,7 +25,7 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
 #include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_known_method.h"
+#include "ruvia/http/http_header.h"
 
 #include "client/client_happy_eyeballs.h"
 #include "client/client_tls.h"

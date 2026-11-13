@@ -1,7 +1,9 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -10,11 +12,120 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_status.h"
+#include "ruvia/http/http_transfer_coding_decoder.h"
 #include "ruvia/http/protocol_byte_limit.h"
+
+namespace ruvia {
+
+inline constexpr std::string_view http1_chunk_data_terminator = "\r\n";
+inline constexpr std::string_view http1_last_chunk_prefix = "0\r\n";
+inline constexpr std::string_view http1_trailer_section_terminator = "\r\n";
+
+// The HTTP/1 chunk-size line, including its terminating CRLF. The caller owns
+// framing decisions; this value only formats one chunk's wire prefix.
+class http1_chunk_header final {
+public:
+    explicit http1_chunk_header(std::size_t chunk_size) noexcept {
+        auto* cursor_value = storage_.data() + storage_.size();
+        *--cursor_value = '\n';
+        *--cursor_value = '\r';
+        do {
+            *--cursor_value = http_lower_hex_digit(static_cast<int>(chunk_size & 0x0fU));
+            chunk_size >>= 4U;
+        } while (chunk_size != 0);
+        offset_ = static_cast<std::size_t>(cursor_value - storage_.data());
+    }
+
+    [[nodiscard]] std::string_view view() const& noexcept {
+        return std::string_view(storage_.data() + offset_, storage_.size() - offset_);
+    }
+    [[nodiscard]] std::string_view view() const&& = delete;
+
+private:
+    // Construction writes every byte exposed by view(), plus the final offset.
+    std::array<char, sizeof(std::size_t) * 2 + 2> storage_;
+    std::size_t offset_;
+};
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+// A request-body failure detected by a server driver while enforcing the
+// HTTP-owned content contract. The driver supplies runtime byte limits and I/O
+// completion facts; HTTP owns their final response status and diagnostic.
+enum class http_request_body_failure : std::uint8_t {
+    too_large,
+    incomplete,
+    buffer_limit,
+};
+
+[[nodiscard]] inline http_protocol_error http_request_body_protocol_error(
+    http_request_body_failure failure) noexcept {
+    switch (failure) {
+        case http_request_body_failure::too_large:
+            return http_protocol_error(
+                http_status::content_too_large, "request_body_too_large", "request body is too large");
+        case http_request_body_failure::incomplete:
+            return http_protocol_error(
+                http_status::bad_request, "incomplete_request_body", "incomplete request body");
+        case http_request_body_failure::buffer_limit:
+            return http_protocol_error(http_status::service_unavailable, "inbound_buffer_limit",
+                "inbound buffer capacity exhausted");
+    }
+    return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
+}
+
+[[nodiscard]] inline http_protocol_error http_request_transfer_coding_error(
+    http_transfer_coding_decode_error error) noexcept {
+    switch (error) {
+        case http_transfer_coding_decode_error::invalid_content:
+            return http_protocol_error(http_status::bad_request, "invalid_transfer_coding_body",
+                "invalid transfer-coding body");
+        case http_transfer_coding_decode_error::decoded_size_exceeded:
+            return http_request_body_protocol_error(http_request_body_failure::too_large);
+    }
+    return http_protocol_error(
+        http_status::bad_request, "invalid_transfer_coding_body", "invalid transfer-coding body");
+}
+
+// Status for a request body whose Content-Encoding could not be decoded.
+[[nodiscard]] inline http_protocol_error http_request_content_decode_error(
+    http_content_decode_error error) noexcept {
+    switch (error) {
+        case http_content_decode_error::unsupported_coding:
+            return http_protocol_error(http_status::unsupported_media_type,
+                "unsupported_content_coding", "request Content-Encoding is not supported");
+        case http_content_decode_error::invalid_content:
+            return http_protocol_error(
+                http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+        case http_content_decode_error::decoded_size_exceeded:
+            return http_request_body_protocol_error(http_request_body_failure::too_large);
+    }
+    return http_protocol_error(
+        http_status::bad_request, "invalid_content_coding", "failed to decode request body");
+}
+
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_size_failure(
+    std::size_t size, protocol_byte_limit limit) noexcept {
+    return limit.exceeds(size)
+               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
+               : std::nullopt;
+}
+
+[[nodiscard]] inline std::optional<http_request_body_failure> http_request_body_addition_failure(
+    std::size_t current_size, std::size_t additional_size, protocol_byte_limit limit) noexcept {
+    return limit.addition_exceeds(current_size, additional_size)
+               ? std::optional<http_request_body_failure>(http_request_body_failure::too_large)
+               : std::nullopt;
+}
+
+}  // namespace ruvia
 
 namespace ruvia {
 

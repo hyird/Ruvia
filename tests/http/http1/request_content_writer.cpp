@@ -11,10 +11,10 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_request_content_plan.h"
+#include "ruvia/http/http_request_content_semantics.h"
 
 #include "test_exceptions.h"
 

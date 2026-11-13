@@ -8,15 +8,14 @@
 #include <type_traits>
 #include <variant>
 
-#include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_content_coding.h"
+#include "coding/http_zlib_stream.h"
 #include "field/http_connection_fields.h"
-#include "memory/http_c_library_memory.h"
-
+#include "http_wire_sink.h"
 namespace ruvia::detail {
 
 [[nodiscard]] constexpr http_response_content_semantics classify_http_response_content_semantics(

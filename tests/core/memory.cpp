@@ -1,5 +1,3 @@
-#include "ruvia/core/memory.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -10,6 +8,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+#include "ruvia/core/task.h"
 
 namespace {
 

@@ -5,19 +5,426 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
+#include <optional>
 #include <span>
+#include <string>
 #include <string_view>
 #include <type_traits>
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_base64.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_request_target.h"
 
-#include "field/http_field_kind.h"
+#include "http_wire_sink.h"
+#include "parser/http_uri_grammar.h"
+
+namespace ruvia::detail {
+
+// IMF-fixdate month names (RFC 9110 section 5.6.7), in calendar order.
+inline constexpr std::array<std::string_view, 12> http_month_names{
+    "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"};
+
+// Seconds since the epoch for UTC civil fields, or no value for an invalid
+// calendar date, out-of-range clock fields or a time_t overflow. A second of 60
+// is accepted as the leap second and counts into the following minute.
+[[nodiscard]] std::optional<std::time_t> http_civil_to_time_t(
+    int year, int month, int day, int hour, int minute, int second) noexcept;
+
+// Full "Date: <value>\r\n" line for the current second, for HTTP/1 text response
+// heads. Empty when the clock reports failure (-1) or a date outside the
+// four-digit wire year range.
+[[nodiscard]] std::string_view cached_date_header() noexcept;
+
+// Bare date value (no field name, no CRLF) for HTTP/2 and HTTP/3 headers.
+[[nodiscard]] std::string_view cached_date_value() noexcept;
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// One identity for wire classification, cached lookup and descriptor tags.
+// Other has no cache slot; the remaining identities map to compact slots.
+enum class http_field_kind : std::uint8_t {
+    other,
+    accept,
+    accept_encoding,
+    access_control_request_headers,
+    access_control_request_method,
+    authorization,
+    connection,
+    content_encoding,
+    content_length,
+    content_type,
+    cookie,
+    expect,
+    host,
+    if_match,
+    if_modified_since,
+    if_none_match,
+    if_range,
+    if_unmodified_since,
+    origin,
+    range,
+    sec_websocket_key,
+    sec_websocket_protocol,
+    sec_websocket_version,
+    transfer_encoding,
+    upgrade,
+    user_agent,
+    forwarded,
+    x_forwarded_for,
+    x_forwarded_proto,
+    sec_websocket_extensions,
+    te,
+    trailer,
+    proxy_authorization
+};
+
+inline constexpr std::size_t http_field_kind_count =
+    static_cast<std::uint8_t>(http_field_kind::proxy_authorization) + 1;
+
+[[nodiscard]] inline constexpr std::size_t http_field_kind_known_slot(
+    http_field_kind kind) noexcept {
+    const auto index = static_cast<std::size_t>(kind);
+    return index == 0 ? http_field_kind_count : index - 1;
+}
+
+[[nodiscard]] inline constexpr std::uint32_t singleton_request_header_bit(
+    http_field_kind kind) noexcept {
+    switch (kind) {
+        case http_field_kind::access_control_request_method:
+        case http_field_kind::authorization:
+        case http_field_kind::content_type:
+        case http_field_kind::if_modified_since:
+        case http_field_kind::if_range:
+        case http_field_kind::if_unmodified_since:
+        case http_field_kind::origin:
+        case http_field_kind::range:
+        case http_field_kind::sec_websocket_key:
+        case http_field_kind::sec_websocket_version:
+        case http_field_kind::user_agent:
+            return 1U << static_cast<std::uint32_t>(kind);
+        case http_field_kind::other:
+        case http_field_kind::accept:
+        case http_field_kind::accept_encoding:
+        case http_field_kind::access_control_request_headers:
+        case http_field_kind::connection:
+        case http_field_kind::content_encoding:
+        case http_field_kind::content_length:
+        case http_field_kind::cookie:
+        case http_field_kind::expect:
+        case http_field_kind::host:
+        case http_field_kind::if_match:
+        case http_field_kind::if_none_match:
+        case http_field_kind::sec_websocket_protocol:
+        case http_field_kind::transfer_encoding:
+        case http_field_kind::upgrade:
+        case http_field_kind::forwarded:
+        case http_field_kind::x_forwarded_for:
+        case http_field_kind::x_forwarded_proto:
+        case http_field_kind::sec_websocket_extensions:
+        case http_field_kind::te:
+        case http_field_kind::trailer:
+        case http_field_kind::proxy_authorization:
+            return 0;
+    }
+    return 0;
+}
+
+struct http_field_classification final {
+    http_field_kind kind_{http_field_kind::other};
+    std::uint32_t response_bit_{0};
+};
+
+[[nodiscard]] http_field_classification classify_http_field_name(std::string_view name) noexcept;
+[[nodiscard]] http_field_kind classify_http_field(std::string_view name) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+struct http_structured_item {
+    enum class kind_type {
+        other,
+        integer,
+        boolean,
+        token,
+        string,
+        inner_list
+    } kind_{kind_type::other};
+    std::int64_t integer_{0};
+    bool boolean_{false};
+    std::string_view text_{};
+    bool has_escapes_{false};
+};
+struct http_structured_text_input {
+    std::string_view remaining_;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return remaining_.empty();
+    }
+    [[nodiscard]] char peek() const noexcept {
+        return remaining_.front();
+    }
+    [[nodiscard]] const char* data() const noexcept {
+        return remaining_.data();
+    }
+    void advance() noexcept {
+        remaining_.remove_prefix(1);
+    }
+};
+template <typename iterator_type>
+class http_structured_header_input final {
+public:
+    http_structured_header_input(
+        iterator_type first, iterator_type last, std::string_view field_name) noexcept
+        : next_(first),
+          last_(last),
+          field_name_(field_name) {
+        (void)select_next(remaining_);
+        normalize();
+    }
+    [[nodiscard]] bool empty() const noexcept {
+        return remaining_.empty();
+    }
+    [[nodiscard]] char peek() const noexcept {
+        return remaining_.front();
+    }
+    [[nodiscard]] const char* data() const noexcept {
+        return remaining_.data();
+    }
+    void advance() noexcept {
+        remaining_.remove_prefix(1);
+        normalize();
+    }
+
+private:
+    [[nodiscard]] bool select_next(std::string_view& value) noexcept {
+        while (next_ != last_) {
+            const auto& header_value = *next_++;
+            if (http_ascii_equals_ignore_case(header_value.name(), field_name_)) {
+                value = header_value.value();
+                return true;
+            }
+        }
+        return false;
+    }
+    void normalize() noexcept {
+        while (remaining_.empty()) {
+            if (separator_) {
+                separator_ = false;
+                remaining_ = pending_;
+            } else if (select_next(pending_)) {
+                remaining_ = ", ";
+                separator_ = true;
+            } else {
+                return;
+            }
+        }
+    }
+
+    iterator_type next_;
+    iterator_type last_;
+    std::string_view field_name_;
+    std::string_view remaining_;
+    std::string_view pending_;
+    bool separator_{false};
+};
+
+template <typename input_type>
+struct http_structured_parser {
+    input_type input_;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return input_.empty();
+    }
+    bool take(char ch) {
+        if (!input_.empty() && input_.peek() == ch) {
+            input_.advance();
+            return true;
+        }
+        return false;
+    }
+    void spaces() {
+        while (take(' ')) {
+        }
+    }
+    void ows() {
+        while (!input_.empty() && is_http_ows_char(input_.peek())) {
+            input_.advance();
+        }
+    }
+    std::string_view key() {
+        if (input_.empty() || !((input_.peek() >= 'a' && input_.peek() <= 'z') || input_.peek() == '*')) {
+            return {};
+        }
+        const auto* const start = input_.data();
+        std::size_t length = 1;
+        input_.advance();
+        while (!input_.empty()) {
+            const auto ch = input_.peek();
+            if (!((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') || ch == '_' || ch == '-' || ch == '.' || ch == '*')) {
+                break;
+            }
+            ++length;
+            input_.advance();
+        }
+        // Field-line boundaries inject commas, so a key always stays contiguous.
+        return {start, length};
+    }
+    bool item(http_structured_item& value) {
+        if (input_.empty()) {
+            return false;
+        }
+        if (take('?')) {
+            value.kind_ = http_structured_item::kind_type::boolean;
+            if (take('1')) {
+                value.boolean_ = true;
+                return true;
+            }
+            return take('0');
+        }
+        if (take('"')) {
+            const auto* const start = input_.data();
+            std::size_t length = 0;
+            bool has_escapes = false;
+            while (!input_.empty()) {
+                const auto ch = static_cast<unsigned char>(input_.peek());
+                input_.advance();
+                if (ch == '"') {
+                    value.kind_ = http_structured_item::kind_type::string;
+                    value.text_ = std::string_view(start, length);
+                    value.has_escapes_ = has_escapes;
+                    return true;
+                }
+                if (ch == '\\') {
+                    if (input_.empty() || (input_.peek() != '\\' && input_.peek() != '"')) {
+                        return false;
+                    }
+                    has_escapes = true;
+                    input_.advance();
+                    length += 2;
+                } else if (ch < 0x20 || ch > 0x7e) {
+                    return false;
+                } else {
+                    ++length;
+                }
+            }
+            return false;
+        }
+        if (take(':')) {
+            std::size_t count = 0, padding = 0;
+            while (!input_.empty() && input_.peek() != ':') {
+                const auto ch = input_.peek();
+                input_.advance();
+                if (ch == '=') {
+                    if (++padding > 2) {
+                        return false;
+                    }
+                } else if (padding || http_base64_decode_char(ch) < 0) {
+                    return false;
+                }
+                ++count;
+            }
+            // RFC 8941 section 4.2.7 allows missing padding, including the
+            // final '=' of a partially padded sequence. Validate the data
+            // quartet and supplied padding as if missing padding were added.
+            const auto data_remainder = (count - padding) % 4;
+            return take(':') && data_remainder != 1 && padding <= (4 - data_remainder) % 4;
+        }
+        if (input_.peek() == '-' || (input_.peek() >= '0' && input_.peek() <= '9')) {
+            const bool negative = take('-');
+            std::size_t digits = 0;
+            std::int64_t number = 0;
+            while (!input_.empty() && input_.peek() >= '0' && input_.peek() <= '9') {
+                if (++digits > 15) {
+                    return false;
+                }
+                number = number * 10 + input_.peek() - '0';
+                input_.advance();
+            }
+            if (!digits) {
+                return false;
+            }
+            if (take('.')) {
+                if (digits > 12) {
+                    return false;
+                }
+                std::size_t fraction = 0;
+                while (!input_.empty() && input_.peek() >= '0' && input_.peek() <= '9') {
+                    input_.advance();
+                    if (++fraction > 3) {
+                        return false;
+                    }
+                }
+                return fraction != 0;
+            }
+            value.kind_ = http_structured_item::kind_type::integer;
+            value.integer_ = negative ? -number : number;
+            return true;
+        }
+        const auto* const start = input_.data();
+        const auto first = input_.peek();
+        input_.advance();
+        if (!((first >= 'a' && first <= 'z') || (first >= 'A' && first <= 'Z') || first == '*')) {
+            return false;
+        }
+        std::size_t length = 1;
+        // sf-token = ( ALPHA / "*" ) *( tchar / ":" / "/" )
+        while (!input_.empty()) {
+            const auto ch = input_.peek();
+            if (!is_http_token_char(static_cast<unsigned char>(ch)) && ch != ':' && ch != '/') {
+                break;
+            }
+            ++length;
+            input_.advance();
+        }
+        value.kind_ = http_structured_item::kind_type::token;
+        value.text_ = std::string_view(start, length);
+        return true;
+    }
+    bool parameters() {
+        while (take(';')) {
+            spaces();
+            if (key().empty()) {
+                return false;
+            }
+            if (take('=')) {
+                http_structured_item ignored;
+                if (!item(ignored)) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    bool member(http_structured_item& value) {
+        if (!take('(')) {
+            return item(value) && parameters();
+        }
+        value.kind_ = http_structured_item::kind_type::inner_list;
+        spaces();
+        while (!take(')')) {
+            http_structured_item ignored;
+            if (!item(ignored) || !parameters()) {
+                return false;
+            }
+            if (input_.empty() || (input_.peek() != ' ' && input_.peek() != ')')) {
+                return false;
+            }
+            spaces();
+        }
+        return parameters();
+    }
+};
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 
@@ -750,4 +1157,198 @@ namespace ruvia::detail {
     return status == http_field_list_parse_status::ok && (role == http_field_list_role::recipient || has_member);
 }
 
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// The standardized Expect field member is defined once so parsers and writers
+// cannot drift on its wire spelling.
+inline constexpr std::string_view http_continue_expectation_token = "100-continue";
+
+// RFC 6454 section 7.1 permits either `null` or a space-delimited list of
+// serialized origins. Fetch-generated CORS requests currently send one item,
+// but the HTTP protocol primitive must retain the complete field grammar.
+[[nodiscard]] inline bool is_valid_http_origin_field_value(std::string_view value) noexcept {
+    value = http_trim_ows(value);
+    if (value == "null") {
+        return true;
+    }
+    std::size_t offset = 0;
+    for (;;) {
+        const auto separator = value.find(' ', offset);
+        const auto end = separator == std::string_view::npos ? value.size() : separator;
+        if (!is_valid_http_serialized_origin(value.substr(offset, end - offset))) {
+            return false;
+        }
+        if (separator == std::string_view::npos) {
+            return true;
+        }
+        offset = separator + 1;
+    }
+}
+
+inline constexpr auto binary_field_name_char_table = [] {
+    auto table_value = http_token_char_table;
+    for (unsigned byte = 'A'; byte <= 'Z'; ++byte) {
+        table_value[byte] = false;
+    }
+    return table_value;
+}();
+
+// HTTP/2 (RFC 9113 §8.2.1) and HTTP/3 (RFC 9114 §4.2) regular field names are
+// nonempty lowercase tokens.
+[[nodiscard]] inline bool is_valid_binary_field_name(std::string_view name) noexcept {
+    if (name.empty()) {
+        return false;
+    }
+    std::size_t index = 0;
+    while (name.size() - index >= 4) {
+        const auto* bytes_value = reinterpret_cast<const unsigned char*>(name.data() + index);
+        const bool first = binary_field_name_char_table[bytes_value[0]];
+        const bool second = binary_field_name_char_table[bytes_value[1]];
+        const bool third = binary_field_name_char_table[bytes_value[2]];
+        const bool fourth = binary_field_name_char_table[bytes_value[3]];
+        if (!(first & second & third & fourth)) {
+            return false;
+        }
+        index += 4;
+    }
+    while (index < name.size()) {
+        if (!binary_field_name_char_table[static_cast<unsigned char>(name[index])]) {
+            return false;
+        }
+        ++index;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool is_http_request_scheme(std::string_view scheme) noexcept {
+    return http_ascii_equals_ignore_case(scheme, "http") || http_ascii_equals_ignore_case(scheme, "https");
+}
+
+// http(s) target URIs carry a mandatory, non-empty authority with Host
+// syntax; other schemes may carry any RFC 3986 authority.
+[[nodiscard]] inline bool is_valid_binary_request_authority(
+    std::string_view scheme, std::string_view authority) noexcept {
+    if (is_http_request_scheme(scheme)) {
+        return !authority.empty() && is_valid_host_header(authority);
+    }
+    return is_valid_uri_authority(authority);
+}
+
+[[nodiscard]] inline bool binary_regular_request_requires_authority(
+    std::string_view scheme, std::string_view path) noexcept {
+    return path != "*" && is_http_request_scheme(scheme);
+}
+
+// HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
+[[nodiscard]] inline bool binary_request_synthesizes_host(bool has_host, bool has_authority,
+    std::string_view scheme, std::string_view authority) noexcept {
+    return !has_host && has_authority &&
+           (is_http_request_scheme(scheme) || is_valid_host_header(authority));
+}
+
+// RFC 8441 §4 / RFC 9220 §3: websocket extended CONNECT requires an HTTP(S) URI
+// scheme; other extended protocols retain the full RFC 3986 space.
+[[nodiscard]] inline bool is_valid_extended_connect_scheme(
+    std::string_view protocol, std::string_view scheme) noexcept {
+    return !http_ascii_equals_ignore_case(protocol, "websocket") || is_http_request_scheme(scheme);
+}
+
+[[nodiscard]] inline bool validate_binary_request_authority_and_host(
+    std::string_view scheme, std::string_view path, bool has_authority, std::string_view authority,
+    bool has_host, std::string_view host) noexcept {
+    if (has_authority && !is_valid_binary_request_authority(scheme, authority)) {
+        return false;
+    }
+    if (!has_authority && binary_regular_request_requires_authority(scheme, path) &&
+        (!has_host || !is_valid_binary_request_authority(scheme, host))) {
+        return false;
+    }
+    return !has_authority || !has_host ||
+           authority_matches_host(authority, host, http_uri_scheme_default_port(scheme));
+}
+
+// Joins split binary (RFC 9113 §8.2.3, RFC 9114 §4.2.1) Cookie crumbs with "; "
+// within max_http_header_bytes. When `first_crumb` is non-empty and `joined` is
+// still empty, `first_crumb` is materialized before appending the second crumb.
+[[nodiscard]] inline bool append_binary_cookie_crumb(std::string& joined,
+    std::string_view value, bool has_existing_cookie, std::string_view first_crumb = {}) {
+    if (value.empty()) {
+        return true;
+    }
+    if (value.size() > max_http_header_bytes) {
+        return false;
+    }
+    if (!has_existing_cookie) {
+        reserve_geometric(joined, value.size());
+        joined.append(value.data(), value.size());
+        return true;
+    }
+    constexpr std::string_view cookie_separator = "; ";
+    const auto prefix_bytes = joined.empty() ? first_crumb.size() : joined.size();
+    if (prefix_bytes > max_http_header_bytes - cookie_separator.size() ||
+        value.size() > max_http_header_bytes - cookie_separator.size() - prefix_bytes) {
+        return false;
+    }
+    reserve_geometric(joined, prefix_bytes + cookie_separator.size() + value.size());
+    if (joined.empty() && !first_crumb.empty()) {
+        joined.append(first_crumb.data(), first_crumb.size());
+    }
+    joined.append(cookie_separator.data(), cookie_separator.size());
+    joined.append(value.data(), value.size());
+    return true;
+}
+
+[[nodiscard]] constexpr bool is_valid_http_request_field_source(http_request_field_source source) noexcept {
+    return source == http_request_field_source::generated || source == http_request_field_source::forwarded;
+}
+
+// The only version-dependent request-field semantics: HTTP/1.1 negotiates
+// transfer codings through TE, while HTTP/2 permits only "trailers".
+enum class request_field_framing : std::uint8_t { http1,
+    binary };
+
+enum class request_field_status : std::uint8_t {
+    ok,
+    // Grammar violation, or a second instance of a field that may occur once.
+    invalid,
+    // A client generated the field itself. Expect and Content-Length are
+    // derived from the request plan on every HTTP version, so a raw field
+    // would be a second source of truth for the body gate or the framing.
+    managed_by_sender,
+};
+
+// Per field section: which once-only fields were seen, plus the framing whose
+// TE rules apply. One instance spans exactly one request header section.
+class request_field_state final {
+public:
+    explicit request_field_state(request_field_framing framing) noexcept
+        : framing_(framing) {}
+
+    // True once a field that may occur only once (Host and every
+    // singleton_request_header_bit() kind) has been validated.
+    [[nodiscard]] bool seen(http_field_kind kind) const noexcept;
+
+private:
+    friend request_field_status validate_request_field(http_field_kind kind, std::string_view value,
+        http_field_list_role role, request_field_state& state, http_request_field_source source) noexcept;
+
+    std::uint32_t seen_{0};
+    request_field_framing framing_;
+};
+
+// The authoritative semantic check for one request field, shared by the
+// HTTP/1 and HTTP/2 request writers (role sender) and request
+// recipients (role recipient). Callers classify the name once with
+// classify_http_field() and keep version-specific concerns themselves:
+// framing state (Content-Length values on receipt, Transfer-Encoding,
+// Connection, Upgrade), Host/:authority agreement, cookie joining, and parsing
+// accepted Expect members.
+[[nodiscard]] request_field_status validate_request_field(http_field_kind kind, std::string_view value,
+    http_field_list_role role, request_field_state& state,
+    http_request_field_source source = http_request_field_source::generated) noexcept;
+
+[[nodiscard]] bool is_protocol_managed_request_field(
+    http_field_kind kind, std::string_view name) noexcept;
 }  // namespace ruvia::detail

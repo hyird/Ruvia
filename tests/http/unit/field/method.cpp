@@ -3,7 +3,6 @@
 #include <string_view>
 
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_content_semantics.h"
 

@@ -19,7 +19,6 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
 
 #include "worker_task_fixture.h"
