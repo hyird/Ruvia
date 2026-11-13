@@ -1,12 +1,19 @@
 #include "ruvia/http/http1_client_request_writer.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <stdexcept>
 
+#include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/http1_chunked_framing.h"
+#include "ruvia/http/http1_request_content_writer.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_number_format.h"
@@ -564,4 +571,211 @@ http1_response_head_plan prepare_http1_connect_response_head(
     return http1_close_delimited_response_stream_head_plan(body, connection);
 }
 
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind,
+    http1_client_request_field_facts& facts, http1_client_request_prepare_error& error,
+    http_request_field_source source) noexcept {
+    const auto name = header.name();
+    const auto value = header.value();
+    if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
+        error = http1_client_request_prepare_error::invalid_header;
+        return false;
+    }
+    // The HTTP/1 writer owns Host and refuses message framing it does not
+    // generate; the remaining semantics are version-independent.
+    switch (kind) {
+        case detail::http_field_kind::host:
+            error = http1_client_request_prepare_error::host_header_managed_by_writer;
+            return false;
+        case detail::http_field_kind::transfer_encoding:
+            error = http1_client_request_prepare_error::transfer_encoding_unsupported;
+            return false;
+        default:
+            break;
+    }
+    switch (detail::validate_request_field(kind, value, detail::http_field_list_role::sender, facts.fields_, source)) {
+        case detail::request_field_status::ok:
+            break;
+        case detail::request_field_status::invalid:
+            error = http1_client_request_prepare_error::invalid_header;
+            return false;
+        case detail::request_field_status::managed_by_sender:
+            error = kind == detail::http_field_kind::expect
+                        ? http1_client_request_prepare_error::expect_header_managed_by_writer
+                        : http1_client_request_prepare_error::content_length_managed_by_writer;
+            return false;
+    }
+    if (kind == detail::http_field_kind::connection) {
+        if (facts.connection_options_.parse_field(value, detail::http_connection_field_role::sender) !=
+            detail::http_field_list_parse_status::ok) {
+            error = http1_client_request_prepare_error::invalid_connection;
+            return false;
+        }
+    } else if (kind == detail::http_field_kind::upgrade) {
+        const auto role = source == http_request_field_source::forwarded
+                              ? detail::http_field_list_role::recipient
+                              : detail::http_field_list_role::sender;
+        if (facts.upgrade_protocols_.parse_field(value, role) !=
+            detail::http_field_list_parse_status::ok) {
+            error = http1_client_request_prepare_error::invalid_upgrade;
+            return false;
+        }
+        if (facts.upgrade_field_count_ == 0) {
+            facts.first_upgrade_value_ = value;
+        } else {
+            ++facts.upgrade_value_bytes_;
+        }
+        facts.upgrade_value_bytes_ += value.size();
+        ++facts.upgrade_field_count_;
+    } else if (kind == detail::http_field_kind::te) {
+        facts.has_te_ = true;
+    } else if (kind == detail::http_field_kind::trailer) {
+        facts.has_trailer_ = true;
+    }
+
+    if (!facts.section_.add_field(name, value)) {
+        error = http1_client_request_prepare_error::header_too_large;
+        return false;
+    }
+    return true;
+}
+
+bool finish_http1_client_request_fields(
+    const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept {
+    if (facts.upgrade_protocols_.has_field() && !facts.connection_options_.upgrade()) {
+        error = http1_client_request_prepare_error::upgrade_connection_option_required;
+        return false;
+    }
+    if (facts.has_te_ && !facts.connection_options_.te()) {
+        error = http1_client_request_prepare_error::te_connection_option_required;
+        return false;
+    }
+    return true;
+}
+
+bool analyze_http1_client_request_fields(std::span<const http_header_view> headers, http1_client_request_field_facts& facts,
+    http1_client_request_prepare_error& error, http_request_field_source source) noexcept {
+    for (const auto& header : headers) {
+        if (!analyze_http1_client_request_field(header, detail::classify_http_field(header.name()), facts, error, source)) {
+            return false;
+        }
+    }
+    return finish_http1_client_request_fields(facts, error);
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+namespace {
+
+[[nodiscard]] char* write_chunked_trailers(char* output, std::span<const http_header_view> trailers) noexcept {
+    detail::http_raw_wire_sink sink(output);
+    sink.append(http1_last_chunk_prefix);
+    for (const auto& field : trailers) {
+        detail::emit_http1_field_line(sink, field.name(), field.value());
+    }
+    sink.append(http1_trailer_section_terminator);
+    return sink.position();
+}
+
+}  // namespace
+
+using error_type = http1_request_content_write_error;
+http1_request_content_writer::http1_request_content_writer(const http1_client_streaming_request_content& plan) noexcept
+    : length_(plan.content_length()),
+      gated_(plan.continue_gated()) {}
+void http1_request_content_writer::release_content() noexcept {
+    gated_ = false;
+}
+void http1_request_content_writer::abort() noexcept {
+    stopped_ = true;
+    writing_ = false;
+    finishing_ = false;
+}
+std::variant<http1_request_content_writer::chunk, error_type> http1_request_content_writer::plan_chunk(std::span<const char> payload_value) noexcept {
+    if (stopped_ || finished_) {
+        return error_type::stopped;
+    }
+    if (gated_) {
+        return error_type::awaiting_continue;
+    }
+    if (writing_ || finishing_) {
+        return error_type::write_pending;
+    }
+    if (payload_value.size() > std::numeric_limits<std::uint64_t>::max() - committed_) {
+        return error_type::length_overflow;
+    }
+    if (length_ && payload_value.size() > *length_ - committed_) {
+        return error_type::length_mismatch;
+    }
+    chunk result;
+    result.payload_ = payload_value;
+    if (!length_ && !payload_value.empty()) {
+        http1_chunk_header header_value(payload_value.size());
+        auto prefix = header_value.view();
+        std::copy(prefix.begin(), prefix.end(), result.prefix_.begin());
+        result.prefix_size_ = prefix.size();
+        result.suffix_ = http1_chunk_data_terminator;
+    }
+    writing_ = true;
+    pending_ = payload_value.size();
+    return result;
+}
+void http1_request_content_writer::commit_chunk() {
+    if (stopped_ || finished_ || !writing_) {
+        throw std::logic_error("HTTP/1 request content chunk commit requires a pending chunk write");
+    }
+    committed_ += pending_;
+    pending_ = 0;
+    writing_ = false;
+}
+std::variant<std::string_view, error_type> http1_request_content_writer::plan_finish(std::span<char> buffer, std::span<const http_header_view> trailers) noexcept {
+    if (stopped_ || finished_) {
+        return error_type::stopped;
+    }
+    if (gated_) {
+        return error_type::awaiting_continue;
+    }
+    if (writing_ || finishing_) {
+        return error_type::write_pending;
+    }
+    if (length_ && committed_ != *length_) {
+        return error_type::length_mismatch;
+    }
+    if (length_ && !trailers.empty()) {
+        return error_type::trailers_require_chunked;
+    }
+    // The last-chunk line shares the section budget, which keeps the whole
+    // encoded ending within the bounded wire snapshot.
+    auto section = http_trailer_section_budget();
+    (void)section.add(http1_last_chunk_prefix.size());
+    for (const auto& field : trailers) {
+        if (const auto error = detail::charge_http_request_trailer_field(section, field.name(), field.value())) {
+            return *error == http_request_trailer_error::section_too_large ? error_type::header_too_large
+                                                                           : error_type::invalid_trailer;
+        }
+    }
+    const auto required = length_ ? std::size_t{0} : section.bytes();
+    if (buffer.size() < required) {
+        return error_type::output_too_small;
+    }
+    if (!length_) {
+        const auto output = buffer.first(required);
+        detail::write_http_wire(output,
+            detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), trailers),
+            [trailers](char* destination) noexcept { return write_chunked_trailers(destination, trailers); });
+    }
+    finishing_ = true;
+    return required ? std::string_view(buffer.data(), required) : std::string_view{};
+}
+void http1_request_content_writer::commit_finish() {
+    if (stopped_ || finished_ || !finishing_) {
+        throw std::logic_error("HTTP/1 request content finish commit requires a pending finish write");
+    }
+    finishing_ = false;
+    finished_ = true;
+}
 }  // namespace ruvia

@@ -1,17 +1,24 @@
 #include "ruvia/http/http_content_encoder.h"
 
 #include <brotli/decode.h>
+#include <brotli/encode.h>
 #include <zlib.h>
+#define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
+#include <zstd_errors.h>
+#undef ZSTD_STATIC_LINKING_ONLY
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <memory>
 #include <new>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -19,11 +26,499 @@
 #include "ruvia/http/http_content_codec.h"
 
 #include "coding/codec_slot.h"
-#include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
 #include "coding/http_zlib_stream.h"
-#include "coding/http_zstd_stream.h"
 #include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
+
+// Brotli (RFC 7932) state with tracked working memory.
+// Brotli retains the allocator context as its opaque pointer, so these types are
+// pinned: owners embed them in storage whose address never changes.
+//
+// Construction rethrows an allocation failure captured during initialization.
+// Any other Brotli refusal leaves the stream uninitialized so each owner maps it
+// into its own error contract.
+
+namespace ruvia::detail {
+
+// Decoder whose native working memory is bounded by the caller's decoded-size
+// cap rather than by the window and metablock sizes the peer declares: a
+// declared ring buffer that the cap could never fill is refused, and
+// native_budget_exceeded() then reports a cap violation instead of a codec
+// failure.
+class brotli_decoder_stream final {
+public:
+    explicit brotli_decoder_stream(
+        std::size_t max_decoded_bytes,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    ~brotli_decoder_stream();
+    brotli_decoder_stream(const brotli_decoder_stream&) = delete;
+    brotli_decoder_stream& operator=(const brotli_decoder_stream&) = delete;
+
+    [[nodiscard]] bool initialized() const noexcept {
+        return state_ != nullptr;
+    }
+    [[nodiscard]] BrotliDecoderState* native() const noexcept {
+        return state_;
+    }
+    void rethrow_allocation_failure() const {
+        allocation_.rethrow_if_failed();
+    }
+    [[nodiscard]] bool native_budget_exceeded() const noexcept {
+        return allocation_.budget_exceeded();
+    }
+
+private:
+    http_c_library_memory allocation_;
+    BrotliDecoderState* state_;
+};
+
+// LZ77 window exponents. Whole-buffer encoding is bounded by its input and
+// released at once, so it keeps the library default; a stream encoder lives as
+// long as its response (SSE), so it uses Pingora's 512 KiB window.
+inline constexpr int brotli_whole_buffer_window_bits = BROTLI_DEFAULT_WINDOW;
+inline constexpr int brotli_stream_window_bits = 19;
+
+// Encoder at quality 5, shared by whole-buffer and streaming HTTP content coding.
+class brotli_encoder_stream final {
+public:
+    explicit brotli_encoder_stream(
+        int window_bits,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    ~brotli_encoder_stream();
+    brotli_encoder_stream(const brotli_encoder_stream&) = delete;
+    brotli_encoder_stream& operator=(const brotli_encoder_stream&) = delete;
+
+    [[nodiscard]] bool initialized() const noexcept {
+        return state_ != nullptr;
+    }
+    // Consumes the input and drains the requested operation into output. False
+    // means the total output budget was exceeded before appending a block.
+    // After false or an exception, the owner must discard/rebuild this stream.
+    [[nodiscard]] bool encode(std::string_view input, std::string& output,
+        BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
+
+private:
+    http_c_library_memory allocation_;
+    BrotliEncoderState* state_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+namespace {
+
+inline constexpr std::uint32_t http_brotli_quality = 5;
+
+// Upper bound of the per-metablock Huffman groups (256 trees each of the
+// literal, command and 520-symbol distance alphabets at alphabet + 376
+// four-byte entries, about 2.7 MB in the reference decoder) plus context maps,
+// block-type trees and the state itself. It does not depend on the window.
+inline constexpr std::size_t brotli_decoder_table_allowance = 3U * 1024U * 1024U;
+
+// The reference decoder sizes its ring buffer as the smallest power of two
+// covering the bytes already decoded plus the declared metablock length, and
+// grows it by doubling, holding the old ring during the copy. Content that
+// fits `max_decoded_bytes` therefore never needs more than three times that
+// cap (1 KiB floor) plus write-ahead slack; a larger ring can only serve
+// content the cap rejects anyway.
+[[nodiscard]] std::size_t brotli_decoder_native_budget(std::size_t max_decoded_bytes) noexcept {
+    constexpr auto unlimited = (std::numeric_limits<std::size_t>::max)();
+    constexpr std::size_t ring_floor = 1024;
+    constexpr std::size_t ring_slack = 2 * 1024;
+    const auto ring_bytes = (std::max)(max_decoded_bytes, ring_floor);
+    if (ring_bytes > (unlimited - ring_slack - brotli_decoder_table_allowance) / 3) {
+        return unlimited;
+    }
+    return 3 * ring_bytes + ring_slack + brotli_decoder_table_allowance;
+}
+
+[[nodiscard]] bool brotli_allocation_failure(BrotliDecoderErrorCode error) noexcept {
+    switch (error) {
+        case BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MODES:
+        case BROTLI_DECODER_ERROR_ALLOC_TREE_GROUPS:
+        case BROTLI_DECODER_ERROR_ALLOC_CONTEXT_MAP:
+        case BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_1:
+        case BROTLI_DECODER_ERROR_ALLOC_RING_BUFFER_2:
+        case BROTLI_DECODER_ERROR_ALLOC_BLOCK_TYPE_TREES:
+            return true;
+        default:
+            return false;
+    }
+}
+}  // namespace
+
+brotli_decoder_stream::brotli_decoder_stream(
+    std::size_t max_decoded_bytes, std::size_t max_memory_bytes)
+    : allocation_(
+          (std::min)(brotli_decoder_native_budget(max_decoded_bytes), max_memory_bytes),
+          max_memory_bytes < brotli_decoder_native_budget(max_decoded_bytes)),
+      state_(BrotliDecoderCreateInstance(
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
+    if (state_ == nullptr) {
+        allocation_.rethrow_if_failed();
+    }
+}
+
+brotli_decoder_stream::~brotli_decoder_stream() {
+    if (state_ != nullptr) {
+        BrotliDecoderDestroyInstance(state_);
+    }
+}
+
+brotli_encoder_stream::brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+      state_(BrotliEncoderCreateInstance(
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
+    if (state_ != nullptr &&
+        (BrotliEncoderSetParameter(state_, BROTLI_PARAM_QUALITY, http_brotli_quality) != BROTLI_TRUE ||
+            BrotliEncoderSetParameter(state_, BROTLI_PARAM_LGWIN, static_cast<std::uint32_t>(window_bits)) != BROTLI_TRUE)) {
+        BrotliEncoderDestroyInstance(state_);
+        state_ = nullptr;
+    }
+    if (state_ == nullptr) {
+        allocation_.rethrow_if_failed();
+    }
+}
+
+brotli_encoder_stream::~brotli_encoder_stream() {
+    if (state_ != nullptr) {
+        BrotliEncoderDestroyInstance(state_);
+    }
+}
+
+bool brotli_encoder_stream::encode(std::string_view input, std::string& output,
+    BrotliEncoderOperation operation, std::size_t max_encoded_bytes) {
+    std::size_t available_input = input.size();
+    const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
+    for (;;) {
+        const auto before_input = available_input;
+        std::size_t available_output = 0;
+        const auto compressed = BrotliEncoderCompressStream(state_, operation,
+            &available_input, &next_input, &available_output, nullptr, nullptr);
+        allocation_.rethrow_if_failed();
+        if (compressed != BROTLI_TRUE) {
+            throw http_content_codec_error("brotli encoding failed");
+        }
+        std::size_t produced = 0;
+        const auto* bytes_value = BrotliEncoderTakeOutput(state_, &produced);
+        if (output.size() > max_encoded_bytes || produced > max_encoded_bytes - output.size()) {
+            return false;
+        }
+        // Consume the borrowed block directly into the caller's output before
+        // any subsequent encoder call can invalidate it.
+        if (produced != 0) {
+            output.append(reinterpret_cast<const char*>(bytes_value), produced);
+        }
+        if (operation == BROTLI_OPERATION_FINISH) {
+            if (BrotliEncoderIsFinished(state_) == BROTLI_TRUE) {
+                return true;
+            }
+        } else if (available_input == 0 && BrotliEncoderHasMoreOutput(state_) != BROTLI_TRUE) {
+            return true;
+        }
+        if (produced == 0 && available_input == before_input) {
+            throw http_content_codec_error("brotli encoder made no progress");
+        }
+    }
+}
+
+std::variant<std::string, http_content_decode_error> decode_brotli_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    std::string output;
+    brotli_decoder_stream decoder(max_decoded_bytes);
+    if (!decoder.initialized()) {
+        throw http_content_codec_error("brotli decoder initialization failed");
+    }
+    auto* state_value = decoder.native();
+
+    const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
+    std::size_t available_input = input.size();
+    for (;;) {
+        const auto before_input = available_input;
+        std::size_t available_output = 0;
+        const auto result_value = BrotliDecoderDecompressStream(
+            state_value, &available_input, &next_input, &available_output, nullptr, nullptr);
+        bool produced_output = false;
+        // The ring buffer can expose more than one contiguous block. Consume
+        // each borrow before the next decoder call invalidates it.
+        while (BrotliDecoderHasMoreOutput(state_value) == BROTLI_TRUE) {
+            std::size_t produced = 0;
+            const auto* bytes_value = BrotliDecoderTakeOutput(state_value, &produced);
+            if (!append_decoded_bytes(
+                    output, reinterpret_cast<const char*>(bytes_value), produced, max_decoded_bytes)) {
+                return http_content_decode_error::decoded_size_exceeded;
+            }
+            produced_output = produced_output || produced != 0;
+        }
+        if (result_value == BROTLI_DECODER_RESULT_SUCCESS) {
+            // RFC 7932 defines one Brotli stream. Its decoder deliberately does
+            // not over-consume, so remaining bytes are not part of this content.
+            if (available_input == 0) {
+                return output;
+            }
+            return http_content_decode_error::invalid_content;
+        }
+        if (result_value == BROTLI_DECODER_RESULT_ERROR) {
+            // A ring buffer refused by the native budget was declared larger
+            // than the cap allows the content to be.
+            if (decoder.native_budget_exceeded()) {
+                return http_content_decode_error::decoded_size_exceeded;
+            }
+            decoder.rethrow_allocation_failure();
+            if (brotli_allocation_failure(BrotliDecoderGetErrorCode(state_value))) {
+                throw std::bad_alloc();
+            }
+            return http_content_decode_error::invalid_content;
+        }
+        const bool progressed = produced_output || available_input != before_input;
+        if (!progressed ||
+            (result_value == BROTLI_DECODER_RESULT_NEEDS_MORE_INPUT && available_input == 0)) {
+            return http_content_decode_error::invalid_content;
+        }
+    }
+}
+
+std::optional<std::string> encode_brotli_content(
+    brotli_encoder_stream& encoder, std::string_view input,
+    std::size_t max_encoded_bytes) {
+    return encode_whole_content_with_stream(
+        encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes);
+}
+
+std::optional<std::string> encode_brotli_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed",
+        BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
+}
+
+}  // namespace ruvia::detail
+
+// zstd (RFC 8878) state with tracked working memory and
+// whose window never exceeds the 8 MiB HTTP limit of RFC 9659. zstd
+// retains the allocator context as its opaque pointer, so these types are
+// pinned: owners embed them in storage whose address never changes.
+//
+// Construction rethrows an allocation failure captured during initialization.
+// Any other zstd refusal leaves the stream uninitialized so each owner maps it
+// into its own error contract.
+
+namespace ruvia::detail {
+
+class zstd_decoder_stream final {
+public:
+    explicit zstd_decoder_stream(
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    ~zstd_decoder_stream();
+    zstd_decoder_stream(const zstd_decoder_stream&) = delete;
+    zstd_decoder_stream& operator=(const zstd_decoder_stream&) = delete;
+
+    [[nodiscard]] bool initialized() const noexcept {
+        return stream_ != nullptr;
+    }
+    [[nodiscard]] ZSTD_DStream* native() const noexcept {
+        return stream_;
+    }
+    void rethrow_allocation_failure() const {
+        allocation_.rethrow_if_failed();
+    }
+
+private:
+    http_c_library_memory allocation_;
+    ZSTD_DStream* stream_;
+};
+
+// Encoder at the default compression level, with the level's own window.
+// reset() ends any frame in progress and keeps both the parameters and the
+// working memory, so the next frame is identical to one from a new encoder.
+// false means the owner must destroy it.
+class zstd_encoder_stream final {
+public:
+    explicit zstd_encoder_stream(
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
+    ~zstd_encoder_stream();
+    zstd_encoder_stream(const zstd_encoder_stream&) = delete;
+    zstd_encoder_stream& operator=(const zstd_encoder_stream&) = delete;
+
+    [[nodiscard]] bool initialized() const noexcept {
+        return context_ != nullptr;
+    }
+    void rethrow_allocation_failure() const {
+        allocation_.rethrow_if_failed();
+    }
+    [[nodiscard]] bool reset() noexcept;
+    // The single zstd encode loop, shared by whole-buffer and streaming
+    // coding: consumes the input and drains `operation` into output. False
+    // means output would exceed `max_encoded_bytes` in total; no byte past
+    // that cap is appended. After false or an exception, the owner must reset
+    // or discard this stream.
+    [[nodiscard]] bool encode(std::string_view input, std::string& output,
+        ZSTD_EndDirective operation, std::size_t max_encoded_bytes);
+
+private:
+    http_c_library_memory allocation_;
+    ZSTD_CCtx* context_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+namespace {
+
+// RFC 9659 §3: HTTP zstd windows never exceed 8 MiB. Decoders must accept
+// that window, so it is also the decoder's floor.
+inline constexpr int http_zstd_window_log_max = 23;
+
+[[noreturn]] void fail_zstd_encoding(const zstd_encoder_stream& encoder, std::size_t result_value) {
+    encoder.rethrow_allocation_failure();
+    throw http_content_codec_error(ZSTD_getErrorName(result_value));
+}
+
+}  // namespace
+
+zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+      stream_(ZSTD_createDStream_advanced(ZSTD_customMem{
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
+    if (stream_ != nullptr &&
+        (ZSTD_isError(ZSTD_initDStream(stream_)) != 0 ||
+            ZSTD_isError(ZSTD_DCtx_setParameter(stream_, ZSTD_d_windowLogMax, http_zstd_window_log_max)) != 0)) {
+        (void)ZSTD_freeDStream(stream_);
+        stream_ = nullptr;
+    }
+    if (stream_ == nullptr) {
+        allocation_.rethrow_if_failed();
+    }
+}
+
+zstd_decoder_stream::~zstd_decoder_stream() {
+    if (stream_ != nullptr) {
+        (void)ZSTD_freeDStream(stream_);
+    }
+}
+
+zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
+      context_(ZSTD_createCCtx_advanced(ZSTD_customMem{
+          &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
+    // The level picks its own window (and adapts it to a known source size).
+    // RFC 9659's 8 MiB is only a ceiling; pinning it would also fix the
+    // streaming input buffer at the window size for every pooled encoder.
+    const bool window_exceeds_http_limit =
+        ZSTD_getCParams(ZSTD_CLEVEL_DEFAULT, ZSTD_CONTENTSIZE_UNKNOWN, 0).windowLog >
+        static_cast<unsigned>(http_zstd_window_log_max);
+    if (context_ != nullptr &&
+        (ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_compressionLevel, ZSTD_CLEVEL_DEFAULT)) != 0 ||
+            (window_exceeds_http_limit &&
+                ZSTD_isError(ZSTD_CCtx_setParameter(context_, ZSTD_c_windowLog, http_zstd_window_log_max)) != 0))) {
+        (void)ZSTD_freeCCtx(context_);
+        context_ = nullptr;
+    }
+    if (context_ == nullptr) {
+        allocation_.rethrow_if_failed();
+    }
+}
+
+zstd_encoder_stream::~zstd_encoder_stream() {
+    if (context_ != nullptr) {
+        (void)ZSTD_freeCCtx(context_);
+    }
+}
+
+bool zstd_encoder_stream::reset() noexcept {
+    allocation_.clear_allocation_failure();
+    return context_ != nullptr && ZSTD_isError(ZSTD_CCtx_reset(context_, ZSTD_reset_session_only)) == 0;
+}
+
+bool zstd_encoder_stream::encode(std::string_view input, std::string& output,
+    ZSTD_EndDirective operation, std::size_t max_encoded_bytes) {
+    if (output.size() > max_encoded_bytes) {
+        return false;
+    }
+    ZSTD_inBuffer input_buffer{input.data(), input.size(), 0};
+    // Uninitialized scratch: only the bytes zstd produced are copied out.
+    std::array<char, 16384> buffer;
+    for (;;) {
+        // At the cap, a one-byte probe distinguishes "already complete" from
+        // "more output pending" without letting a byte past the cap through.
+        const auto room = max_encoded_bytes - output.size();
+        const bool probing = room == 0;
+        const auto writable = probing ? std::size_t{1} : (std::min)(buffer.size(), room);
+        ZSTD_outBuffer output_buffer{buffer.data(), writable, 0};
+        const auto before_input = input_buffer.pos;
+        const auto remaining = ZSTD_compressStream2(context_, &output_buffer, &input_buffer, operation);
+        if (ZSTD_isError(remaining) != 0) {
+            fail_zstd_encoding(*this, remaining);
+        }
+        if (probing && output_buffer.pos != 0) {
+            return false;
+        }
+        output.append(buffer.data(), output_buffer.pos);
+        const bool input_consumed = input_buffer.pos == input_buffer.size;
+        if (input_consumed && (operation == ZSTD_e_continue ? output_buffer.pos < writable : remaining == 0)) {
+            return true;
+        }
+        if (probing) {
+            return false;
+        }
+        if (output_buffer.pos == 0 && input_buffer.pos == before_input) {
+            throw http_content_codec_error("Zstd content encoder made no progress");
+        }
+    }
+}
+
+std::variant<std::string, http_content_decode_error> decode_zstd_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    std::string output;
+    zstd_decoder_stream decoder;
+    if (!decoder.initialized()) {
+        throw http_content_codec_error("zstd decoder initialization failed");
+    }
+    auto* stream = decoder.native();
+
+    ZSTD_inBuffer in{input.data(), input.size(), 0};
+    char buffer[16384];
+    for (;;) {
+        const auto before_input = in.pos;
+        ZSTD_outBuffer out{buffer, sizeof(buffer), 0};
+        const auto result_value = ZSTD_decompressStream(stream, &out, &in);
+        if (ZSTD_isError(result_value) != 0) {
+            decoder.rethrow_allocation_failure();
+            if (ZSTD_getErrorCode(result_value) == ZSTD_error_memory_allocation) {
+                throw http_content_codec_error(ZSTD_getErrorName(result_value));
+            }
+            return http_content_decode_error::invalid_content;
+        }
+        if (!append_decoded_bytes(output, buffer, out.pos, max_decoded_bytes)) {
+            return http_content_decode_error::decoded_size_exceeded;
+        }
+        if (result_value == 0 && in.pos == in.size) {
+            return output;
+        }
+        // A zero result with remaining input completed one RFC 8878 frame;
+        // ZSTD_decompressStream is ready to consume the next concatenated frame.
+        if (out.pos == 0 && in.pos == before_input) {
+            return http_content_decode_error::invalid_content;
+        }
+    }
+}
+
+std::optional<std::string> encode_zstd_content(
+    zstd_encoder_stream& encoder, std::string_view input,
+    std::size_t max_encoded_bytes) {
+    return encode_whole_content_with_stream(encoder, ZSTD_e_end, input, max_encoded_bytes);
+}
+
+std::optional<std::string> encode_zstd_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content<zstd_encoder_stream>(
+        "zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes);
+}
+
+}  // namespace ruvia::detail
+
 namespace ruvia {
 
 namespace {
