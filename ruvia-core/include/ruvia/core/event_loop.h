@@ -1503,7 +1503,6 @@ using post_result_type = post_outcome<void()>;
 class blocking_pool;
 
 namespace detail {
-class worker_dispatcher;
 struct worker_ref_access;
 
 // Per-owner-type phase table; a null entry skips that phase.
@@ -3895,10 +3894,6 @@ private:
 
 class scoped_capability_registration;
 
-namespace detail {
-class scoped_operation_registration;
-}
-
 // Worker-affine owner of borrowed capabilities and their lazy operations.
 // Close discards cold frames before capability cleanup. Started operations must
 // finish; close_and_join waits for their frames, leases and capability cleanup
@@ -5020,8 +5015,6 @@ template <typename result_type = void, typename initiate_type>
     return asio_completion_awaiter<result_type, std::decay_t<initiate_type>>(std::forward<initiate_type>(initiate));
 }
 
-class event_loop;
-
 namespace detail {
 
 // Routes an unobserved root-task failure through the loop's own failure sink,
@@ -5654,8 +5647,6 @@ private:
     struct impl_type;
     std::shared_ptr<impl_type> impl_;
 };
-
-class worker_runtime;
 
 struct worker_notification_options final {
     // Bounds the Windows native wake-pipe connection wait (at most one minute).

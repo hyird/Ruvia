@@ -2070,7 +2070,6 @@ struct db_lock_options final {
     borrowed_span<borrowed_text> tables_{};
 };
 
-class db_query;
 class db_predicate;
 class db_expr;
 class db_tuple;

@@ -5744,11 +5744,6 @@ private:
     const http_response_coding_selection& selection,
     detail::static_root_entry_view identity);
 
-class http_client;
-class http_client_ref;
-class stop_token;
-class operation_scope;
-
 #ifdef RUVIA_ENABLE_DATABASE
 class db_session;
 #endif
@@ -5760,7 +5755,6 @@ namespace detail {
 
 class borrowed_clients;
 class db_registry;
-struct request_io_metrics;
 class http_client_registry;
 class redis_registry;
 
@@ -5839,15 +5833,6 @@ private:
     redis_registry* redis_{nullptr};
 #endif
 };
-
-}  // namespace detail
-
-class body_reader;
-class response_stream_writer;
-class websocket;
-class http_tunnel;
-
-namespace detail {
 
 class request_body_loader;
 class context_request_body_source;
@@ -6048,9 +6033,6 @@ private:
 
 }  // namespace detail
 
-class http_request;
-class http_request_trailers;
-class env;
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -6058,8 +6040,6 @@ namespace ruvia::detail {
 class http_interim_response_output;
 class route_table;
 struct connection_failure_sink;
-class worker_state_registry;
-class borrowed_clients;
 
 // Borrows the request's connection.
 class http_push_output final {
@@ -6934,14 +6914,6 @@ private:
     loader_type loader_;
     request_body_loader facade_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-class context;
-}
-
-namespace ruvia::detail {
 
 // One request's typed interim output lane. The protocol driver outlives this
 // object; operations own their fields until completion.
@@ -8047,8 +8019,6 @@ private:
 
 namespace ruvia {
 
-class static_root;
-
 namespace detail {
 
 // One immutable document-root snapshot. The application's refresher builds it
@@ -8204,14 +8174,6 @@ void ensure_same_http_server_tls_policy(const http_server_listener_definition::t
 // Never touches the file system.
 void configure_http_server_client_certificates(SSL_CTX& context_value,
     const std::optional<http_server_listener_definition::tls_client_certificate_policy>& client_certificates);
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-class env;
-}
-
-namespace ruvia::detail {
 
 class document_root_publisher;
 
@@ -8417,14 +8379,6 @@ struct http_server_options final {
         trusted_proxies_ = http_client_ip_extractor();
     }
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-struct listen_config;
-}
-
-namespace ruvia::detail {
 
 // Owns every inherited socket and cleanses every TLS secret, including when
 // configuration validation or allocation fails.
@@ -12362,13 +12316,6 @@ private:
     const http_client_config_storage& config_;
     http_cookie_jar jar_;
 };
-}  // namespace ruvia::detail
-
-namespace ruvia {
-class operation_deadline;
-}  // namespace ruvia
-
-namespace ruvia::detail {
 
 class http_client_response_state;
 
@@ -12849,14 +12796,6 @@ private:
 };
 
 using http_client_definition_type = named_capability_definition<http_client_config_storage>;
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-class response_stream_writer;
-}
-
-namespace ruvia::detail {
 
 inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
     if (++value == 0) {
@@ -14059,8 +13998,6 @@ private:
     std::size_t dropped_{};
 };
 
-struct http_tunnel_input;
-
 using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
 
 // The one retry rule of both wire protocols for a request that failed on a
@@ -14355,14 +14292,6 @@ private:
     worker_timer_registration dns_refresh_timer_;
     stop_source dns_stop_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-class http1_request_content_writer;
-}  // namespace ruvia
-
-namespace ruvia::detail {
 
 // One serialized HTTP/1 exchange on a connected http_client_connection: the
 // request head and content, a full-duplex streaming upload, the response head,
@@ -20207,8 +20136,6 @@ struct route_request_view final {
     std::string_view extended_protocol_{};
 };
 
-class controller_store;
-
 // The framework's own answer to a failed request, consulting no application
 // error handler: the status an http_error or protocol failure carries, else a
 // generic 500 that names nothing internal. An inbound transport failure
@@ -20411,8 +20338,6 @@ namespace ruvia {
 }  // namespace ruvia
 
 namespace ruvia::detail {
-
-class app_configuration;
 
 // Builds the process route plan once per run: every controller instance in
 // `controllers` (one per registrar, registrar order) declares its routes, then
@@ -22036,13 +21961,6 @@ private:
     std::string encoded_chunk_;
     state_type state_;
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-}
-
-namespace ruvia::detail {
 
 // Inactivity belongs to the connection; request bodies and output waits have
 // independent per-stream deadlines.
@@ -24323,16 +24241,11 @@ private:
 #if defined(_WIN32)
 #endif
 
-namespace ruvia {
-class worker_runtime;
-}
-
 namespace ruvia::detail {
 
 using tcp_socket_type = asio::ip::tcp::socket;
 template <typename stream_type>
 struct http1_connection_session;
-struct server_connection_fields;
 class worker_capabilities;
 
 // What serve_requests hands back to run_stream when the connection stays open:
@@ -24594,13 +24507,6 @@ private:
 #endif
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia {
-}  // namespace ruvia
-
-namespace ruvia::detail {
-
 struct worker_capability_definitions final {
 #ifdef RUVIA_ENABLE_DATABASE
     std::span<const db_definition> databases_{};
@@ -24682,7 +24588,6 @@ private:
 
 namespace ruvia {
 
-class worker_ref;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_client;
 #endif
@@ -24971,13 +24876,6 @@ private:
     std::atomic_uint64_t failed_count_{0};
     std::atomic_size_t outstanding_{0};
 };
-
-}  // namespace ruvia::detail
-
-namespace ruvia {
-}  // namespace ruvia
-
-namespace ruvia::detail {
 
 // The application's one document-root refresher. The first registered worker
 // walks the root, reads small files into the snapshot and precompresses changed files

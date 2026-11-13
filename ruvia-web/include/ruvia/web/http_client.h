@@ -782,7 +782,6 @@ struct std::is_error_code_enum<ruvia::http_client_errc> : std::true_type {};
 
 namespace ruvia {
 
-class event_loop;
 namespace detail {
 class tcp_client_state;
 }
@@ -864,14 +863,10 @@ private:
     std::shared_ptr<detail::tcp_client_state> state_;
 };
 
-class context;
-class context_response_editor;
 class request_stream;
-class response_stream_writer;
 class http_client_request;
 class http_client_connect_request;
 class http_client_websocket_request;
-class operation_deadline;
 
 namespace detail {
 class http_client_pool;

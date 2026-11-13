@@ -277,7 +277,6 @@ static_assert(std::is_trivially_copyable_v<callback_ref<void()>>);
 namespace ruvia {
 
 class context;
-class http_response;
 class next;
 
 namespace detail {
@@ -291,7 +290,6 @@ using route_middleware = callback_ref<task<void>(context&, next&)>;
 
 }  // namespace detail
 
-class context;
 class validator;
 
 inline constexpr std::size_t max_validation_text_bytes = 1024;
@@ -4077,10 +4075,6 @@ void initialize_model(model_type& value) {
 }
 
 }  // namespace ruvia::detail::model
-
-namespace ruvia {
-class request_name_value_list;
-}  // namespace ruvia
 
 namespace ruvia::detail {
 

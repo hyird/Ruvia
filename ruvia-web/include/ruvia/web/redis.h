@@ -1603,15 +1603,11 @@ namespace ruvia {
 enum class redis_index_kind : std::uint8_t;
 class redis_predicate;
 struct redis_find_options;
-struct redis_repository_config;
 struct redis_write_options;
 class redis_write_result;
 }  // namespace ruvia
 
 namespace ruvia::detail {
-
-class redis_pool;
-struct request_io_metrics;
 
 // Typed reply accessors that enforce the redis_value kind. A reply's type is
 // chosen by the (untrusted) server, so a mismatch throws

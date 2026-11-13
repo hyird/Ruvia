@@ -276,8 +276,6 @@ private:
 
 }  // namespace detail
 
-class task_scope;
-
 template <typename t_type, typename completion_token_type>
     requires detail::asio_task_result<t_type>
 auto async_start(task<t_type>&& task_value, completion_token_type&& token);

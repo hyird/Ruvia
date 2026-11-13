@@ -1198,7 +1198,6 @@ using http3_field_callback = move_only_function<void(const http3_field_record&) 
 #endif
 
 class request_stream;
-class router;
 enum class http2_error_code : std::uint32_t;
 enum class http3_error_code : std::uint64_t;
 

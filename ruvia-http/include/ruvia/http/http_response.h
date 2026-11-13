@@ -29,7 +29,6 @@
 namespace ruvia {
 
 class http_response_headers;
-class http_request;
 
 namespace detail {
 struct http_content_coding_field_result_access;
@@ -576,8 +575,6 @@ private:
 // Accept-Encoding negotiation (RFC 9110 section 12.5.3): the per-coding weights a
 // request expresses, and the response coding the server picks from them.
 // gzip and its deprecated x-gzip spelling share one case-insensitive weight.
-
-class http_request;
 
 struct http_accepted_encoding_quality {
     int explicit_quality_{-1};
@@ -2102,7 +2099,6 @@ private:
 
 enum class http_connect_udp_error : std::uint8_t;
 class http1_response_head_plan;
-class http_response_headers;
 
 enum class http_response_content_semantics : std::uint8_t {
     informational,
@@ -5017,7 +5013,6 @@ private:
     std::variant<stack_state_type, heap_state_type> state_{stack_state_type{}};
 };
 
-class http1_response_head_plan;
 class http1_buffered_response_plan;
 
 // A complete buffered representation is length-delimited by the response writer.

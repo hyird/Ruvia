@@ -2597,8 +2597,6 @@ template <typename header_accessor_type>
 
 namespace ruvia {
 
-class http_request;
-
 namespace detail {
 
 // The base64-encoded SHA-1 of the client key plus the RFC 6455 GUID, as it

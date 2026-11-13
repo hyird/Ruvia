@@ -212,7 +212,8 @@ pool.join();
 - **Cookie 写出原子性**：`write_cookie_request_pair()` 与 `append_cookie_request_pair()` 失败保留原内容；追加器扩容可能使旧借用视图失效，重试时重新获取视图。
 - **Cookie 快照预算**：仅暂存与输出重叠的输入；未重叠输入不占临时内存预算，双重叠共享一份快照。
 
-- **优先级紧急度 `http_priority_urgency`**：`http_priority::urgency_` 与 `http_priority_fields::urgency_` 共用 `http_priority_urgency`，后者仍以 `std::optional` 区分缺省参数。按 [RFC 9218 §4.1](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.1)，值域为 `0..7`、默认值为 `3`；本地整数输入在窄化前检查，非法值抛出 `std::invalid_argument`，无异常探测用 `try_from_value()`。不隐式接受浮点或枚举，也不隐式转换回整数；需要整数时用 `urgency_.value()`（可选字段用 `urgency_->value()`），不要预先窄化。接收端仍按 RFC 9218 §4 忽略越界或类型不符的参数，不把本地构造失败规则套用到对端字段。
+- **优先级紧急度 `http_priority_urgency`**：`http_priority::urgency_` 与 `http_priority_fields::urgency_` 共用 `http_priority_urgency`，后者仍以 `std::optional` 区分缺省参数。按 [RFC 9218 §4.1](https://www.rfc-editor.org/rfc/rfc9218.html#section-4.1)，值域为 `0..7`、默认值为 `3`；本地整数输入在窄化前检查，非法值抛出 `std::invalid_argument`，无异常探测用 `try_from_value()`。不隐式接受浮点或枚举，也不隐式转换回整数；需要整数时用 `urgency_.value()`（可选字段用 `urgency_->value()`），不要预先窄化。
+- **优先级接收方容错**：接收端仍按 RFC 9218 §4 忽略越界或类型不符的参数，不把本地构造失败规则套用到对端字段。
 
 当两个 `http_header` 均绑定 PMR 时，赋值保留目标的资源对象。移动赋值在资源等价时直接转移存储、不分配；`is_equal()` 只允许互相回收存储，不表示两个资源对象具有相同寿命，因此不会改为借用源资源。拷贝和移动构造仍沿用源对象的资源。
 
@@ -387,7 +388,8 @@ while (conn.wants_write()) {
 - **存活探测 `submit_ping()`**：排队一个非 ACK `PING`，载荷与优雅排空的 `PING` 不同，两者的 ACK 互不影响。同一时刻最多一个探测未确认：在其 ACK 到达前再次调用返回 `accepted` 但不再排队新帧；ACK 不产生事件，任何收到的帧（含该 ACK）都可作为对端存活的证据。连接出错后返回 `closed`。
 - **对端诱发输出的预算**：核心没有时钟（`nghttp2` 基于时钟的 reset 与 glitch 限速器因此被关闭），以两个计数器限制对端不读取输出时能诱发的输出，超限即发送 `GOAWAY(ENHANCE_YOUR_CALM)` 并进入连接错误。其一是输出未排空期间的控制帧数：`PING` ACK、`SETTINGS` ACK 与因对端流错误发出的 `RST_STREAM` 合计不超过 1000，输出完全排空（`take_output_batch()` 取空）后清零（同 Go `x/net/http2` 的 `maxQueuedControlFrames`）。
 - **累计流错误与帧数防洪**：连接生命周期内因对端流错误发出的 `RST_STREAM` 总数，上限 1024，不会回补（同 h2 `max_local_error_reset_streams`）：否则对端可反复开流、诱发流错误（如不带 `END_STREAM` 的 trailer 区段），绕过只统计对端 `RST_STREAM` 的 rapid-reset 预算。所有者主动的 `submit_reset()` 不计入这两项。此外，超过 32 项的 `SETTINGS` 帧与单个字段块超过 1024 个 `CONTINUATION` 帧同样以 `GOAWAY(ENHANCE_YOUR_CALM)` 结束连接。
-- **由 `nghttp2` 决定的错误类别**：以下情形按连接错误 `PROTOCOL_ERROR` 处理（RFC 9113 §5.4.1 允许把流错误升级为连接错误）：任意流上的零增量 `WINDOW_UPDATE`、长度不足以容纳填充或优先级字段的 `HEADERS`、依赖自身的请求 `HEADERS`、对端在本端 `SETTINGS` 已被确认后超出 `SETTINGS_MAX_CONCURRENT_STREAMS` 的新流（确认前超出的流收到 `RST_STREAM(REFUSED_STREAM)`）、服务端 `PRIORITY_UPDATE` 指向的空闲流超出并发上限，以及非法的客户端连接前言。`nghttp2` 不保留已关闭流的历史：已被其遗忘的流上再到达的帧被忽略；关联流已不存在时到达的 `PUSH_PROMISE` 被忽略，其承诺流以 `RST_STREAM(CANCEL)` 取消。
+- **由 `nghttp2` 决定的错误类别**：以下情形按连接错误 `PROTOCOL_ERROR` 处理（RFC 9113 §5.4.1 允许把流错误升级为连接错误）：任意流上的零增量 `WINDOW_UPDATE`、长度不足以容纳填充或优先级字段的 `HEADERS`、依赖自身的请求 `HEADERS`、对端在本端 `SETTINGS` 已被确认后超出 `SETTINGS_MAX_CONCURRENT_STREAMS` 的新流（确认前超出的流收到 `RST_STREAM(REFUSED_STREAM)`）、服务端 `PRIORITY_UPDATE` 指向的空闲流超出并发上限，以及非法的客户端连接前言。
+- **已遗忘流与孤儿 `PUSH_PROMISE`**：`nghttp2` 不保留已关闭流的历史：已被其遗忘的流上再到达的帧被忽略；关联流已不存在时到达的 `PUSH_PROMISE` 被忽略，其承诺流以 `RST_STREAM(CANCEL)` 取消。
 - **服务端 `CONNECT` 乐观数据**：接受/拒绝前收到的 `DATA` 以 `tunnel_data()` 事件发布，其流控凭证由所有者持有到接受隧道后消费；`submit_connect_response_head()` 接受后再发布 `tunnel_end()`（若请求半边已结束）。
 - **隧道拒绝与扩展帧过滤**：非 2xx 拒绝后到达的 `DATA` 丢弃并归还流控额度。RFC 8441 `:protocol = websocket` 的提前 `DATA` 同样保留（RFC 6455 §4.1 的等待规则只约束客户端）。非 2xx 拒绝响应后服务端以 `RST_STREAM(NO_ERROR)` 结束流。已建立隧道上的未知扩展帧被丢弃（RFC 9113 §5.5），`ALTSVC`/`ORIGIN` 帧也被忽略（RFC 7838 §4、RFC 8336 §2.1）。已建立隧道上的 `PUSH_PROMISE` 先完成 HPACK 解码，再依次以 `RST_STREAM(PROTOCOL_ERROR)` 重置关联流、以 `RST_STREAM(CANCEL)` 取消承诺流。
 - **客户端 `REFUSED_STREAM`**：客户端在收到任何响应头（含 `1xx` 临时响应与最终响应头）前收到 `RST_STREAM(REFUSED_STREAM)` 时发布 `request_unprocessed()` 而不是 `stream_closed()`（RFC 9113 §8.7：请求未被处理，可安全重试），连接保持可用。

@@ -62,7 +62,8 @@ ruvia::app().database({
 - **在途语句超时**：语句正在执行时，该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
 - **空闲租约超时**：调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
 
-- **迁移事务超时继承**：迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
+- **迁移事务超时继承**：迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。
+- **非事务迁移超时边界**：PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
 
 - **连接租出前存活性探测**：池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
@@ -257,7 +258,8 @@ RUVIA_DB_PROJECTION(device_summary,
 ```
 
 - **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::string`、`ruvia::string`，以及这些值的一维 `std::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命。
-- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
+- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。
+- **数组预分配上界防线**：`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
 - **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
 - **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列拒绝隐式浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
 - **PostgreSQL 浮点数组写入**：按元素的原始浮点类型生成十进制文本，不先转为 `double`；`long double` 的额外精度与范围可由显式 `numeric` 数组列承载。NaN 与无穷大在编码时拒绝，写 Builder 保留此前已接受的行。
@@ -483,7 +485,8 @@ while (auto event = co_await sub.read()) {
 
 - **逐次读取选项**：`read(operation_options)` 的超时只收紧订阅选项，其令牌只取消本次读取（订阅自身令牌仍以 `std::nullopt` 结束事件流）；非正超时在调用处抛 `std::invalid_argument`。启动前已停止的令牌抛 `redis_error(cancelled)` 且订阅保持打开；等待中的超时或取消关闭订阅连接并抛 `redis_error(timeout / cancelled)`。
 
-- **Pub/Sub 事件分类**：`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
+- **Pub/Sub 事件分类**：`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。
+- **Pub/Sub 消息视图生命周期**：消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
 
 线上 `message` / `pmessage` 与四种确认字段的定义见 [Redis Pub/Sub 推送格式](https://redis.io/docs/latest/develop/pubsub/#format-of-pushed-messages)。
 

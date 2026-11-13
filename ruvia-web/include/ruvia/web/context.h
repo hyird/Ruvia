@@ -469,7 +469,6 @@ class redis_session;
 namespace detail {
 class web_worker_dispatch;
 class worker_client_registry_view;
-class worker_state_registry;
 }  // namespace detail
 class web_worker_context final {
 public:
@@ -1073,7 +1072,6 @@ template <middleware middleware_type, typename... args_types>
 
 namespace ruvia {
 
-class context;
 struct csrf_protection_config final {
     std::string cookie_name_{"XSRF-TOKEN"};
     // 必须为脚本主动提交 token 的自定义字段；构造时拒绝 CORS-safelisted、
@@ -1366,8 +1364,6 @@ struct session_access;
 }  // namespace ruvia::detail
 
 namespace ruvia {
-
-class next;
 
 // A request-local capability bound by session_middleware. The handle borrows
 // context state and therefore cannot escape the request.
@@ -2440,13 +2436,10 @@ class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
 // where they are used: context.h and http_client.h.
-class http_client_ref;
 class http_client_response;
 class test_app;
-class session;
 class tls_client_hello_record;
 class server_connection;
-class multipart_part;
 #ifdef RUVIA_ENABLE_DATABASE
 class db_session;
 #endif
@@ -2458,7 +2451,6 @@ class context_request_storage;
 class context_request_body_source;
 class context_response_output;
 class context_response_state;
-class context_session_state;
 template <typename t_type>
 [[nodiscard]] request_binding_guard<t_type> bind_validated_model(context& context_value, const t_type& model);
 template <typename t_type>
@@ -2470,7 +2462,6 @@ request_binding_guard<std::remove_cvref_t<t_type>> bind_validated_model(context&
 
 struct context_access;
 class context_services;
-struct session_access;
 }  // namespace detail
 
 class plain_connection_transport final {

@@ -3324,8 +3324,6 @@ private:
     const http_request& request,
     std::uint64_t max_saturation = (std::numeric_limits<std::uint64_t>::max)()) noexcept;
 
-class http_request;
-
 // The connection facts RFC 9110 §7.4 weighs against a request's target URI.
 // The server runtime supplies them; the request alone cannot know them.
 struct http_target_origin_connection final {
