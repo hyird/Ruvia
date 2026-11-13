@@ -32,8 +32,7 @@
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis/redis.h"
 
-#include "connection_lifecycle.h"
-#include "http_client_pool.h"
+#include "context_access.h"
 #include "route_table.h"
 namespace ruvia::detail {
 namespace {

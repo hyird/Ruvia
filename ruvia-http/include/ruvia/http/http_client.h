@@ -16,7 +16,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response.h"
 namespace ruvia::detail {
 struct http_client_response_head_access;
 }  // namespace ruvia::detail

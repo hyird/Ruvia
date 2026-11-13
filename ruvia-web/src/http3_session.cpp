@@ -34,11 +34,9 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/streaming.h"
 
-#include "connection_lifecycle.h"
 #include "context_access.h"
 #include "route_table.h"
 #if defined(_WIN32)
@@ -64,8 +62,7 @@
 
 #include "ruvia/core/worker_wait.h"
 
-#include "http_client_pool.h"
-
+#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

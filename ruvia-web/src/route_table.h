@@ -1,44 +1,17 @@
-#if defined(RUVIA_ENABLE_REDIS)
-#include <cstddef>
-#include <cstdint>
-#include <exception>
-#include <optional>
-#include <span>
-#include <string>
-#include <string_view>
-#include <utility>
-
-#include "ruvia/web/redis/redis.h"
-
-struct redisReader;
-struct redisReadTask;
-struct redisReplyObjectFunctions;
-
-#include <ngtcp2/ngtcp2.h>
-#include <ngtcp2/ngtcp2_crypto.h>
-#include <ngtcp2/ngtcp2_crypto_ossl.h>
+#pragma once
 
 #include <algorithm>
 #include <array>
 #include <atomic>
-#include <charconv>
 #include <chrono>
-#include <cmath>
 #include <concepts>
-#include <condition_variable>
-#include <coroutine>
 #include <cstddef>
 #include <cstdint>
-#include <cstring>
 #include <deque>
 #include <exception>
-#include <filesystem>
 #include <functional>
-#include <initializer_list>
-#include <iosfwd>
 #include <limits>
 #include <memory>
-#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -46,21 +19,23 @@ struct redisReplyObjectFunctions;
 #include <string_view>
 #include <system_error>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include <asio/append.hpp>
+#include <asio/associator.hpp>
+#include <asio/bind_executor.hpp>
 #include <asio/buffer.hpp>
-#include <asio/cancellation_signal.hpp>
+#include <asio/detail/handler_cont_helpers.hpp>
 #include <asio/error.hpp>
-#include <asio/fwd.hpp>
 #include <asio/io_context.hpp>
+#include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/ip/udp.hpp>
+#include <asio/post.hpp>
 #include <asio/ssl/context.hpp>
-#include <asio/write.hpp>
-#include <openssl/ssl.h>
+#include <asio/ssl/stream.hpp>
+#include <openssl/types.h>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
@@ -69,29 +44,7871 @@ struct redisReplyObjectFunctions;
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
+#include "ruvia/web/http_client.h"
+
+#include "context_access.h"
+#ifdef RUVIA_ENABLE_HTTP2
+#include "ruvia/http/http2_connection.h"
+#endif
+#ifdef RUVIA_ENABLE_HTTP3
+#include "ruvia/http/http3_connection.h"
+#endif
+#ifdef RUVIA_ENABLE_HTTP2
+#include "ruvia/http/http2_connection.h"
+#endif
+#ifdef RUVIA_ENABLE_HTTP2
+#include "ruvia/http/http2_connection.h"
+#endif
+
+#include <cmath>
+#include <coroutine>
+#include <cstring>
+#include <ranges>
+
+#include <openssl/evp.h>
+#include <openssl/sha.h>
+
+#include "ruvia/web/db/db.h"
+
+#ifdef _WIN32
+#include <winsock2.h>
+
+#include <asio/ip/tcp.hpp>
+#else
+#include <asio/posix/stream_descriptor.hpp>
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis.h"
+#endif
+#include <ngtcp2/ngtcp2.h>
+#include <ngtcp2/ngtcp2_crypto.h>
+#include <ngtcp2/ngtcp2_crypto_ossl.h>
+
+#include <charconv>
+#include <condition_variable>
+#include <filesystem>
+#include <initializer_list>
+#include <iosfwd>
+#include <mutex>
+#include <unordered_map>
+
+#include <asio/cancellation_signal.hpp>
+#include <asio/fwd.hpp>
+#include <asio/ip/udp.hpp>
+#include <asio/write.hpp>
+#include <openssl/ssl.h>
+
+#include "ruvia/http/http3_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/streaming.h"
 
-#include "connection_lifecycle.h"
-#include "context_access.h"
-#include "http_client_pool.h"
+namespace ruvia::detail {
+
+struct client_resolve_result final {
+    asio::ip::tcp::resolver::results_type addresses_{};
+    // Numeric hosts do not need a heap-backed resolver result.
+    std::optional<asio::ip::tcp::endpoint> literal_{};
+    std::error_code error_{};
+};
+
+using client_resolve_operation = std::variant<client_resolve_result, task<client_resolve_result>>;
+
+// False for an IP literal, which connects without a lookup.
+[[nodiscard]] bool client_host_needs_lookup(std::string_view host);
+
+// A DNS host is looked up on the blocking pool of the client's event loop;
+// without one the client cannot connect, so it is rejected at construction.
+void require_client_host_lookup(std::string_view host, const worker_ref& worker);
+
+// HTTP、WebSocket、Redis 和数据库共用的系统名称查询。系统 getaddrinfo 不可
+// 抢占；查询卸载到客户端事件循环借用的有界阻塞池，只携带自有输入，取消或停机先
+// 释放等待者，再丢弃迟到结果。IP 字面量不查询，也不需要池。
+class client_host_resolver final {
+public:
+    explicit client_host_resolver(const worker_ref& worker) noexcept
+        : worker_(&worker) {}
+    client_host_resolver(const client_host_resolver&) = delete;
+    client_host_resolver& operator=(const client_host_resolver&) = delete;
+    client_host_resolver(client_host_resolver&& other) noexcept;
+    client_host_resolver& operator=(client_host_resolver&& other) noexcept;
+
+    [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port,
+        const operation_deadline& timeout, stop_token stop = {});
+    void cancel() noexcept;
+
+private:
+    struct query;
+    [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_deadline timeout, stop_token stop);
+    const worker_ref* worker_;
+    std::optional<stop_source> stop_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+inline constexpr std::chrono::milliseconds client_connection_attempt_delay{250};
+
+// Traverse RFC 6724 resolver order while alternating families (RFC 8305 §4).
+// The resolver owns the addresses; traversal and duplicate suppression allocate
+// nothing, allowing a bounded transport race to construct candidates lazily.
+template <typename results_type>
+class client_address_sequence final {
+public:
+    using endpoint_type = std::remove_cvref_t<decltype(std::declval<const results_type&>().begin()->endpoint())>;
+    explicit client_address_sequence(const results_type& addresses)
+        : addresses_(addresses),
+          first_(addresses.begin()),
+          other_(addresses.begin()),
+          first_is_v6_(!addresses.empty() && addresses.begin()->endpoint().address().is_v6()),
+          pending_(advance()) {}
+    client_address_sequence(results_type&&) = delete;
+
+    [[nodiscard]] bool has_next() const noexcept {
+        return pending_.has_value();
+    }
+
+    [[nodiscard]] std::optional<endpoint_type> next() {
+        auto result = std::move(pending_);
+        if (result.has_value()) {
+            pending_ = advance();
+        }
+        return result;
+    }
+
+private:
+    [[nodiscard]] std::optional<endpoint_type> advance() {
+        for (unsigned family = 0; family != 2; ++family) {
+            auto& iterator = next_first_ ? first_ : other_;
+            const bool is_v6 = next_first_ ? first_is_v6_ : !first_is_v6_;
+            next_first_ = !next_first_;
+            while (iterator != addresses_.end()) {
+                const auto current = iterator++;
+                const auto endpoint = current->endpoint();
+                if (endpoint.address().is_v6() != is_v6) {
+                    continue;
+                }
+                bool repeated = false;
+                for (auto previous = addresses_.begin(); previous != current; ++previous) {
+                    if (previous->endpoint() == endpoint) {
+                        repeated = true;
+                        break;
+                    }
+                }
+                if (!repeated) {
+                    return endpoint;
+                }
+            }
+        }
+        return std::nullopt;
+    }
+
+    const results_type& addresses_;
+    decltype(std::declval<const results_type&>().begin()) first_;
+    decltype(std::declval<const results_type&>().begin()) other_;
+    bool first_is_v6_;
+    bool next_first_{true};
+    std::optional<endpoint_type> pending_;
+};
+
+struct client_happy_eyeballs_result final {
+    std::optional<asio::ip::tcp::socket> socket_;
+    std::error_code error_;
+};
+
+// RFC 8305 §4-5 connection-attempt phase. The platform resolver supplies the
+// RFC 6724 sorted list; this operation interleaves address families, staggers
+// attempts, keeps earlier attempts alive, and joins every loser after the first
+// success or cancellation.
+class client_happy_eyeballs final {
+public:
+    client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor,
+        const asio::ip::tcp::resolver::results_type& addresses);
+    client_happy_eyeballs(worker_ref&&, const asio::ip::tcp::socket::executor_type&,
+        const asio::ip::tcp::resolver::results_type&) = delete;
+    ~client_happy_eyeballs();
+    client_happy_eyeballs(const client_happy_eyeballs&) = delete;
+    client_happy_eyeballs& operator=(const client_happy_eyeballs&) = delete;
+
+    [[nodiscard]] task<client_happy_eyeballs_result> connect() &;
+    task<client_happy_eyeballs_result> connect() && = delete;
+    void cancel() noexcept;
+
+private:
+    struct attempt final {
+        attempt(const asio::ip::tcp::socket::executor_type& executor, asio::ip::tcp::endpoint endpoint)
+            : socket_(executor),
+              endpoint_(std::move(endpoint)) {}
+        attempt(const attempt&) = delete;
+        attempt& operator=(const attempt&) = delete;
+        attempt(attempt&&) noexcept = default;
+        attempt& operator=(attempt&&) noexcept = default;
+
+        asio::ip::tcp::socket socket_;
+        asio::ip::tcp::endpoint endpoint_;
+        bool active_{false};
+    };
+
+    void start_next() noexcept;
+    void schedule_next() noexcept;
+    void on_delay(worker_timer_outcome outcome) noexcept;
+    void on_connect(std::size_t index, const std::error_code& error) noexcept;
+    void close_active() noexcept;
+    static void close_socket(asio::ip::tcp::socket& socket) noexcept;
+
+    const worker_ref& worker_;
+    worker_signal changed_;
+    std::vector<attempt> attempts_;
+    std::size_t next_{0};
+    std::size_t active_{0};
+    std::optional<std::size_t> winner_;
+    std::exception_ptr failure_;
+    std::error_code last_error_;
+    bool launch_ready_{false};
+    bool cancelled_{false};
+    worker_timer_registration delay_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+enum class client_phase : unsigned char { fresh,
+    connecting,
+    connected,
+    closing,
+    closed };
+
+// Composed by an address-stable protocol owner, after its backend and memory.
+// Owns the sole standalone-client startup/cancel/retirement chain. Backend
+// connect/close/join and the not-ready error are explicit compile-time policies.
+// No type erasure, extra sharing, or locking is added to operation admission.
+template <typename owner_type>
+class client_lifecycle final {
+public:
+    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_ref& worker_value,
+        client_phase initial = client_phase::fresh)
+        : owner_(owner_value),
+          loop_(loop),
+          worker_(worker_value),
+          close_signal_(worker_value),
+          phase_(initial) {
+        operations_.bind_worker(worker_value);
+    }
+
+    ~client_lifecycle() {
+        if (phase_.load(std::memory_order_acquire) != client_phase::closed ||
+            !close_complete_ || operations_.has_pending_operations()) {
+            std::terminate();
+        }
+    }
+
+    client_lifecycle(const client_lifecycle&) = delete;
+    client_lifecycle& operator=(const client_lifecycle&) = delete;
+
+    [[nodiscard]] static event_loop require_loop(event_loop loop) {
+        if (!loop.worker().valid()) {
+            throw std::invalid_argument(message(" requires a valid event loop"));
+        }
+        return loop;
+    }
+
+    void bind_stop() {
+        try {
+            std::weak_ptr<owner_type> weak = owner_.shared_from_this();
+            stop_registration_ = loop_.on_stop([weak = std::move(weak)]() -> task<void> {
+                if (const auto state = weak.lock()) {
+                    co_await shutdown_owned(state, shutdown_mode::retirement);
+                }
+            });
+        } catch (...) {
+            owner_.backend().close_now();
+            phase_.store(client_phase::closed, std::memory_order_release);
+            // No client or stop callback has been published yet.
+            if (close_started_ || close_complete_) {
+                std::terminate();
+            }
+            close_complete_ = true;
+            throw;
+        }
+    }
+
+    [[nodiscard]] task<void> connect() {
+        return connect_owned(owner_.shared_from_this());
+    }
+
+    void require_ready() const {
+        require_current(" must be used on its bound event loop");
+        if (phase_.load(std::memory_order_acquire) != client_phase::connected) {
+            owner_type::throw_not_ready();
+        }
+    }
+
+    [[nodiscard]] ::ruvia::operation_scope& operation_scope() noexcept {
+        return operations_;
+    }
+
+    [[nodiscard]] stop_token token() const noexcept {
+        return stop_.token();
+    }
+
+    void request_close() noexcept {
+        stop_.request_stop();
+        if (!begin_close()) {
+            return;
+        }
+        if (worker_.is_current()) {
+            start_close();
+            return;
+        }
+        try {
+            if (!loop_.defer_cleanup([state = owner_.shared_from_this()] { state->lifecycle_.start_close(); }) &&
+                phase_.load(std::memory_order_acquire) != client_phase::closed) {
+                std::terminate();
+            }
+        } catch (...) {
+            if (phase_.load(std::memory_order_acquire) != client_phase::closed) {
+                std::terminate();
+            }
+        }
+    }
+
+    [[nodiscard]] task<void> shutdown() {
+        return shutdown_owned(owner_.shared_from_this(), shutdown_mode::caller);
+    }
+
+private:
+    enum class shutdown_mode : unsigned char { caller,
+        retirement };
+
+    [[nodiscard]] static std::string message(std::string_view suffix) {
+        std::string result(owner_type::client_name);
+        result.append(" client");
+        result.append(suffix);
+        return result;
+    }
+
+    void require_current(std::string_view suffix) const {
+        if (!worker_.is_current()) {
+            throw std::logic_error(message(suffix));
+        }
+    }
+
+    [[nodiscard]] static task<void> connect_owned(std::shared_ptr<owner_type> state_value) {
+        co_await state_value->lifecycle_.connect_on_worker();
+    }
+
+    task<void> connect_on_worker() {
+        require_current(" must connect on its bound event loop");
+        auto expected = client_phase::fresh;
+        if (!phase_.compare_exchange_strong(expected, client_phase::connecting,
+                std::memory_order_acq_rel, std::memory_order_acquire)) {
+            if (expected == client_phase::closing || expected == client_phase::closed) {
+                throw std::runtime_error(message(" closed before connecting"));
+            }
+            throw std::logic_error(message(" can only connect once"));
+        }
+        // Only the startup lease holder may tear down a failed connection.
+        try {
+            connecting_ = true;
+            if (stop_.stop_requested() || !worker_.accepting()) {
+                throw std::runtime_error(message(" closed before connecting"));
+            }
+            co_await owner_.backend().connect();
+            expected = client_phase::connecting;
+            if (!phase_.compare_exchange_strong(expected, client_phase::connected,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                throw std::runtime_error(message(" stopped while connecting"));
+            }
+            connecting_ = false;
+            close_signal_.notify();
+        } catch (...) {
+            owner_.backend().close_now();
+            stop_.request_stop();
+            phase_.store(client_phase::closed, std::memory_order_release);
+            connecting_ = false;
+            if (close_started_) {
+                close_signal_.notify();
+            } else if (!close_complete_) {
+                close_complete_ = true;
+                close_signal_.notify();
+            }
+            throw;
+        }
+    }
+
+    [[nodiscard]] bool begin_close() noexcept {
+        auto phase = phase_.load(std::memory_order_acquire);
+        while (phase != client_phase::closed && phase != client_phase::closing) {
+            if (phase_.compare_exchange_weak(phase, client_phase::closing,
+                    std::memory_order_acq_rel, std::memory_order_acquire)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value,
+        shutdown_mode mode) {
+        auto& lifecycle = state_value->lifecycle_;
+        if (!lifecycle.loop_.worker().is_current()) {
+            throw std::logic_error("client shutdown must run on its bound event loop");
+        }
+        // The coroutine frame retains the client until its cleanup completes.
+        lifecycle.start_close();
+        while (!lifecycle.close_complete_) {
+            co_await lifecycle.close_signal_.wait();
+        }
+        if (mode == shutdown_mode::caller && lifecycle.close_failure_) {
+            std::rethrow_exception(lifecycle.close_failure_);
+        }
+    }
+
+    void start_close() noexcept {
+        if (!worker_.is_current()) {
+            std::terminate();
+        }
+        (void)begin_close();
+        stop_.request_stop();
+        owner_.backend().close_now();
+        if (close_started_ || close_complete_) {
+            return;
+        }
+        close_started_ = true;
+        try {
+            ruvia::async_start(close_on_worker(), asio::bind_executor(loop_.executor(), [state = owner_.shared_from_this()](std::exception_ptr failure) {
+                state->lifecycle_.finish_close(std::move(failure));
+            }));
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    task<void> close_on_worker() {
+        while (connecting_) {
+            co_await close_signal_.wait();
+        }
+        std::exception_ptr failure;
+        if constexpr (requires { owner_.backend().join(); }) {
+            try {
+                co_await owner_.backend().join();
+            } catch (...) {
+                failure = std::current_exception();
+            }
+        }
+        try {
+            co_await operations_.close_and_join();
+        } catch (...) {
+            if (failure == nullptr) {
+                failure = std::current_exception();
+            }
+        }
+        if (failure != nullptr) {
+            std::rethrow_exception(failure);
+        }
+    }
+
+    void finish_close(std::exception_ptr failure) noexcept {
+        if (!close_started_ || close_complete_ || connecting_ || operations_.has_pending_operations()) {
+            std::terminate();
+        }
+        phase_.store(client_phase::closed, std::memory_order_release);
+        close_failure_ = std::move(failure);
+        close_complete_ = true;
+        close_signal_.notify();
+        if (close_failure_) {
+            loop_.report_failure(close_failure_);
+        }
+    }
+
+    owner_type& owner_;
+    const event_loop& loop_;
+    const worker_ref& worker_;
+    stop_source stop_;
+    event_loop_stop_registration stop_registration_;
+    worker_signal close_signal_;
+    bool close_started_{};
+    bool close_complete_{};
+    std::exception_ptr close_failure_;
+    std::atomic<client_phase> phase_;
+    bool connecting_{};
+    // Last: invalidate cold operations before backend and allocator retirement.
+    ::ruvia::operation_scope operations_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline bool is_client_ip_address(std::string_view host) noexcept {
+    return ::ruvia::is_valid_http_ipv4_literal(host) || ::ruvia::is_valid_http_ipv6_literal(host);
+}
+
+// A client transport host, also used for TLS SNI and peer verification: an
+// unbracketed IP literal or an ASCII DNS host name.
+inline void validate_client_origin_host(
+    std::string_view host, const char* empty_message, const char* invalid_message) {
+    ensure_config_host(host, empty_message, invalid_message);
+    if (!is_client_ip_address(host) && !is_valid_dns_host(host)) {
+        throw std::invalid_argument(invalid_message);
+    }
+}
+
+// File paths are validated when the storage is built, before any file is read.
+inline void validate_client_tls_config(const client_tls_config& config) {
+    validate_tls_record_limit(config.max_outgoing_records_);
+    if (config.mode_ != client_tls_mode::verify_identity && config.mode_ != client_tls_mode::disabled) {
+        throw std::invalid_argument("invalid client TLS mode");
+    }
+    switch (config.minimum_version_) {
+        case tls_version::tls_1_1:
+        case tls_version::tls_1_2:
+        case tls_version::tls_1_3:
+            break;
+        default:
+            throw std::invalid_argument("invalid client TLS minimum version");
+    }
+    if (config.server_name_.has_value()) {
+        if (config.server_name_->find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("client TLS configuration must not contain NUL bytes");
+        }
+        // The override replaces the origin host for SNI and peer verification.
+        validate_client_origin_host(*config.server_name_, "TLS server name must not be empty", "TLS server name is invalid");
+    }
+    if (config.mode_ == client_tls_mode::disabled &&
+        (config.ca_file_.has_value() || config.identity_.has_value() || config.server_name_.has_value())) {
+        throw std::invalid_argument("disabled TLS must not have TLS credentials or a server name");
+    }
+    // Database drivers read identity files themselves; every client keeps
+    // the one file-based shape.
+    if (config.identity_.has_value() &&
+        (!config.identity_->certificate_chain_pem_.empty() || !config.identity_->private_key_pem_.empty())) {
+        throw std::invalid_argument("client TLS identities must be PEM files, not in-memory PEM");
+    }
+}
+
+// Whether a client storage parses its TLS files. Owners that build their own
+// SSL_CTXs parse once at startup so every context shares the result; database
+// drivers read the paths themselves and plaintext clients never use them.
+enum class client_tls_files : std::uint8_t {
+    keep_paths,
+    parse,
+};
+
+// Startup-owned copy of a validated client_tls_config. The private key
+// password is used only while parsing and is not retained.
+struct client_tls_config_storage final {
+    // Validates the file paths. With client_tls_files::parse and TLS enabled,
+    // also reads the trust store and the client identity (when configured);
+    // throws when either cannot be loaded.
+    client_tls_config_storage(
+        const client_tls_config& source_value, client_tls_files files);
+
+    // Copies share the parsed trust store and identity; no file is re-read.
+    client_tls_config_storage(const client_tls_config_storage& source_value);
+    client_tls_config_storage(client_tls_config_storage&&) noexcept = default;
+    client_tls_config_storage& operator=(client_tls_config_storage&&) noexcept = default;
+    // Reads the client identity, and the trust store unless one was supplied.
+    void parse_files(std::string_view private_key_password);
+
+    // SNI and verified peer name: the configured override, else the origin host.
+    [[nodiscard]] std::string_view tls_host(std::string_view configured_host) const noexcept {
+        return server_name_.has_value() ? std::string_view(*server_name_) : configured_host;
+    }
+
+    client_tls_mode mode_;
+    tls_version minimum_version_;
+    std::uint64_t max_outgoing_records_;
+    // nullopt selects the system or driver trust store.
+    std::optional<tls_file_name> ca_file_;
+    std::optional<tls_identity_files> identity_;
+    std::optional<std::string> server_name_;
+    // Parsed by client_tls_files::parse: the trust store and the configured
+    // client identity.
+    std::optional<tls_trust_store> trust_store_;
+    std::optional<tls_certificate> certificate_;
+};
+
+// Owns paths and password before returning the cold task. Blocking work owns
+// only TLS material, never a client's worker-affine configuration or callbacks.
+// A started parser is joined even after cancellation; callers reject publication.
+[[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(
+    worker_ref worker, client_tls_config_storage config,
+    std::string_view private_key_password, stop_token stop);
+
+enum class client_tls_setup_error : std::uint8_t {
+    none,
+    reset_failed,
+    sni_failed,
+    alpn_failed,
+    peer_identity_failed,
+    protocol_failed,
+};
+
+// The ALPN offer of one client protocol. HTTP/1 and WebSocket offer
+// http/1.1; protocols without an ALPN identifier offer nothing.
+enum class client_alpn : std::uint8_t {
+    none,
+    http11,
+    http2,
+    negotiate,
+};
+[[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept;
+
+// Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
+// trust and client identity loading have one implementation; the ALPN offer is
+// installed per connection by the TCP transport.
+// The storage must come from a validated client_tls_config with TLS enabled.
+void configure_client_tls_context(SSL_CTX& context_value, const client_tls_config_storage& config);
+// Resets the reusable SSL of a client stream, prepares SNI (DNS names only, one
+// trailing dot removed), the expected peer host or IP, and installs the ALPN
+// offer. An h2-only offer requires TLS 1.2 or newer (RFC 9113).
+// A host name matches DNS-ID subjectAltNames only: no Common Name
+// fallback, no partial-label wildcards. `host` need not be NUL-terminated.
+[[nodiscard]] client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols);
+// Carries a setup failure through transport results; message() names it.
+[[nodiscard]] std::error_code make_client_tls_setup_error_code(client_tls_setup_error error) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class client_tls_socket;
+
+// Completion of a socket write in flight: one that waits for the reactor,
+// ended inside a record, or finished synchronously and must still observe a
+// cancel() before the stream continues.
+template <typename handler_type>
+class client_tls_write_handler final {
+public:
+    client_tls_write_handler(handler_type&& handler, client_tls_socket& socket, bool counted)
+        : handler_(std::move(handler)),
+          socket_(&socket),
+          counted_(counted) {}
+
+    void operator()(const std::error_code& error, std::size_t bytes);
+
+    // Asio's associators and continuation hook forward to the wrapped handler.
+    handler_type handler_;
+
+private:
+    client_tls_socket* socket_;
+    bool counted_;
+};
+
+// The TCP layer under the client's TLS stream. Every TLS record reaches the
+// socket through async_write_some() here, whichever stream operation produced
+// it: a write, the handshake, or a read answering a post-handshake message
+// (a TLS 1.2 HelloRequest makes the read send a no_renegotiation alert). So
+// this layer alone knows when each record handed to the socket is whole on
+// the wire and none was lost to a failed or cancelled write: only then can
+// another record follow without corrupting the stream. The socket must be in
+// non-blocking mode; a write the kernel takes whole at once is complete even
+// though its handler runs later.
+class client_tls_socket final {
+public:
+    using executor_type = asio::ip::tcp::socket::executor_type;
+    using lowest_layer_type = client_tls_socket;
+    using native_handle_type = asio::ip::tcp::socket::native_handle_type;
+    using protocol_type = asio::ip::tcp;
+    using endpoint_type = asio::ip::tcp::endpoint;
+
+    explicit client_tls_socket(const executor_type& executor)
+        : socket_(executor) {}
+
+    [[nodiscard]] executor_type get_executor() noexcept {
+        return socket_.get_executor();
+    }
+    [[nodiscard]] lowest_layer_type& lowest_layer() noexcept {
+        return *this;
+    }
+    [[nodiscard]] const lowest_layer_type& lowest_layer() const noexcept {
+        return *this;
+    }
+    // The raw socket, for plaintext connections, socket options and the
+    // CONNECT tunnel, which writes its own TLS records.
+    [[nodiscard]] asio::ip::tcp::socket& socket() noexcept {
+        return socket_;
+    }
+    // Replaces the unopened pre-handshake socket with the winner of the
+    // Happy Eyeballs race. No TLS record operation may be active yet.
+    void replace_socket(asio::ip::tcp::socket socket) noexcept {
+        if (writes_ != 0) {
+            std::terminate();
+        }
+        socket_ = std::move(socket);
+        reset();
+    }
+    // Every record the stream handed to the socket is whole on the wire, in
+    // sequence: no write is pending or partly done, and none failed.
+    [[nodiscard]] bool records_whole() const noexcept {
+        return writes_ == 0 && !write_failed_;
+    }
+    [[nodiscard]] bool is_open() const noexcept {
+        return socket_.is_open();
+    }
+    [[nodiscard]] native_handle_type native_handle() {
+        return socket_.native_handle();
+    }
+    void open(const protocol_type& protocol = asio::ip::tcp::v4()) {
+        reset();
+        socket_.open(protocol);
+    }
+    void open(const protocol_type& protocol, std::error_code& error) noexcept {
+        reset();
+        (void)socket_.open(protocol, error);
+    }
+    void connect(const endpoint_type& endpoint) {
+        reset();
+        socket_.connect(endpoint);
+    }
+    void connect(const endpoint_type& endpoint, std::error_code& error) noexcept {
+        reset();
+        (void)socket_.connect(endpoint, error);
+    }
+    void cancel() {
+        std::error_code error;
+        cancel(error);
+        if (error) {
+            throw std::system_error(error);
+        }
+    }
+    void cancel(std::error_code& error) noexcept {
+        cancelled_ = true;
+        if (writes_ != 0) {
+            write_failed_ = true;
+        }
+        (void)socket_.cancel(error);
+    }
+    void close() {
+        std::error_code error;
+        close(error);
+        if (error) {
+            throw std::system_error(error);
+        }
+    }
+    void close(std::error_code& error) noexcept {
+        cancelled_ = true;
+        if (writes_ != 0) {
+            write_failed_ = true;
+        }
+        std::error_code ignored;
+        (void)socket_.cancel(ignored);
+        (void)socket_.close(error);
+    }
+    void reset() noexcept {
+        cancelled_ = false;
+        write_failed_ = false;
+    }
+
+    template <typename buffers_type>
+    std::size_t read_some(const buffers_type& buffers, std::error_code& error) {
+        return socket_.read_some(buffers, error);
+    }
+    template <typename buffers_type>
+    std::size_t write_some(const buffers_type& buffers, std::error_code& error) {
+        return socket_.write_some(buffers, error);
+    }
+    template <typename buffers_type, typename handler_type>
+    void async_read_some(const buffers_type& buffers, handler_type&& handler) {
+        if (cancelled_) {
+            asio::post(socket_.get_executor(),
+                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            return;
+        }
+        socket_.async_read_some(buffers, std::forward<handler_type>(handler));
+    }
+    template <typename buffers_type, typename handler_type>
+    void async_write_some(const buffers_type& buffers, handler_type&& handler) {
+        using completion_type = client_tls_write_handler<std::decay_t<handler_type>>;
+        if (cancelled_) {
+            write_failed_ = true;
+            asio::post(socket_.get_executor(),
+                asio::append(std::forward<handler_type>(handler), asio::error::operation_aborted, std::size_t{0}));
+            return;
+        }
+        // Like Asio's own speculative write, but its outcome stays visible:
+        // only a write that waits for the reactor or ends inside a record is
+        // in flight. Queued writes keep their order, so a direct write runs
+        // only while none waits.
+        if (writes_ == 0 && socket_.non_blocking()) {
+            std::error_code error;
+            const auto written = socket_.write_some(buffers, error);
+            if (error != asio::error::would_block && error != asio::error::try_again &&
+                error != asio::error::interrupted) {
+                if (error) {
+                    write_failed_ = true;
+                    asio::post(socket_.get_executor(), asio::append(std::forward<handler_type>(handler), error, written));
+                    return;
+                }
+                const bool partial = written != asio::buffer_size(buffers);
+                if (partial) {
+                    ++writes_;
+                }
+                try {
+                    asio::post(socket_.get_executor(),
+                        asio::append(completion_type(std::forward<handler_type>(handler), *this, partial), error, written));
+                } catch (...) {
+                    if (partial) {
+                        --writes_;
+                    }
+                    write_failed_ = true;
+                    throw;
+                }
+                return;
+            }
+        }
+        ++writes_;
+        try {
+            socket_.async_write_some(buffers, completion_type(std::forward<handler_type>(handler), *this, true));
+        } catch (...) {
+            --writes_;
+            write_failed_ = true;
+            throw;
+        }
+    }
+
+private:
+    template <typename>
+    friend class client_tls_write_handler;
+
+    asio::ip::tcp::socket socket_;
+    std::size_t writes_{0};
+    // A failed or cancelled write may leave a record partly sent, or records
+    // unsent whose sequence numbers a later record would skip.
+    bool write_failed_{false};
+    bool cancelled_{false};
+};
+
+template <typename handler_type>
+void client_tls_write_handler<handler_type>::operator()(const std::error_code& error, std::size_t bytes) {
+    if (counted_) {
+        --socket_->writes_;
+    }
+    if (socket_->cancelled_) {
+        socket_->write_failed_ = true;
+        std::move(handler_)(asio::error::operation_aborted, 0);
+        return;
+    }
+    if (error) {
+        socket_->write_failed_ = true;
+    }
+    std::move(handler_)(error, bytes);
+}
+
+template <typename handler_type>
+[[nodiscard]] bool asio_handler_is_continuation(client_tls_write_handler<handler_type>* handler) {
+    return asio_handler_cont_helpers::is_continuation(handler->handler_);
+}
+
+}  // namespace ruvia::detail
+
+namespace asio {
+
+template <template <typename, typename> class associator_type, typename handler_type, typename candidate_type>
+struct associator<associator_type, ruvia::detail::client_tls_write_handler<handler_type>, candidate_type>
+    : associator_type<handler_type, candidate_type> {
+    static typename associator_type<handler_type, candidate_type>::type get(
+        const ruvia::detail::client_tls_write_handler<handler_type>& handler) noexcept {
+        return associator_type<handler_type, candidate_type>::get(handler.handler_);
+    }
+    static auto get(const ruvia::detail::client_tls_write_handler<handler_type>& handler,
+        const candidate_type& candidate) noexcept
+        -> decltype(associator_type<handler_type, candidate_type>::get(handler.handler_, candidate)) {
+        return associator_type<handler_type, candidate_type>::get(handler.handler_, candidate);
+    }
+};
+
+}  // namespace asio
+
+namespace ruvia::detail {
+
+class client_happy_eyeballs;
+
+// Why an owner stopped a transport. The latest non-none reason wins until the
+// owner starts a new operation with reset_abort().
+enum class client_abort_reason : std::uint8_t { none,
+    timeout,
+    cancelled,
+    closing };
+
+enum class client_transport_status : std::uint8_t {
+    ok,
+    // The peer ended the byte stream (TCP FIN, close_notify or truncation).
+    eof,
+    // abort_ names the reason: an owner abort or an expired deadline.
+    aborted,
+    resolve_failed,
+    connect_failed,
+    tls_failed,
+    io_failed,
+};
+
+struct client_transport_result final {
+    client_transport_status status_{client_transport_status::ok};
+    client_abort_reason abort_{client_abort_reason::none};
+    std::size_t bytes_{0};
+    std::error_code error_{};
+
+    [[nodiscard]] bool ok() const noexcept {
+        return status_ == client_transport_status::ok;
+    }
+};
+
+// Counts plaintext bytes completed by socket/TLS I/O, including the completed
+// prefix of an operation that also reports an error.
+struct client_wire_counters final {
+    std::size_t sent_{};
+    std::size_t received_{};
+};
+
+enum class client_idle_transport_status : std::uint8_t {
+    reusable,
+    closed,
+    pending_data,
+};
+
+// Borrowed origin of one transport; the owner's startup config outlives it.
+struct client_tcp_endpoint final {
+    // Validated unbracketed host used for DNS.
+    std::string_view host_;
+    std::uint16_t port_;
+    // nullptr selects plaintext TCP.
+    const client_tls_config_storage* tls_;
+    client_tcp_config tcp_;
+    // ALPN wire offer borrowed until transport retirement; empty for TCP.
+    std::span<const unsigned char> alpn_{};
+    // TLS SNI and verified peer name, used verbatim; empty selects the TLS
+    // configuration's server name, else host_.
+    std::string_view identity_host_{};
+    void* resolve_context_{};
+    // Resolves host_ and port_ in place of the transport's own resolver.
+    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_deadline&, std::string_view, std::uint16_t){};
+};
+
+// True for an OpenSSL failure or a TLS stream truncated without close_notify.
+[[nodiscard]] bool is_tls_error(const std::error_code& error) noexcept;
+
+// The one outbound TCP/TLS byte transport shared by the HTTP/1, WebSocket and
+// Redis clients. Protocol-neutral: callers map results onto their error
+// types. One worker owns the socket; the read lane (resolve, connect, TLS
+// handshake, reads) and the write lane have independent deadlines so a
+// full-duplex exchange can bound its upload separately. A connected socket
+// stays in non-blocking mode: every operation on it is asynchronous or a
+// bounded probe. Address-stable. Construction throws std::invalid_argument
+// for a DNS host on a worker without a blocking pool.
+class client_tcp_transport final {
+public:
+    client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_ref& worker_value,
+        client_tcp_endpoint endpoint, client_wire_counters& counters);
+    client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_ref&&, client_tcp_endpoint,
+        client_wire_counters&) = delete;
+    ~client_tcp_transport();
+    client_tcp_transport(const client_tcp_transport&) = delete;
+    client_tcp_transport& operator=(const client_tcp_transport&) = delete;
+
+    [[nodiscard]] bool secure() const noexcept {
+        return endpoint_.tls_ != nullptr;
+    }
+    [[nodiscard]] const client_tcp_endpoint& endpoint() const noexcept {
+        return endpoint_;
+    }
+    // Resolves, connects, applies socket policies and, for TLS, prepares SNI,
+    // peer identity and the ALPN offer before the handshake. h2-only offers
+    // require TLS 1.2; a peer selecting h2 below TLS 1.2 is rejected before
+    // application I/O. Every operation borrowing a previous connection must
+    // have finished.
+    [[nodiscard]] task<client_transport_result> connect(const operation_deadline& timeout);
+    // Replaces the endpoint's ALPN offer for every later connect().
+    void offer_alpn(client_alpn alpn) noexcept {
+        endpoint_.alpn_ = client_alpn_bytes(alpn);
+    }
+    [[nodiscard]] const asio::ip::tcp::endpoint& peer_endpoint() const noexcept {
+        return peer_endpoint_;
+    }
+    [[nodiscard]] std::chrono::steady_clock::duration connect_duration() const noexcept {
+        return connect_duration_;
+    }
+    [[nodiscard]] std::chrono::steady_clock::duration tls_duration() const noexcept {
+        return tls_duration_;
+    }
+    // Selected ALPN protocol of the current TLS connection; empty for TCP.
+    [[nodiscard]] std::string_view alpn() noexcept;
+    // HTTP/1 clients offer only http/1.1: a TLS peer either skips ALPN or
+    // must select it.
+    [[nodiscard]] bool alpn_allows_http11() noexcept {
+        if (!secure()) {
+            return true;
+        }
+        const auto selected = alpn();
+        return selected.empty() || selected == "http/1.1";
+    }
+    [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_deadline& timeout);
+    // Writes every byte under the write lane's own deadline. The buffer
+    // sequence form sends framed parts (chunk prefix, payload, suffix) as one
+    // transport write, which is one TLS record sequence and one deadline cycle.
+    [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_deadline& timeout);
+    [[nodiscard]] task<client_transport_result> write(
+        std::span<const asio::const_buffer> buffers, const operation_deadline& timeout);
+
+    [[nodiscard]] client_abort_reason abort_reason() const noexcept {
+        return abort_reason_;
+    }
+    void reset_abort() noexcept {
+        abort_reason_ = client_abort_reason::none;
+    }
+    // Records the reason (replacing an earlier one) and cancels pending
+    // resolve and socket operations; the established socket stays open until
+    // close(). During an address race, every attempt is closed and joined.
+    void abort(client_abort_reason reason) noexcept;
+    // Closes the connection at once. An established TLS connection first
+    // sends close_notify (RFC 9112 §9.8, RFC 9846 §6.1) with one non-blocking
+    // write when the alert can follow every record already sent whole: no
+    // record write, from a write or from a read answering a post-handshake
+    // message, still waits for the socket or ended inside a record, and none
+    // failed or was cancelled. A peer that is not reading does not delay the
+    // close, it only misses the alert. A pending read does not hold the alert
+    // back; the close cancels it.
+    void close() noexcept;
+    // Bounded non-blocking check of a connected, idle transport that never
+    // runs the TLS engine. An HTTP/1 or Redis peer sends nothing between
+    // exchanges, so readable or TLS-buffered bytes are distinguished from an
+    // end of stream before either condition retires the connection. Pending TLS
+    // data can be close_notify, a post-handshake record or an unsolicited response.
+    [[nodiscard]] client_idle_transport_status idle_status() noexcept;
+    // Completes once the socket of a connected, idle transport is readable,
+    // at its end or failed, without reading and without running the TLS
+    // engine; idle_status() then classifies it. Only while no other operation
+    // is pending: cancel_wait() ends it early.
+    [[nodiscard]] task<void> wait_readable();
+    void cancel_wait() noexcept;
+
+    // Raw stream for the CONNECT tunnel adapter, which owns TLS shutdown: the
+    // transport no longer sends close_notify for this connection.
+    [[nodiscard]] asio::ssl::stream<client_tls_socket>& stream() noexcept {
+        tls_close_ready_ = false;
+        return stream_;
+    }
+
+private:
+    struct lane_deadline final {
+        deadline_lifecycle<> deadline_;
+        worker_timer_registration timer_;
+    };
+
+    template <typename buffers_type>
+    [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_deadline& timeout);
+    void send_close_notify() noexcept;
+    [[nodiscard]] bool arm(lane_deadline& lane, const operation_deadline& timeout);
+    [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
+    [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_deadline& timeout,
+        const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
+    [[nodiscard]] client_transport_result aborted() const noexcept;
+
+    const worker_ref& worker_;
+    asio::ssl::context& tls_;
+    client_tcp_endpoint endpoint_;
+    std::optional<asio::ip::tcp::endpoint> literal_endpoint_{};
+    client_wire_counters& counters_;
+    asio::ip::tcp::endpoint peer_endpoint_;
+    std::chrono::steady_clock::duration connect_duration_{};
+    std::chrono::steady_clock::duration tls_duration_{};
+    client_host_resolver resolver_;
+    asio::ssl::stream<client_tls_socket> stream_;
+    lane_deadline read_;
+    lane_deadline write_;
+    client_abort_reason abort_reason_{client_abort_reason::none};
+    bool tls_started_{false};
+    // Non-null only while the address race is active; abort() cancels and the
+    // connect coroutine joins every attempted socket before clearing it.
+    client_happy_eyeballs* connecting_{nullptr};
+    // The TLS connection is established and has not failed, so a close may
+    // append close_notify once its socket layer holds whole records only.
+    bool tls_close_ready_{false};
+    // A composed write_buffers call is in flight: it may span multiple TLS
+    // records across posted speculative completions.
+    bool writing_{false};
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline std::error_code http_client_abort_error(client_abort_reason reason) noexcept {
+    switch (reason) {
+        case client_abort_reason::timeout:
+            return std::make_error_code(std::errc::timed_out);
+        case client_abort_reason::cancelled:
+            return std::make_error_code(std::errc::operation_canceled);
+        case client_abort_reason::none:
+        case client_abort_reason::closing:
+            break;
+    }
+    return make_error_code(http_client_errc::closing);
+}
+
+// The HTTP client's mapping of a failed client_tcp_transport result.
+[[nodiscard]] inline std::error_code http_client_transport_error(
+    const client_transport_result& result) noexcept {
+    switch (result.status_) {
+        case client_transport_status::aborted:
+            return http_client_abort_error(result.abort_);
+        case client_transport_status::resolve_failed:
+            return make_error_code(http_client_errc::resolve_failed);
+        case client_transport_status::connect_failed:
+            return make_error_code(http_client_errc::connect_failed);
+        case client_transport_status::tls_failed:
+            return make_error_code(http_client_errc::tls_failed);
+        case client_transport_status::ok:
+        case client_transport_status::eof:
+        case client_transport_status::io_failed:
+            break;
+    }
+    return result.error_ == std::errc::protocol_error ? make_error_code(http_client_errc::protocol_error)
+                                                      : make_error_code(http_client_errc::io_error);
+}
+
+// The one message of each error class an exchange reports without a more
+// specific transport or protocol description.
+[[nodiscard]] inline std::string_view http_client_error_message(std::error_code code) noexcept {
+    if (code == std::make_error_code(std::errc::timed_out)) {
+        return "HTTP client request timed out";
+    }
+    if (code == std::make_error_code(std::errc::operation_canceled)) {
+        return "HTTP client request cancelled";
+    }
+    if (code == make_error_code(http_client_errc::closing)) {
+        return "HTTP client pool is closing";
+    }
+    if (code == make_error_code(http_client_errc::response_too_large)) {
+        return "HTTP response exceeds configured byte limit";
+    }
+    if (code == make_error_code(http_client_errc::tls_failed)) {
+        return "HTTP client TLS connection failed";
+    }
+    if (code == make_error_code(http_client_errc::io_error)) {
+        return "HTTP client connection failed";
+    }
+    if (code == make_error_code(http_client_errc::protocol_error)) {
+        return "HTTP protocol failed";
+    }
+    if (code == make_error_code(http_client_errc::handshake_rejected)) {
+        return "WebSocket handshake was rejected";
+    }
+    if (code == make_error_code(http_client_errc::message_too_large)) {
+        return "WebSocket message exceeds configured byte limit";
+    }
+    return "HTTP request failed";
+}
+
+[[noreturn]] inline void throw_http_client_abort(client_abort_reason reason) {
+    const auto code = http_client_abort_error(reason);
+    throw http_client_error(code, http_client_error_message(code));
+}
+
+// A non-value wait outcome of the pool's slot, connect or HTTP/1 exchange
+// schedulers; `operation` names the wait in timeout and cancellation messages.
+[[noreturn]] inline void throw_http_client_wait_failure(worker_wait_status status, std::string_view operation) {
+    switch (status) {
+        case worker_wait_status::timed_out:
+            throw http_client_error(std::make_error_code(std::errc::timed_out),
+                std::string(operation).append(" timed out"));
+        case worker_wait_status::cancelled:
+            throw http_client_error(std::make_error_code(std::errc::operation_canceled),
+                std::string(operation).append(" cancelled"));
+        case worker_wait_status::closed:
+        case worker_wait_status::worker_stopping:
+            throw http_client_error(make_error_code(http_client_errc::closing),
+                http_client_error_message(make_error_code(http_client_errc::closing)));
+        case worker_wait_status::value:
+            break;
+    }
+    std::terminate();
+}
+
+// The code of a failure the client reported as http_client_error.
+[[nodiscard]] inline std::optional<std::error_code> http_client_failure_code(
+    const std::exception_ptr& failure) noexcept {
+    try {
+        std::rethrow_exception(failure);
+    } catch (const http_client_error& error) {
+        return error.code();
+    } catch (...) {
+        return std::nullopt;
+    }
+}
+
+// `eof_message` describes a peer close where the caller still needed bytes.
+[[noreturn]] inline void throw_http_client_transport_error(
+    const client_transport_result& result, std::string_view eof_message) {
+    if (result.status_ == client_transport_status::aborted) {
+        throw_http_client_abort(result.abort_);
+    }
+    if (result.status_ == client_transport_status::eof) {
+        throw http_client_error(make_error_code(http_client_errc::io_error), eof_message);
+    }
+    throw http_client_error(http_client_transport_error(result), error_code_text(result.error_));
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_pool;
+class http_client_tunnel_state;
+class http_client_upload_state;
+class http_client_output_queue;
+struct http_client_config_storage;
+
+// Syntax of http_client_request_options' route overrides, independently of
+// any alias; throws std::invalid_argument.
+void validate_http_client_route_options(const http_client_request_options& options);
+// The checks of configure(): route overrides and the field source.
+void validate_http_client_request_options(const http_client_request_options& options);
+// Shares a request's informational callback between its exchanges; null when empty.
+[[nodiscard]] std::shared_ptr<http_client_informational_callback> share_http_client_informational(
+    http_client_informational_callback&& callback);
+
+// Every field of `options` except the informational callback, which the
+// exchanges of a request (one per redirect hop) share through
+// http_client_request_storage::informational_ instead.
+[[nodiscard]] http_client_request_options copy_http_client_request_settings(const http_client_request_options& options);
+
+// The effective origin and transport of one request: the alias defaults with
+// the request's route overrides applied. Views borrow the alias configuration
+// or the owning request storage.
+struct http_client_route final {
+    http_origin_view origin_;
+    // RFC 3986 authority with the scheme's default port omitted.
+    std::string_view authority_;
+    std::string_view dial_host_;
+    std::uint16_t dial_port_{};
+    // TLS SNI and verified peer name; empty for http.
+    std::string_view server_name_;
+    // The authority is the alias authority: its cookie jar applies.
+    bool alias_origin_{true};
+    // Dial target and server name are the alias defaults: a connection of
+    // this transport is authenticated for the alias origin (server push).
+    bool alias_transport_{true};
+    // The alias's versions, or the request's override.
+    http_client_versions versions_{};
+};
+
+struct http_client_websocket_handshake final {
+    http_client_websocket_handshake(websocket_client_negotiation_config_view config);
+    websocket_client_negotiation negotiation_;
+    std::array<char, 24> key_;
+    std::string selected_subprotocol_;
+    websocket_compression compression_{};
+};
+
+class http_client_request_storage final {
+public:
+    // Complete owning boundary: reserve field metadata once and normalize/copy
+    // every field before asynchronous work can outlive caller storage.
+    http_client_request_storage(std::string_view method, std::string_view target,
+        std::span<const http_header_view> fields);
+
+    http_client_request_storage(const http_client_request_storage&) = delete;
+    http_client_request_storage& operator=(const http_client_request_storage&) = delete;
+    http_client_request_storage(http_client_request_storage&& other) noexcept;
+    http_client_request_storage& operator=(http_client_request_storage&&) noexcept = delete;
+
+    http_client_request_storage& set_body(std::string_view body);
+
+    void set_host_stop(stop_token token) noexcept {
+        host_stop_ = std::move(token);
+    }
+    [[nodiscard]] const stop_token& host_stop() const noexcept {
+        return host_stop_;
+    }
+
+    void set_tunnel(std::string_view authority, std::string_view protocol);
+    void set_websocket(std::shared_ptr<http_client_websocket_handshake> handshake) noexcept {
+        websocket_ = std::move(handshake);
+    }
+    [[nodiscard]] http_client_websocket_handshake* websocket() const noexcept {
+        return websocket_.get();
+    }
+    void bind_tunnel(http_client_tunnel_state& tunnel) noexcept {
+        tunnel_ = &tunnel;
+    }
+    [[nodiscard]] http_client_tunnel_state* tunnel() const noexcept {
+        return tunnel_;
+    }
+    [[nodiscard]] http_client_output_queue* output() const noexcept;
+    [[nodiscard]] bool is_tunnel() const noexcept {
+        return is_tunnel_;
+    }
+    void set_upgrade() noexcept {
+        is_upgrade_ = true;
+        is_tunnel_ = true;
+    }
+    [[nodiscard]] bool is_upgrade() const noexcept {
+        return is_upgrade_;
+    }
+    [[nodiscard]] std::string_view tunnel_authority() const& noexcept {
+        return tunnel_authority_;
+    }
+    std::string_view tunnel_authority() const&& = delete;
+    [[nodiscard]] std::string_view tunnel_protocol() const& noexcept {
+        return tunnel_protocol_;
+    }
+    std::string_view tunnel_protocol() const&& = delete;
+    void bind_upload(http_client_upload_state& upload) noexcept {
+        upload_ = &upload;
+    }
+    [[nodiscard]] http_client_upload_state* upload() const noexcept {
+        return upload_;
+    }
+    [[nodiscard]] std::string_view method() const& noexcept {
+        return method_;
+    }
+    [[nodiscard]] std::string_view method() const&& = delete;
+    [[nodiscard]] std::string_view target() const& noexcept {
+        return target_;
+    }
+    [[nodiscard]] std::string_view target() const&& = delete;
+
+    [[nodiscard]] std::string_view body() const& noexcept {
+        return body_;
+    }
+    std::string_view body() const&& = delete;
+    [[nodiscard]] bool has_body() const noexcept {
+        return has_body_;
+    }
+    [[nodiscard]] const std::vector<http_header>& headers() const noexcept {
+        return headers_;
+    }
+    [[nodiscard]] bool udp_tunnel() const noexcept {
+        return tunnel_protocol_ == "connect-udp";
+    }
+    // Validates the route overrides against `config` and fixes route(). Only
+    // once the storage reached the address it keeps while its request runs:
+    // a move drops the resolved views.
+    void resolve_route(const http_client_config_storage& config);
+    [[nodiscard]] const http_client_route& route() const& noexcept {
+        return *route_;
+    }
+    const http_client_route& route() const&& = delete;
+    // informational_ stays empty; the request's callback is informational_.
+    http_client_request_options options_;
+    std::shared_ptr<http_client_informational_callback> informational_;
+    std::shared_ptr<http_client_pool> pool_owner_;
+
+private:
+    http_client_request_storage(
+        std::string_view method, std::string_view target);
+
+    std::string method_;
+    std::string target_;
+    std::vector<http_header> headers_;
+    std::string body_;
+    std::string tunnel_authority_;
+    std::string tunnel_protocol_;
+    std::shared_ptr<http_client_websocket_handshake> websocket_;
+    stop_token host_stop_;
+    bool is_tunnel_{};
+    bool is_upgrade_{false};
+    http_client_tunnel_state* tunnel_{};
+    bool has_body_{false};
+    http_client_upload_state* upload_{};
+    // The normalized authority override that route() views.
+    std::string route_authority_;
+    std::optional<http_client_route> route_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_result_budget_domain final {
+public:
+    explicit http_client_result_budget_domain(http_client_result_budget_config config);
+
+    http_client_result_budget_domain(const http_client_result_budget_domain&) = delete;
+    http_client_result_budget_domain& operator=(const http_client_result_budget_domain&) = delete;
+
+    [[nodiscard]] bool try_reserve(std::size_t bytes) noexcept;
+    void release(std::size_t bytes) noexcept;
+
+    // Only the owning worker accesses receive accounting. Escaped results
+    // independently use the thread-safe retained-result counter above.
+    [[nodiscard]] bool reserve_in_flight(std::size_t bytes) noexcept;
+    void release_in_flight(std::size_t bytes) noexcept;
+
+private:
+    const std::size_t max_retained_bytes_;
+    std::atomic<std::size_t> retained_bytes_{0};
+    const std::size_t max_in_flight_bytes_;
+    std::size_t in_flight_bytes_{0};
+};
+
+// Move-only reservation carried by an escaped result. It owns the budget domain
+// independently of the client and releases its exact charge at destruction.
+class http_client_result_budget_lease final {
+public:
+    http_client_result_budget_lease(const http_client_result_budget_lease&) = delete;
+    http_client_result_budget_lease& operator=(const http_client_result_budget_lease&) = delete;
+    http_client_result_budget_lease(http_client_result_budget_lease&& other) noexcept;
+    ~http_client_result_budget_lease();
+
+    [[nodiscard]] static std::optional<http_client_result_budget_lease> try_acquire(
+        const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes) noexcept;
+    [[nodiscard]] std::pair<std::shared_ptr<http_client_result_budget_domain>, std::size_t> release() && noexcept {
+        return {std::move(domain_), std::exchange(bytes_, 0)};
+    }
+
+private:
+    http_client_result_budget_lease(
+        const std::shared_ptr<http_client_result_budget_domain>& domain, std::size_t bytes_value) noexcept;
+
+    // Keep the domain alive until after releasing the reservation.
+    std::shared_ptr<http_client_result_budget_domain> domain_;
+    std::size_t bytes_{0};
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_pool;
+
+// Worker-affine bounds shared by every HTTP client alias of one owner (a
+// standalone http_client, or one application worker): idle connections across
+// aliases, ordered by one idle clock, and concurrent background DNS refreshes.
+// Pools join with their first connection and leave before retiring them.
+class http_client_worker_limits final {
+public:
+    explicit http_client_worker_limits(const http_client_worker_config& config);
+    http_client_worker_limits(const http_client_worker_limits&) = delete;
+    http_client_worker_limits& operator=(const http_client_worker_limits&) = delete;
+
+    void join(http_client_pool& pool);
+    void leave(http_client_pool& pool) noexcept;
+    [[nodiscard]] std::uint64_t next_idle_order() noexcept {
+        return ++idle_clock_;
+    }
+    // Closes the least recently used idle connections of any alias while the
+    // worker keeps more than its bound; alias bounds apply first.
+    void enforce_idle_limits() noexcept;
+    // A background refresh lookup may start: false once the worker runs its
+    // bound of them, and the caller defers to its next refresh period.
+    [[nodiscard]] bool try_begin_dns_refresh() noexcept;
+    void end_dns_refresh() noexcept;
+
+private:
+    void enforce_idle_limit(bool multiplexed, std::size_t maximum) noexcept;
+
+    std::size_t max_idle_http1_;
+    std::size_t max_idle_multiplexed_;
+    std::size_t max_dns_refreshes_;
+    std::size_t dns_refreshes_{0};
+    std::uint64_t idle_clock_{0};
+    std::vector<http_client_pool*> pools_{};
+};
+
+// The per-worker state every pool of one owner shares.
+struct http_client_worker_services final {
+    std::shared_ptr<http_client_result_budget_domain> result_budget_;
+    std::shared_ptr<http_client_worker_limits> limits_;
+};
+
+// Validates `config`; throws std::invalid_argument.
+[[nodiscard]] http_client_worker_services make_http_client_worker_services(const http_client_worker_config& config);
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+struct http_client_config_storage;
+class http_client_request_storage;
+struct client_received_cookie;
+
+struct client_prepared_request_scratch final {
+    static constexpr std::size_t inline_header_capacity = 16;
+    static constexpr std::size_t inline_cookie_capacity = 256;
+
+    client_prepared_request_scratch() = default;
+
+    std::array<http_header_view, inline_header_capacity> inline_headers_;
+    std::vector<http_header_view> overflow_headers_;
+    std::array<char, inline_cookie_capacity> inline_cookie_header_;
+    std::string overflow_cookie_header_;
+};
+
+// Origin policy owns cookies and automatic headers independently of connection
+// negotiation, cancellation, and transport retirement.
+class client_request_policy final {
+public:
+    explicit client_request_policy(const http_client_config_storage& config);
+    // The complete view borrows the request, policy text and both scratch buffers;
+    // keep their owners alive through protocol serialization.
+    [[nodiscard]] http_client_request_view prepare_request(
+        const http_client_request_storage& request, client_prepared_request_scratch& scratch);
+    // Stored and configured cookies belong to the fixed origin: false for a
+    // request whose authority override or tunnel authority names another
+    // host or port. Requires a resolved request route.
+    [[nodiscard]] bool addresses_origin(const http_client_request_storage& request) const noexcept;
+    // Retains the Set-Cookie fields of a final head received for an origin
+    // request with `request_target`.
+    void retain_response_cookies(std::string_view request_target, std::span<const http_header> headers);
+
+private:
+    const http_client_config_storage& config_;
+    http_cookie_jar jar_;
+};
+}  // namespace ruvia::detail
+
+namespace ruvia {
+class operation_deadline;
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+class client_request_policy;
+class http_client_response_state;
+struct http_client_websocket_handshake;
+
+// One received final response head, after its protocol driver stored the
+// response fields in the state's headers_.
+struct http_client_final_head final {
+    http_received_status status_;
+    http_protocol_version protocol_version_;
+    std::optional<http_client_request_content_signal> request_content_signal_;
+    // Target of a request addressed to the fixed origin, whose jar retains the
+    // head's Set-Cookie fields; nullopt for a tunnel to another authority.
+    std::optional<std::string_view> origin_target_;
+    // The protocol's verdict that this head opens the request's tunnel: a 2xx
+    // to CONNECT, or the HTTP/1 101 upgrade of CONNECT-UDP (RFC 9298 section 3).
+    bool opens_tunnel_{false};
+};
+
+// Stores a received HTTP/2 or HTTP/3 final head in the state: its fields
+// (moved when they already use the state's resource), Content-Length and the
+// framing its status implies for the request method.
+void retain_http_client_binary_response_head(http_client_response_state& state_value, http_client_response_head&& head);
+
+// The final-head publication shared by HTTP/1, HTTP/2 and HTTP/3: stops an upload the
+// response completed, records status, version and body plan, retains origin
+// cookies, settles tunnel acceptance (rejecting an invalid CONNECT-UDP head),
+// selects collection of an encoded body, then wakes the head consumer.
+void publish_http_client_final_head(
+    http_client_response_state& state_value, client_request_policy& policy, const http_client_final_head& head);
+
+// Validates an RFC 8441 Extended CONNECT WebSocket response head (HTTP/2 or
+// HTTP/3) and records the negotiated subprotocol and compression on `websocket`.
+void accept_extended_connect_websocket_response(http_client_websocket_handshake& websocket,
+    http_status_code status, std::span<const http_header> headers, bool stream_ended,
+    std::string_view error_message);
+
+// Ends a received body: decodes a collected Content-Encoding within the
+// response byte limit, failing with timeout when `timeout` expired before or
+// during decoding.
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
+    bool content_semantics_present, std::size_t max_decoded_bytes);
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_pool;
+class http_client_response_state;
+class http_client_result_budget_domain;
+
+// Response storage and in-flight budget accounting of one client pool, plus the
+// registry of live response states so the pool can retire their transport
+// borrows on join. Worker-affine, reference counted by the pool root and every
+// live state.
+class http_client_response_memory_domain final {
+public:
+    class deleter_type final {
+    public:
+        void operator()(http_client_response_memory_domain* domain) const noexcept;
+    };
+
+    using owner = std::unique_ptr<http_client_response_memory_domain, deleter_type>;
+
+    [[nodiscard]] static owner create(const worker_ref& worker,
+        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+
+    http_client_response_memory_domain(const http_client_response_memory_domain&) = delete;
+    http_client_response_memory_domain& operator=(const http_client_response_memory_domain&) = delete;
+
+    [[nodiscard]] const worker_ref& worker() const& noexcept {
+        return worker_;
+    }
+
+    void charge_in_flight(std::size_t bytes_value);
+    void release_in_flight(std::size_t bytes_value) noexcept;
+
+    [[nodiscard]] http_client_response_state* create_state(http_client_pool& pool);
+    void destroy_state(http_client_response_state* state) noexcept;
+    void detach_transport_bindings(http_client_pool& pool) noexcept;
+
+private:
+    enum class phase_type : unsigned char { prepared,
+        active,
+        retired };
+
+    http_client_response_memory_domain(const worker_ref& worker_value,
+        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+    ~http_client_response_memory_domain();
+
+    void destroy() noexcept;
+    void require_current() const noexcept;
+    void attach_state(http_client_response_state& state) noexcept;
+    void unlink_state(http_client_response_state& state) noexcept;
+    void retain() noexcept;
+    void release() noexcept;
+    void release_root() noexcept;
+
+    worker_ref worker_;
+    std::shared_ptr<http_client_result_budget_domain> result_budget_domain_;
+    http_client_response_state* state_head_{};
+    std::size_t references_{1};
+    phase_type phase_{phase_type::prepared};
+
+    friend class deleter_type;
+    friend class http_client_response_state;
+};
+
+class http_client_in_flight_reservation final {
+public:
+    constexpr http_client_in_flight_reservation() noexcept = default;
+    explicit constexpr http_client_in_flight_reservation(http_client_response_memory_domain* domain) noexcept
+        : domain_(domain) {}
+    ~http_client_in_flight_reservation() {
+        clear();
+    }
+    http_client_in_flight_reservation(const http_client_in_flight_reservation&) = delete;
+    http_client_in_flight_reservation& operator=(const http_client_in_flight_reservation&) = delete;
+    http_client_in_flight_reservation(http_client_in_flight_reservation&& other) noexcept
+        : domain_(std::exchange(other.domain_, nullptr)),
+          bytes_(std::exchange(other.bytes_, 0)) {}
+    http_client_in_flight_reservation& operator=(http_client_in_flight_reservation&& other) noexcept {
+        if (this != &other) {
+            clear();
+            domain_ = std::exchange(other.domain_, nullptr);
+            bytes_ = std::exchange(other.bytes_, 0);
+        }
+        return *this;
+    }
+
+    void resize_to(std::size_t target_bytes) {
+        if (domain_ == nullptr || target_bytes == bytes_) {
+            return;
+        }
+        if (target_bytes > bytes_) {
+            domain_->charge_in_flight(target_bytes - bytes_);
+        } else {
+            domain_->release_in_flight(bytes_ - target_bytes);
+        }
+        bytes_ = target_bytes;
+    }
+
+    void shrink_to(std::size_t target_bytes) noexcept {
+        if (domain_ != nullptr && target_bytes < bytes_) {
+            domain_->release_in_flight(bytes_ - target_bytes);
+            bytes_ = target_bytes;
+        }
+    }
+
+    void clear() noexcept {
+        if (domain_ != nullptr && bytes_ != 0) {
+            domain_->release_in_flight(bytes_);
+            bytes_ = 0;
+        }
+    }
+
+    void swap(http_client_in_flight_reservation& other) noexcept {
+        std::swap(domain_, other.domain_);
+        std::swap(bytes_, other.bytes_);
+    }
+
+private:
+    http_client_response_memory_domain* domain_{nullptr};
+    std::size_t bytes_{0};
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// The configured User-Agent (RFC 9110 section 10.1.5) of the HTTP client and
+// both WebSocket client protocols: sent when a request or handshake carries no
+// User-Agent field of its own; empty sends none.
+inline void validate_client_user_agent(std::string_view user_agent) {
+    if (!user_agent.empty() && !is_valid_http_header_value(user_agent)) {
+        throw std::invalid_argument("client user agent is invalid");
+    }
+}
+
+// The scheme of an alias and its fixed origin, absent for a scheme-only
+// base_url_ whose requests each name their authority.
+struct http_client_origin_spec final {
+    http_scheme scheme_;
+    std::optional<http_origin_view> origin_;
+};
+
+// A nonempty set of compiled-in versions; HTTP/3 only over https.
+inline void validate_http_client_versions(const http_client_versions& versions, http_scheme scheme) {
+    if (!versions.http1_ && !versions.http2_ && !versions.http3_) {
+        throw std::invalid_argument("HTTP client versions must not be empty");
+    }
+#ifndef RUVIA_ENABLE_HTTP2
+    if (versions.http2_) {
+        throw std::invalid_argument("HTTP/2 support is disabled");
+    }
+#endif
+#ifndef RUVIA_ENABLE_HTTP3
+    if (versions.http3_) {
+        throw std::invalid_argument("HTTP/3 support is disabled");
+    }
+#endif
+    if (versions.http3_ && scheme != http_scheme::https) {
+        throw std::invalid_argument("HTTP/3 requires HTTPS");
+    }
+}
+
+[[nodiscard]] inline http_client_origin_spec validate_http_client_config(const http_client_config& config) {
+    auto url = config.base_url_.view();
+    const bool tls = http_ascii_equals_ignore_case(url.substr(0, 8), "https://");
+    if (!tls && !http_ascii_equals_ignore_case(url.substr(0, 7), "http://")) {
+        throw std::invalid_argument("HTTP client base_url must be an http(s) origin");
+    }
+    url.remove_prefix(tls ? 8 : 7);
+    const http_client_origin_spec spec{.scheme_ = tls ? http_scheme::https : http_scheme::http, .origin_ = std::nullopt};
+    const auto scheme = spec.scheme_;
+    if (url.empty()) {
+        // An egress alias without a fixed origin: every destination comes
+        // from a request, so the dial addresses (Alt-Svc alternatives included)
+        // must pass a validator, and no origin-scoped cookie jar exists.
+        if (!config.address_validator_) {
+            throw std::invalid_argument("HTTP client alias without a fixed origin requires an address_validator_");
+        }
+        if (!config.cookies_.empty() || config.received_cookies_ != http_client_received_cookie_policy::ignore) {
+            throw std::invalid_argument("HTTP client alias without a fixed origin has no cookie jar");
+        }
+        if (config.tls_.server_name_) {
+            throw std::invalid_argument("HTTP client alias without a fixed origin takes each TLS server name from its request");
+        }
+    }
+    if (url.ends_with('/')) {
+        url.remove_suffix(1);
+    }
+    std::optional<http_authority_view> authority;
+    if (!url.empty()) {
+        authority = parse_http_authority(url);
+        if (!authority || authority->host().empty() || authority->port_kind() == http_authority_port_kind::empty ||
+            authority->port() == 0 || url.find_first_of("/?#") != std::string_view::npos) {
+            throw std::invalid_argument("HTTP client base_url must contain only a fixed origin or a scheme");
+        }
+    }
+    auto result = spec;
+    if (authority) {
+        result.origin_ = tls ? http_origin_view::https({.host_ = authority->host(), .port_ = authority->effective_port(443)})
+                             : http_origin_view::http({.host_ = authority->host(), .port_ = authority->effective_port(80)});
+    }
+    auto host = result.origin_ ? result.origin_->host() : std::string_view{};
+    if (host.starts_with('[')) {
+        host = host.substr(1, host.size() - 2);
+    }
+    if (config.push_.max_queued_pushes_ == 0 || config.push_.max_concurrent_pushes_ == 0 ||
+        (config.push_.timeout_ && config.push_.timeout_->value().count() <= 0)) {
+        throw std::invalid_argument("HTTP push bounds and configured timeout must be positive");
+    }
+    if (config.advertisements_.max_queued_advertisements_ == 0 || config.advertisements_.max_retained_bytes_ == 0) {
+        throw std::invalid_argument("HTTP advertisement bounds must be positive");
+    }
+    if (config.advertisements_.receive_origins_ && scheme != http_scheme::https) {
+        throw std::invalid_argument("ORIGIN advertisements require authenticated HTTPS");
+    }
+    validate_http_client_versions(config.versions_, scheme);
+    if (config.http3_.max_concurrent_streams_ == 0 || config.http3_.max_alt_svc_entries_ == 0 ||
+        config.http3_.max_datagram_bytes_ == 0 || config.http3_.max_stream_output_bytes_ == 0) {
+        throw std::invalid_argument("HTTP/3 resource bounds must be positive");
+    }
+    if (config.http3_.max_datagram_bytes_ < 1200 || config.http3_.max_datagram_bytes_ > 65527 ||
+        config.http3_.max_concurrent_streams_ > (std::numeric_limits<std::uint32_t>::max)()) {
+        throw std::invalid_argument("HTTP/3 transport limits exceed QUIC bounds");
+    }
+    validate_client_tls_config(config.tls_);
+    if (scheme == http_scheme::https && config.tls_.mode_ == client_tls_mode::disabled) {
+        throw std::invalid_argument("HTTPS client requires TLS; use the http scheme for plaintext");
+    }
+    if (config.received_cookies_ != http_client_received_cookie_policy::ignore &&
+        config.received_cookies_ != http_client_received_cookie_policy::retain_and_send) {
+        throw std::invalid_argument("http client received cookie policy is invalid");
+    }
+    if (config.dial_host_) {
+        validate_client_origin_host(config.dial_host_->view(), "HTTP client dial host must not be empty", "HTTP client dial host is invalid");
+    }
+    if (config.dial_port_ && config.dial_port_->value() == 0) {
+        throw std::invalid_argument("HTTP client dial port must be positive");
+    }
+    detail::ensure_positive_optional_durations("HTTP DNS refresh interval must be positive", config.dns_refresh_interval_);
+    if (result.origin_) {
+        validate_client_origin_host(
+            host, "http client host must not be empty", "http client host is invalid");
+    }
+    if (config.connection_limits_.max_open_ && *config.connection_limits_.max_open_ == 0) {
+        throw std::invalid_argument("http client open connection limit must be greater than zero");
+    }
+    detail::ensure_positive_size(config.max_concurrent_http2_streams_per_connection_,
+        "http client HTTP/2 stream limit per connection must be greater than zero");
+    detail::ensure_positive_size(
+        config.max_buffered_requests_, "http client buffered request limit must be greater than zero");
+    detail::ensure_positive_size(config.max_cookies_, "http client cookie limit must be greater than zero");
+    detail::ensure_positive_size(
+        config.max_cookie_bytes_, "http client cookie byte limit must be greater than zero");
+    detail::ensure_positive_size(
+        config.max_response_bytes_, "http client response byte limit must be greater than zero");
+    detail::ensure_positive_optional_durations("configured http client timeouts must be greater than zero",
+        std::optional{config.connect_timeout_}, config.write_timeout_, config.read_timeout_, config.request_timeout_,
+        config.acquire_timeout_, config.idle_timeout_, config.http2_ping_interval_);
+    validate_client_user_agent(config.user_agent_.view());
+    validate_client_tcp_config(config.tcp_);
+    // Every configured cookie is validated, including one a later entry with
+    // the same name replaces; capacity applies to the deduplicated set.
+    for (const auto& cookie : config.cookies_) {
+        if (!is_valid_http_header_name(cookie.name()) || !::ruvia::is_valid_cookie_value(cookie.value())) {
+            throw std::invalid_argument("configured HTTP client cookie is invalid");
+        }
+    }
+    return result;
+}
+
+// Capacity of the deduplicated configured cookies, each stored with the
+// default "/" path like a retained cookie.
+inline void validate_http_client_configured_cookie_capacity(
+    std::span<const http_header> cookies, std::size_t max_cookies, std::size_t max_cookie_bytes) {
+    if (cookies.size() > max_cookies) {
+        throw std::invalid_argument("configured HTTP client cookies exceed the client cookie limit");
+    }
+    std::size_t cookie_bytes = 0;
+    for (const auto& cookie : cookies) {
+        for (const auto bytes : {cookie.name().size(), cookie.value().size(), std::size_t{1}}) {
+            if (bytes > max_cookie_bytes - cookie_bytes) {
+                throw std::invalid_argument("configured HTTP client cookies exceed the client byte limit");
+            }
+            cookie_bytes += bytes;
+        }
+    }
+}
+
+struct http_client_config_storage final {
+    http_client_config_storage(const http_client_config& source_value,
+        client_tls_files files = client_tls_files::parse)
+        : http_client_config_storage(
+              source_value, validate_http_client_config(source_value), files) {}
+
+    http_client_config_storage(
+        const http_client_config_storage& source_value)
+        : http_client_config_storage(source_value,
+              http_client_origin_spec{.scheme_ = source_value.scheme_,
+                  .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt},
+              client_tls_files::keep_paths) {}
+
+    std::string host_;
+    std::string dial_host_;
+    std::uint16_t dial_port_;
+    std::shared_ptr<const http_client_address_validator> address_validator_;
+    std::optional<timeout_duration> dns_refresh_interval_;
+    bool decode_content_;
+    // False for a scheme-only base_url_: host_, uri_host_ and authority_ stay
+    // empty, each request names its authority, and dial_host_ / dial_port_
+    // (empty / 0 unless configured) default to that authority.
+    bool fixed_origin_;
+    // RFC 3986 uri-host (IPv6 literals bracketed) and the default-port-omitted
+    // authority of the fixed origin, computed once at startup.
+    std::string uri_host_;
+    http_scheme scheme_;
+    std::uint16_t port_;
+    std::string authority_;
+    http_client_connection_limits connection_limits_;
+    std::size_t max_concurrent_http2_streams_per_connection_;
+    std::size_t max_buffered_requests_;
+    std::size_t max_cookies_;
+    std::size_t max_cookie_bytes_;
+    timeout_duration connect_timeout_;
+    std::optional<timeout_duration> write_timeout_;
+    std::optional<timeout_duration> read_timeout_;
+    std::optional<timeout_duration> request_timeout_;
+    std::optional<timeout_duration> acquire_timeout_;
+    std::optional<timeout_duration> idle_timeout_;
+    std::optional<timeout_duration> http2_ping_interval_;
+    std::size_t max_response_bytes_;
+    http_client_versions versions_;
+    http_client_advertisement_config advertisements_;
+    http_client_push_config push_;
+    http_client_http3_config http3_;
+    client_tls_config_storage tls_;
+    client_tcp_config tcp_;
+    http_client_received_cookie_policy received_cookies_;
+    std::string user_agent_;
+    // Configured name/value cookie pairs, one allocation per pair; a later
+    // configured entry replaces an earlier one of the same name in place.
+    std::vector<http_header> cookies_;
+
+    // Validating factory for the fixed origin. Owners that are never moved
+    // cache the returned view, which borrows uri_host_. Requires fixed_origin_.
+    [[nodiscard]] http_origin_view origin() const {
+        const http_origin_options options{.host_ = uri_host_, .port_ = port_};
+        return scheme_ == http_scheme::https ? http_origin_view::https(options) : http_origin_view::http(options);
+    }
+
+private:
+    [[nodiscard]] static std::string_view transport_host(const std::optional<http_origin_view>& origin) noexcept {
+        if (!origin) {
+            return {};
+        }
+        auto host = origin->host();
+        return host.starts_with('[') ? host.substr(1, host.size() - 2) : host;
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config& source_value) noexcept {
+        return source_value.user_agent_.view();
+    }
+    [[nodiscard]] static std::string_view user_agent_view(const http_client_config_storage& source_value) noexcept {
+        return source_value.user_agent_;
+    }
+    [[nodiscard]] static std::string_view dial_host_view(const http_client_config& source, const std::optional<http_origin_view>& origin) noexcept {
+        return source.dial_host_ ? source.dial_host_->view() : transport_host(origin);
+    }
+    [[nodiscard]] static std::string_view dial_host_view(const http_client_config_storage& source, const std::optional<http_origin_view>&) noexcept {
+        return source.dial_host_;
+    }
+    [[nodiscard]] static std::uint16_t dial_port_value(const http_client_config& source, const std::optional<http_origin_view>& origin) noexcept {
+        if (source.dial_port_) {
+            return source.dial_port_->value();
+        }
+        return origin ? origin->port() : std::uint16_t{0};
+    }
+    [[nodiscard]] static std::uint16_t dial_port_value(const http_client_config_storage& source, const std::optional<http_origin_view>&) noexcept {
+        return source.dial_port_;
+    }
+
+    // Startup parses TLS files; asynchronous updates first own paths only.
+    // Allocator-rebound copies share already prepared material.
+    template <typename source_type>
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const source_type& source_value, http_scheme scheme, client_tls_files files) {
+        if constexpr (std::same_as<source_type, http_client_config>) {
+            return {source_value.tls_,
+                scheme == http_scheme::https ? files : client_tls_files::keep_paths};
+        } else {
+            return {source_value.tls_};
+        }
+    }
+
+    // Resolve representation differences at the boundary, then own every field
+    // and cookie through one allocator-bound construction path.
+    template <typename source_type>
+        requires(std::same_as<source_type, http_client_config> ||
+                    std::same_as<source_type, http_client_config_storage>)
+    http_client_config_storage(
+        const source_type& source_value, http_client_origin_spec spec, client_tls_files files)
+        : host_(transport_host(spec.origin_)),
+          dial_host_(dial_host_view(source_value, spec.origin_)),
+          dial_port_(dial_port_value(source_value, spec.origin_)),
+          address_validator_(source_value.address_validator_),
+          dns_refresh_interval_(source_value.dns_refresh_interval_),
+          decode_content_(source_value.decode_content_),
+          fixed_origin_(spec.origin_.has_value()),
+          uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
+          scheme_(spec.scheme_),
+          port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
+          authority_(spec.origin_ ? make_http_origin_authority(origin()) : std::string{}),
+          connection_limits_(source_value.connection_limits_),
+          max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
+          max_buffered_requests_(source_value.max_buffered_requests_),
+          max_cookies_(source_value.max_cookies_),
+          max_cookie_bytes_(source_value.max_cookie_bytes_),
+          connect_timeout_(source_value.connect_timeout_),
+          write_timeout_(source_value.write_timeout_),
+          read_timeout_(source_value.read_timeout_),
+          request_timeout_(source_value.request_timeout_),
+          acquire_timeout_(source_value.acquire_timeout_),
+          idle_timeout_(source_value.idle_timeout_),
+          http2_ping_interval_(source_value.http2_ping_interval_),
+          max_response_bytes_(source_value.max_response_bytes_),
+          versions_(source_value.versions_),
+          advertisements_(source_value.advertisements_),
+          push_(source_value.push_),
+          http3_(source_value.http3_),
+          tls_(tls_storage(source_value, scheme_, files)),
+          tcp_(source_value.tcp_),
+          received_cookies_(source_value.received_cookies_),
+          user_agent_(user_agent_view(source_value)) {
+        cookies_.reserve(source_value.cookies_.size());
+        for (const auto& cookie : source_value.cookies_) {
+            if constexpr (std::same_as<source_type, http_client_config>) {
+                const auto existing = std::ranges::find_if(cookies_,
+                    [name = cookie.name()](const http_header& entry) { return entry.name() == name; });
+                if (existing != cookies_.end()) {
+                    *existing = http_header(cookie.name(), cookie.value());
+                    continue;
+                }
+            }
+            cookies_.emplace_back(cookie.name(), cookie.value());
+        }
+        if constexpr (std::same_as<source_type, http_client_config>) {
+            validate_http_client_configured_cookie_capacity(cookies_, max_cookies_, max_cookie_bytes_);
+        }
+    }
+};
+
+using http_client_definition_type = named_capability_definition<http_client_config_storage>;
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+class response_stream_writer;
+}
+
+namespace ruvia::detail {
+
+struct http_client_route;
+
+class http_client_pool;
+class http_client_response_memory_domain;
+
+inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
+    if (++value == 0) {
+        ++value;
+    }
+    return value;
+}
+
+// Owned by the response memory domain, not by a connection/session arena.
+// At most one application chunk is queued; wire drivers borrow it until their
+// protocol cursor commits it. Terminal wakeups never free a pending SSL span.
+class http_client_output_queue final {
+public:
+    http_client_output_queue(const worker_ref& worker_value)
+        : data_(worker_value),
+          space_(worker_value) {}
+    void notify_data() noexcept {
+        data_.notify();
+        if (wake_ != nullptr) {
+            wake_(wake_target_);
+        }
+    }
+    void acknowledge_chunk() noexcept {
+        chunk_ready_ = false;
+        http_clear_string_retaining_small(chunk_, http_body_buffer_bytes);
+        space_.notify();
+    }
+    void finish() noexcept {
+        ended_ = true;
+        std::string(chunk_.get_allocator()).swap(chunk_);
+        space_.notify();
+    }
+    void stop() noexcept {
+        if (stopped_) {
+            return;
+        }
+        stopped_ = true;
+        notify_data();
+        space_.notify();
+    }
+    void* wake_target_{};
+    void (*wake_)(void*) noexcept {};
+    worker_signal data_;
+    worker_signal space_;
+    std::string chunk_;
+    bool chunk_ready_{};
+    bool end_requested_{};
+    bool completion_pending_{};
+    bool ended_{};
+    bool stopped_{};
+    bool operation_active_{};
+    ::ruvia::operation_scope output_scope_;
+};
+
+// Transfers the response of an exchange or a push to its consumer once, after
+// the final head arrived. Embedded in the address-stable response state; one
+// started receive runs at a time, and the owner retiring closes the cold ones.
+class http_client_response_handoff final {
+public:
+    [[nodiscard]] bool taken() const noexcept {
+        return taken_;
+    }
+    [[nodiscard]] bool has_pending_receive() const noexcept {
+        return scope_.has_pending_operations();
+    }
+    // A cold receive of `pin`'s response, bound to this handoff's scope;
+    // `head_message` (static text) reports a failure before the head. Its
+    // own `operation` interrupts only this wait.
+    [[nodiscard]] task<http_client_response> receive(http_client_response pin, std::string_view head_message, operation_options operation);
+    // The owner retires: its pending receives close, and once the response was
+    // transferred the owner's handle no longer consumes it.
+    void release(http_client_response& owner) noexcept;
+
+private:
+    [[nodiscard]] task<http_client_response> receive_owned(http_client_response pin, std::string_view head_message, operation_options operation);
+
+    ::ruvia::operation_scope scope_;
+    bool taken_{false};
+    bool active_{false};
+};
+
+class http_client_tunnel_state final {
+public:
+    http_client_tunnel_state(const worker_ref& worker_value, http_client_tunnel_config config)
+        : output_(worker_value),
+          config_(config) {}
+    http_client_output_queue output_;
+    http_client_tunnel_config config_;
+    bool udp_{};
+    bool accepted_{};
+    bool receive_ended_{};
+};
+
+class http_client_upload_state final {
+public:
+    http_client_upload_state(const worker_ref& worker_value, http_client_upload_config config)
+        : output_(worker_value),
+          config_(config) {}
+    http_client_upload_state(worker_ref&&, http_client_upload_config) = delete;
+    http_client_output_queue output_;
+    http_client_upload_config config_;
+    std::vector<http_header> trailers_;
+    // The caller stopped sending through abandon(); the response stays valid.
+    bool abandoned_{};
+    // Upload-only failures belong to the writer, not to an otherwise valid
+    // response. HTTP/1 may record them while the response is still arriving;
+    // late failures in any protocol must preserve an already validated EOF.
+    std::exception_ptr failure_;
+    bool content_released_{};
+    http_client_response_handoff response_;
+    std::unique_ptr<http_client_request> redirect_request_;
+};
+
+// Composite per-stream deadline timer shared by HTTP/2 and HTTP/3 client
+// streams: combines the operation timeout with active read/write inactivity
+// deadlines and reschedules lazily when a deadline only moves later.
+struct http_client_stream_timer final {
+    using time_point = std::chrono::steady_clock::time_point;
+
+    std::optional<time_point> read_deadline_;
+    std::optional<time_point> write_deadline_;
+    std::optional<time_point> timer_at_;
+    worker_timer_registration timer_;
+
+    void cancel() noexcept {
+        timer_.cancel();
+        timer_at_.reset();
+    }
+
+    [[nodiscard]] std::optional<time_point> earliest_deadline(const operation_deadline& timeout) const noexcept {
+        auto deadline = timeout.deadline();
+        for (const auto bound : {read_deadline_, write_deadline_}) {
+            if (bound && (!deadline || *bound < *deadline)) {
+                deadline = bound;
+            }
+        }
+        return deadline;
+    }
+
+    [[nodiscard]] bool expired(const operation_deadline& timeout,
+        time_point now = std::chrono::steady_clock::now()) const noexcept {
+        return timeout.expired() || (read_deadline_ && *read_deadline_ <= now) ||
+               (write_deadline_ && *write_deadline_ <= now);
+    }
+
+    template <typename callback_type>
+    void schedule(const worker_ref& worker, const operation_deadline& timeout, callback_type&& on_expired) {
+        const auto deadline = earliest_deadline(timeout);
+        if (!deadline || (timer_at_ && *timer_at_ <= *deadline)) {
+            return;
+        }
+        timer_.cancel();
+        timer_at_.reset();
+        if (worker.schedule_timer(timer_, *deadline,
+                [on_expired = std::forward<callback_type>(on_expired)](worker_timer_outcome outcome) mutable noexcept {
+                    if (outcome == worker_timer_outcome::expired) {
+                        on_expired();
+                    }
+                }) == worker_timer_schedule_status::scheduled) {
+            timer_at_ = deadline;
+        }
+    }
+
+    template <typename timeout_source_type, typename expired_type, typename error_type>
+    void schedule_with_retry(const worker_ref& worker, const timeout_source_type& timeout_source,
+        expired_type on_expired, error_type on_error) {
+        const auto current_timeout = [&timeout_source]() noexcept -> const operation_deadline& {
+            if constexpr (std::is_pointer_v<timeout_source_type>) {
+                return *timeout_source;
+            } else {
+                return timeout_source;
+            }
+        };
+        schedule(worker, current_timeout(),
+            [this, &worker, &timeout_source, current_timeout, on_expired, on_error]() noexcept {
+                timer_at_.reset();
+                if (expired(current_timeout())) {
+                    on_expired();
+                    return;
+                }
+                try {
+                    schedule_with_retry(worker, timeout_source, on_expired, on_error);
+                } catch (...) {
+                    on_error(std::current_exception());
+                }
+            });
+    }
+};
+
+template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type,
+    typename send_chunk_fn_type, typename finish_fn_type>
+[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_ref& worker,
+    const http_client_request_storage& request, http_client_output_queue& upload, worker_signal& stream_signal,
+    wake_fn_type&& wake_fn, stop_predicate_type&& stop_predicate, release_fn_type&& release_content,
+    send_chunk_fn_type&& send_chunk, finish_fn_type&& finish_upload) {
+    upload.wake_target_ = &wake_fn;
+    upload.wake_ = [](void* target) noexcept { (*static_cast<std::remove_reference_t<wake_fn_type>*>(target))(); };
+    struct upload_wake_guard final {
+        http_client_output_queue& upload_;
+        ~upload_wake_guard() {
+            upload_.wake_ = nullptr;
+            upload_.wake_target_ = nullptr;
+        }
+    } wake_guard{upload};
+    worker_timer_registration continue_timer;
+    if (request.upload() != nullptr && !request.upload()->content_released_) {
+        (void)worker.schedule_timer(continue_timer,
+            deadline_after(request.upload()->config_.continue_timeout_.value()),
+            [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
+                    policy->content_released_ = true;
+                    upload.notify_data();
+                }
+            });
+    }
+    while (!upload.ended_ && !upload.stopped_ && !stop_predicate()) {
+        if (request.is_tunnel() ? !request.tunnel()->accepted_ : !request.upload()->content_released_) {
+            co_await stream_signal.wait();
+            continue;
+        }
+        continue_timer.cancel();
+        if (!release_content()) {
+            break;
+        }
+        if (upload.chunk_ready_) {
+            if (co_await send_chunk(std::string_view(upload.chunk_))) {
+                upload.acknowledge_chunk();
+            }
+        } else if (upload.end_requested_) {
+            if (!(co_await finish_upload())) {
+                break;
+            }
+            if (!stop_predicate() && !upload.stopped_ && !upload.ended_) {
+                upload.finish();
+            }
+        } else {
+            co_await stream_signal.wait();
+        }
+    }
+}
+
+enum class http_client_response_transport : std::uint8_t {
+    unassigned,
+    http1,
+    http2,
+    http3,
+};
+
+// Address-stable response storage. Network stream registration and connection
+// leases are added here rather than to the movable public response wrapper.
+class http_client_response_state final {
+public:
+    explicit http_client_response_state(http_client_response_memory_domain& memory_domain);
+
+    // Body algorithms run on the address-stable storage owner. The public
+    // facade tracks cold frames in body_operation_scope_; the algorithms claim
+    // body_operation_active_ only when their lazy task starts. `operation` is
+    // validated by the facade and timed from here.
+    template <typename view>
+    [[nodiscard]] task<std::conditional_t<std::is_void_v<view>, void, std::optional<view>>> consume_body(operation_options operation, response_stream_writer* output = nullptr);
+    [[nodiscard]] task<http_client_response_bytes> read_all(std::size_t max_bytes, operation_options operation);
+    void retain_reference() noexcept;
+    void release_reference() noexcept;
+    [[nodiscard]] http_client_response_memory_domain& memory_domain() const noexcept {
+        return memory_domain_;
+    }
+    // Response storage is worker-local: throws std::logic_error(`message`)
+    // when called off the worker that owns it.
+    void require_owner_worker(const char* message) const;
+    void notify_producer_space() noexcept;
+    // The consumer's wait for the final head: rethrows the producer's failure
+    // or reports `head_message` for its error code. An encoded body is decoded
+    // completely before the head is returned, so its failure is observed here.
+    [[nodiscard]] task<void> await_head(std::string_view head_message);
+    void rethrow_response_failure() const;
+    // The running consumer (body read or head receive) or output operation's
+    // own interruption, reported as http_client_error timeout / cancelled.
+    [[nodiscard]] bool read_interrupted() const noexcept {
+        return read_operation_ != nullptr && read_operation_->interrupted();
+    }
+    void throw_if_read_interrupted() const;
+    void throw_if_output_interrupted() const;
+    // A forward's downstream response_stream_writer step runs with the time
+    // left in `steps`; http_client_error(timeout) once none is left.
+    [[nodiscard]] operation_options downstream_step(const operation_steps& steps) const;
+    // Rethrows the exception being handled, reporting a downstream step that
+    // `steps` interrupted as this client's http_client_error.
+    [[noreturn]] void rethrow_downstream_failure(const operation_steps& steps) const;
+    void discard_response_body() noexcept;
+    void discard_failed_encoded_response() noexcept;
+    [[nodiscard]] task<void> dispatch_informational(const operation_deadline& timeout);
+    void request_informational_stop() noexcept {
+        informational_stop_requested_ = informational_stop_requested_ || informational_active_;
+        if (informational_abort_) {
+            informational_abort_->request_stop();
+        }
+    }
+    void release_consumed_body_prefix();
+    [[nodiscard]] bool append_received_body(std::string_view bytes_value, std::size_t max_response_bytes) {
+        const auto retained = buffered_.size() - offset_ + pending_.size();
+        if (collect_all_ && bytes_value.size() > max_response_bytes - (std::min)(retained, max_response_bytes)) {
+            discard_response_body();
+            return false;
+        }
+        // The consumer's last borrowed view lives in buffered, not pending.
+        // Appending producer output must never relocate that view.
+        pending_.append(bytes_value);
+        data_signal_.notify();
+        return true;
+    }
+
+    // One retention path: consume response-owned fields or copy borrowed fields.
+    // Owned fields must already use this response's resource. A 100 (Continue)
+    // releases request content gated on it.
+    template <typename fields_type>
+        requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
+                 std::is_same_v<fields_type, std::vector<http_header>>)
+    void retain_informational(http_status_code status, fields_type&& fields_value,
+        std::optional<http_client_request_content_signal> request_content_signal) {
+        constexpr bool transferring = std::is_same_v<fields_type, std::vector<http_header>>;
+        http_client_informational_response head(status);
+        if constexpr (!transferring) {
+            head.headers_.reserve(fields_value.size());
+        }
+        // Fieldless heads still consume response-budgeted vector storage.
+        // Each head's own field count is bounded by its decoder; across heads
+        // only the retained bytes are bounded, so many small interim heads
+        // (e.g. repeated 103 Early Hints) stay acceptable.
+        auto budget = informational_budget_;
+        for (const auto& field : fields_value) {
+            if (!budget.add(field.name().size()) || !budget.add(field.value().size()) ||
+                !budget.add(http_field_line_overhead)) {
+                throw http_client_error(make_error_code(http_client_errc::protocol_error), "informational response metadata exceeds byte limit");
+            }
+            if constexpr (!transferring) {
+                head.headers_.emplace_back(field.name(), field.value());
+            }
+        }
+        if constexpr (transferring) {
+            head.headers_ = std::move(fields_value);
+        }
+        informational_.push_back(std::move(head));
+        informational_budget_ = budget;
+        if (upload_ && request_content_signal == http_client_request_content_signal::continue_value) {
+            upload_->content_released_ = true;
+            upload_->output_.notify_data();
+        }
+    }
+
+    [[nodiscard]] http_client_output_queue* output() noexcept {
+        return tunnel_ ? &tunnel_->output_ : upload_ ? &upload_->output_
+                                                     : nullptr;
+    }
+    [[nodiscard]] bool receive_complete() const noexcept {
+        return complete_ || (tunnel_ && tunnel_->accepted_ && tunnel_->receive_ended_);
+    }
+    std::optional<http_client_tunnel_state> tunnel_;
+    std::optional<http_client_upload_state> upload_;
+    worker_signal head_signal_;
+    worker_signal data_signal_;
+    worker_signal space_signal_;
+    http_client_pool* pool_{nullptr};
+    http_received_status status_{http_status::ok};
+    http_known_method request_method_{http_known_method::unknown};
+    http_protocol_version protocol_version_{http_protocol_version::http11};
+    std::optional<http_response_body_plan> response_body_plan_{};
+    http_client_response_framing framing_{http_client_response_framing::none};
+    std::optional<std::uint64_t> content_length_;
+    http_client_connection_info connection_info_;
+    bool request_written_{false};
+    std::optional<timeout_duration> effective_connect_timeout_;
+    std::optional<timeout_duration> effective_read_timeout_;
+    std::optional<timeout_duration> effective_write_timeout_;
+    std::optional<timeout_duration> effective_acquire_timeout_;
+    std::shared_ptr<http_client_informational_callback> informational_callback_;
+    stop_token informational_stop_;
+    std::optional<stop_source> informational_abort_;
+    bool informational_active_{false};
+    bool informational_stop_requested_{false};
+    bool decode_content_{true};
+    std::vector<http_client_informational_response> informational_;
+    // One aggregate byte budget across every retained interim head.
+    http_field_section_budget informational_budget_;
+    std::size_t informational_delivered_{};
+    std::vector<http_header> headers_;
+    std::vector<http_header> trailers_;
+    std::string buffered_;
+    // Producers only append here. The consumer swaps it with `buffered` before
+    // returning a view, so later network progress cannot invalidate that view.
+    std::string pending_;
+    std::size_t offset_{0};
+    std::size_t buffered_limit_{default_max_buffered_body_bytes};
+    std::exception_ptr failure_;
+    // The pool retired before the exchange completed; consumers report
+    // http_client_error::closing with their own operation message.
+    bool pool_closed_{false};
+    std::size_t references_{1};
+    bool head_ready_{false};
+    bool complete_{false};
+    bool abandoned_{false};
+    bool collect_all_{false};
+    bool body_operation_active_{false};
+    // The interrupts of the running consumer and output operations; null
+    // while none runs. Their source routes stop requests on this worker.
+    const operation_interrupt* read_operation_{};
+    const operation_interrupt* output_operation_{};
+    bool body_decode_required_{false};
+    // Content-Encoding parsed with the final head while decoding is pending.
+    std::optional<http_content_coding_field_result> content_coding_{};
+    http_client_response_transport transport_{http_client_response_transport::unassigned};
+#ifdef RUVIA_ENABLE_HTTP2
+    std::optional<::ruvia::http2_received_data_credit> http2_data_credit_{};
+#endif
+#ifdef RUVIA_ENABLE_HTTP3
+    // Receive credit of buffered response DATA, returned as the consumer
+    // takes it (RFC 9000 §4.1).
+    std::optional<::ruvia::http3_received_data_credit> http3_data_credit_{};
+#endif
+    std::optional<std::deque<std::string>> http3_datagrams_;
+    std::size_t http3_datagram_bytes_{0};
+    bool http3_native_datagrams_{false};
+    // Pool position and pool-unique serial of the connection owner carrying
+    // this response; positions are reused once their owner is reclaimed.
+    std::size_t connection_index_{0};
+    std::uint64_t connection_serial_{0};
+    std::uint64_t connection_generation_{0};
+    // The request's route while its exchange runs: a final head may teach it
+    // Alt-Svc. Null for pushes and once the request finished.
+    const http_client_route* route_{};
+    std::uint64_t request_id_{0};
+    std::uint64_t cancellation_id_{0};
+    std::uint64_t stream_id_{0};
+    std::optional<http_push_request> promised_request_{};
+    http_client_response_handoff push_response_;
+    operation_interrupt_source interrupt_source_;
+    // Declared after every field a body coroutine borrows, so the operation
+    // scope closes while they are alive.
+    ::ruvia::operation_scope body_operation_scope_;
+
+private:
+    void promote_pending_data();
+    void detach_transport_bindings() noexcept;
+
+    http_client_response_memory_domain& memory_domain_;
+    http_client_response_state* previous_memory_state_{};
+    http_client_response_state* next_memory_state_{};
+
+    friend class http_client_response_memory_domain;
+};
+
+enum class http_client_operation_lane : std::uint8_t {
+    read,
+    output,
+};
+
+// Binds one operation's own timeout and stop token to a response lane while it
+// runs. A read interruption wakes the consumer and keeps buffered bytes; an
+// output interruption stops the output and abandons the exchange or tunnel,
+// since a partly sent chunk cannot be withdrawn. An already-stopped token
+// throws http_client_error(cancelled) before anything is armed.
+class http_client_operation_interruption final {
+public:
+    http_client_operation_interruption(http_client_response_state& state, http_client_operation_lane lane,
+        const operation_options& operation);
+    ~http_client_operation_interruption();
+    http_client_operation_interruption(const http_client_operation_interruption&) = delete;
+    http_client_operation_interruption& operator=(const http_client_operation_interruption&) = delete;
+
+private:
+    static void wake_reader(void* state) noexcept;
+    static void abort_output(void* state) noexcept;
+
+    http_client_response_state& state_;
+    http_client_operation_lane lane_;
+    operation_interrupt interrupt_;
+};
+
+// Publish both identities before arm(), which may deliver cancellation inline.
+// The owner must declare this after any generation/stream guard so callback
+// retirement precedes unpublishing the operation.
+template <typename target_type>
+class http_client_response_cancellation final {
+public:
+    http_client_response_cancellation(const std::shared_ptr<target_type>& target,
+        std::uint64_t& identity, http_client_response_state& response)
+        : response_(response),
+          registration_(target, identity) {
+        response_.cancellation_id_ = registration_.id();
+    }
+    http_client_response_cancellation(std::shared_ptr<target_type>&&, std::uint64_t&, http_client_response_state&) = delete;
+    http_client_response_cancellation(const std::shared_ptr<target_type>&&, std::uint64_t&, http_client_response_state&) = delete;
+    http_client_response_cancellation(const http_client_response_cancellation&) = delete;
+    http_client_response_cancellation& operator=(const http_client_response_cancellation&) = delete;
+    http_client_response_cancellation(http_client_response_cancellation&&) = delete;
+    http_client_response_cancellation& operator=(http_client_response_cancellation&&) = delete;
+    ~http_client_response_cancellation() {
+        registration_.reset();
+        if (response_.cancellation_id_ == registration_.id()) {
+            response_.cancellation_id_ = 0;
+        }
+    }
+    void arm(const stop_token& stop) {
+        registration_.arm(stop);
+    }
+
+private:
+    http_client_response_state& response_;
+    worker_cancellation_registration<target_type> registration_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_output_queue;
+class http_client_request_storage;
+class http_client_pool;
+class http_client_response_state;
+struct http_client_websocket_handshake;
+
+#ifdef RUVIA_ENABLE_HTTP2
+enum class http2_client_session_start_status : std::uint8_t {
+    started,
+    // transport_ names the failure, including EOF before the peer SETTINGS.
+    transport_failed,
+    protocol_failed,
+};
+
+struct http2_client_session_start_result final {
+    http2_client_session_start_status status_{http2_client_session_start_status::started};
+    client_transport_result transport_{};
+};
+
+enum class http2_client_data_status : std::uint8_t {
+    // Every byte was submitted and its output reached the transport, or the
+    // session ended meanwhile; the caller judges that end itself.
+    submitted,
+    // The caller's stop condition held, or the session ended, before every
+    // byte was submitted.
+    stopped,
+    // The core refused the DATA: the stream no longer sends, or the input
+    // contradicts its declared length or state (std::logic_error).
+    rejected,
+};
+
+class http_client_connection;
+
+// The HTTP/2 client connection driver: preface, the sole socket reader and
+// writer, event drain, DATA submission under flow control, PING liveness and
+// generation-safe failure over a borrowed client_tcp_transport. The writer
+// transfers complete frame-bounded batches into its own storage, so a feed()
+// or submit during an in-flight write never invalidates the bytes being
+// written. Worker-affine and address-stable; the owner joins `tasks` before
+// retiring it.
+class http2_client_session final {
+public:
+    // `ping_interval` bounds silence: no received frame for one interval sends
+    // a PING, and another silent interval fails the session with timeout.
+    http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
+        const worker_ref& worker_value, std::optional<timeout_duration> ping_interval);
+    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_ref&&,
+        std::optional<timeout_duration>) = delete;
+
+    http2_client_session(const http2_client_session&) = delete;
+    http2_client_session& operator=(const http2_client_session&) = delete;
+
+    // Starts a new generation over the freshly connected transport: flushes the
+    // client preface, reads until the peer SETTINGS (draining events through
+    // the handler), then spawns the reader and writer. The previous
+    // generation's tasks must have finished.
+    [[nodiscard]] task<http2_client_session_start_result> start(
+        http2_connection_options options, const operation_deadline& timeout);
+
+    // The live connection of the current generation; check usable() first.
+    [[nodiscard]] ::ruvia::http2_connection& connection() noexcept;
+    [[nodiscard]] bool has_connection() const noexcept;
+    // Accepts new streams: started, not failed and not draining.
+    [[nodiscard]] bool usable() const noexcept;
+    [[nodiscard]] std::size_t available_request_streams(std::size_t local_limit) const noexcept;
+
+    // Reader or writer of some generation is still running.
+    [[nodiscard]] bool running() const noexcept;
+    [[nodiscard]] bool failed() const noexcept;
+    [[nodiscard]] bool draining() const noexcept;
+    [[nodiscard]] bool writing() const noexcept;
+    // begin_close() queued its GOAWAY and the generation has not ended yet.
+    [[nodiscard]] bool closing() const noexcept;
+    [[nodiscard]] std::uint64_t generation() const noexcept;
+    // GOAWAY, an unprocessed request or exhausted stream IDs: no new streams.
+    void mark_draining() noexcept;
+    void wake_writer() noexcept;
+    // Notified after every input batch, state transition and completed write.
+    [[nodiscard]] worker_signal& state_signal() noexcept;
+    // Notified only when the request-stream capacity grew (a stream closed or
+    // the peer raised SETTINGS_MAX_CONCURRENT_STREAMS) or the session stopped
+    // admitting streams, so a parked request submitter is not woken by
+    // unrelated input. A submitter's own cancellation notifies it explicitly.
+    [[nodiscard]] worker_signal& capacity_signal() noexcept;
+
+    // Fails the current generation once: aborts the transport, reports the
+    // failure to the handler and wakes every waiter.
+    void fail(const client_transport_result& transport, std::exception_ptr failure = {}) noexcept;
+
+    // The one client-initiated close of a running generation (RFC 9113
+    // section 6.8: GOAWAY before closing). Stops admitting streams, queues
+    // GOAWAY(NO_ERROR) and lets the writer fail the generation with `transport`
+    // once every queued frame reached the transport, or after
+    // one second. Streams still open are not cancelled
+    // here; the bound ends them with the generation. Returns true while that
+    // close is pending. Without a running generation that can send the frame
+    // (or a timer to bound it) the generation fails at once and this returns
+    // false.
+    bool begin_close(const client_transport_result& transport) noexcept;
+
+    // Requests a RST_STREAM (CANCEL unless the stream's input was malformed);
+    // allocation failure fails the connection.
+    void submit_reset(std::uint32_t stream_id, http2_error_code error = http2_error_code::cancel) noexcept;
+
+    // Submits `bytes` on `stream_id` in DATA frames of at most `chunk_bytes`,
+    // waiting for each batch to reach the transport and for send window.
+    // An empty input ending the stream is still one DATA frame, sent only
+    // while both send windows are positive (RFC 9113 section 6.9).
+    // `stop()` is checked before each submission and after each wait. Input
+    // beyond the declared Content-Length is rejected (invalid_message), as is
+    // a stream that no longer sends (std::logic_error); other exceptions
+    // propagate.
+    template <typename stop_type>
+    [[nodiscard]] task<http2_client_data_status> send_data(std::uint32_t stream_id, std::string_view bytes,
+        http2_end_stream end_stream, std::size_t chunk_bytes, stop_type stop, bool* end_submitted = nullptr) {
+        const auto generation = generation_;
+        bool end_pending = http2_ends_stream(end_stream);
+        while (!bytes.empty() || end_pending) {
+            if (ended(generation) || stop()) {
+                co_return http2_client_data_status::stopped;
+            }
+            if (connection_->stream_aborted(stream_id)) {
+                co_return http2_client_data_status::rejected;
+            }
+            http2_data_submit_result submitted{};
+            try {
+                submitted = connection_->submit_data(stream_id, bytes, end_stream, chunk_bytes);
+            } catch (const std::logic_error&) {
+                co_return http2_client_data_status::rejected;
+            }
+            bytes.remove_prefix(submitted.consumed_bytes_);
+            if (submitted.status_ == http2_data_submit_status::complete) {
+                if (end_pending && end_submitted != nullptr) {
+                    *end_submitted = true;
+                }
+                end_pending = false;
+            }
+            wake_writer();
+            if (submitted.status_ == http2_data_submit_status::closed ||
+                submitted.status_ == http2_data_submit_status::invalid_message) {
+                co_return http2_client_data_status::rejected;
+            }
+            if (submitted.status_ == http2_data_submit_status::expectation_pending) {
+                // 100 (Continue) and the continue timeout both wake state waiters.
+                co_await state_signal_.wait();
+                continue;
+            }
+            co_await wait_output_flushed(stop);
+            if (submitted.status_ == http2_data_submit_status::backpressured) {
+                co_await wait_send_window(generation, stream_id, stop);
+            }
+        }
+        co_return http2_client_data_status::submitted;
+    }
+
+    // Ends a request stream with `trailers`, or without them with an empty
+    // END_STREAM DATA frame, which waits for positive send windows like
+    // send_data(). Rejected when the stream no longer sends (std::logic_error),
+    // the content is incomplete or a trailer is invalid (invalid_message).
+    template <typename stop_type>
+    [[nodiscard]] task<http2_client_data_status> finish_request(
+        std::uint32_t stream_id, std::span<const http_header_view> trailers, stop_type stop) {
+        const auto generation = generation_;
+        for (;;) {
+            if (ended(generation) || stop()) {
+                co_return http2_client_data_status::stopped;
+            }
+            if (connection_->stream_aborted(stream_id)) {
+                co_return http2_client_data_status::rejected;
+            }
+            http2_finish_status finished{};
+            try {
+                finished = connection_->finish_request(stream_id, trailers);
+            } catch (const std::logic_error&) {
+                co_return http2_client_data_status::rejected;
+            }
+            wake_writer();
+            if (finished == http2_finish_status::accepted) {
+                co_await wait_output_flushed(stop);
+                co_return http2_client_data_status::submitted;
+            }
+            if (finished != http2_finish_status::backpressured) {
+                co_return http2_client_data_status::rejected;
+            }
+            co_await wait_send_window(generation, stream_id, stop);
+        }
+    }
+
+    [[nodiscard]] bool output_flushed() const noexcept;
+
+    // Waits until every queued frame reached the transport, the session ended
+    // or `stop()` holds.
+    template <typename stop_type>
+    [[nodiscard]] task<void> wait_output_flushed(stop_type stop) {
+        const auto generation = generation_;
+        while (!ended(generation) && (connection_->wants_write() || writing_) && !stop()) {
+            co_await state_signal_.wait();
+        }
+    }
+
+    // Waits until the stream has send window again, WINDOW_UPDATE and
+    // SETTINGS producing no stream event, or the session ended, the stream
+    // was aborted or `stop()` holds.
+    template <typename stop_type>
+    [[nodiscard]] task<void> wait_send_window(std::uint64_t generation, std::uint32_t stream_id, stop_type& stop) {
+        while (!ended(generation) && !stop()) {
+            const auto window = connection_->send_window_state(stream_id);
+            if (!window || window->available_ != 0 || connection_->stream_aborted(stream_id)) {
+                co_return;
+            }
+            co_await state_signal_.wait();
+        }
+    }
+
+    // Drops the retired connection once no generation is running. Escaped
+    // DATA credits stay valid; they only reference the memory resource.
+    void reset() noexcept;
+
+private:
+    static constexpr std::size_t read_buffer_bytes = 16384;
+    static constexpr std::size_t write_batch_bytes = 2 * http2_default_max_frame_size;
+
+    [[nodiscard]] bool ended(std::uint64_t generation) const noexcept;
+
+    void schedule_ping(std::uint64_t generation, std::chrono::steady_clock::time_point deadline);
+
+    // Any received frame, the PING ACK included, proves liveness (as Go's
+    // ReadIdleTimeout): one silent interval sends a PING, and the session
+    // fails only when no input arrived during the interval after it. Input is
+    // compared with when the PING was sent, not with the timer's firing time,
+    // which may trail its deadline.
+    void check_liveness(std::uint64_t generation) noexcept;
+
+    void take_output_batch(std::string& output);
+
+    [[nodiscard]] bool feed(std::string_view bytes_value);
+
+    void drain();
+
+    // Every input batch and completed write may close streams or apply peer
+    // SETTINGS; only a grown request capacity wakes capacity waiters.
+    void publish_state() noexcept;
+
+    void fail(std::uint64_t generation, const client_transport_result& transport, std::exception_ptr failure) noexcept;
+
+    void finish_task(std::uint64_t generation) noexcept;
+
+    struct task_guard final {
+        http2_client_session& session_;
+        std::uint64_t generation_;
+        ~task_guard();
+    };
+
+    [[nodiscard]] task<void> run_reader(std::uint64_t generation);
+
+    [[nodiscard]] task<void> run_writer(std::uint64_t generation);
+
+    http_client_connection& handler_;
+    client_tcp_transport& transport_;
+    task_scope& tasks_;
+    const worker_ref& worker_;
+    std::optional<timeout_duration> ping_interval_;
+    std::optional<::ruvia::http2_connection> connection_;
+    http_io_buffer read_buffer_;
+    std::string write_buffer_;
+    worker_signal write_signal_;
+    worker_signal state_signal_;
+    worker_signal capacity_signal_;
+    std::uint64_t generation_{0};
+    std::size_t session_tasks_{0};
+    // Request-stream capacity at the last publish_state().
+    std::size_t request_capacity_{0};
+    // When the reader last received bytes, while ping_interval_ is set.
+    std::chrono::steady_clock::time_point last_input_{};
+    // When the outstanding liveness PING was queued.
+    std::chrono::steady_clock::time_point ping_sent_at_{};
+    // The generation's end once begin_close() flushed its GOAWAY.
+    client_transport_result close_result_{};
+    bool failed_{false};
+    bool draining_{false};
+    bool writing_{false};
+    // begin_close() is pending for the current generation.
+    bool closing_{false};
+    // A liveness PING is outstanding: no input arrived since ping_sent_at_.
+    bool ping_pending_{false};
+    // Last: destroyed first, before any state their completions read.
+    worker_timer_registration close_timer_;
+    worker_timer_registration ping_timer_;
+};
+#endif
+
+// One physical connection owner of an http_client_pool for one route: its
+// transport, the HTTP/1 parse buffers and the HTTP/2 session with its stream
+// registry. Reconnects keep the route. HTTP/1 exchanges run through
+// http1_client_exchange; the pool owns admission, policy and reclamation.
+// Worker-affine and address-stable.
+class http_client_connection final {
+public:
+    enum class protocol_type : std::uint8_t { unknown,
+        http1,
+        http2 };
+
+#ifdef RUVIA_ENABLE_HTTP2
+    // One registered HTTP/2 request or push stream; a stack or driver record
+    // that unregisters before its response state can be released.
+    struct http2_stream final {
+        http2_stream(const worker_ref& worker_value, http_client_response_state& state_value)
+            : signal_(worker_value),
+              state_(&state_value) {}
+        http2_stream(worker_ref&&, http_client_response_state&) = delete;
+
+        worker_signal signal_;
+        http_client_response_state* state_;
+        http_client_websocket_handshake* websocket_{};
+        std::optional<std::error_code> error_;
+        std::exception_ptr failure_;
+        std::size_t registry_index_{0};
+        std::uint64_t request_id_{0};
+        std::uint64_t cancellation_id_{0};
+        std::uint32_t stream_id_{0};
+        // Borrowed from the request or push driver while registered.
+        const operation_deadline* timeout_{nullptr};
+        std::string_view request_target_;
+        http_client_stream_timer timer_;
+        bool complete_{false};
+        // Caller-owned buffered suffix or its socket output is still pending.
+        bool request_body_pending_{false};
+        // The tunnel's final DATA frame entered session output. Its transport
+        // completion can precede the upload coroutine's scheduled resumption.
+        bool tunnel_end_submitted_{false};
+        bool retryable_{false};
+        // The peer refused the request with RST_STREAM(HTTP_1_1_REQUIRED)
+        // before any response head (RFC 9113 section 7).
+        bool http11_required_{false};
+        // The request addresses the fixed origin, whose jar retains the
+        // response's Set-Cookie fields.
+        bool addresses_origin_{true};
+
+        [[nodiscard]] bool failed() const noexcept {
+            return error_.has_value() || failure_ != nullptr;
+        }
+    };
+#endif
+
+    // `server_name` is the TLS SNI and verified name (empty for http); `alpn`
+    // is the TLS ALPN offer, and over plaintext http2 selects prior-knowledge
+    // h2c, anything else HTTP/1.1.
+    http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
+        std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
+        client_alpn alpn);
+    void capture_connection_info(http_client_response_state& response, bool reused) const;
+    void retire_addresses() noexcept;
+    [[nodiscard]] std::uint64_t connection_id() const noexcept {
+        return connection_id_;
+    }
+    ~http_client_connection();
+    http_client_connection(const http_client_connection&) = delete;
+    http_client_connection& operator=(const http_client_connection&) = delete;
+
+    [[nodiscard]] std::size_t index() const noexcept {
+        return index_;
+    }
+    [[nodiscard]] std::uint64_t serial() const noexcept {
+        return serial_;
+    }
+    // The route is the alias default, authenticated for the alias origin.
+    [[nodiscard]] bool alias_route() const noexcept {
+        return alias_route_;
+    }
+    [[nodiscard]] bool serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
+        client_alpn alpn) const noexcept;
+    // Kept between uses: an HTTP/1 connection between exchanges, or an HTTP/2
+    // session admitting streams without any.
+    [[nodiscard]] bool idle() const noexcept;
+    // Nothing runs on or borrows this owner any longer; the pool may destroy it.
+    [[nodiscard]] bool reclaimable() const noexcept;
+#ifdef RUVIA_ENABLE_HTTP2
+    // Advisory only; the worker-affine request driver consumes the selected
+    // capacity synchronously before another request can select it.
+    [[nodiscard]] std::size_t available_http2_request_streams() const noexcept;
+#endif
+    // No transport, operation, session or stream uses this slot: a request
+    // routed here connects at once.
+    [[nodiscard]] bool idle_unconnected() const noexcept {
+#ifdef RUVIA_ENABLE_HTTP2
+        if (http2_.running() || !http2_streams_.empty()) {
+            return false;
+        }
+#endif
+        return !connected_ && http1_operations_ == 0;
+    }
+
+    // Serialized by connect_scheduler_. Returns true only when the existing
+    // transport remains connected and is reused; a replacement returns false.
+    // A previous HTTP/2 generation that is draining or still unwinding is
+    // waited for first, within `acquire_timeout`.
+    [[nodiscard]] task<bool> ensure_connected(
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
+        stop_token stop_token_value, http_client_response_state& response);
+    // Terminal close of the current connection; a running HTTP/2 session
+    // fails through its single transition so every stream is woken.
+    void close() noexcept;
+    // Starts the idle bound of a connected HTTP/1 connection between exchanges
+    // or an HTTP/2 connection without streams; its expiry closes the
+    // connection unless it is in use again. A bound that cannot be armed
+    // closes the connection at once. An idle HTTP/1 connection is also
+    // watched: peer EOF, reset or unsolicited bytes close it at once.
+    void begin_idle() noexcept;
+    void end_idle() noexcept;
+    // Closes a connection nothing uses; an HTTP/2 session sends GOAWAY first.
+    void close_idle() noexcept;
+    // Applies the retention policy to both buffers. Only between exchanges,
+    // when no transport operation borrows their storage.
+    void retain_idle_buffers() noexcept;
+    // Pool shutdown: permanently refuses new leases, aborts the connect or
+    // HTTP/1 exchange in progress with closing, then closes. An HTTP/2
+    // session without streams closes with GOAWAY first.
+    void shutdown() noexcept;
+    // Lease cancellation: aborts the connect or HTTP/1 exchange in progress
+    // with `reason` and closes the transport.
+    void cancel(std::uint64_t generation, client_abort_reason reason) noexcept;
+    // Stops the bound HTTP/1 response's output and wakes its producer waits.
+    [[nodiscard]] bool cancel_by_id(std::uint64_t cancellation_id) noexcept;
+    void abort_http1_response() noexcept;
+    // Throws the HTTP client error of the transport's abort reason, if any.
+    void throw_if_aborted() const;
+
+#ifdef RUVIA_ENABLE_HTTP2
+    // HTTP/2 (http2/http_client_http2.cpp). False when the multiplexed session
+    // had ended (or the peer required HTTP/1.1, RFC 9113 section 7) and its
+    // replacement connection speaks HTTP/1.1 instead: nothing was sent, and
+    // the caller runs the request as an HTTP/1 exchange on that connection.
+    // (ensure_connected() already rejects that outcome for an http2_only
+    // client.) `acquire_timeout` bounds the first attempt's reconnect and
+    // stream-capacity waits; a retry attempt gets its own acquisition bound.
+    [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
+        http_client_response_state& state_value);
+    // Registers a stream whose timeout_ is set and arms its deadline timer.
+    void register_http2_stream(http2_stream& stream);
+    void remove_http2_stream(http2_stream& stream) noexcept;
+    void cancel_http2_stream(std::uint64_t request_id, client_abort_reason reason,
+        http2_error_code error = http2_error_code::cancel) noexcept;
+    [[nodiscard]] std::uint64_t next_http2_request_id() noexcept;
+    void reprioritize(http_client_response_state& state_value, http_priority priority);
+    // Wakes the writer to flush WINDOW_UPDATE for released DATA credit; the
+    // stream's read inactivity bound restarts as the peer may send again.
+    void release_response_data(http_client_response_state& state_value) noexcept;
+
+    // http2_client_session handler.
+    void on_http2_event(http2_event& event);
+    [[nodiscard]] task<void> deliver_http2_informational(std::uint32_t stream_id);
+    [[nodiscard]] std::optional<timeout_duration> http2_write_timeout() const noexcept;
+    void on_http2_failure(const client_transport_result& transport, std::exception_ptr failure) noexcept;
+    // http2_client_session handler: request-stream capacity grew, or the last
+    // session task ended.
+    void on_http2_capacity() noexcept;
+    void on_http2_stopped() noexcept;
+#endif
+
+private:
+    // The route's transport names; transport_ borrows them, so they precede it.
+    std::string dial_host_;
+    std::string server_name_;
+
+public:
+    client_tcp_transport transport_;
+    http_io_buffer read_buffer_;
+    http_io_buffer write_buffer_;
+#ifdef RUVIA_ENABLE_HTTP2
+    http2_client_session http2_;
+#endif
+    pool_lease_scheduler connect_scheduler_;
+    pool_lease_scheduler http1_scheduler_;
+    // HTTP/1 exchanges holding or waiting for http1_scheduler_.
+    std::size_t http1_operations_{0};
+    // Borrowed only while one serialized HTTP/1 exchange is active.
+    http_client_response_state* http1_response_{nullptr};
+    // Bumped around every connect and HTTP/1 exchange so stale cancellations
+    // cannot reach a later operation.
+    std::uint64_t generation_{0};
+    std::uint64_t cancellation_id_{0};
+    protocol_type protocol_{protocol_type::unknown};
+    bool connected_{false};
+    bool retired_{false};
+    bool address_retired_{false};
+    bool fresh_{false};
+    // The connection key's offer; reconnects keep it.
+    const client_alpn alpn_;
+    // Requests the pool routed here that have not released it yet.
+    std::size_t users_{0};
+    // Order in which the connection last turned idle (larger is newer); 0
+    // while it is in use or after it closed.
+    std::uint64_t idle_order_{0};
+
+private:
+#ifdef RUVIA_ENABLE_HTTP2
+    struct http2_state_waiter final {
+        std::uint64_t cancellation_id_{};
+        http2_state_waiter* next_{};
+    };
+    [[nodiscard]] http2_stream* find_http2_stream(std::uint32_t stream_id) noexcept;
+    [[nodiscard]] http2_stream* find_http2_request(std::uint64_t request_id) noexcept;
+    [[nodiscard]] bool http2_exchange_complete(const http2_stream& stream) noexcept;
+    void fail_http2_stream(http2_stream& stream, std::exception_ptr failure, bool reset_stream) noexcept;
+    // Wakes a stream's driver, and capacity waiters while it has no stream ID.
+    void wake_http2_stream(http2_stream& stream) noexcept;
+    // Peer input for the stream restarts its read inactivity bound.
+    void restart_http2_stream_read(http2_stream& stream);
+    // Arms timer_ for the earlier of the total and read deadlines.
+    void schedule_http2_stream_timer(http2_stream& stream);
+    void arm_http2_write_timer(worker_timer_registration& write_timer, const http2_stream& stream);
+#endif
+#ifdef RUVIA_ENABLE_HTTP2
+    // Client close of a session that admits no further request: GOAWAY first
+    // (RFC 9113 section 6.8), bounded by the session.
+    void close_http2_session() noexcept;
+#endif
+    // Pingora's idle_poll: one watcher per connection, parked while the
+    // connection is in use and retired with the pool.
+    [[nodiscard]] task<void> watch_idle_http1();
+#ifdef RUVIA_ENABLE_HTTP2
+    void publish_http2_head(http2_stream& stream, http2_response_head_event& event);
+    void consume_http2_data(std::uint32_t stream_id, std::string_view bytes, http2_received_data_credit credit);
+    void finish_http2_message(std::uint32_t stream_id, http2_message_end_event& end);
+    [[nodiscard]] task<bool> send_http2_request_data(http2_stream& stream, std::string_view bytes,
+        http2_end_stream end_stream, const http_client_output_queue* upload = nullptr);
+    [[nodiscard]] task<void> stream_http2_upload(const http_client_request_storage& request, http2_stream& stream,
+        http_client_output_queue& upload);
+    // The one wait for a previous HTTP/2 generation to retire: its session and
+    // every stream that borrows its transport.
+    [[nodiscard]] task<void> wait_for_http2_session_stop(
+        const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response);
+#endif
+
+    http_client_pool& pool_;
+    std::size_t index_;
+    std::uint64_t serial_;
+    bool alias_route_;
+    std::uint64_t connection_id_{};
+    ip_address peer_ip_{};
+#ifdef RUVIA_ENABLE_HTTP2
+    std::vector<http2_stream*> http2_streams_;
+    http2_stream* last_http2_stream_{nullptr};
+    std::uint64_t next_http2_request_id_{0};
+    // Request heads accepted by the current HTTP/2 generation: a later
+    // request's stream runs on a reused connection.
+    std::size_t http2_session_requests_{0};
+    http2_state_waiter* state_waiters_{};
+#endif
+    // Idle watch of an HTTP/1 connection: wanted between begin_idle() and
+    // end_idle(); each end bumps idle_period_ so a late readiness of an
+    // earlier period is ignored.
+    worker_signal idle_watch_signal_;
+    std::uint64_t idle_period_{0};
+    bool idle_watch_wanted_{false};
+    // The watcher's readiness wait is pending and not yet cancelled.
+    bool idle_wait_pending_{false};
+    bool idle_watcher_started_{false};
+    // Last: destroyed first, so its completion never sees a retiring connection.
+    worker_timer_registration idle_timer_;
+};
+
+}  // namespace ruvia::detail
+
+#ifdef RUVIA_ENABLE_HTTP3
+namespace ruvia::detail {
+class http_client_pool;
+class http_client_request_storage;
+class http_client_response_state;
+
+// The QUIC endpoint and TLS identity of one HTTP/3 connection owner.
+struct http3_client_route final {
+    std::string host_;
+    std::uint16_t port_;
+    std::string server_name_;
+};
+
+// QUIC TLS shared by one pool's HTTP/3 connections: one SSL_CTX and resumption
+// tickets isolated per route, so a ticket never resumes another server name or
+// dial target. Least recently used routes give way beyond the idle bound.
+class http3_client_tls final {
+public:
+    struct ticket;
+    explicit http3_client_tls(http_client_pool& pool);
+    ~http3_client_tls();
+    http3_client_tls(const http3_client_tls&) = delete;
+    http3_client_tls& operator=(const http3_client_tls&) = delete;
+    [[nodiscard]] ticket* find(const http3_client_route& route) noexcept;
+    [[nodiscard]] ticket& store(const http3_client_route& route);
+    // A DNS change retires the endpoints remembered for 0-RTT.
+    void forget_endpoints() noexcept;
+
+    asio::ssl::context context_;
+
+private:
+    std::vector<ticket> tickets_;
+    std::size_t capacity_;
+    std::uint64_t clock_{};
+};
+
+// Worker-affine UDP/TLS/QUIC session owner of one route. The pool keeps this
+// owner alive until it is reclaimable, and through join() on shutdown,
+// including cancellation completions of both UDP directions.
+class http3_client_connection final {
+public:
+    http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index, std::uint64_t serial,
+        std::string_view host, std::uint16_t port, std::string_view server_name);
+    ~http3_client_connection();
+    http3_client_connection(const http3_client_connection&) = delete;
+    http3_client_connection& operator=(const http3_client_connection&) = delete;
+    [[nodiscard]] task<bool> execute(const http_client_request_storage& request, bool fallback,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
+        stop_token stop, http_client_response_state& response);
+    void close() noexcept;
+    void retire_addresses() noexcept;
+    [[nodiscard]] std::uint64_t connection_id() const noexcept;
+    void shutdown() noexcept;
+    [[nodiscard]] task<void> join();
+    [[nodiscard]] bool cancel_by_id(std::uint64_t id) noexcept;
+    void abandon(http_client_response_state& response, bool malformed) noexcept;
+    void release_data(http_client_response_state& response) noexcept;
+    void reprioritize(http_client_response_state& response, http_priority priority);
+    [[nodiscard]] std::size_t available() const noexcept;
+    [[nodiscard]] bool active() const noexcept;
+    [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port,
+        const operation_deadline& timeout, stop_token stop);
+    [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
+    [[nodiscard]] std::uint64_t serial() const noexcept {
+        return serial_;
+    }
+    [[nodiscard]] const http3_client_route& route() const noexcept {
+        return route_;
+    }
+    // The current QUIC peer while a session is open.
+    [[nodiscard]] std::optional<asio::ip::address> peer_address() const noexcept;
+    [[nodiscard]] bool serves(std::string_view host, std::uint16_t port, std::string_view server_name) const noexcept;
+    // An endpoint selection (resolve and handshake race) is in progress;
+    // further requests of the route queue behind it.
+    [[nodiscard]] bool connecting() const noexcept;
+    // An open session without streams.
+    [[nodiscard]] bool idle() const noexcept;
+    // Nothing runs on or borrows this owner any longer; the pool may destroy it.
+    [[nodiscard]] bool reclaimable() const noexcept;
+
+    bool fresh_{false};
+    // Requests the pool routed here that have not released it yet.
+    std::size_t users_{0};
+    // Order in which the owner last turned idle (larger is newer); 0 in use.
+    std::uint64_t idle_order_{0};
+
+private:
+    class session;
+    class address_race;
+    [[nodiscard]] task<void> select_endpoint(bool allow_early,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
+        stop_token stop, http_client_response_state& response);
+    http3_client_tls& tls_;
+    http3_client_route route_;
+    std::uint64_t serial_;
+    std::unique_ptr<session> session_;
+    std::unique_ptr<address_race> race_;
+};
+}  // namespace ruvia::detail
+#endif
+
+namespace ruvia::detail {
+class http_client_advertisement_memory;
+
+// The pool owns this bounded queue. Returned owners retain their separate
+// retained-bytes accounting, not the client pool or its transport lifecycle.
+class http_client_advertisement_queue final {
+public:
+    http_client_advertisement_queue(const worker_ref& worker_value, http_client_advertisement_config config);
+    http_client_advertisement_queue(worker_ref&&, http_client_advertisement_config) = delete;
+    ~http_client_advertisement_queue();
+    http_client_advertisement_queue(const http_client_advertisement_queue&) = delete;
+    http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;
+
+    // Drops (counted by dropped()) an observation beyond the configured bounds.
+    void retain(std::size_t slot, http_protocol_version protocol, const http_origin_advertisement& origins);
+    void retain(std::size_t slot, const http_alternative_service_advertisement& service);
+    [[nodiscard]] std::optional<http_client_advertisement> next();
+    void retire() noexcept;
+    [[nodiscard]] std::size_t dropped() const noexcept {
+        return dropped_;
+    }
+
+private:
+    void require_current() const noexcept;
+    [[nodiscard]] bool admit(std::size_t bytes) noexcept;
+    const worker_ref& worker_;
+    http_client_advertisement_config config_;
+    http_client_advertisement_memory* memory_{};
+    std::deque<http_client_advertisement> pending_;
+    std::size_t dropped_{};
+};
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_connection;
+struct http_tunnel_input;
+class http_client_response_state;
+
+class http_client_pool;
+using http_client_cancellation_target = worker_cancellation_target<http_client_pool>;
+
+// The one retry rule of both wire protocols for a request that failed on a
+// reused connection (Pingora RetryType::ReusedOnly): replayed once on a new
+// connection only after a plain I/O failure (TLS failures, timeouts and
+// cancellation excluded), for an idempotent request (RFC 9110 section 9.2.2)
+// whose content is buffered, before any response head was published.
+[[nodiscard]] bool can_retry_reused_connection_request(std::optional<std::error_code> failure,
+    const http_client_request_storage& request, const http_client_response_state& response) noexcept;
+
+// One origin client on one worker: request admission and buffering limits,
+// on-demand connections keyed by route (dial host, dial port, TLS server name,
+// ALPN offer) with open and idle bounds, origin policy (cookies, automatic
+// headers, push acceptance) and statistics. Wire protocols run in
+// http_client_connection (HTTP/2 session), http1_client_exchange and
+// http3_client_connection.
+class http_client_pool final {
+public:
+    // Process-lifetime storage backs the pool and its retained responses.
+    http_client_pool(asio::io_context& io_context, const worker_ref& worker_value,
+        http_client_config_storage config, const http_client_worker_services& services);
+    http_client_pool(asio::io_context&, worker_ref&&, http_client_config_storage,
+        const http_client_worker_services&) = delete;
+    ~http_client_pool();
+    http_client_pool(const http_client_pool&) = delete;
+    http_client_pool& operator=(const http_client_pool&) = delete;
+
+    [[nodiscard]] task<http_client_response> execute(http_client_request_storage request, operation_options options);
+    [[nodiscard]] task<http_client_exchange> open_request(
+        http_client_request_storage request, http_client_upload_config upload, operation_options options);
+    [[nodiscard]] task<http_client_tunnel_result> open_tunnel(
+        http_client_request_storage request, http_client_tunnel_config config, operation_options options);
+    void close_now() noexcept;
+    [[nodiscard]] task<void> join();
+    [[nodiscard]] http_client_stats stats() const noexcept;
+    [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
+    void update_dns(std::span<const http_client_endpoint_address> addresses);
+    [[nodiscard]] task<void> refresh_dns(operation_options options);
+    [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
+    [[nodiscard]] std::uint64_t next_connection_id() noexcept;
+    [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port,
+        client_host_resolver& resolver, const operation_deadline& timeout);
+    [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() {
+        return advertisements_.next();
+    }
+    [[nodiscard]] std::optional<http_client_push> next_push();
+    [[nodiscard]] std::string_view host() const noexcept {
+        return config_.host_;
+    }
+    [[nodiscard]] std::uint16_t port() const noexcept {
+        return config_.port_;
+    }
+    [[nodiscard]] http_scheme scheme() const noexcept {
+        return config_.scheme_;
+    }
+
+    // Response-state operations of the public response, tunnel and push owners.
+    // Malformed input resets the owning protocol stream with its protocol
+    // error; abandonment otherwise cancels it.
+    void abandon_response(http_client_response_state& state_value, bool malformed = false) noexcept;
+    void reprioritize(http_client_response_state& state_value, http_priority priority);
+    void release_response_data(http_client_response_state& state_value) noexcept;
+    // TLS-authenticated responses of `route` update its entries in this pool's
+    // bounded Alt-Svc cache.
+    void observe_alt_svc(const http_client_route& route, std::span<const http_header> fields);
+    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port,
+        operation_options options, stop_token host_stop);
+#ifdef RUVIA_ENABLE_HTTP3
+    // `operation` follows the client's per-operation contract: an interrupted
+    // read keeps queued input, an interrupted send abandons the tunnel.
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_http3_tunnel_input(
+        http_client_response_state& state, operation_options operation);
+    [[nodiscard]] task<bool> send_http3_datagram(
+        http_client_response_state& state, std::string_view payload, operation_options operation);
+#endif
+    [[nodiscard]] http_client_response_memory_domain& response_memory() noexcept {
+        return *response_memory_;
+    }
+    // worker_cancellation_target hook; routes to TCP and HTTP/2 owners.
+    void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept;
+
+    // Origin services shared by the pool's connections and exchange drivers.
+    [[nodiscard]] asio::io_context& io_context() noexcept {
+        return io_context_;
+    }
+    [[nodiscard]] const worker_ref& worker() const noexcept {
+        return worker_;
+    }
+    [[nodiscard]] const http_client_config_storage& config() const noexcept {
+        return config_;
+    }
+    // The fixed origin; std::logic_error for an alias without one.
+    [[nodiscard]] const http_origin_view& origin() const {
+        if (!origin_) {
+            throw std::logic_error("HTTP client alias has no fixed origin");
+        }
+        return *origin_;
+    }
+    [[nodiscard]] client_request_policy& policy() noexcept {
+        return policy_;
+    }
+    [[nodiscard]] http_client_advertisement_queue& advertisements() noexcept {
+        return advertisements_;
+    }
+    [[nodiscard]] task_scope& tasks() noexcept {
+        return background_tasks_;
+    }
+    [[nodiscard]] stop_token pool_stop_token() const noexcept {
+        return dns_stop_.token();
+    }
+    [[nodiscard]] const std::shared_ptr<http_client_cancellation_target>& cancellation_target() const noexcept {
+        return cancellation_target_;
+    }
+    [[nodiscard]] asio::ssl::context& tls_context() noexcept {
+        return tls_context_;
+    }
+    [[nodiscard]] client_wire_counters& wire_counters() noexcept {
+        return wire_counters_;
+    }
+    void record_idle_connection_with_pending_data() noexcept {
+        ++idle_connections_with_pending_data_;
+    }
+    // Worker idle bound (http_client_worker_limits): this pool's idle count of
+    // one kind (an upper bound until recount_idle()), its least recently used
+    // idle connection's order, and closing that connection.
+    [[nodiscard]] std::size_t idle_count(bool multiplexed) const noexcept;
+    void recount_idle() noexcept;
+    [[nodiscard]] std::optional<std::uint64_t> least_recent_idle(bool multiplexed) const noexcept;
+    [[nodiscard]] bool close_least_recent_idle(std::optional<bool> multiplexed) noexcept;
+    // A connection gained capacity or settled its protocol: admission waiters
+    // re-check.
+    void admission_changed() noexcept;
+    // A connection closed or one of its tasks ended: it may be reclaimable.
+    void connection_retired() noexcept;
+    // The origin answered HTTP_1_1_REQUIRED (RFC 9113 section 7) on a
+    // connection offering h2 and http/1.1: every later connect of such an
+    // offer in this pool offers only http/1.1, like Pingora's prefer_h1.
+    [[nodiscard]] bool prefers_http11() const noexcept {
+        return prefers_http11_;
+    }
+    void require_http11() noexcept {
+        prefers_http11_ = true;
+    }
+#ifdef RUVIA_ENABLE_HTTP2
+    // Admits or rejects one HTTP/2 PUSH_PROMISE of `connection`.
+    void accept_http2_push(http_client_connection& connection, const http2_push_promise_event& promise);
+#endif
+
+private:
+    struct request_admission;
+    struct admission_waiter;
+    void require_accepting() const;
+    void require_open() const;
+    void require_fixed_dial() const;
+    void validate_addresses(const client_resolve_result& result) const;
+    void install_addresses(client_resolve_result result);
+    void schedule_dns_refresh();
+    // One refresh period: looks up each DNS dial target with a live connection
+    // within the worker's concurrency bound, and retires connections to
+    // addresses the answer no longer contains.
+    [[nodiscard]] task<void> refresh_live_routes();
+    void retire_unresolved(std::string_view host, std::uint16_t port, const client_resolve_result& result) noexcept;
+    [[nodiscard]] task<void> background_refresh_dns();
+#ifdef RUVIA_ENABLE_HTTP2
+    struct http2_push_driver;
+#endif
+    using connection_owner_type = std::unique_ptr<http_client_connection>;
+
+#ifdef RUVIA_ENABLE_HTTP2
+    [[nodiscard]] task<void> run_http2_push(std::unique_ptr<http2_push_driver> driver);
+#endif
+    [[nodiscard]] task<void> execute_into(
+        http_client_request_storage request, operation_options options, http_client_response_state* state);
+    [[nodiscard]] task<void> execute_request_into(
+        http_client_request_storage request, operation_options options, http_client_response_state* state);
+    // Routes the request to a reusable connection of its route, a new one
+    // within max_open_, or waits within the acquisition bound. The returned
+    // connection counts this request among its users_.
+    [[nodiscard]] task<http_client_connection*> acquire_tcp_connection(const http_client_request_storage& request,
+        const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state,
+        request_admission& admission);
+    void release_tcp_connection(http_client_connection& connection) noexcept;
+    [[nodiscard]] task<void> execute_tcp_request(const http_client_request_storage& request,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
+        http_client_response_state& state, request_admission& admission);
+    // One wait for admission_changed(), the acquisition deadline or a stop;
+    // the caller re-checks every condition. Throws timeout once the bound expired.
+    [[nodiscard]] task<void> wait_for_admission(const operation_deadline& acquire_timeout);
+    // The TCP connection key's offer for the request's versions: TLS ALPN, or
+    // over plaintext http2 for prior-knowledge h2c and http11 otherwise.
+    [[nodiscard]] client_alpn tcp_offer(const http_client_request_storage& request) const noexcept;
+    void throw_if_admission_ended(const stop_token& stop, const http_client_response_state& state) const;
+    // A new connection fits within max_open_, possibly after closing the least
+    // recently used idle connection (reclaimed later).
+    [[nodiscard]] bool admits_new_connection() noexcept;
+    void mark_idle(std::uint64_t& idle_order, bool multiplexed) noexcept;
+    void enforce_idle_limits() noexcept;
+    void start_reclaimer();
+    [[nodiscard]] task<void> run_reclaimer();
+    void reclaim_connections() noexcept;
+    [[nodiscard]] http_client_connection* find_connection(const http_client_response_state& state) noexcept;
+    [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
+        http_client_response_state& state_value);
+    // Runs the request as an HTTP/1 exchange on `connection`, reconnecting it
+    // when needed. False, with nothing sent, when the connection speaks HTTP/2.
+    // `connected_http1_generation` names a connection this request has just
+    // negotiated, which is not idle-probed.
+    [[nodiscard]] task<bool> execute_http1(http_client_connection& connection,
+        const http_client_request_storage& request, const operation_deadline& timeout,
+        const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
+        std::optional<std::uint64_t> connected_http1_generation);
+    // Spawns the request driver for `state_value`, which the caller's response owns.
+    void spawn_request(http_client_request_storage request, operation_options options,
+        http_client_response_state& state_value);
+
+#ifdef RUVIA_ENABLE_HTTP3
+    // An h3 alternative (RFC 7838) advertised by the responses of one route:
+    // its dial host, dial port and TLS server name.
+    struct alternative_service final {
+        std::string route_host_;
+        std::uint16_t route_port_;
+        std::string server_name_;
+        std::string host_;
+        std::uint16_t port_;
+        std::chrono::steady_clock::time_point expires_;
+        // A failed alternative is not tried again before then.
+        std::chrono::steady_clock::time_point broken_until_;
+        std::uint64_t used_;
+    };
+    [[nodiscard]] alternative_service* find_alternative_service(
+        const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
+        stop_token stop, http_client_response_state& state, request_admission& admission);
+    [[nodiscard]] http3_client_connection* find_http3_connection(const http_client_response_state& state) noexcept;
+    void release_http3_connection(http3_client_connection& connection) noexcept;
+#endif
+    asio::io_context& io_context_;
+    worker_ref worker_;
+    http_client_config_storage config_;
+    // Borrows config_.uri_host_; the pool is address-stable and never moved.
+    std::optional<http_origin_view> origin_;
+    client_request_policy policy_;
+    http_client_advertisement_queue advertisements_;
+    std::deque<http_client_push> pushes_;
+#ifdef RUVIA_ENABLE_HTTP2
+    std::size_t active_pushes_{};
+#endif
+    std::size_t received_pushes_{};
+    std::size_t rejected_pushes_{};
+    std::shared_ptr<http_client_result_budget_domain> result_budget_domain_;
+    std::shared_ptr<http_client_worker_limits> worker_limits_;
+    http_client_response_memory_domain::owner response_memory_{};
+    client_wire_counters wire_counters_;
+    asio::ssl::context tls_context_;
+    std::shared_ptr<http_client_cancellation_target> cancellation_target_;
+    task_scope background_tasks_;
+    // Owners stay at one address; a null entry is a free position.
+    std::vector<connection_owner_type> connections_;
+#ifdef RUVIA_ENABLE_HTTP3
+    // Bounded by http3_.max_alt_svc_entries_ across routes, least recently
+    // used first out.
+    std::vector<alternative_service> alternative_services_{};
+    std::uint64_t alternative_clock_{};
+    // Created with the first HTTP/3 connection.
+    std::unique_ptr<http3_client_tls> http3_tls_{};
+    std::vector<std::unique_ptr<http3_client_connection>> http3_connections_{};
+#endif
+    worker_signal admission_signal_;
+    worker_signal reclaim_signal_;
+    admission_waiter* admission_waiters_{};
+    std::size_t open_connections_{0};
+    std::size_t dns_refreshes_{0};
+    // Upper bounds of the idle connections, recounted when exceeded.
+    std::size_t idle_http1_{0};
+    std::size_t idle_multiplexed_{0};
+    std::uint64_t next_connection_serial_{0};
+    bool closing_{false};
+    bool reclaimer_started_{false};
+    std::size_t requests_buffered_{0};
+    std::size_t requests_in_flight_{0};
+    std::size_t completed_requests_{0};
+    std::size_t failed_requests_{0};
+    std::size_t idle_connections_with_pending_data_{0};
+    bool prefers_http11_{false};
+    bool background_joined_{false};
+    client_resolve_result dns_addresses_;
+    std::uint64_t dns_revision_{};
+    std::size_t dns_active_{};
+    worker_signal dns_changed_;
+    worker_timer_registration dns_refresh_timer_;
+    stop_source dns_stop_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+class http1_request_content_writer;
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+class http_client_connection;
+class http_client_output_queue;
+class http_client_pool;
+class http_client_request_storage;
+class http_client_response_state;
+class tls_tunnel_output;
+
+// One serialized HTTP/1 exchange on a connected http_client_connection: the
+// request head and content, a full-duplex streaming upload, the response head,
+// body and Content-Encoding, or an accepted CONNECT/Upgrade byte tunnel. The caller holds
+// the connection's pool lease, and its cancellation, for the whole run.
+class http1_client_exchange final {
+public:
+    http1_client_exchange(http_client_pool& pool, http_client_connection& connection) noexcept
+        : pool_(pool),
+          connection_(connection) {}
+
+    http1_client_exchange(const http1_client_exchange&) = delete;
+    http1_client_exchange& operator=(const http1_client_exchange&) = delete;
+
+    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_deadline& timeout,
+        stop_token stop_token_value, http_client_response_state& state_value);
+
+private:
+    // Receives the final response head, then the body or an accepted tunnel.
+    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_deadline& timeout,
+        http_client_response_state& state_value, http1_client_response_parser& parser);
+    // Waits until the consumer releases pending and borrowed response bytes.
+    [[nodiscard]] task<void> wait_for_body_space(
+        http_client_response_state& state_value, const operation_deadline& timeout);
+    void expire_tunnel() noexcept;
+    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_deadline& timeout,
+        tls_tunnel_output* tls, std::exception_ptr& failure);
+    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout,
+        bool websocket);
+    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_deadline& timeout,
+        http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
+    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_deadline& timeout,
+        http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
+    // One transport write of all `parts` (a head, or a framed upload chunk:
+    // prefix, payload, suffix) under the write timeout.
+    [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout);
+    // Restarts the exchange-level inactivity bound, when armed: read
+    // inactivity counted from the last progress in either direction.
+    void restart_inactivity() noexcept;
+    void stop_inactivity() noexcept;
+    // Appends at most `max_bytes` read from the transport to `target` under the
+    // read inactivity bound; returns the read, which is not ok() at the peer's
+    // end of stream, and throws any other transport failure.
+    [[nodiscard]] task<client_transport_result> read_append(
+        http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout,
+        bool read_inactivity_bound = true);
+
+    http_client_pool& pool_;
+    http_client_connection& connection_;
+    http_client_response_state* response_{};
+    // Armed while request content may still be sent before the final response
+    // head (read_timeout_), and through an accepted tunnel (its idle_timeout_).
+    std::optional<timeout_duration> inactivity_bound_;
+    // Last: destroyed first, so its expiry never sees a retiring exchange.
+    worker_timer_registration inactivity_timer_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class http_client_pool;
+
+// Every pool of one owner shares the owner's worker services (result budget
+// and worker limits): one per standalone client, one per application worker. Process-lifetime storage
+// backs the pools and their retained responses.
+class http_client_registry final {
+public:
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        std::span<const http_client_definition_type> definitions,
+        const http_client_worker_services& services);
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        std::span<const http_client_config> configs,
+        const http_client_worker_services& services);
+    http_client_registry(asio::io_context&, worker_ref&&,
+        std::span<const http_client_definition_type>,
+        const http_client_worker_services&) = delete;
+    http_client_registry(asio::io_context&, worker_ref&&,
+        std::span<const http_client_config>,
+        const http_client_worker_services&) = delete;
+    ~http_client_registry();
+    http_client_registry(const http_client_registry&) = delete;
+    http_client_registry& operator=(const http_client_registry&) = delete;
+
+    // Owns inputs immediately; TLS files are prepared off-worker before the
+    // atomic publication. Shutdown joins started preparation, and discarded
+    // cold operations cannot publish. Removed pools retain only live borrows.
+    [[nodiscard]] task<void> upsert(const http_client_config& config, operation_options options = {});
+    [[nodiscard]] bool remove(std::string_view alias);
+
+    void close_now() noexcept;
+    [[nodiscard]] task<void> join();
+    [[nodiscard]] http_client_ref get(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] std::shared_ptr<http_client_pool> find_origin(http_scheme scheme, std::string_view authority) const;
+
+private:
+    using pool_owner_type = std::shared_ptr<http_client_pool>;
+    struct alias_binding final {
+        std::string alias_;
+        pool_owner_type pool_;
+        std::size_t order_;
+    };
+    using alias_map_type = std::vector<alias_binding>;
+    struct origin_preparation;
+    // Startup aliases without a ca_file_ share system_trust_.
+    [[nodiscard]] http_client_config_storage startup_config(const http_client_definition_type& definition);
+    [[nodiscard]] http_client_config_storage startup_config(const http_client_config& config);
+    using preparation_owner_type = std::unique_ptr<origin_preparation>;
+
+    [[nodiscard]] task<void> prepare_origin(preparation_owner_type input, operation_options options);
+    void require_prepared(stop_token stop, const operation_deadline& timeout) const;
+    void publish(std::string alias, pool_owner_type replacement);
+
+    void require_mutable() const;
+    [[nodiscard]] task<void> retire_origin(alias_map_type::iterator position,
+        pool_owner_type replacement, task<void> joining);
+
+    template <typename config_type>
+    void initialize(std::span<const config_type> configs);
+    asio::io_context& io_context_;
+    const worker_ref& worker_;
+    http_client_worker_services services_;
+    alias_map_type aliases_;
+    task_scope retirements_;
+    stop_source preparation_stop_;
+    // The system trust store, read once for every alias without a ca_file_:
+    // OpenSSL shares one X509_STORE across their contexts.
+    std::optional<tls_trust_store> system_trust_;
+    std::size_t next_origin_order_{};
+    bool closing_{false};
+    operation_scope preparations_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// SHA-256 over input fed in pieces, the one digest the database layer keys
+// statements, cache entries and migration history by. Input that fits the
+// inline buffer is digested in one call; longer input streams through an
+// OpenSSL context created once it overflows.
+class db_sha256 final {
+public:
+    static constexpr std::size_t digest_size = 32;
+    using digest_type = std::array<unsigned char, digest_size>;
+
+    db_sha256() noexcept = default;
+    static_assert(digest_size == SHA256_DIGEST_LENGTH);
+
+    ~db_sha256() {
+        if (context_ != nullptr) {
+            EVP_MD_CTX_free(context_);
+        }
+    }
+
+    db_sha256(const db_sha256&) = delete;
+    db_sha256& operator=(const db_sha256&) = delete;
+
+    void update(std::string_view bytes) {
+        if (bytes.empty()) {
+            return;
+        }
+        if (context_ == nullptr) {
+            if (bytes.size() <= buffer_.size() - buffered_) {
+                std::memcpy(buffer_.data() + buffered_, bytes.data(), bytes.size());
+                buffered_ += bytes.size();
+                return;
+            }
+            context_ = EVP_MD_CTX_new();
+            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 ||
+                (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
+                throw_digest_failure();
+            }
+        }
+        if (EVP_DigestUpdate(context_, bytes.data(), bytes.size()) != 1) {
+            throw_digest_failure();
+        }
+    }
+
+    // Eight little-endian bytes.
+    void update_u64_le(std::uint64_t value) {
+        std::array<char, 8> encoded;
+        for (unsigned index = 0; index < encoded.size(); ++index) {
+            encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
+        }
+        update({encoded.data(), encoded.size()});
+    }
+
+    // Ends the digest; nothing may be fed afterwards.
+    [[nodiscard]] digest_type finish() {
+        digest_type digest;
+        if (context_ == nullptr) {
+            if (SHA256(buffer_.data(), buffered_, digest.data()) == nullptr) {
+                throw_digest_failure();
+            }
+            return digest;
+        }
+        unsigned int size = 0;
+        if (EVP_DigestFinal_ex(context_, digest.data(), &size) != 1 || size != digest.size()) {
+            throw_digest_failure();
+        }
+        return digest;
+    }
+
+private:
+    [[noreturn]] static void throw_digest_failure() {
+        throw std::runtime_error("database SHA-256 digest failed");
+    }
+
+    std::array<unsigned char, 512> buffer_;
+    std::size_t buffered_{0};
+    evp_md_ctx_st* context_{nullptr};
+};
+
+[[nodiscard]] inline db_sha256::digest_type db_sha256_of(std::string_view bytes) {
+    db_sha256 digest;
+    digest.update(bytes);
+    return digest.finish();
+}
+
+}  // namespace ruvia::detail
+
+// Execution of compiled db_query statements: one deadline and one chain for a
+// query, or a query and its count, run directly or through the result cache.
+
+namespace ruvia {
+class db_query;
+
+// A statement copied into the worker's memory resource so it outlives the
+// caller's arguments: a suspended query keeps borrowing its SQL and parameters
+// long after the expression that produced them has ended.
+struct prepared_db_statement final {
+    std::string sql_;
+    std::vector<db_value> params_;
+};
+
+// Raw SQL is checked once, where the caller hands it over: it must hold a
+// statement, and no NUL byte, since both client libraries read SQL as a C
+// string. Compiled SQL is built that way; parameters are checked where they
+// are encoded for the client library.
+void validate_db_sql_text(std::string_view sql);
+
+[[nodiscard]] prepared_db_statement prepare_db_statement(
+    std::string_view sql, std::span<const db_value> params);
+
+// PostgreSQL NOTIFY as a pg_notify() call, so channel and payload travel as
+// bound parameters rather than as SQL text.
+[[nodiscard]] prepared_db_statement prepare_db_notify(
+    std::string_view channel, std::string_view payload);
+
+namespace detail {
+
+[[nodiscard]] inline db_value clone_db_value_for_resource(
+    const db_value& value) {
+    switch (value.type()) {
+        case db_value_type::null:
+            return db_value(nullptr);
+        case db_value_type::string:
+            return db_value_access::owned_string(
+                std::string(value.text()));
+        case db_value_type::signed_value:
+            return db_value(value.signed_value());
+        case db_value_type::unsigned_value:
+            return db_value(value.unsigned_value());
+        case db_value_type::double_value:
+            return db_value(value.double_value());
+        case db_value_type::bool_value:
+            return db_value(value.bool_value());
+    }
+    return db_value(nullptr);
+}
+
+[[nodiscard]] inline std::vector<db_value> clone_db_values(
+    std::span<const db_value> values) {
+    std::vector<db_value> output;
+    output.reserve(values.size());
+    for (const auto& value : values) {
+        output.push_back(clone_db_value_for_resource(value));
+    }
+    return output;
+}
+
+struct request_io_metrics;
+
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state;
+#endif
+
+// Where a plan's statements run: a pooled connection, or the slot an open
+// transaction holds. A value adapter, not a lease owner.
+struct db_query_backend final {
+    db_pool_ref_type pool_;
+    std::optional<std::size_t> slot_;
+    // The request's counter block; null outside a request.
+    request_io_metrics* io_metrics_{nullptr};
+    // Set when the database statement itself failed: a transaction statement
+    // failure has already retired the transaction's lease.
+    bool* backend_failed_{nullptr};
+#ifdef RUVIA_ENABLE_REDIS
+    // Pooled backends only: a transaction's reads may include its own
+    // uncommitted writes, which the shared cache must never see or replace.
+    db_query_cache_state* cache_{nullptr};
+#endif
+};
+
+struct db_query_step final {
+    std::string sql_;
+    std::vector<db_value> params_;
+#ifdef RUVIA_ENABLE_REDIS
+    // Present only when a configured cache applies to this statement.
+    std::optional<std::string> cache_key_;
+    std::optional<std::chrono::milliseconds> cache_duration_;
+#endif
+};
+
+// Preparation owns every statement and cache key before returning a cold task.
+// Transaction state and its exclusive lease remain with the outer operation.
+struct db_query_plan final {
+    db_query_step first_;
+    std::optional<db_query_step> second_;
+    [[nodiscard]] static db_query_plan prepare(
+        const db_query& query, const db_query* count, const db_query_backend& backend);
+};
+
+template <bool with_count>
+using db_query_result = std::conditional_t<with_count, std::pair<db_rows, db_rows>, db_rows>;
+
+template <bool with_count>
+[[nodiscard]] task<db_query_result<with_count>> execute_db_query_plan(
+    db_query_plan plan, db_query_backend backend, operation_options options);
+
+// Runs one statement on the backend without a cache. `options` is owned by the
+// awaiting frame, which must outlive the returned task; a pooled statement
+// takes it over, a transaction statement borrows it.
+[[nodiscard]] task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
+    std::vector<db_value> params, operation_options& options);
+
+[[nodiscard]] inline operation_options db_remaining_options(
+    const operation_options& base, const operation_deadline& timeout) {
+    auto result_value = base;
+    result_value.timeout_ = timeout.timeout();
+    return result_value;
+}
+
+}  // namespace detail
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+inline void require_db_dialect(db_driver driver) {
+    if (driver != db_driver::postgresql && driver != db_driver::mariadb) {
+        throw std::invalid_argument("SQL compilation requires an explicit database driver");
+    }
+}
+
+// MariaDB limits identifiers to 64 characters and PostgreSQL to 63 bytes
+// (NAMEDATALEN - 1). Counting characters requires well-formed UTF-8, so an
+// ill-formed MariaDB name is rejected rather than measured by guesswork.
+[[nodiscard]] inline bool fits_db_identifier_limit(std::string_view name, db_driver driver) noexcept {
+    if (driver == db_driver::postgresql) {
+        return name.size() <= 63;
+    }
+    std::size_t characters = 0;
+    for (std::size_t i = 0; i < name.size(); ++characters) {
+        if (static_cast<unsigned char>(name[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        const auto sequence = ::ruvia::scan_utf8_sequence(name, i);
+        if (!sequence.well_formed_) {
+            return false;
+        }
+        i += sequence.length_;
+    }
+    return characters <= 64;
+}
+
+inline void validate_db_identifier(std::string_view name, db_driver driver) {
+    require_db_dialect(driver);
+    if (name.empty() || name.find('\0') != std::string_view::npos || !fits_db_identifier_limit(name, driver)) {
+        throw std::invalid_argument("invalid or overlong database identifier");
+    }
+}
+
+inline void append_db_identifier(std::string& output, std::string_view name, db_driver driver) {
+    validate_db_identifier(name, driver);
+    const char quote = driver == db_driver::postgresql ? '"' : '`';
+    output.push_back(quote);
+    for (auto at = name.find(quote); at != std::string_view::npos; at = name.find(quote)) {
+        output.append(name.data(), at + 1);
+        output.push_back(quote);
+        name.remove_prefix(at + 1);
+    }
+    output.append(name);
+    output.push_back(quote);
+}
+
+inline void append_db_qualified_identifier(std::string& output, std::string_view name, db_driver driver) {
+    while (true) {
+        const auto dot = name.find('.');
+        append_db_identifier(output, name.substr(0, dot), driver);
+        if (dot == std::string_view::npos) {
+            return;
+        }
+        output.push_back('.');
+        name.remove_prefix(dot + 1);
+    }
+}
+
+inline void append_db_string_literal(std::string& output, std::string_view value, db_driver driver) {
+    require_db_dialect(driver);
+    if (value.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("database text cannot contain NUL");
+    }
+    if (driver == db_driver::mariadb) {
+        // Hex text is independent of NO_BACKSLASH_ESCAPES and ANSI_QUOTES.
+        // It also avoids allowing connection SQL modes to change DDL values.
+        output.reserve(output.size() + 26U + value.size() * 2U);
+        output += "CONVERT(X'";
+        http_append_lower_hex(output, value);
+        output += "' USING utf8mb4)";
+        return;
+    }
+    output.reserve(output.size() + 3U + value.size());
+    output += "E'";
+    for (auto at = value.find_first_of("'\\"); at != std::string_view::npos;
+        at = value.find_first_of("'\\")) {
+        output.append(value.data(), at + 1);
+        output.push_back(value[at]);
+        value.remove_prefix(at + 1);
+    }
+    output.append(value);
+    output.push_back('\'');
+}
+
+// Bound doubles travel as float8/DOUBLE, so a literal must keep that type: an
+// unadorned 2 is an integer and 2.5 is exact NUMERIC/DECIMAL in both dialects,
+// which changes division and overload resolution. PostgreSQL gets an explicit
+// cast of a quoted constant (valid in DEFAULT, CHECK, generated columns and
+// views, and immune to a preceding '-' forming a comment); MariaDB reads any
+// literal with an exponent as DOUBLE.
+inline void append_db_double_literal(std::string& output, double value, db_driver driver) {
+    require_db_dialect(driver);
+    if (driver == db_driver::postgresql) {
+        output += "CAST('";
+        append_db_number(output, value);
+        output += "' AS DOUBLE PRECISION)";
+        return;
+    }
+    const auto start = output.size();
+    append_db_number(output, value);
+    if (output.find_first_of("eE", start) == std::string::npos) {
+        output += "e0";
+    }
+}
+
+inline void append_db_literal(std::string& output, const db_value& value, db_driver driver) {
+    require_db_dialect(driver);
+    switch (value.type()) {
+        case db_value_type::null:
+            output += "NULL";
+            return;
+        case db_value_type::string:
+            append_db_string_literal(output, value.text(), driver);
+            return;
+        case db_value_type::signed_value:
+            append_db_number(output, value.signed_value());
+            return;
+        case db_value_type::unsigned_value:
+            append_db_number(output, value.unsigned_value());
+            return;
+        case db_value_type::double_value:
+            append_db_double_literal(output, value.double_value(), driver);
+            return;
+        case db_value_type::bool_value:
+            output += value.bool_value() ? "TRUE" : "FALSE";
+            return;
+    }
+    std::terminate();
+}
+
+enum class db_sql_type_usage : std::uint8_t { column,
+    cast };
+
+void append_db_expression(std::string& output, db_expression expression, db_driver driver);
+
+template <typename contains_fn_type>
+[[nodiscard]] inline std::string_view select_db_dollar_delimiter(
+    std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
+    std::string_view delimiter = "$ruvia$";
+    for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
+        std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
+        std::array<char, http_max_unsigned_decimal_size> digits;
+        const auto formatted = http_format_unsigned(digits, suffix);
+        std::size_t length = 6;
+        formatted.copy(delimiter_buf.data() + length, formatted.size());
+        length += formatted.size();
+        delimiter_buf[length++] = '$';
+        delimiter = std::string_view(delimiter_buf.data(), length);
+    }
+    return delimiter;
+}
+
+inline void append_db_dollar_body(std::string& output, std::string_view body) {
+    std::array<char, 32> delimiter_buf;
+    const auto delimiter = select_db_dollar_delimiter(
+        delimiter_buf, [body](std::string_view candidate) noexcept {
+            return body.find(candidate) != std::string_view::npos;
+        });
+    output.reserve(output.size() + delimiter.size() * 2U + body.size());
+    output.append(delimiter);
+    output.append(body);
+    output.append(delimiter);
+}
+
+[[nodiscard]] inline std::string_view table_lock_mode_name(db_table_lock_mode mode) {
+    switch (mode) {
+        case db_table_lock_mode::access_share:
+            return "ACCESS SHARE";
+        case db_table_lock_mode::row_share:
+            return "ROW SHARE";
+        case db_table_lock_mode::row_exclusive:
+            return "ROW EXCLUSIVE";
+        case db_table_lock_mode::share_update_exclusive:
+            return "SHARE UPDATE EXCLUSIVE";
+        case db_table_lock_mode::share:
+            return "SHARE";
+        case db_table_lock_mode::share_row_exclusive:
+            return "SHARE ROW EXCLUSIVE";
+        case db_table_lock_mode::exclusive:
+            return "EXCLUSIVE";
+        case db_table_lock_mode::access_exclusive:
+            return "ACCESS EXCLUSIVE";
+    }
+    throw std::invalid_argument("unknown table lock mode");
+}
+
+// PostgreSQL statements emitted both as migration steps and inside PL/pgSQL bodies.
+inline void append_db_lock_table_statement(std::string& output, std::string_view table, db_table_lock_mode mode, bool nowait) {
+    const auto mode_name = table_lock_mode_name(mode);
+    output.append("LOCK TABLE ");
+    append_db_qualified_identifier(output, table, db_driver::postgresql);
+    output.append(" IN ");
+    output.append(mode_name);
+    output.append(" MODE");
+    if (nowait) {
+        output.append(" NOWAIT");
+    }
+}
+inline void append_db_perform_statement(std::string& output, db_expression expression) {
+    output.append("PERFORM ");
+    append_db_expression(output, expression, db_driver::postgresql);
+}
+
+inline void append_db_type_name(std::string& output, db_data_type type,
+    std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale,
+    bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {
+    require_db_dialect(driver);
+    const bool pg = driver == db_driver::postgresql;
+    if ((array_value || !custom_name.empty()) && !pg) {
+        throw std::invalid_argument("array and named database types require PostgreSQL");
+    }
+    if (!custom_name.empty()) {
+        if (type != db_data_type::inferred || length != 0 || precision != 0 || scale != 0) {
+            throw std::invalid_argument("a named database type cannot also specify scalar type modifiers");
+        }
+        append_db_qualified_identifier(output, custom_name, driver);
+        if (array_value) {
+            output += "[]";
+        }
+        return;
+    }
+    if (length != 0 && type != db_data_type::char_value && type != db_data_type::varchar) {
+        throw std::invalid_argument("length requires CHAR or VARCHAR");
+    }
+    if ((precision != 0 || scale != 0) && type != db_data_type::numeric) {
+        throw std::invalid_argument("precision and scale require NUMERIC");
+    }
+    if (scale > precision || (precision > (pg ? 1000U : 65U))) {
+        throw std::invalid_argument("invalid database numeric precision or scale");
+    }
+    const bool maria_cast = !pg && usage == db_sql_type_usage::cast;
+    if (type == db_data_type::char_value) {
+        if (length == 0) {
+            throw std::invalid_argument("CHAR requires a positive length");
+        }
+        if (pg && length > 10485760) {
+            throw std::invalid_argument("PostgreSQL CHAR length exceeds the supported maximum");
+        }
+        if (!pg && !maria_cast && length > 255) {
+            throw std::invalid_argument("MariaDB CHAR length exceeds the supported maximum");
+        }
+    }
+    switch (type) {
+        case db_data_type::boolean:
+            output += maria_cast ? "UNSIGNED" : "BOOLEAN";
+            break;
+        case db_data_type::small_int:
+            output += maria_cast ? "SIGNED" : "SMALLINT";
+            break;
+        case db_data_type::integer:
+            output += maria_cast ? "SIGNED" : "INTEGER";
+            break;
+        case db_data_type::big_int:
+            output += maria_cast ? "SIGNED" : "BIGINT";
+            break;
+        case db_data_type::real:
+            output += maria_cast ? "DOUBLE" : "REAL";
+            break;
+        case db_data_type::double_value:
+            output += pg ? "DOUBLE PRECISION" : "DOUBLE";
+            break;
+        case db_data_type::text:
+            output += maria_cast ? "CHAR" : "TEXT";
+            break;
+        case db_data_type::char_value:
+            output += "CHAR(";
+            append_db_number(output, static_cast<std::uint64_t>(length));
+            output.push_back(')');
+            break;
+        case db_data_type::varchar:
+            if (length == 0) {
+                throw std::invalid_argument("VARCHAR requires a positive length");
+            }
+            output += maria_cast ? "CHAR(" : "VARCHAR(";
+            append_db_number(output, static_cast<std::uint64_t>(length));
+            output.push_back(')');
+            break;
+        case db_data_type::numeric:
+            output += "DECIMAL";
+            if (precision != 0) {
+                output.push_back('(');
+                append_db_number(output, static_cast<std::uint64_t>(precision));
+                output.push_back(',');
+                append_db_number(output, static_cast<std::uint64_t>(scale));
+                output.push_back(')');
+            } else if (!pg) {
+                // MariaDB's bare DECIMAL is DECIMAL(10,0) and silently rounds.
+                throw std::invalid_argument("MariaDB DECIMAL requires an explicit precision");
+            }
+            break;
+        case db_data_type::date:
+            output += "DATE";
+            break;
+        case db_data_type::timestamp:
+            // Match PostgreSQL's microsecond precision; bare DATETIME truncates.
+            output += pg ? "TIMESTAMP" : "DATETIME(6)";
+            break;
+        case db_data_type::json:
+            if (maria_cast) {
+                throw std::invalid_argument("MariaDB does not support CAST AS JSON");
+            }
+            output += "JSON";
+            break;
+        case db_data_type::jsonb:
+        case db_data_type::uuid:
+        case db_data_type::timestamp_tz:
+        case db_data_type::interval:
+        case db_data_type::inet:
+        case db_data_type::cidr:
+        case db_data_type::bytea:
+            if (!pg) {
+                throw std::invalid_argument("selected database type requires PostgreSQL");
+            }
+            switch (type) {
+                case db_data_type::jsonb:
+                    output += "JSONB";
+                    break;
+                case db_data_type::uuid:
+                    output += "UUID";
+                    break;
+                case db_data_type::timestamp_tz:
+                    output += "TIMESTAMPTZ";
+                    break;
+                case db_data_type::interval:
+                    output += "INTERVAL";
+                    break;
+                case db_data_type::inet:
+                    output += "INET";
+                    break;
+                case db_data_type::cidr:
+                    output += "CIDR";
+                    break;
+                case db_data_type::bytea:
+                    output += "BYTEA";
+                    break;
+                default:
+                    std::terminate();
+            }
+            break;
+        case db_data_type::array:
+        case db_data_type::inferred:
+            throw std::invalid_argument("SQL requires an explicit scalar type; use the array flag for arrays");
+    }
+    if (array_value) {
+        output += "[]";
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+constexpr std::size_t no_db_node = std::numeric_limits<std::size_t>::max();
+
+enum class db_node_kind : std::uint8_t {
+    sql,
+    column,
+    star,
+    value,
+    default_value,
+    excluded,
+    function,
+    coalesce,
+    null_if,
+    greatest,
+    least,
+    binary,
+    unary,
+    between,
+    tuple,
+    list,
+    array,
+    any,
+    all,
+    cast,
+    alias,
+    case_value,
+    exists,
+    subquery,
+    aggregate,
+    filter,
+    window,
+    within_group,
+    extract,
+    subscript,
+    collate,
+    at_time_zone,
+};
+enum class db_query_kind : std::uint8_t { select,
+    values,
+    insert,
+    update,
+    delete_value };
+enum class db_source_kind : std::uint8_t { table,
+    query,
+    function };
+
+struct db_stored_type final {
+    db_stored_type() = default;
+    db_stored_type(const db_stored_type&) = default;
+    db_stored_type& operator=(const db_stored_type&) = default;
+    db_stored_type(db_stored_type&&) noexcept = default;
+    db_stored_type& operator=(db_stored_type&&) noexcept = default;
+    db_stored_type(const db_type_definition& source_value)
+        : data_type_(source_value.data_type_),
+          custom_name_(source_value.custom_name_),
+          length_(source_value.length_),
+          precision_(source_value.precision_),
+          scale_(source_value.scale_),
+          array_(source_value.array_) {}
+    db_data_type data_type_{db_data_type::inferred};
+    std::string custom_name_;
+    std::size_t length_{0};
+    unsigned precision_{0};
+    unsigned scale_{0};
+    bool array_{false};
+};
+struct db_stored_order final {
+    std::size_t expression_{no_db_node};
+    db_order_direction direction_{db_order_direction::asc};
+    db_nulls_order nulls_{db_nulls_order::default_value};
+};
+struct db_stored_named_argument final {
+    db_stored_named_argument(std::string_view name, std::size_t expression)
+        : name_(name),
+          expression_(expression) {}
+    std::string name_;
+    std::size_t expression_;
+};
+
+struct db_query_node final {
+    db_query_node(db_node_kind kind)
+        : kind_(kind),
+          value_(nullptr) {}
+    db_query_node(db_node_kind kind, db_value&& value)
+        : kind_(kind),
+          value_(std::move(value)) {}
+    db_query_node(const db_query_node& source_value)
+        : kind_(source_value.kind_),
+          value_(db_value(source_value.value_)),
+          text_(source_value.text_),
+          qualifier_(source_value.qualifier_),
+          args_(source_value.args_),
+          orders_(source_value.orders_),
+          type_(source_value.type_),
+          binary_(source_value.binary_),
+          unary_(source_value.unary_),
+          date_part_(source_value.date_part_),
+          left_(source_value.left_),
+          right_(source_value.right_),
+          query_(source_value.query_),
+          flag_(source_value.flag_),
+          explicit_alias_(source_value.explicit_alias_),
+          frame_(source_value.frame_) {
+        named_.reserve(source_value.named_.size());
+        for (const auto& argument : source_value.named_) {
+            named_.emplace_back(argument.name_, argument.expression_);
+        }
+    }
+    db_query_node(db_query_node&&) noexcept = default;
+    db_query_node& operator=(db_query_node&&) = delete;
+    db_node_kind kind_;
+    db_value value_;
+    std::string text_;
+    std::string qualifier_;
+    std::vector<std::size_t> args_;
+    std::vector<db_stored_named_argument> named_;
+    std::vector<db_stored_order> orders_;
+    db_stored_type type_;
+    db_binary_operator binary_{db_binary_operator::equal};
+    db_unary_operator unary_{db_unary_operator::not_value};
+    db_date_part date_part_{db_date_part::epoch};
+    std::size_t left_{no_db_node};
+    std::size_t right_{no_db_node};
+    std::size_t query_{no_db_node};
+    bool flag_{false};
+    bool explicit_alias_{false};
+    std::optional<db_window_frame_options> frame_{};
+};
+// AND and OR are associative, so a left-deep chain of one of them (as built
+// by and_where/or_where or `p = std::move(p) && q`) is a single nesting level
+// for import and compilation. True when `child` continues `parent`'s chain.
+[[nodiscard]] inline bool continues_logical_chain(
+    const std::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
+    if (parent.kind_ != db_node_kind::binary || child == no_db_node ||
+        (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
+        return false;
+    }
+    const auto& node = nodes[child];
+    return node.kind_ == db_node_kind::binary && node.binary_ == parent.binary_;
+}
+struct db_stored_source_column final {
+    db_stored_source_column(const db_source_column& source_value)
+        : name_(source_value.name_),
+          type_(source_value.type_) {}
+    db_stored_source_column(const db_stored_source_column&) = default;
+    db_stored_source_column& operator=(const db_stored_source_column&) = default;
+    db_stored_source_column(db_stored_source_column&&) noexcept = default;
+    db_stored_source_column& operator=(db_stored_source_column&&) noexcept = default;
+    std::string name_;
+    db_stored_type type_;
+};
+struct db_query_source final {
+    db_query_source() = default;
+    db_query_source(const db_query_source&) = default;
+    db_query_source& operator=(const db_query_source&) = default;
+    db_query_source(db_query_source&&) noexcept = default;
+    db_query_source& operator=(db_query_source&&) noexcept = default;
+    db_source_kind kind_{db_source_kind::table};
+    std::string name_;
+    std::string alias_;
+    std::size_t expression_{no_db_node};
+    std::size_t query_{no_db_node};
+    bool lateral_{false};
+    bool ordinality_{false};
+    std::vector<db_stored_source_column> columns_;
+};
+// Whether a FROM item binds `name`: its alias when present, otherwise its
+// table name or, for a schema-qualified table, any dot-aligned suffix of it.
+[[nodiscard]] inline bool source_binds_name(const db_query_source& source_value, std::string_view name) noexcept {
+    if (!source_value.alias_.empty()) {
+        return source_value.alias_ == name;
+    }
+    const std::string_view table = source_value.name_;
+    return table == name ||
+           (table.size() > name.size() && table.ends_with(name) && table[table.size() - name.size() - 1] == '.');
+}
+struct db_stored_join final {
+    db_stored_join(db_join_type type, db_query_source source_value, std::size_t on)
+        : type_(type),
+          source_(std::move(source_value)),
+          on_(on) {}
+    db_stored_join(const db_stored_join& source_value)
+        : type_(source_value.type_),
+          source_(source_value.source_),
+          on_(source_value.on_),
+          using_columns_(source_value.using_columns_) {}
+    db_join_type type_;
+    db_query_source source_;
+    std::size_t on_{no_db_node};
+    std::vector<std::string> using_columns_;
+};
+struct db_stored_assignment final {
+    db_stored_assignment(std::string_view column, std::size_t expression)
+        : column_(column),
+          expression_(expression) {}
+    std::string column_;
+    std::size_t expression_;
+};
+struct db_stored_cte final {
+    template <class column_range>
+    db_stored_cte(std::string_view name, std::size_t query, bool recursive, db_materialization materialization,
+        const column_range& columns)
+        : name_(name),
+          query_(query),
+          recursive_(recursive),
+          materialization_(materialization) {
+        columns_.reserve(std::ranges::size(columns));
+        for (const auto& column : columns) {
+            columns_.emplace_back(std::string_view(column));
+        }
+    }
+    db_stored_cte(const db_stored_cte& source_value)
+        : name_(source_value.name_),
+          query_(source_value.query_),
+          recursive_(source_value.recursive_),
+          materialization_(source_value.materialization_),
+          columns_(source_value.columns_) {}
+    std::string name_;
+    std::size_t query_;
+    bool recursive_{false};
+    db_materialization materialization_{db_materialization::default_value};
+    std::vector<std::string> columns_;
+};
+struct db_stored_set_operation final {
+    db_set_operation operation_;
+    std::size_t query_;
+};
+struct db_stored_conflict final {
+    db_stored_conflict() = default;
+    db_stored_conflict(const db_stored_conflict&) = default;
+    db_stored_conflict& operator=(const db_stored_conflict&) = default;
+    db_stored_conflict(db_stored_conflict&&) noexcept = default;
+    db_stored_conflict& operator=(db_stored_conflict&&) noexcept = default;
+    std::vector<std::string> columns_;
+    std::string constraint_;
+    std::size_t target_where_{no_db_node};
+    std::vector<db_stored_assignment> assignments_;
+    std::size_t update_where_{no_db_node};
+    bool do_nothing_{false};
+    bool any_unique_key_{false};
+};
+struct db_stored_lock final {
+    db_stored_lock(const db_lock_options& source_value)
+        : mode_(source_value.mode_),
+          nowait_(source_value.nowait_),
+          skip_locked_(source_value.skip_locked_) {
+        tables_.reserve(source_value.tables_.size());
+        for (const auto& table : source_value.tables_) {
+            tables_.emplace_back(table);
+        }
+    }
+    db_stored_lock(const db_stored_lock&) = default;
+    db_stored_lock& operator=(const db_stored_lock&) = default;
+    db_stored_lock(db_stored_lock&&) noexcept = default;
+    db_stored_lock& operator=(db_stored_lock&&) noexcept = default;
+    db_row_lock mode_;
+    bool nowait_{false};
+    bool skip_locked_{false};
+    std::vector<std::string> tables_;
+};
+
+class db_query_storage final {
+public:
+    db_query_storage() = default;
+    db_query_storage(const db_query_storage& source);
+
+    std::vector<db_query_node> nodes_;
+    std::vector<db_query> queries_;
+    db_query_kind kind_{db_query_kind::select};
+    std::string target_;
+    std::string target_alias_;
+    std::vector<std::string> columns_;
+    std::vector<std::size_t> projections_;
+    std::vector<std::size_t> groups_;
+    std::vector<db_stored_order> orders_;
+    bool distinct_{false};
+    std::vector<std::size_t> distinct_on_;
+    std::vector<std::size_t> returning_;
+    std::optional<db_query_source> source_{};
+    std::vector<db_stored_join> joins_;
+    std::vector<std::vector<std::size_t>> rows_;
+    std::vector<db_stored_assignment> assignments_;
+    std::size_t insert_query_{no_db_node};
+    std::size_t predicate_{no_db_node};
+    std::size_t having_{no_db_node};
+    std::optional<std::uint64_t> limit_{};
+    std::optional<std::uint64_t> offset_{};
+    std::optional<db_stored_conflict> conflict_{};
+    std::optional<db_stored_lock> lock_{};
+    std::vector<db_stored_cte> ctes_;
+    std::vector<db_stored_set_operation> set_operations_;
+
+    std::optional<bool> cache_enabled_{};
+    std::optional<std::chrono::milliseconds> cache_duration_{};
+    std::string cache_id_;
+    // The result shape a repository builder derived this query as; with
+    // cache_id_ it names the id-keyed entry.
+    db_cache_shape cache_shape_{db_cache_shape::rows};
+
+    [[nodiscard]] bool returns_rows() const noexcept {
+        return kind_ == db_query_kind::select || kind_ == db_query_kind::values || !returning_.empty();
+    }
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Readiness classes a database driver can wait for. A wait completes on the
+// first class that becomes ready.
+enum class db_socket_readiness : std::uint8_t {
+    none = 0,
+    read = 1,
+    write = 2,
+    error = 4,
+};
+
+[[nodiscard]] constexpr db_socket_readiness operator|(db_socket_readiness left, db_socket_readiness right) noexcept {
+    return static_cast<db_socket_readiness>(static_cast<std::uint8_t>(left) | static_cast<std::uint8_t>(right));
+}
+
+[[nodiscard]] constexpr bool has_db_socket_readiness(db_socket_readiness set, db_socket_readiness value) noexcept {
+    return (static_cast<std::uint8_t>(set) & static_cast<std::uint8_t>(value)) != 0;
+}
+
+struct db_socket_wait_result final {
+    // The class that completed first; none when the wait failed or was cancelled.
+    db_socket_readiness ready_{db_socket_readiness::none};
+    std::error_code error_{};
+    // The slot deadline guarding this wait expired.
+    bool expired_{false};
+};
+
+// Ruvia-owned duplicate of a database driver's connection socket, registered
+// with ASIO for readiness waits.
+//
+// MariaDB and libpq own their native socket and close it themselves inside
+// their read/write calls when the transport fails (libmariadb end_server,
+// libpq pqDropConnection). Registering that handle directly would leave ASIO
+// holding a handle the driver may close -- and the OS may reuse -- between two
+// waits. A duplicate refers to the same socket object, so it observes the same
+// readiness, but its handle belongs to Ruvia: the driver closing its own
+// handle can neither invalidate nor be invalidated by it. The duplicate is
+// therefore made and registered once per driver socket and kept until the
+// pool closes the connection.
+//
+// The duplicate keeps the underlying connection open after the driver has
+// closed its handle. The driver only does that on a transport failure, which
+// the pool answers by closing the slot, and closing the slot closes the
+// duplicate first so the driver's own close still ends the connection.
+struct db_slot_socket final {
+    explicit db_slot_socket(asio::io_context& io_context);
+
+    db_slot_socket(const db_slot_socket&) = delete;
+    db_slot_socket& operator=(const db_slot_socket&) = delete;
+
+#if defined(_WIN32)
+    using native_socket_type = std::uintptr_t;
+    using waitable_type = asio::ip::tcp::socket;
+    asio::ip::tcp::socket socket_;
+    static constexpr native_socket_type invalid_socket = std::numeric_limits<native_socket_type>::max();
+#else
+    using native_socket_type = asio::posix::stream_descriptor::native_handle_type;
+    using waitable_type = asio::posix::stream_descriptor;
+    asio::posix::stream_descriptor descriptor_;
+    static constexpr native_socket_type invalid_socket = -1;
+#endif
+    // The driver handle the open duplicate was made from.
+    native_socket_type source_{invalid_socket};
+
+    // Any-of readiness wait. The first completion cancels the others, and the
+    // awaiting coroutine resumes only after every started handler has run, so
+    // no outstanding operation still borrows the awaiter.
+    class readiness_awaiter final {
+    public:
+        readiness_awaiter(db_slot_socket& socket, db_socket_readiness wanted) noexcept
+            : socket_(socket),
+              wanted_(wanted) {}
+
+        [[nodiscard]] bool await_ready() const noexcept {
+            return false;
+        }
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        // Rethrows a failure to start a wait.
+        [[nodiscard]] db_socket_wait_result await_resume() const;
+
+    private:
+        void start(waitable_type::wait_type wait_type, db_socket_readiness readiness);
+        void complete(db_socket_readiness readiness, std::error_code error) noexcept;
+
+        db_slot_socket& socket_;
+        db_socket_readiness wanted_;
+        std::coroutine_handle<> continuation_{};
+        db_socket_wait_result result_{};
+        std::exception_ptr initiation_failure_{};
+        std::uint8_t pending_{0};
+        bool completed_{false};
+    };
+
+    // Duplicates and registers the driver's socket unless the open duplicate
+    // was already made from this handle value. The value is the only identity
+    // checked, so a caller must close() before the driver can replace its
+    // socket with one that reuses the value.
+    [[nodiscard]] std::error_code attach(native_socket_type driver_socket) noexcept;
+    [[nodiscard]] readiness_awaiter wait(db_socket_readiness wanted) noexcept {
+        return readiness_awaiter(*this, wanted);
+    }
+    void cancel() noexcept;
+    // Cancels pending waits and closes the duplicate, leaving the driver's
+    // socket open and unregistered.
+    void close() noexcept;
+
+private:
+    [[nodiscard]] waitable_type& waitable() noexcept;
+};
+
+// Puts a driver-owned socket into non-blocking mode. A driver whose
+// asynchronous API suspends on EAGAIN cannot suspend at all while its socket
+// blocks, so it runs the whole operation inside the call that was supposed to
+// start it.
+[[nodiscard]] std::error_code set_db_socket_non_blocking(db_slot_socket::native_socket_type driver_socket) noexcept;
+
+// What a look at an idle pooled connection's socket finds.
+enum class db_idle_socket_status : std::uint8_t {
+    quiet,
+    // Bytes wait to be read.
+    pending_data,
+    // End of stream or a socket error: the server ended the session.
+    closed,
+};
+
+// Peeks at most one byte of a driver-owned socket without blocking and
+// without taking it from the driver (Pingora's test_reusable_stream). Both
+// drivers keep their socket non-blocking: libpq always, MariaDB through
+// set_db_socket_non_blocking().
+[[nodiscard]] db_idle_socket_status peek_db_idle_socket(db_slot_socket::native_socket_type driver_socket) noexcept;
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+class validated_db_config_view final {
+public:
+    [[nodiscard]] const db_config& get() const noexcept {
+        return *config_;
+    }
+
+private:
+    friend validated_db_config_view validated_db_config(const db_config& config);
+
+    explicit validated_db_config_view(const db_config& config) noexcept
+        : config_(&config) {}
+
+    const db_config* config_;
+};
+
+[[nodiscard]] inline constexpr std::uint16_t default_db_port(db_driver driver) noexcept {
+    switch (driver) {
+        case db_driver::mariadb:
+            return 3306;
+        case db_driver::postgresql:
+            return 5432;
+        default:
+            return 0;
+    }
+}
+
+[[nodiscard]] inline std::uint16_t configured_db_port(const db_config& config) noexcept {
+    return config.port_.has_value() ? config.port_->value() : default_db_port(config.driver_);
+}
+
+inline void validate_db_config(const db_config& config) {
+    validate_client_tls_config(config.tls_);
+    // Both drivers are configured with key files only; refuse a password they
+    // would silently ignore.
+    if (config.tls_.identity_.has_value() && !config.tls_.identity_->private_key_password_.empty()) {
+        throw std::invalid_argument("database TLS does not support encrypted private keys");
+    }
+    const auto driver = config.driver_;
+    if (driver == db_driver::mariadb && config.tls_.mode_ == client_tls_mode::verify_identity) {
+        if (!is_client_ip_address(config.host_) || config.tls_.server_name_.has_value()) {
+            throw std::invalid_argument("MariaDB authenticated TLS requires a numeric host with an IP certificate; server_name is unsupported");
+        }
+    }
+    if (driver != db_driver::mariadb && driver != db_driver::postgresql) {
+        throw std::invalid_argument("database driver must be selected");
+    }
+#ifndef RUVIA_ENABLE_MARIADB
+    if (driver == db_driver::mariadb) {
+        throw std::invalid_argument("MariaDB support is not enabled");
+    }
+#endif
+#ifndef RUVIA_ENABLE_POSTGRESQL
+    if (driver == db_driver::postgresql) {
+        throw std::invalid_argument("PostgreSQL support is not enabled");
+    }
+#endif
+
+    validate_client_origin_host(config.host_, "database host must not be empty", "database host is invalid");
+    // Both drivers pass these to C APIs as NUL-terminated strings.
+    for (const std::string_view value : {std::string_view{config.username_}, std::string_view{config.password_},
+             std::string_view{config.database_}}) {
+        if (value.find('\0') != std::string_view::npos) {
+            throw std::invalid_argument("database credentials must not contain NUL bytes");
+        }
+    }
+    detail::ensure_non_zero_port(configured_db_port(config), "database port must not be zero");
+    detail::ensure_positive_size(config.pool_size_per_worker_, "database pool size must be greater than zero");
+    detail::ensure_positive_optional_durations("configured database timeouts must be greater than zero",
+        config.connect_timeout_, config.read_timeout_, config.write_timeout_, config.query_timeout_,
+        config.acquire_timeout_, config.transaction_timeout_);
+}
+
+[[nodiscard]] inline validated_db_config_view validated_db_config(const db_config& config) {
+    validate_db_config(config);
+    return validated_db_config_view(config);
+}
+
+validated_db_config_view validated_db_config(db_config&&) = delete;
+validated_db_config_view validated_db_config(const db_config&&) = delete;
+
+#ifdef RUVIA_ENABLE_REDIS
+struct db_cache_config_storage final {
+    template <typename config_type>
+    db_cache_config_storage(const config_type& source_value)
+        : duration_(source_value.duration_),
+          always_enabled_(source_value.always_enabled_),
+          ignore_errors_(source_value.ignore_errors_),
+          key_prefix_(source_value.key_prefix_) {
+        if (duration_.count() <= 0 || key_prefix_.empty()) {
+            throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
+        }
+    }
+    std::chrono::milliseconds duration_;
+    bool always_enabled_;
+    bool ignore_errors_;
+    std::string key_prefix_;
+};
+#endif
+
+// Worker/app-owned copy of the public startup configuration. Retained runtime
+// state is explicitly rebound to its owning PMR domain here.
+struct db_config_storage final {
+    db_config_storage(const db_config& source_value)
+        : db_config_storage(validated_db_config(source_value)) {}
+
+    db_config_storage(validated_db_config_view source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value.get()) {}
+
+    db_config_storage(db_config_storage&&) noexcept = default;
+    db_config_storage(const db_config_storage& source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value) {}
+
+    db_driver driver_{db_driver::unspecified};
+    std::string host_;
+    std::uint16_t port_{0};
+    std::string username_;
+    std::string password_;
+    client_tls_config_storage tls_;
+    std::string database_;
+    std::size_t pool_size_per_worker_;
+    std::optional<timeout_duration> connect_timeout_;
+    std::optional<timeout_duration> read_timeout_;
+    std::optional<timeout_duration> write_timeout_;
+    std::optional<timeout_duration> query_timeout_;
+    std::optional<timeout_duration> acquire_timeout_;
+    std::optional<timeout_duration> transaction_timeout_;
+    // Whether a slot whose connection ended connects again on its next use.
+    // Off for a pool bound to the sessions it opened at startup (the
+    // migrator's): a statement on a lost session then fails rather than run
+    // on a new one that lacks the old one's session-scoped state.
+    bool reconnect_{true};
+
+private:
+    struct validated_config_tag_type final {};
+
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config& source) noexcept {
+        return configured_db_port(source);
+    }
+    [[nodiscard]] static std::uint16_t resolved_port(const db_config_storage& source) noexcept {
+        return source.port_;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config&) noexcept {
+        return true;
+    }
+    [[nodiscard]] static bool resolved_reconnect(const db_config_storage& source) noexcept {
+        return source.reconnect_;
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config& source) {
+        return {source.tls_, client_tls_files::keep_paths};
+    }
+    [[nodiscard]] static client_tls_config_storage tls_storage(
+        const db_config_storage& source) {
+        return {source.tls_};
+    }
+
+    template <typename source_type>
+        requires(std::same_as<source_type, db_config> || std::same_as<source_type, db_config_storage>)
+    db_config_storage(validated_config_tag_type, const source_type& source_value)
+        : driver_(source_value.driver_),
+          host_(source_value.host_),
+          port_(resolved_port(source_value)),
+          username_(source_value.username_),
+          password_(source_value.password_),
+          tls_(tls_storage(source_value)),
+          database_(source_value.database_),
+          pool_size_per_worker_(source_value.pool_size_per_worker_),
+          connect_timeout_(source_value.connect_timeout_),
+          read_timeout_(source_value.read_timeout_),
+          write_timeout_(source_value.write_timeout_),
+          query_timeout_(source_value.query_timeout_),
+          acquire_timeout_(source_value.acquire_timeout_),
+          transaction_timeout_(source_value.transaction_timeout_),
+          reconnect_(resolved_reconnect(source_value)) {}
+};
+
+#ifdef RUVIA_ENABLE_REDIS
+struct db_query_cache_registration_storage final {
+    db_query_cache_registration_storage(const db_query_cache_registration& source_value)
+        : redis_alias_(source_value.redis_alias_),
+          policy_(source_value.policy_) {
+        validate_capability_alias(redis_alias_, "database query cache Redis alias must not be empty");
+    }
+    std::string redis_alias_;
+    db_cache_config_storage policy_;
+};
+#endif
+
+struct db_definition final {
+    using config_storage_type = db_config_storage;
+    std::string alias_;
+    db_config_storage config_;
+#ifdef RUVIA_ENABLE_REDIS
+    std::optional<db_query_cache_registration_storage> query_cache_{};
+#endif
+};
+
+}  // namespace ruvia::detail
+
+// Pipelining of buffered statements outside transactions, shared by the
+// drivers whose protocol lets one connection carry several statements at
+// once. A statement joins a pipeline group: one leased connection that
+// several statements share, each sending its own flight so that a failed
+// statement affects no other. Results are read in send order by one member at
+// a time, the reader, which hands each finished statement's outcome to its
+// member and passes the role on when its own statement completes. Members wait
+// in their own coroutine frames; the group's bookkeeping is owned by the
+// connection's slot and the pool, because a member that is cancelled leaves
+// before its results arrive.
+//
+// A driver supplies an io_type with its protocol: what a flight and a group
+// keep (flight_type, group_state), the statement its caller prepared
+// (statement_type), and the hooks that open a group, queue a flight, read
+// results without waiting, wait for and exchange I/O, and judge whether a
+// connection can be reused once its group dissolves. Everything else --
+// admission in arrival order, room, the reader role, deadlines, cancellation
+// and connection failure -- is this one implementation.
+//
+// A statement that changes session state (SET, USE, BEGIN, LOCK, ...) changes
+// it for every statement sharing the connection after it; such statements
+// belong in a transaction. A group dissolving with its connection left inside
+// a transaction block closes that connection.
+
+namespace ruvia::detail {
+
+template <typename driver_type>
+class db_pool;
+template <typename io_type>
+class db_pipeline_state;
+template <typename io_type>
+struct db_pipeline_record;
+
+// Statements one connection keeps in flight at once. Locally, 16 reached about
+// six times the throughput of one statement per round trip on PostgreSQL, 8
+// somewhat less and 32 no more; a deeper pipeline only adds queueing latency.
+inline constexpr std::size_t db_pipeline_depth = 16;
+
+enum class db_pipeline_phase : std::uint8_t {
+    // Holds nothing.
+    admitting,
+    // Waits in the pool's arrival order for room in a group or a connection.
+    parked,
+    // Holds a lease and founds a group on it.
+    leased,
+    // A member holding room for a flight it has not sent yet.
+    reserved,
+    // A member whose flight is in the group.
+    pending,
+    // A member whose statement has an outcome, or was abandoned.
+    settled,
+};
+
+// What woke a waiting member.
+enum class db_pipeline_event : std::uint8_t {
+    none,
+    // Admission: a connection was leased for it, or room in a group reserved.
+    leased,
+    joined,
+    // It reads the group's results now.
+    reader,
+    // Its statement finished; failure_ tells how.
+    completed,
+    // Its statement must be sent once more (a stale cached statement).
+    retry,
+    // Its group's connection failed with failure_.
+    failed,
+    timed_out,
+    cancelled,
+    closing,
+};
+
+// How the head flight of a group ended, as the driver read it.
+struct db_pipeline_outcome final {
+    std::exception_ptr failure_{};
+    std::uint64_t affected_rows_{0};
+    std::optional<std::uint64_t> insert_id_{};
+    // The statement runs once more instead of completing.
+    bool retry_{false};
+};
+
+// One pipelined statement. It lives in its caller's coroutine frame; the
+// group refers to it only while it is a member, through records that forget
+// it when it leaves. Construction binds its stop token and makes it findable
+// for cancellation; destruction gives back whatever it still holds -- a parked
+// position, a lease, room or a flight in a group -- so every exit path of the
+// statement shares one cleanup.
+template <typename io_type>
+class db_pipeline_member final {
+public:
+    using state_type = db_pipeline_state<io_type>;
+
+    db_pipeline_member(
+        state_type& state, db_rows* rows, const stop_token& stop_token_value);
+    ~db_pipeline_member();
+
+    db_pipeline_member(const db_pipeline_member&) = delete;
+    db_pipeline_member& operator=(const db_pipeline_member&) = delete;
+
+    // Suspends until an event arrives, unless one already has.
+    struct wait final {
+        db_pipeline_member& member_;
+
+        [[nodiscard]] bool await_ready() const noexcept {
+            return member_.event_ != db_pipeline_event::none;
+        }
+        void await_suspend(std::coroutine_handle<> handle) noexcept {
+            member_.continuation_ = handle;
+        }
+        [[nodiscard]] db_pipeline_event await_resume() noexcept {
+            return member_.take_event();
+        }
+    };
+
+    [[nodiscard]] db_pipeline_event take_event() noexcept {
+        return std::exchange(event_, db_pipeline_event::none);
+    }
+    // Its stop token was triggered, even if the cancellation has not been
+    // dispatched yet.
+    [[nodiscard]] bool stopped() const noexcept {
+        return cancel_requested_ || stop_token_.stop_requested();
+    }
+
+    state_type& state_;
+    // The caller's result for query(); null for execute().
+    db_rows* rows_;
+    // The caller's options outlive the statement's frame.
+    const stop_token& stop_token_;
+    std::uint64_t affected_rows_{0};
+    std::optional<std::uint64_t> insert_id_{};
+    std::exception_ptr failure_{};
+    // The statement deadline, from its first send.
+    std::optional<std::chrono::steady_clock::time_point> deadline_{};
+    std::coroutine_handle<> continuation_{};
+    // The record of its flight while pending.
+    db_pipeline_record<io_type>* record_{nullptr};
+    // Its place in the pool's arrival order, shared with the callers waiting
+    // for a lease.
+    std::uint64_t arrival_{0};
+    std::size_t slot_{0};
+    db_pipeline_phase phase_{db_pipeline_phase::admitting};
+    db_pipeline_event event_{db_pipeline_event::none};
+    // Set when its cancellation is dispatched, which also unlinks it from the
+    // statements a cancellation searches.
+    bool cancel_requested_{false};
+    bool connecting_{false};
+    bool may_retry_{true};
+    // The pool's FIFO of parked statements.
+    db_pipeline_member* previous_parked_{nullptr};
+    db_pipeline_member* next_parked_{nullptr};
+    // The pool's cancellable statements, newest first.
+    db_pipeline_member* previous_{nullptr};
+    db_pipeline_member* next_{nullptr};
+    worker_timer_registration admission_timer_;
+    std::uint64_t cancellation_id_{0};
+    worker_cancellation_registration<worker_cancellation_target<state_type>> cancellation_;
+};
+
+// One flight in a group, in send order.
+template <typename io_type>
+struct db_pipeline_record final {
+    // Null once the member abandoned the statement; its results are discarded.
+    db_pipeline_member<io_type>* member_{nullptr};
+    typename io_type::flight_type flight_{};
+    bool returns_rows_{false};
+};
+
+// The pipeline group of one connection; it exists while it has members. The
+// records form a ring of the flights in send order; the head is the one whose
+// results are read next.
+template <typename io_type>
+struct db_pipeline_group final {
+    [[nodiscard]] db_pipeline_record<io_type>& record(std::size_t offset) noexcept {
+        return records_[(head_ + offset) % db_pipeline_depth];
+    }
+    [[nodiscard]] const db_pipeline_record<io_type>& record(std::size_t offset) const noexcept {
+        return records_[(head_ + offset) % db_pipeline_depth];
+    }
+    // Its oldest flight was abandoned: a statement sent now would wait behind
+    // one whose caller already gave up on it, so the group takes nobody new
+    // until that flight's results have been read.
+    [[nodiscard]] bool stalled() const noexcept {
+        return pending_ != 0 && records_[head_].member_ == nullptr;
+    }
+
+    std::array<db_pipeline_record<io_type>, db_pipeline_depth> records_{};
+    // The driver's protocol state of the connection's flights.
+    typename io_type::group_state io_{};
+    // Why the connection failed, once closing_.
+    std::exception_ptr failure_{};
+    // When the reader's current socket wait ends at the latest.
+    std::optional<std::chrono::steady_clock::time_point> wait_deadline_{};
+    // Start of the connection's current stretch without progress -- no socket
+    // readiness and no flight completed -- while flights are outstanding. The
+    // I/O timeout counts from it whichever member holds the reader role.
+    std::optional<std::chrono::steady_clock::time_point> stretch_start_{};
+    db_pipeline_member<io_type>* reader_{nullptr};
+    std::size_t head_{0};
+    std::size_t pending_{0};
+    // Room promised to members that have not sent their flight yet.
+    std::size_t reserved_{0};
+    std::size_t members_{0};
+    // The connection failed; the group takes no members and dissolves.
+    bool closing_{false};
+};
+
+// Per pool: admission into groups, in arrival order with the callers waiting
+// for a lease. A statement founds a group on a free connection, else joins
+// the group with the most room, else parks in a FIFO served by freed room and
+// by released connections. A statement never joins a group ahead of an older
+// caller still waiting for a lease: the groups drain to it, and a released
+// connection goes to it. A parked statement older than every caller waiting
+// for a lease takes a released connection itself, before the lease scheduler
+// can hand it on.
+template <typename io_type>
+class db_pipeline_state final {
+public:
+    using driver_type = typename io_type::driver_type;
+    using pool_type = db_pool<driver_type>;
+    using member_type = db_pipeline_member<io_type>;
+    using group_type = db_pipeline_group<io_type>;
+    using record_type = db_pipeline_record<io_type>;
+    using statement_type = typename io_type::statement_type;
+    using cancellation_target_type = worker_cancellation_target<db_pipeline_state>;
+
+    db_pipeline_state(pool_type& pool, const worker_ref& worker_value);
+    ~db_pipeline_state();
+
+    db_pipeline_state(const db_pipeline_state&) = delete;
+    db_pipeline_state& operator=(const db_pipeline_state&) = delete;
+
+    // db_pool hooks.
+    [[nodiscard]] bool take_released_slot(std::size_t slot) noexcept;
+    void exclusive_waiter_left() noexcept;
+    // Fails every parked statement with closing.
+    void close() noexcept;
+    // worker_cancellation_target hook.
+    void cancel_operation_by_id(std::uint64_t cancellation_id) noexcept;
+
+    [[nodiscard]] const std::shared_ptr<cancellation_target_type>& cancellation_target() const noexcept {
+        return cancellation_target_;
+    }
+
+    // The statement's way through a group, in order. admit() places it, or
+    // parks it to be woken with the event admitted() checks. A statement that
+    // leased a connection connects it if needed and founds a group on it.
+    [[nodiscard]] db_pipeline_event admit(member_type& member, const operation_deadline& admission_deadline);
+    void admitted(db_pipeline_event event) const;
+    [[nodiscard]] bool must_connect(member_type& member);
+    void connected(member_type& member, const std::exception_ptr& failure);
+    void found_group(member_type& member);
+    // Queues the member's flight in its reserved room; it becomes the reader
+    // when the group has none.
+    void send(member_type& member, statement_type& statement);
+    [[nodiscard]] bool reads(const member_type& member) const noexcept;
+    // Turns the event that ended the member's wait into its outcome: false
+    // once it completed, true when it must be sent once more; throws its
+    // failure.
+    [[nodiscard]] bool retries(member_type& member, db_pipeline_event event) const;
+
+    // Services for the reader. read_buffered() reads the results available
+    // without waiting and returns true once the reader's own statement
+    // finished, after handing the role on.
+    [[nodiscard]] bool read_buffered(member_type& reader);
+    // Abandons the pending followers whose deadline passed.
+    void expire_followers(member_type& reader, std::chrono::steady_clock::time_point now) noexcept;
+    [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> earliest_deadline(std::size_t slot) const noexcept;
+    // Fails every pending member and closes the connection.
+    void fail_group(std::size_t slot, const std::exception_ptr& failure) noexcept;
+    [[nodiscard]] const worker_ref& worker() const noexcept {
+        return worker_;
+    }
+
+    // Services for the driver's hooks.
+    [[nodiscard]] pool_type& pool() const noexcept {
+        return pool_;
+    }
+    // Statements this pool runs now, in every phase from admission on.
+    [[nodiscard]] std::size_t statements() const noexcept {
+        return statements_;
+    }
+    [[nodiscard]] group_type& group(std::size_t slot) const noexcept;
+    // Hands the head flight's outcome to its member, which the reader settles
+    // itself and wakes any other; an abandoned flight's outcome is discarded.
+    void complete_head(std::size_t slot, member_type& reader, db_pipeline_outcome outcome);
+    [[nodiscard]] db_error cancelled() const;
+
+private:
+    friend class db_pipeline_member<io_type>;
+
+    // Whether a statement of this arrival may take a connection or room: no
+    // older caller still waits for a lease.
+    [[nodiscard]] bool may_share(std::uint64_t arrival) const noexcept;
+    // Places a statement whose turn it is: a free connection, else room in the
+    // group with the most of it that is not stalled.
+    [[nodiscard]] db_pipeline_event place(member_type& member);
+    [[nodiscard]] std::optional<std::size_t> roomiest_group() const noexcept;
+    void join(member_type& member, std::size_t slot) noexcept;
+    void park(member_type& member, const operation_deadline& admission_deadline);
+    void unpark(member_type& member) noexcept;
+    // Serves parked statements in arrival order.
+    void dispatch() noexcept;
+    // Records what woke a member and posts its resumption.
+    void settle(member_type& member, db_pipeline_event event) noexcept;
+    void require_usable(std::size_t slot) const;
+    void hand_off(member_type& reader) noexcept;
+    void abandon(member_type& member) noexcept;
+    void clear_flights(group_type& cleared) noexcept;
+    void unlink(member_type& member) noexcept;
+    void retire(member_type& member) noexcept;
+    void leave(member_type& member) noexcept;
+    void dissolve(std::size_t slot) noexcept;
+
+    pool_type& pool_;
+    const worker_ref& worker_;
+    member_type* members_{nullptr};
+    std::size_t statements_{0};
+    member_type* parked_head_{nullptr};
+    member_type* parked_tail_{nullptr};
+    std::shared_ptr<cancellation_target_type> cancellation_target_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Names one entry of a db_statement_cache by position and generation, so
+// forgetting or replacing an entry never redirects another statement's handle
+// to a different statement; a stale handle finds nothing.
+struct db_statement_entry final {
+    std::size_t index_;
+    std::uint64_t generation_;
+};
+
+// The server-side prepared statements of one connection, shared by the drivers
+// that cache them. A statement is keyed by its SQL and the type codes of its
+// parameters, since a server fixes parameter (and with them result) types when
+// it prepares. A statement is prepared on its second use: the first runs
+// unprepared, so SQL that never repeats (literals, generated lists) costs no
+// more than without the cache and does not evict reused statements. Entries
+// live as long as the connection; the least recently used one makes room for
+// a new one, and its payload goes back to the driver to release on the server.
+template <typename payload_type>
+class db_statement_cache final {
+public:
+    static constexpr std::size_t capacity = 128;
+
+    using entry_ref = db_statement_entry;
+
+    struct lookup final {
+        // Absent: run the statement unprepared.
+        std::optional<entry_ref> statement_{};
+        // The statement is new to the connection: prepare it first.
+        bool inserted_{false};
+        // The payload of an entry evicted to make room.
+        std::optional<payload_type> evicted_{};
+        // The statement's key_hash().
+        std::size_t hash_{0};
+        // Not cached, used before, and not inserted only because the caller
+        // may not insert it now.
+        bool repeated_{false};
+    };
+
+    db_statement_cache()
+        : entries_() {}
+
+    // Counts a use of the statement. A cached one is returned. One used
+    // before is inserted when the caller `may_insert` it now, with the payload
+    // make() builds; the whole entry is built before the table changes, so a
+    // failed allocation leaves every entry intact. Otherwise the use is
+    // remembered and nothing returned.
+    template <typename factory_type>
+    [[nodiscard]] lookup find(
+        std::string_view sql, std::span<const unsigned int> types, bool may_insert, factory_type&& make) {
+        const auto hash = key_hash(sql, types);
+        ++clock_;
+        const auto cached = entry_index_.find(hash, [&](std::size_t index) noexcept {
+            const auto& existing = entries_[index];
+            return existing.generation_ != 0 && existing.hash_ == hash && existing.sql_ == sql &&
+                   std::ranges::equal(existing.types_, types);
+        });
+        if (cached.has_value()) {
+            auto& existing = entries_[*cached];
+            existing.last_use_ = clock_;
+            return {entry_ref{*cached, existing.generation_}, false, std::nullopt, hash};
+        }
+        const auto first_use_index = find_first_use(hash);
+        if (!first_use_index.has_value()) {
+            remember(hash);
+            return {std::nullopt, false, std::nullopt, hash};
+        }
+        if (!may_insert) {
+            return {std::nullopt, false, std::nullopt, hash, true};
+        }
+        const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
+        const bool has_free_entry = free_entry != entries_.end();
+        if (!has_free_entry && entries_.size() < capacity && entries_.size() == entries_.capacity()) {
+            entries_.reserve(std::min(capacity, std::max<std::size_t>(entries_.size() * 2, 8)));
+        }
+        std::string key_sql(sql);
+        std::vector<unsigned int> key_types(types.begin(), types.end());
+        std::optional<payload_type> created_payload;
+        if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>,
+                          std::size_t>) {
+            created_payload = make(sql, types, hash);
+            if (!created_payload.has_value()) {
+                return {std::nullopt, false, std::nullopt, hash, true};
+            }
+        } else {
+            created_payload.emplace(make(sql, types));
+        }
+        // Nothing below allocates: the key was copied above, `entries_` has
+        // room, and every string and vector shares one resource, so swaps and
+        // moves only exchange storage.
+        const auto next_generation = generation_ + 1;
+        auto index = entries_.size();
+        std::optional<payload_type> evicted;
+        if (has_free_entry || index == capacity) {
+            if (has_free_entry) {
+                // A forgotten entry is reused before the table grows.
+                index = static_cast<std::size_t>(free_entry - entries_.begin());
+            } else {
+                // Only a full table evicts a statement the server still holds.
+                const auto oldest = std::ranges::min_element(entries_, {}, &entry::last_use_);
+                index = static_cast<std::size_t>(oldest - entries_.begin());
+                entry_index_.erase(index, oldest->hash_, [this](std::size_t position) noexcept { return entries_[position].hash_; });
+                evicted.emplace(std::move(oldest->payload_));
+            }
+            auto& reused = entries_[index];
+            reused.sql_.swap(key_sql);
+            reused.types_.swap(key_types);
+            reused.hash_ = hash;
+            reused.last_use_ = clock_;
+            reused.generation_ = next_generation;
+            reused.payload_ = std::move(*created_payload);
+        } else {
+            entries_.push_back(
+                entry{std::move(key_sql), std::move(key_types), hash, clock_, next_generation, std::move(*created_payload)});
+        }
+        entry_index_.insert(index, hash);
+        clear_first_use(*first_use_index, hash);
+        ++generation_;
+        return {entry_ref{index, next_generation}, true, std::move(evicted), hash};
+    }
+
+    [[nodiscard]] payload_type* payload(entry_ref statement) noexcept {
+        auto* found = live(statement);
+        return found == nullptr ? nullptr : &found->payload_;
+    }
+
+    // The SQL of a live entry, owned by the cache. It stays in place until the
+    // next find() or clear().
+    [[nodiscard]] std::string_view sql(entry_ref statement) const noexcept {
+        if (statement.index_ >= entries_.size() || entries_[statement.index_].generation_ != statement.generation_) {
+            return {};
+        }
+        return entries_[statement.index_].sql_;
+    }
+
+    // Drops an entry the server does not hold (a failed prepare) or no longer
+    // holds as cached (a stale statement), unless it was replaced since, and
+    // hands its payload back. With `use_again` its next use prepares it
+    // straight away, as for a statement used before.
+    std::optional<payload_type> forget(entry_ref statement, bool use_again) noexcept {
+        auto* found = live(statement);
+        if (found == nullptr) {
+            return std::nullopt;
+        }
+        const auto old_hash = found->hash_;
+        entry_index_.erase(statement.index_, old_hash, [this](std::size_t index) noexcept { return entries_[index].hash_; });
+        found->generation_ = 0;
+        if (use_again) {
+            remember(old_hash);
+        }
+        return std::move(found->payload_);
+    }
+
+    // Calls visit() with the payload of every live entry.
+    template <typename visitor_type>
+    void for_each(visitor_type&& visit) {
+        for (auto& existing : entries_) {
+            if (existing.generation_ != 0) {
+                visit(existing.payload_);
+            }
+        }
+    }
+
+    // A new connection starts without server-side statements.
+    void clear() noexcept {
+        entries_.clear();
+        entry_index_.clear();
+        first_uses_.fill(0);
+        first_use_index_.clear();
+    }
+
+    // The hash a key is kept under; never zero, which marks a free position.
+    [[nodiscard]] static std::size_t key_hash(std::string_view sql, std::span<const unsigned int> types) noexcept {
+        auto hash = std::hash<std::string_view>{}(sql) ^ types.size();
+        for (const auto type : types) {
+            hash = (hash ^ type) * fnv1a_prime;
+        }
+        return hash == 0 ? 1 : hash;
+    }
+
+private:
+    struct entry final {
+        std::string sql_;
+        std::vector<unsigned int> types_;
+        std::size_t hash_;
+        std::uint64_t last_use_;
+        // Zero marks a forgotten entry, free for reuse. Never reused across
+        // clear(), so no handle outlives its entry unnoticed.
+        std::uint64_t generation_;
+        payload_type payload_;
+    };
+
+    [[nodiscard]] entry* live(entry_ref statement) noexcept {
+        if (statement.index_ >= entries_.size() || entries_[statement.index_].generation_ != statement.generation_) {
+            return nullptr;
+        }
+        return &entries_[statement.index_];
+    }
+
+    static constexpr std::size_t index_capacity = 256;
+    static_assert((index_capacity & (index_capacity - 1)) == 0 && index_capacity >= capacity * 2);
+
+    // An open-addressing index over at most `capacity` positions, stored as
+    // position + 1 so zero marks an empty slot: probed linearly from the
+    // hash, deleted by backward shift. `hash_of(position)` reads the hash a
+    // stored position was inserted under.
+    class probe_index final {
+    public:
+        template <typename match_type>
+        [[nodiscard]] std::optional<std::size_t> find(std::size_t hash, match_type&& match) const noexcept {
+            for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+                const auto code = slots_[slot];
+                if (code == 0) {
+                    return std::nullopt;
+                }
+                if (const auto position = static_cast<std::size_t>(code - 1); match(position)) {
+                    return position;
+                }
+            }
+            return std::nullopt;
+        }
+
+        void insert(std::size_t position, std::size_t hash) noexcept {
+            std::size_t slot = hash & mask;
+            while (slots_[slot] != 0) {
+                slot = (slot + 1) & mask;
+            }
+            slots_[slot] = static_cast<std::uint8_t>(position + 1);
+        }
+
+        template <typename hash_of_type>
+        void erase(std::size_t position, std::size_t hash, hash_of_type&& hash_of) noexcept {
+            const auto target = static_cast<std::uint8_t>(position + 1);
+            for (std::size_t step = 0, slot = hash & mask; step < index_capacity; ++step, slot = (slot + 1) & mask) {
+                const auto code = slots_[slot];
+                if (code == 0) {
+                    return;
+                }
+                if (code == target) {
+                    std::size_t empty = slot;
+                    for (std::size_t next = (slot + 1) & mask; slots_[next] != 0; next = (next + 1) & mask) {
+                        const auto ideal = hash_of(static_cast<std::size_t>(slots_[next] - 1)) & mask;
+                        if (((next - ideal) & mask) >= ((next - empty) & mask)) {
+                            slots_[empty] = slots_[next];
+                            empty = next;
+                        }
+                    }
+                    slots_[empty] = 0;
+                    return;
+                }
+            }
+        }
+
+        void clear() noexcept {
+            slots_.fill(0);
+        }
+
+    private:
+        static constexpr std::size_t mask = index_capacity - 1;
+        std::array<std::uint8_t, index_capacity> slots_{};
+    };
+
+    [[nodiscard]] std::optional<std::size_t> find_first_use(std::size_t hash) const noexcept {
+        return first_use_index_.find(hash, [&](std::size_t position) noexcept { return first_uses_[position] == hash; });
+    }
+
+    void clear_first_use(std::size_t position, std::size_t hash) noexcept {
+        first_use_index_.erase(position, hash, [this](std::size_t stored) noexcept { return first_uses_[stored]; });
+        first_uses_[position] = 0;
+    }
+
+    void remember(std::size_t hash) noexcept {
+        if (find_first_use(hash).has_value()) {
+            return;
+        }
+        const auto position = next_first_use_;
+        if (first_uses_[position] != 0) {
+            first_use_index_.erase(position, first_uses_[position], [this](std::size_t stored) noexcept { return first_uses_[stored]; });
+        }
+        first_uses_[position] = hash;
+        first_use_index_.insert(position, hash);
+        next_first_use_ = (next_first_use_ + 1) % first_uses_.size();
+    }
+
+    std::vector<entry> entries_;
+    probe_index entry_index_;
+    // Key hashes of recent first uses; zero marks a free position. A hash
+    // collision only prepares a statement on its first use.
+    std::array<std::size_t, capacity> first_uses_{};
+    probe_index first_use_index_;
+    std::size_t next_first_use_{0};
+    std::uint64_t clock_{0};
+    std::uint64_t generation_{0};
+};
+
+}  // namespace ruvia::detail
+
+struct st_mysql;
+struct st_mysql_res;
+struct ma_charset_info_st;
+
+namespace ruvia::detail {
+
+// Builds the error for a failed driver call from what libmariadb reports for
+// it. A statement_failed whose cause ended the connection is reported as
+// io_error.
+[[nodiscard]] db_error mariadb_error(std::string_view operation, unsigned int native_code, const char* sql_state,
+    const char* message, db_error::code_type code);
+[[nodiscard]] db_error mysql_error(
+    const st_mysql& connection, std::string_view operation, db_error::code_type code);
+
+// A failed command after which the connection cannot carry another one: the
+// client library failed or lost the exchange, or the server ended the session
+// or read a packet it did not expect. The server answers any other error once
+// the command is done, and the connection is ready for the next.
+[[nodiscard]] bool mariadb_connection_failure(unsigned int native_code) noexcept;
+
+// MariaDB's C API carries SQL and escaped-value lengths in unsigned long.
+// Reject a wider C++ view before any narrowing conversion reaches the driver.
+void validate_mariadb_sql_length(std::size_t length);
+
+void free_stored_result(void* result_value) noexcept;
+
+// The query that reads the session's client character set, and the
+// character set its stored result names. The latter throws
+// std::invalid_argument when libmariadb does not know it.
+inline constexpr std::string_view mariadb_charset_query = "SELECT @@character_set_client";
+[[nodiscard]] const ma_charset_info_st& mariadb_queried_charset(st_mysql_res& result);
+// utf8mb4, the client character set a connection opens with: the one to
+// escape for while the session's tracking says it is still in effect.
+[[nodiscard]] const ma_charset_info_st& mariadb_utf8mb4_charset() noexcept;
+
+// Writes `sql` with each placeholder replaced by its parameter's literal to
+// `output`. A quote is escaped by doubling it, which reads the same in every
+// sql_mode and character set; a backslash, in a session that reads backslash
+// escapes, by another one, as `charset` (the session's client character set)
+// splits the string into characters. The session's status must be current:
+// every response before has been read whenever the statement or a string
+// parameter has a backslash (mariadb_statement_classification::has_backslash_,
+// mariadb_parameter_traits::has_backslash_); `charset` is needed only where
+// mariadb_escape_needs_charset() says so. A string parameter with a NUL byte is
+// refused: no SQL literal carries one.
+void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params,
+    std::string& output, const ma_charset_info_st* charset = nullptr);
+
+// What a statement's text tells about how it may run.
+struct mariadb_statement_traits final {
+    // A cached statement may run prepared: not a CALL, whose OUT parameters
+    // come back as an extra result set only in the binary protocol; not a
+    // LOAD; not a SET or USE, which change the session every cached
+    // statement was prepared in and so would drop their own handle each
+    // time they run; not one with RETURNING, whose changes a failure after
+    // its result changed shape would hide; and no executable comment, whose
+    // content the server runs but this scan cannot see.
+    bool preparable_{false};
+    // Placeholders, by position, where the text protocol takes only an
+    // integer literal (LIMIT, OFFSET, FETCH and ROWS EXAMINED counts).
+    std::uint64_t integer_params_{0};
+};
+
+[[nodiscard]] mariadb_statement_traits mariadb_statement_traits_of(std::string_view sql) noexcept;
+
+struct mariadb_statement_classification final {
+    // A statement that must have the connection to itself: LOAD ... LOCAL INFILE
+    // answers its command with a request for the file, then reads the file's
+    // content as packets of the same command, so a command sent behind it would
+    // be read as file content. A statement led by an executable comment counts as
+    // one, since the comment may hide a LOAD.
+    bool exclusive_{false};
+    // A statement that may run a stored procedure: a CALL, or one hidden behind
+    // an executable comment.
+    bool calls_routine_{false};
+    // Whether `sql` names one of the session tracking variables.
+    bool names_session_tracking_{false};
+    // Whether `sql` contains a backslash character.
+    bool has_backslash_{false};
+};
+
+struct mariadb_parameter_traits final {
+    bool has_backslash_{false};
+    // A backslash right after a byte above 0x7F.
+    bool has_ambiguous_backslash_{false};
+};
+
+[[nodiscard]] mariadb_statement_classification classify_mariadb_statement(std::string_view sql) noexcept;
+[[nodiscard]] mariadb_parameter_traits inspect_mariadb_parameters(std::span<const db_value> params) noexcept;
+// Whether escaping string parameters for the session needs its client
+// character set. Only an escape a string needs could change its meaning: a
+// backslash put in front of its own backslash, in a session that reads
+// backslash escapes (its current server status tells). That is safe in every
+// character set right after an ASCII byte; right after another byte a
+// multibyte character set (GBK, Big5, SJIS) may read the two as one character
+// and leave the inserted backslash to escape what follows.
+[[nodiscard]] bool mariadb_escape_needs_charset(
+    const st_mysql& connection, bool has_ambiguous_backslash) noexcept;
+
+}  // namespace ruvia::detail
+
+struct st_mysql;
+struct st_mysql_stmt;
+
+namespace ruvia::detail {
+
+// Storage a bound parameter points at for the length of an execution.
+union mariadb_param_value {
+    long long integer_;
+    double real_;
+    signed char flag_;
+};
+
+// Storage of one result column between mysql_stmt_fetch() and formatting.
+struct mariadb_column final {
+    std::vector<char> buffer_;
+    unsigned long length_{0};
+    char null_{0};
+    char error_{0};
+};
+
+// One cached statement: its entry_ref once prepared, the placeholders its text
+// restricts (mariadb_statement_traits::integer_params_), and the hash of its
+// key, for refusing it.
+struct mariadb_statement final {
+    st_mysql_stmt* handle_{nullptr};
+    std::uint64_t integer_params_{0};
+    std::size_t key_hash_{0};
+};
+
+// Server-side prepared statements of one MariaDB connection, so a repeated
+// statement skips the server's parse and travels in the binary protocol
+// (db_statement_cache: keyed by SQL and parameter types, prepared on its
+// second use, the least recently used one closed for room).
+//
+// The text protocol is the reference: a statement runs prepared only where
+// the binary protocol returns the same field text and errors. So it runs as
+// text when the server will not prepare it, when its statement text rules it
+// out (mariadb_statement_traits), when a result column is one whose text the
+// binary value cannot tell (a YEAR the prepare describes), and for a call whose
+// parameters the server would read otherwise than their literals: a negative
+// number (a literal's unary minus binds looser than COLLATE, and -? of
+// INT64_MIN overflows only as a parameter), an integer above INT64_MAX, a
+// string with a NUL byte or a non-finite double (refused by the text
+// protocol), and anything but a non-negative integer where the text protocol
+// takes only an integer literal (LIMIT ?).
+//
+// The server parses a statement when it prepares it, under the session's
+// sql_mode, character sets, default schema and other variables of that
+// moment, and keeps that reading. The session reports every change of those
+// variables (mariadb_tracked_variables, tracked with the schema from when the
+// connection opens): such a change drops every cached statement, so each is
+// prepared anew under the new state; the session's other reports (last_gtid
+// after each commit when binary logging is on, autocommit) leave the cache
+// alone. A connection whose server does not track its session, whose
+// tracking a statement turned off, or whose client or connection character
+// set is not the utf8mb4 it opened with (the binary protocol converts
+// parameters otherwise than the text protocol does literals) runs nothing
+// prepared. A stored procedure may turn tracking off without a report, so
+// after a CALL the next prepared execution first reads the tracked list back
+// from the server.
+//
+// The cache owns every statement entry_ref, including those evicted or found
+// stale that still wait to be closed on the server, and each entry's SQL,
+// which libmariadb reads while a prepare is suspended. After the connection
+// was closed, clear() frees the handles without I/O.
+class mariadb_statement_cache final {
+public:
+    using entry_ref = db_statement_entry;
+
+    mariadb_statement_cache();
+    ~mariadb_statement_cache();
+
+    mariadb_statement_cache(const mariadb_statement_cache&) = delete;
+    mariadb_statement_cache& operator=(const mariadb_statement_cache&) = delete;
+
+    // Counts a use of `sql` with `params`. A statement comes back only when
+    // the caller may run it prepared now and it would return what its text
+    // returns; another use still counts toward preparing it later.
+    [[nodiscard]] std::optional<entry_ref> find(std::string_view sql, std::span<const db_value> params, bool may_prepare);
+    // A new connection starts without server-side statements; the old one is
+    // closed, so its handles are freed without I/O. Until connected() says
+    // otherwise, the session counts as untracked.
+    void clear() noexcept;
+
+    // Hears the session changes `connection` reads from the server; false
+    // when libmariadb refused the callback. Called before it connects.
+    [[nodiscard]] bool observe(st_mysql& connection);
+    // The connection opened: whether the server tracks every change of its
+    // session for it from now on.
+    void connected(bool tracked) noexcept;
+    // A statement that may turn session tracking off (it names one of its
+    // variables, whose change the server does not report) is about to run.
+    void untrack() noexcept;
+    // A statement that may run a stored procedure was sent; the procedure
+    // may have turned tracking off unreported.
+    void routine_called() noexcept;
+    // Whether the session's client character set is known to be utf8mb4:
+    // tracked, and so current once every response before has been read.
+    [[nodiscard]] bool client_utf8mb4() const noexcept;
+
+    [[nodiscard]] mariadb_statement& entry(entry_ref statement);
+    void reserve_retired(std::size_t count = 1);
+    void retire(st_mysql_stmt* statement) noexcept;
+    void refuse(std::size_t hash) noexcept;
+    void refuse(entry_ref statement, std::size_t hash) noexcept;
+    [[nodiscard]] bool refused(std::size_t hash) const noexcept;
+    void invalidate();
+    [[nodiscard]] bool usable() const noexcept;
+    void lose_tracking() noexcept;
+
+    db_statement_cache<mariadb_statement> statements_;
+    std::vector<st_mysql_stmt*> retired_;
+    // Key hashes of statements that run as text on this connection; zero
+    // marks a free position.
+    std::array<std::size_t, db_statement_cache<mariadb_statement>::capacity> refused_{};
+    std::size_t next_refused_{0};
+    // What the session reported: whether it tracks every variable the cache
+    // relies on and the schema, and whether its client and connection
+    // character sets are still utf8mb4; and a change since the last find().
+    bool tracked_{false};
+    bool all_variables_{false};
+    bool schema_tracked_{false};
+    bool untracked_{false};
+    bool client_utf8mb4_{true};
+    bool connection_utf8mb4_{true};
+    bool changed_{false};
+    // A stored procedure ran since the tracked list was last read back.
+    bool verify_{false};
+    // Scratch of the one execution a connection runs at a time.
+    std::vector<unsigned int> types_;
+    std::vector<std::max_align_t> binds_;
+    std::vector<mariadb_param_value> values_;
+    std::vector<mariadb_column> columns_;
+    // The bytes the column buffers hold, and those the last result needed.
+    std::size_t column_bytes_{0};
+    std::size_t column_needed_{0};
+};
+
+// The system variables a statement's parse or result depends on, as
+// session_track_system_variables lists them, with the two tracking variables
+// themselves, so that turning the schema's tracking off or changing this
+// list to one that still names it is reported. A change of
+// collation_connection is reported as one of character_set_connection.
+inline constexpr std::string_view mariadb_tracked_variables =
+    "sql_mode,old_mode,character_set_client,character_set_connection,character_set_results,time_zone,"
+    "div_precision_increment,default_week_format,lc_time_names,max_sort_length,group_concat_max_len,"
+    "session_track_system_variables,session_track_schema";
+
+// Turns on the session tracking the statement cache relies on.
+inline constexpr auto mariadb_session_tracking_storage = [] {
+    constexpr std::string_view prefix = "SET SESSION session_track_system_variables = '";
+    constexpr std::string_view suffix = "', session_track_schema = ON";
+    std::array<char, prefix.size() + mariadb_tracked_variables.size() + suffix.size()> statement{};
+    auto out = statement.begin();
+    for (const auto part : std::array{prefix, mariadb_tracked_variables, suffix}) {
+        for (const char byte : part) {
+            *out++ = byte;
+        }
+    }
+    return statement;
+}();
+inline constexpr std::string_view mariadb_session_tracking_setup(mariadb_session_tracking_storage.data(), mariadb_session_tracking_storage.size());
+
+// One prepared execution as a sequence of libmariadb operations: after a
+// stored procedure ran, reading back the session's tracked variables;
+// closing the statements waiting to be closed, preparing the statement on its
+// first prepared use, executing it, and storing each result.
+// resume_mariadb_prepared() starts or continues the current operation and
+// returns the wait mask its continuation needs; 0 hands the run back to its
+// caller, which goes on according to step_.
+struct mariadb_prepared_run final {
+    enum class step : std::uint8_t {
+        // Querying @@session_track_system_variables, then storing its row.
+        verifying,
+        verified,
+        close,
+        prepare,
+        // The caller confirms the statement still runs, then resumes.
+        execute,
+        executing,
+        storing,
+        // The rows failed (the server's error ended them): back to the state
+        // after prepare, so that the next execution starts clean.
+        resetting,
+        // The caller takes the stored rows, then resumes.
+        rows,
+        next_result,
+        // Reading past the rows of a result the run cannot use.
+        draining,
+        done,
+    };
+
+    mariadb_statement_cache* cache_{nullptr};
+    mariadb_statement_cache::entry_ref handle_{};
+    std::span<const db_value> params_{};
+    step step_{step::done};
+    // The current step's operation has been started and waits to continue.
+    bool started_{false};
+    // A entry_ref being closed on the server, or drained.
+    st_mysql_stmt* closing_{nullptr};
+    // The statement's outcome: its failure, or what its first result reported.
+    std::exception_ptr failure_{};
+    std::exception_ptr output_failure_{};
+    std::uint64_t affected_rows_{0};
+    std::uint64_t insert_id_{0};
+    bool returned_rows_{false};
+    bool extra_row_set_{false};
+    // It did not execute because the server no longer holds it as prepared
+    // (ER_NEED_REPREPARE, ER_UNKNOWN_STMT_HANDLER). It was dropped from the
+    // cache, and a run outside a transaction may go again, preparing it
+    // anew. A statement whose result changed shape after it ran is dropped
+    // as well, but fails: the server has run it, and running it again would
+    // repeat its effects.
+    bool stale_{false};
+    // The server refused to prepare it, its result is not readable as text,
+    // or the session no longer tracks what the cache relies on: run it as
+    // text instead.
+    bool text_{false};
+};
+
+// Starts a run for a statement find() returned.
+[[nodiscard]] mariadb_prepared_run start_mariadb_prepared(
+    mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept;
+// Continues a run with the readiness libmariadb waited for (0 to start the
+// current step); returns the next wait mask, or 0 when the caller goes on.
+// A failure that leaves the connection out of step is thrown.
+[[nodiscard]] int resume_mariadb_prepared(st_mysql& connection, mariadb_prepared_run& run, int ready);
+// Keeps the stored rows of the run's first result in `output`, or discards
+// them when it is null; then the run resumes.
+void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output);
+// Ends a run whose statement was abandoned before it executed.
+void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
+// What a statement's responses amount to, whichever protocol ran it: its own
+// failure, a second row set, a failure to keep its rows, or a row set the
+// caller did (not) ask for; null when it succeeded.
+[[nodiscard]] std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set,
+    const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows);
+
+}  // namespace ruvia::detail
+
+struct st_mysql_res;
+struct ma_charset_info_st;
+
+// MariaDB's part of statement pipelining (db_pipeline.h). A group's
+// statements are sent as separate COM_QUERY commands (mysql_send_query) and
+// their responses read in order (mysql_read_query_result and
+// mysql_store_result). A failed statement does not affect the ones after it:
+// the server runs each command on its own.
+//
+// libmariadb runs one nonblocking operation per connection at a time, and
+// accepts a command only once every result before it has been fully read. So
+// flights queue in the group and the reader sends them whenever it stands
+// between two responses, before it reads the next one: statements that arrive
+// while a response is being read go out right after it. The bytes sent ahead
+// of unread responses are bounded (mariadb_pipeline_send_budget), so neither
+// side can fill its socket buffers with requests while the other waits to
+// write responses; a statement larger than the budget is sent once nothing is
+// outstanding.
+//
+// A command is sent ahead of responses only when the statements before it
+// cannot change what it means. Its parameters are interpolated when it is
+// queued, in text every session reads alike; a statement whose interpolation
+// depends on the session -- a backslash in its text or in a string parameter,
+// which NO_BACKSLASH_ESCAPES reads either way -- is interpolated and sent once
+// every response before it has been read, a SET of sql_mode among them, and
+// when its escape depends on the session's client character set
+// (mariadb_escape_needs_charset()), that is read from the server first, unless
+// session tracking says it is still utf8mb4. A LOAD ... LOCAL INFILE
+// (mariadb_statement_classification::exclusive_) goes out alone, and nothing
+// follows it until its response has been read.
+//
+// A statement found in the connection's statement cache runs prepared only
+// when it is the only statement its worker runs: the binary protocol has no
+// nonblocking way to read an execution's response other than by waiting for
+// it, so a prepared statement cannot share the wire with other flights, and
+// waiting for each response costs more than the server saves on parsing once
+// other statements compete for the worker. Those run as pipelined text.
+
+namespace ruvia::detail {
+
+template <typename driver_type>
+class db_pool;
+struct mariadb_driver;
+
+inline constexpr std::size_t mariadb_pipeline_send_budget = 64 * 1024;
+
+// One statement's command: its text, kept by its caller until it is sent,
+// and the statement as written, for running it prepared or interpolating it
+// late.
+struct mariadb_flight final {
+    // Empty while `deferred_`.
+    std::string_view sql_{};
+    std::string_view statement_sql_{};
+    std::span<const db_value> params_{};
+    std::string* interpolated_{nullptr};
+    // The bytes it put on the wire, once sent.
+    std::size_t size_{0};
+    bool sent_{false};
+    // Interpolated when sent, once every response before it has been read.
+    bool deferred_{false};
+    // Sent once every response before it has been read, and followed by
+    // nothing until its own response has been read.
+    bool exclusive_{false};
+    // May run a stored procedure (mariadb_statement_classification::calls_routine_).
+    bool routine_{false};
+    // Its use was counted in the statement cache: when the reader comes back
+    // to it, it goes out as text.
+    bool counted_{false};
+    // Whether `params_` contains a backslash preceded by a non-ASCII byte.
+    bool ambiguous_backslash_{false};
+    // The session's client character set, read for a deferred statement
+    // whose escape depends on it.
+    const ma_charset_info_st* charset_{nullptr};
+};
+
+// The operation a group's connection runs, one at a time.
+enum class mariadb_operation : std::uint8_t {
+    none,
+    send,
+    read,
+    store,
+    next_result,
+    // Reading the session's client character set for the head statement:
+    // the query, then its row.
+    charset_query,
+    charset_store,
+    // A statement running alone in the group as a prepared statement.
+    prepared,
+};
+
+// The pipeline hooks of MariaDB (see db_pipeline_impl.h).
+struct mariadb_pipeline_io final {
+    using driver_type = mariadb_driver;
+    using pool_type = db_pool<mariadb_driver>;
+    using state_type = db_pipeline_state<mariadb_pipeline_io>;
+    using member_type = db_pipeline_member<mariadb_pipeline_io>;
+    using flight_type = mariadb_flight;
+
+    struct group_state final {
+        group_state()
+            : send_buffer_() {}
+
+        // Frees a stored result nobody took; called whenever the group's
+        // flights clear, which every group does before its slot goes away.
+        void reset() noexcept;
+
+        // The operation in progress: the wait mask it suspended with, and,
+        // once exchange() finished it, its result.
+        mariadb_operation operation_{mariadb_operation::none};
+        int status_{0};
+        bool done_{false};
+        int result_{0};
+        st_mysql_res* stored_{nullptr};
+        // Records from the head that were sent, or dropped unsent because
+        // their statement was abandoned first.
+        std::size_t sent_{0};
+        std::size_t bytes_in_flight_{0};
+        // Commands were sent since the reader last paused for a turn.
+        bool batched_{false};
+        // The command being sent, copied (or, deferred, interpolated) so that
+        // a statement abandoned while its send is suspended leaves libmariadb
+        // nothing dangling. Above the send budget it is given back once sent.
+        std::string send_buffer_;
+        // What has been read of the head's responses.
+        std::exception_ptr head_failure_{};
+        std::exception_ptr head_output_failure_{};
+        std::uint64_t head_affected_rows_{0};
+        std::uint64_t head_insert_id_{0};
+        bool head_returned_rows_{false};
+        bool head_extra_row_set_{false};
+        // The head statement's prepared execution, while operation_ is
+        // prepared.
+        mariadb_prepared_run prepared_{};
+    };
+
+    // The statement as its caller wrote it; queue() interpolates the
+    // parameters unless that waits for the session (mariadb_flight).
+    struct statement_type final {
+        std::string_view sql_;
+        std::span<const db_value> params_;
+        std::string interpolated_;
+        mariadb_statement_classification classification_{};
+        bool deferred_{false};
+        bool ambiguous_backslash_{false};
+    };
+
+    [[nodiscard]] static statement_type prepare(std::string_view sql, std::span<const db_value> params);
+    [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
+    static void open(state_type& state, std::size_t slot);
+    [[nodiscard]] static bool queue(
+        state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
+    [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
+    [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
+    static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
+    [[nodiscard]] static bool reusable(state_type& state, std::size_t slot) noexcept;
+};
+
+// Per connection: cached prepared statements and the pipeline group sharing
+// it.
+struct mariadb_session final {
+    // Cleared by connect(): a new connection holds no server statements.
+    mariadb_statement_cache statements_;
+    db_pipeline_group<mariadb_pipeline_io> pipeline_;
+};
+
+}  // namespace ruvia::detail
+
+struct pg_conn;
+struct pg_result;
+// PostgreSQL's part of statement pipelining (db_pipeline.h): a group's
+// connection runs in libpq pipeline mode, and each statement sends its own
+// flight ending in its own Sync, so the server aborts no statement for another
+// one's failure. Flights are queued and flushed as they are sent; the reader
+// consumes input and reads results whenever libpq holds them.
+
+namespace ruvia::detail {
+// Builds the error for a failed libpq call or result. A statement_failed on a
+// connection libpq has marked bad is reported as io_error.
+[[nodiscard]] db_error postgresql_error(const pg_conn& connection, std::string_view operation,
+    db_error::code_type code, const pg_result* result = nullptr);
+
+// Parameters are sent in text format. A double declares float8 so the server
+// never infers an integer type from an integral value; every other parameter
+// is left untyped (OID 0): the SQL decides its type, and compiled SQL casts
+// each placeholder from its value category.
+struct postgresql_params final {
+    static constexpr std::size_t inline_capacity = 8;
+    static constexpr std::size_t numeric_slot_size = 32;
+
+    explicit postgresql_params(std::span<const db_value> params);
+    postgresql_params(const postgresql_params&) = delete;
+    postgresql_params& operator=(const postgresql_params&) = delete;
+    postgresql_params(postgresql_params&&) = delete;
+    postgresql_params& operator=(postgresql_params&&) = delete;
+
+    [[nodiscard]] int count() const noexcept {
+        return static_cast<int>(count_);
+    }
+
+    [[nodiscard]] const char* const* values() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_values_.data() : heap_values_.data();
+    }
+
+    [[nodiscard]] const unsigned int* types() const noexcept {
+        if (count_ == 0) {
+            return nullptr;
+        }
+        return count_ <= inline_capacity ? inline_types_.data() : heap_types_.data();
+    }
+
+    [[nodiscard]] std::span<const unsigned int> type_span() const noexcept {
+        return {types(), count_};
+    }
+
+    std::size_t count_{0};
+    std::array<char, inline_capacity * numeric_slot_size> inline_encoded_;
+    std::array<const char*, inline_capacity> inline_values_;
+    std::array<unsigned int, inline_capacity> inline_types_;
+    std::vector<std::array<char, numeric_slot_size>> heap_encoded_;
+    std::vector<const char*> heap_values_;
+    // libpq's Oid is unsigned int; 0 leaves the type to the server.
+    std::vector<unsigned int> heap_types_;
+};
+
+[[nodiscard]] std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept;
+
+// Named server-side statements prepared on one PostgreSQL connection, so a
+// repeated statement skips the server's parse and analysis
+// (db_statement_cache: keyed by SQL and the parameter types it declares,
+// prepared on its second use, least recently used closed for room). A name is
+// derived from the key's SHA-256: equal names denote equal statements, so a
+// name reaching a server session it was not prepared on (a pooler that shares
+// server sessions) can never run a different statement. Every statement in
+// flight on a pipelined connection shares the cache.
+//
+// "ruvia_", 32 lowercase hex digits of the key digest, and a NUL.
+using postgresql_statement_name = std::array<char, 39>;
+using postgresql_statement_cache = db_statement_cache<postgresql_statement_name>;
+
+[[nodiscard]] postgresql_statement_name make_postgresql_statement_name(
+    std::string_view sql, std::span<const unsigned int> types);
+
+template <typename driver_type>
+class db_pool;
+struct postgresql_driver;
+
+// The commands of one buffered statement flight. A first use runs as the
+// unnamed statement. Otherwise a Close of a statement evicted to make room and
+// a Close and Parse of a statement new to the connection precede the
+// statement. A Sync ends the flight.
+struct postgresql_flight final {
+    // The cache entry of a named statement.
+    std::optional<postgresql_statement_cache::entry_ref> statement_{};
+    // Commands queued ahead of the statement.
+    std::size_t setup_commands_{0};
+    bool parses_{false};
+};
+
+// What has been read of one flight's results, up to its Sync.
+struct postgresql_flight_results final {
+    // Index of the command whose results are being read; each command's
+    // results end with a null result, and the Sync result follows the last.
+    std::size_t command_{0};
+    std::uint64_t affected_rows_{0};
+    // The first error of the flight; the server skips the rest up to Sync.
+    std::optional<db_error> failure_{};
+    // Keeping the rows failed (an allocation in the caller's resource); the
+    // flight is still read up to its Sync, so only its statement fails.
+    std::exception_ptr output_failure_{};
+    // The error is the statement's own rather than its setup's.
+    bool statement_failed_{false};
+    // The error reports a stale cached statement (26000 / 0A000) ...
+    bool stale_{false};
+    // ... found while looking it up or revalidating it, before it ran.
+    bool stale_before_execution_{false};
+    bool returned_rows_{false};
+    bool parsed_{false};
+};
+
+// The pipeline hooks of PostgreSQL (see db_pipeline_impl.h).
+struct postgresql_pipeline_io final {
+    using driver_type = postgresql_driver;
+    using pool_type = db_pool<postgresql_driver>;
+    using state_type = db_pipeline_state<postgresql_pipeline_io>;
+    using member_type = db_pipeline_member<postgresql_pipeline_io>;
+    using flight_type = postgresql_flight;
+
+    struct group_state final {
+        postgresql_flight_results head_results_{};
+        // libpq holds output the socket has not accepted yet.
+        bool flush_pending_{false};
+
+        void reset() noexcept {
+            head_results_ = {};
+            flush_pending_ = false;
+        }
+    };
+
+    // The statement text, kept by its caller, and its encoded parameters.
+    struct statement_type final {
+        statement_type(std::string_view sql, std::span<const db_value> params)
+            : sql_(sql),
+              encoded_(params) {}
+
+        std::string_view sql_;
+        postgresql_params encoded_;
+    };
+
+    [[nodiscard]] static statement_type prepare(std::string_view sql, std::span<const db_value> params);
+    // The connection's socket for a wait; throws when it has none.
+    [[nodiscard]] static db_slot_socket::native_socket_type socket(pool_type& pool, std::size_t slot);
+    static void open(state_type& state, std::size_t slot);
+    [[nodiscard]] static bool queue(
+        state_type& state, std::size_t slot, member_type& member, statement_type& statement, flight_type& flight);
+    [[nodiscard]] static bool advance(state_type& state, std::size_t slot, member_type& reader);
+    [[nodiscard]] static db_socket_readiness wanted(pool_type& pool, std::size_t slot) noexcept;
+    static void exchange(state_type& state, std::size_t slot, db_socket_readiness ready);
+    [[nodiscard]] static bool reusable(state_type& state, std::size_t slot) noexcept;
+};
+
+// Per connection: cached statements and the pipeline group sharing it.
+struct postgresql_session final {
+    // Cleared by connect(): a new connection holds no server statements.
+    postgresql_statement_cache statements_;
+    db_pipeline_group<postgresql_pipeline_io> pipeline_;
+};
+
+}  // namespace ruvia::detail
+
+struct st_mysql;
+struct pg_conn;
+
+// One worker-local database pool, shared by every driver. The pool owns lease
+// scheduling, cancellation, deadlines, connection lifecycle, and the statement,
+// stream and transaction shapes; a driver supplies its connection type, the
+// protocol hooks that talk to its client library, and the state it keeps per
+// connection (session_type) and per pool (state_type).
+
+namespace ruvia::detail {
+
+using db_resolved_addresses_type = std::vector<std::string>;
+
+[[nodiscard]] db_resolved_addresses_type collect_db_resolved_addresses(
+    const client_resolve_result& results, db_driver driver);
+
+// Connector/C accepts comma-separated hosts and performs failover only while
+// opening the transport. IPv6 literals in a multi-host list must be bracketed
+// so their colons are not parsed as a per-host port separator; a lone IPv6
+// literal remains unbracketed because Connector/C only invokes that list parser
+// when a comma is present.
+[[nodiscard]] std::string make_mariadb_resolved_host_list(
+    std::span<const std::string> addresses);
+
+struct postgresql_resolved_host_list final {
+    std::string hosts_;
+    std::string addresses_;
+};
+
+// libpq requires host and hostaddr lists to contain the same number of items.
+// Repeating the logical hostname preserves TLS/GSS/password-file identity while
+// the numeric hostaddr list suppresses libpq's blocking DNS lookup.
+[[nodiscard]] postgresql_resolved_host_list make_postgresql_resolved_host_list(
+    std::string_view logical_host, std::span<const std::string> addresses);
+
+enum class db_deadline_kind : std::uint8_t {
+    resolve,
+    socket,
+    // A driver-requested timed pause without a socket wait (MariaDB connect).
+    sleep,
+};
+
+// What a driver hook reports after starting an unbuffered statement.
+struct db_stream_start final {
+    db_stream_start() = default;
+
+    // Driver-owned result handle handed to the stream (may be null).
+    void* result_{nullptr};
+    std::vector<std::string> column_names_;
+    // False when the statement produced no row set; the slot is still clean.
+    bool returns_rows_{true};
+};
+
+// How a stream ended. Either way the driver has read the statement to its end,
+// released its result handle, and left the connection idle.
+enum class db_stream_end : std::uint8_t {
+    exhausted,
+    // The statement produced no row set, which only its first result tells.
+    no_row_set,
+};
+
+// One read of a stream: its next row, or how it ended.
+using db_stream_step = std::variant<db_row, db_stream_end>;
+
+template <typename driver_type>
+class db_pool;
+
+// The configured port as a NUL-terminated buffer, the form both asio's
+// resolver and libpq take it in.
+[[nodiscard]] std::array<char, 6> format_db_port(std::uint16_t port);
+
+// The driver hooks. Statement hooks run on a connected, leased slot under a
+// deadline already constrained by the query timeout and, on a transaction or
+// stream lease, by the lease deadline. `sql` views are
+// NUL-terminated and contain no other NUL, and string parameters own their
+// NUL-terminated storage for the entire hook call: raw SQL is checked once
+// where it enters (prepare_db_statement), compiled SQL is built that way, and
+// parameters are checked where they are encoded for the client library. Hooks
+// throw on failure. A statement_failed db_error or a std::invalid_argument
+// promises that the command has been drained and the connection is idle -- a
+// hook that cannot get there closes the slot before throwing -- so the pool
+// keeps the connection; any other failure closes it.
+//
+// Outside transactions, query() and execute() run through the driver's
+// pipeline (pipeline_io_type, db_pipeline.h), which shares connections between
+// callers; state_type is that pipeline's per-pool state and session_type keeps
+// the group of each connection. The state may keep a lease that release_slot()
+// gives back for a caller of its own (take_released_slot() returns true),
+// hears when a caller stops waiting for a lease, and is closed by close_now().
+// Before any lease is reassigned, reusable_connection() must confirm that the
+// drained connection is outside a transaction and safe for unrelated callers.
+// idle_connection_alive() looks at a connection that sat in the pool, without
+// blocking and before anything is sent on it: false when the server ended the
+// session meanwhile, so the pool reconnects instead.
+//
+// Stream hooks are protocol steps only: the pool owns a stream's cancellation,
+// deadline and the release of its slot. A stream's `result` handle is the
+// driver's, kept in the slot (db_slot::stream_result_); a hook that frees it
+// sets it to null, and after a hook throws the pool discards what is left of
+// it (discard_stream()) and closes the slot.
+struct mariadb_driver final {
+    using connection_type = st_mysql;
+    using pool_type = db_pool<mariadb_driver>;
+    using session_type = mariadb_session;
+    using pipeline_io_type = mariadb_pipeline_io;
+    using state_type = db_pipeline_state<pipeline_io_type>;
+    static constexpr db_driver driver = db_driver::mariadb;
+    static constexpr std::string_view name{"MariaDB"};
+
+    static task<void> connect(pool_type& pool, std::size_t slot, const operation_deadline& deadline);
+    static void close_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
+    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
+        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
+    // Ends a stream before its rows ran out; on return the connection is idle.
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
+    static void discard_stream(void* result) noexcept;
+};
+
+struct postgresql_driver final {
+    using connection_type = pg_conn;
+    using pool_type = db_pool<postgresql_driver>;
+    using session_type = postgresql_session;
+    using pipeline_io_type = postgresql_pipeline_io;
+    using state_type = db_pipeline_state<pipeline_io_type>;
+    static constexpr db_driver driver = db_driver::postgresql;
+    static constexpr std::string_view name{"PostgreSQL"};
+
+    static task<void> connect(pool_type& pool, std::size_t slot, const operation_deadline& deadline);
+    static void close_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
+    [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
+    static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
+        std::span<const db_value> params, const operation_deadline& deadline);
+    static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
+        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
+    // Ends a stream before its rows ran out; on return the connection is idle
+    // or closed.
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
+    static void discard_stream(void* result) noexcept;
+};
+
+// One pooled connection. The driver owns the native socket; db_slot_socket
+// waits on a Ruvia-owned duplicate of it. Pending Asio handlers, deadline
+// continuations and pipeline records address the slot, so it never moves.
+template <typename driver_type>
+struct db_slot final {
+    db_slot(asio::io_context& io_context, const worker_ref& worker)
+        : resolver_(worker),
+          wait_socket_(io_context) {}
+
+    ~db_slot() {
+        if (wait_active_) {
+            std::terminate();
+        }
+    }
+
+    db_slot(const db_slot&) = delete;
+    db_slot& operator=(const db_slot&) = delete;
+
+    client_host_resolver resolver_;
+    typename driver_type::connection_type* connection_{nullptr};
+    db_slot_socket wait_socket_;
+    // Driver state of the current connection.
+    [[no_unique_address]] typename driver_type::session_type session_;
+    // A sleep wait parks here until its deadline or a close resumes it.
+    std::coroutine_handle<> deadline_continuation_{};
+    // The driver result of the stream holding this slot, null otherwise. The
+    // pool keeps it so an expiring lease can discard it before closing.
+    void* stream_result_{nullptr};
+    // Whole-lease deadline (db_config::transaction_timeout_) of the
+    // transaction or stream holding this slot; unbounded for any other lease.
+    operation_deadline lease_timeout_{std::nullopt};
+    bool connected_{false};
+    // Shutdown may request closure while an asynchronous wait still borrows
+    // this slot and its socket. The transport stays alive until that wait
+    // resumes and the driving coroutine performs the final close; destroying
+    // it immediately would leave the queued Asio handler dangling.
+    bool wait_active_{false};
+    bool close_requested_{false};
+    // An operation of the transaction or stream holding this slot is running.
+    // Its deadline already ends no later than lease_timeout_, so the lease
+    // timer leaves it to that deadline.
+    bool lease_busy_{false};
+    // Fires at lease_timeout_ to close the connection of a lease its holder
+    // keeps idle. Declared last so it is unregistered before anything it
+    // reaches is destroyed.
+    worker_timer_registration lease_timer_;
+};
+
+// Marks a slot as borrowed by a suspended wait for the wait's duration.
+template <typename driver_type>
+class db_slot_active_wait_guard final {
+public:
+    explicit db_slot_active_wait_guard(db_slot<driver_type>& slot) noexcept
+        : slot_(slot) {
+        if (slot_.wait_active_) {
+            std::terminate();
+        }
+        slot_.wait_active_ = true;
+    }
+    db_slot_active_wait_guard(const db_slot_active_wait_guard&) = delete;
+    db_slot_active_wait_guard& operator=(const db_slot_active_wait_guard&) = delete;
+    ~db_slot_active_wait_guard() {
+        slot_.wait_active_ = false;
+    }
+
+private:
+    db_slot<driver_type>& slot_;
+};
+
+template <typename driver_type>
+class db_pool final {
+public:
+    using slot_type = db_slot<driver_type>;
+
+    struct slot_policy final {
+        using owner_type = db_pool;
+        using deadline_kind_type = db_deadline_kind;
+        [[noreturn]] static void throw_acquire_failure(const db_pool& pool, worker_wait_status status);
+        [[noreturn]] static void throw_aborted(const db_pool& pool, pool_slot_abort_reason reason);
+        static void expire_slot(db_pool& pool, std::size_t slot, db_deadline_kind kind) noexcept;
+        static void cancel_slot(db_pool& pool, std::size_t slot) noexcept;
+    };
+    using leases_type = slot_pool<slot_policy>;
+
+    db_pool(asio::io_context& io_context, const worker_ref& worker_value, db_config_storage config);
+    db_pool(asio::io_context&, worker_ref&&, db_config_storage) = delete;
+    ~db_pool();
+
+    db_pool(const db_pool&) = delete;
+    db_pool& operator=(const db_pool&) = delete;
+
+    [[nodiscard]] task<void> connect();
+    void close_now() noexcept;
+
+    // The only execution path for raw SQL, compiled queries and transactions.
+    // Outside a transaction, a driver that pipelines statements shares
+    // connections between query() and execute() callers. `io_metrics` is the
+    // request's counter block, or null outside a request.
+    //
+    // A transaction (begin_transaction() to commit/rollback) and a stream
+    // (stream() until its rows run out or it is closed) each hold one lease
+    // under config().transaction_timeout_: every operation on it runs under
+    // the earlier of its own deadline and the lease deadline, and a lease
+    // whose deadline passes between operations has its connection closed by
+    // the lease timer; its next operation fails with timeout and gives the
+    // slot back.
+    task<db_rows> query(std::string sql, std::vector<db_value> params, operation_options options,
+        request_io_metrics* io_metrics = nullptr);
+    task<db_exec_result> execute(std::string sql, std::vector<db_value> params, operation_options options,
+        request_io_metrics* io_metrics = nullptr);
+    task<db_stream_result> stream(std::string sql, std::vector<db_value> params, operation_options options);
+    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::vector<db_field>& fields,
+        std::vector<std::string>& column_names,
+        const operation_options& options);
+    task<void> close_stream(std::size_t slot, const operation_options& options);
+    void abort_stream(std::size_t slot) noexcept;
+    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql,
+        std::vector<db_value> params, const operation_options& options);
+    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql,
+        std::vector<db_value> params, const operation_options& options);
+    task<db_transaction> begin_transaction(operation_options operation_options_value, db_transaction_options transaction_options);
+    task<void> commit_transaction(
+        std::size_t slot, const operation_options& options);
+    task<void> rollback_transaction(
+        std::size_t slot, const operation_options& options);
+    void abort_transaction(std::size_t slot) noexcept;
+
+    // Services for driver hooks.
+    [[nodiscard]] const db_config_storage& config() const noexcept {
+        return config_;
+    }
+    [[nodiscard]] const worker_ref& worker() const noexcept {
+        return worker_;
+    }
+    [[nodiscard]] slot_type& slot(std::size_t index) noexcept {
+        return *slots_[index];
+    }
+    // Lease services for driver hooks. A driver never waits for a lease: the
+    // pool's own waits (lease_acquire) are the only callers the lease scheduler
+    // queues, so arrival order covers every one of them.
+    [[nodiscard]] bool closing() const noexcept {
+        return leases_.closing();
+    }
+    void throw_if_aborted(std::size_t index) const {
+        leases_.throw_if_aborted(index);
+    }
+    // Starts an operation on a leased slot: clears a cancellation its previous
+    // operation left, while closing stays permanent.
+    void reset_abort(std::size_t index) noexcept {
+        leases_.reset_abort(index);
+    }
+    // Leases a free slot without waiting; nullopt while every slot is leased
+    // or the pool is closing.
+    [[nodiscard]] std::optional<std::size_t> try_lease() {
+        return leases_.try_acquire();
+    }
+    [[nodiscard]] typename driver_type::state_type& state() noexcept {
+        return state_;
+    }
+    // Arrival order shared by every caller that waits for a connection: a
+    // driver stamps its own waiters with it to keep their order against the
+    // callers waiting for a lease.
+    [[nodiscard]] std::uint64_t next_arrival() noexcept {
+        return ++arrivals_;
+    }
+    // The arrival of the oldest caller still waiting for a lease, if any. One
+    // whose stop was requested no longer counts: the lease scheduler drops it
+    // at once, while the resumption that unlists it may come a turn later.
+    [[nodiscard]] std::optional<std::uint64_t> oldest_exclusive_arrival() const noexcept;
+    // Gives a lease back, unless the driver state keeps it for a caller of its
+    // own. Every lease this pool hands out ends here, and so does the lease
+    // deadline of a transaction or stream.
+    void release_slot(std::size_t index) noexcept;
+    // Runs once per new lease, before its first statement: closes the leased
+    // slot's pooled connection when the server ended the session while it sat
+    // idle, so the next connect_slot() replaces it and nothing is sent on a
+    // dead connection.
+    void retire_dead_idle_connection(std::size_t index) noexcept;
+    // Connects a leased slot unless it is connected; a failure closes it. A
+    // pool that does not reconnect (db_config_storage::reconnect_) fails here
+    // for a slot whose connection ended.
+    task<void> connect_slot(std::size_t index, const operation_deadline& timeout);
+    // Closes the slot's connection now, or -- while a wait still borrows it --
+    // wakes that wait so the driving coroutine finishes the close.
+    void close_slot(std::size_t index) noexcept;
+    task<db_resolved_addresses_type> resolve_host(std::size_t index, const operation_deadline& deadline);
+    // One wait on a leased slot: readiness of the driver's current socket, or
+    // a timed pause without a socket (MariaDB connect), under an optional
+    // per-wait timeout. Not a coroutine: await_ready() registers the socket and
+    // arms the slot deadline, await_suspend() hands the coroutine to the
+    // readiness wait or the deadline, and await_resume() classifies the
+    // outcome -- so a wait allocates nothing. Cancellation, closing, operation
+    // timeout, and wait failures are thrown as db_error; slot-deadline expiry
+    // and socket errors are returned for the driver to interpret, and a pause
+    // always returns expired. Once the slot is connected, the socket's
+    // registration persists across waits.
+    class slot_wait final {
+    public:
+        slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native,
+            db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
+            const operation_deadline& operation_deadline_value) noexcept;
+        ~slot_wait();
+
+        slot_wait(const slot_wait&) = delete;
+        slot_wait& operator=(const slot_wait&) = delete;
+
+        [[nodiscard]] bool await_ready();
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept;
+        [[nodiscard]] db_socket_wait_result await_resume();
+
+    private:
+        db_pool& pool_;
+        std::size_t index_;
+        db_deadline_kind kind_;
+        db_slot_socket::native_socket_type native_;
+        std::optional<std::chrono::steady_clock::time_point> wait_deadline_;
+        const operation_deadline& operation_deadline_;
+        db_slot_socket::readiness_awaiter socket_wait_;
+        // The slot is marked borrowed between arming and resumption.
+        bool borrowed_{false};
+    };
+
+    [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
+        db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
+        const operation_deadline& operation_deadline_value) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline_value);
+    }
+    [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
+        const operation_deadline& operation_deadline_value) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket,
+            db_socket_readiness::none, wait_deadline, operation_deadline_value);
+    }
+    [[nodiscard]] db_error timed_out() const;
+    [[nodiscard]] db_error closing_error() const;
+
+private:
+    template <typename result_type>
+    using statement_hook_type = task<result_type> (*)(db_pool&, std::size_t, std::string_view,
+        std::span<const db_value>, const operation_deadline&);
+
+    // A caller waiting for a lease, listed in arrival order for the duration
+    // of its acquire.
+    class exclusive_wait final {
+    public:
+        exclusive_wait(db_pool& pool, const stop_token& stop) noexcept;
+        exclusive_wait(const exclusive_wait&) = delete;
+        exclusive_wait& operator=(const exclusive_wait&) = delete;
+        ~exclusive_wait();
+
+    private:
+        friend class db_pool;
+
+        db_pool& pool_;
+        const stop_token& stop_;
+        std::uint64_t arrival_;
+        exclusive_wait* previous_;
+        exclusive_wait* next_{nullptr};
+    };
+
+    // The pool's only wait for a lease: stamped and listed before the lease
+    // scheduler queues it, unlisted once its acquire returns. The awaitable
+    // lives for its co_await expression, so it adds no coroutine frame.
+    class lease_acquire final {
+    public:
+        lease_acquire(db_pool& pool, const operation_deadline& timeout, const stop_token& stop)
+            : pool_(pool),
+              waiting_(pool, stop),
+              acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
+        lease_acquire(const lease_acquire&) = delete;
+        lease_acquire& operator=(const lease_acquire&) = delete;
+
+        [[nodiscard]] bool await_ready() {
+            return acquire_.await_ready();
+        }
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
+            return acquire_.await_suspend(continuation);
+        }
+        [[nodiscard]] std::size_t await_resume() {
+            const auto index = acquire_.await_resume();
+            pool_.retire_dead_idle_connection(index);
+            return index;
+        }
+
+    private:
+        db_pool& pool_;
+        exclusive_wait waiting_;
+        typename leases_type::acquire_awaiter acquire_;
+    };
+
+    template <typename result_type>
+    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql,
+        std::vector<db_value> params, const operation_options& options,
+        statement_hook_type<result_type> statement);
+    task<void> execute_control(std::size_t index, std::string_view sql,
+        const operation_deadline& timeout);
+    task<void> finish_transaction(std::size_t index, std::string_view command, const operation_options& options);
+    task<void> retire_failed_transaction_slot(std::size_t index,
+        const operation_deadline& timeout, const std::exception_ptr& failure);
+    task<void> open_slot(std::size_t index, const operation_deadline& timeout);
+    // Starts the lease deadline of a transaction or stream on its fresh lease,
+    // with its first operation running.
+    void start_lease(std::size_t index);
+    // Starts one operation on a transaction or stream lease: reports an
+    // aborted slot, then a lease whose deadline has passed.
+    void enter_lease_operation(std::size_t index);
+    // Leaves the lease held and idle after an operation succeeded; throws
+    // timeout when the lease deadline passed meanwhile, so the operation fails
+    // and its caller retires the lease.
+    void leave_lease_operation(std::size_t index);
+    // The earlier of an operation's own deadline and its lease deadline.
+    [[nodiscard]] operation_deadline lease_operation_timeout(
+        std::size_t index, const operation_deadline& timeout) const noexcept;
+    // Lease timer expiry: closes an idle lease's connection, so the server
+    // ends its transaction and releases its locks while the holder keeps the
+    // lease.
+    void expire_idle_lease(std::size_t index) noexcept;
+    [[nodiscard]] db_error lease_timed_out() const;
+    // Discards what a failed stream left, closes its connection and gives its
+    // lease back.
+    void fail_stream(std::size_t index, typename leases_type::cancellation_guard& cancellation) noexcept;
+    // Every lease names a slot of this pool; any other index breaks the lease
+    // lifecycle, which nothing can unwind from.
+    void require_slot_index(std::size_t index) const noexcept;
+
+    asio::io_context& io_context_;
+    db_config_storage config_;
+    const worker_ref& worker_;
+    // Declared before the lease pool: pending deadline timers address slots.
+    // Each slot is allocated once and stays put while the pool lives.
+    std::vector<std::unique_ptr<slot_type>> slots_;
+    leases_type leases_;
+    std::uint64_t arrivals_{0};
+    exclusive_wait* oldest_exclusive_{nullptr};
+    exclusive_wait* newest_exclusive_{nullptr};
+    // Declared after the lease pool, whose leases it borrows.
+    [[no_unique_address]] typename driver_type::state_type state_;
+};
+
+#ifdef RUVIA_ENABLE_MARIADB
+extern template class db_pipeline_state<mariadb_pipeline_io>;
+extern template class db_pool<mariadb_driver>;
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+extern template class db_pipeline_state<postgresql_pipeline_io>;
+extern template class db_pool<postgresql_driver>;
+#endif
+
+// Every pool operation dispatches on the configured backend; reaching the end
+// means the build has no driver for it.
+[[noreturn]] inline void throw_unavailable_db_backend() {
+    throw std::logic_error("database backend is not available");
+}
+
+// db_pool_ref_type is a closed backend set. Keep its single checked dispatch here so
+// handle, stream, transaction, and registry operations cannot drift into
+// subtly different null or unavailable-backend behavior.
+template <typename visitor_type>
+decltype(auto) visit_db_pool([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return std::forward<visitor_type>(visitor)(**client);
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
+        client != nullptr && *client != nullptr) {
+        return std::forward<visitor_type>(visitor)(**client);
+    }
+#endif
+    throw_unavailable_db_backend();
+}
+
+// Destruction and immediate close paths cannot report an empty backend. They
+// deliberately ignore it while preserving the same closed-set dispatch.
+template <typename visitor_type>
+void visit_db_pool_if_present([[maybe_unused]] const db_pool_ref_type& pool, [[maybe_unused]] visitor_type&& visitor) noexcept {
+#ifdef RUVIA_ENABLE_MARIADB
+    if (const auto* client = std::get_if<db_pool<mariadb_driver>*>(&pool);
+        client != nullptr && *client != nullptr) {
+        std::forward<visitor_type>(visitor)(**client);
+        return;
+    }
+#endif
+#ifdef RUVIA_ENABLE_POSTGRESQL
+    if (const auto* client = std::get_if<db_pool<postgresql_driver>*>(&pool);
+        client != nullptr && *client != nullptr) {
+        std::forward<visitor_type>(visitor)(**client);
+    }
+#endif
+}
+
+[[nodiscard]] inline db_driver db_pool_driver(const db_pool_ref_type& pool) {
+    return visit_db_pool(pool, [](const auto& client) noexcept { return client.config().driver_; });
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Every result shape, so cache-id removal can name each entry of one id.
+inline constexpr std::array db_cache_shapes{
+    db_cache_shape::rows, db_cache_shape::one, db_cache_shape::exists, db_cache_shape::count};
+
+// The key part naming each result shape, indexed by its value. An id-keyed
+// entry stores the caller's id and this tag as separate key parts, so no user
+// id can spell another id's shape.
+inline constexpr std::array<std::string_view, db_cache_shapes.size()> db_cache_shape_tags{
+    "rows", "one", "exists", "count"};
+
+[[nodiscard]] constexpr std::string_view db_cache_shape_tag(db_cache_shape shape) noexcept {
+    return db_cache_shape_tags[static_cast<std::size_t>(shape)];
+}
+
+// The key prefix of one alias's cache entries: everything that decides what a
+// cached result means (namespace, alias, driver, server, database, user and
+// TLS server name) digested into one key part.
+[[nodiscard]] std::string db_cache_prefix(std::string_view name_space, std::string_view alias,
+    const db_config_storage& config);
+
+[[nodiscard]] std::string encode_db_cache_rows(const db_rows& rows);
+[[nodiscard]] db_rows decode_db_cache_rows(std::string bytes_value);
+// Key functions take the immutable prefix already built for this cache owner.
+// Append all result shapes for one id, sharing the id digest.
+void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view prefix, std::string_view id);
+// Keyed by id and shape when the query names an id, otherwise by its SQL and parameters.
+[[nodiscard]] std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape,
+    std::string_view sql, std::span<const db_value> params, db_driver driver);
+
+// The deferred database statement behind a cached step. On a cache hit it is
+// destroyed without starting; on a miss it runs once on the plan's backend.
+class db_cache_query final {
+public:
+    db_cache_query(const db_query_backend& backend, std::string sql, std::vector<db_value> params) noexcept
+        : backend_(backend),
+          sql_(std::move(sql)),
+          params_(std::move(params)) {}
+
+    db_cache_query(const db_cache_query&) = delete;
+    db_cache_query& operator=(const db_cache_query&) = delete;
+    db_cache_query(db_cache_query&&) noexcept = default;
+    db_cache_query& operator=(db_cache_query&&) = delete;
+
+    // The returned task owns the statement and the options it runs under.
+    [[nodiscard]] task<db_rows> operator()(operation_options options) &&;
+
+private:
+    db_query_backend backend_;
+    std::string sql_;
+    std::vector<db_value> params_;
+};
+
+// One database alias's Redis-backed query-result cache (Redis builds only).
+// Worker-local: concurrent misses of one key on this worker share one fill.
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state final {
+public:
+    // `prefix` is the alias's db_cache_prefix().
+    db_query_cache_state(const redis_session& redis, const db_cache_config_storage& config, std::string prefix);
+    ~db_query_cache_state();
+    void close_now() noexcept;
+    [[nodiscard]] std::optional<std::string> key(
+        const db_query& query, const db_statement& statement, db_driver driver);
+    // Serves the step from the cache, or runs `database` and stores its rows.
+    [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::string key,
+        db_cache_query database, operation_options options, operation_deadline deadline);
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] task<void> remove(
+        std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
+    [[nodiscard]] task<void> clear(request_io_metrics* io_metrics, operation_options options);
+
+private:
+    // One read-through fill in flight: the caller that missed first (the
+    // leader) runs the statement; later misses of the same full key wait for
+    // its encoded result, or for its end without one, and then look again.
+    // Shared, so a waiter still reads it after the leader's frame is gone.
+    struct fill final {
+        explicit fill(std::string_view key)
+            : key_(key) {}
+
+        std::string key_;
+        // Requested once the fill ends, with or without a result.
+        stop_source done_;
+        std::optional<std::string> result_;
+        // A waiter joined, so the leader publishes its result in memory.
+        bool awaited_{false};
+    };
+    using fill_pointer = std::shared_ptr<fill>;
+    class fill_lead;
+
+    void require_open() const;
+    task<db_rows> query(std::string key, std::chrono::milliseconds duration, db_cache_query database,
+        operation_options options, operation_deadline deadline);
+    // Ends the fill if it is still the one listed for its key. Later misses
+    // of that key no longer join it.
+    void unlist_fill(const fill& ended) noexcept;
+    // After remove() or clear(), a fill that started before must not answer
+    // callers that arrive after: they read the database themselves.
+    void unlist_fills(std::span<const std::string> keys) noexcept;
+    void unlist_all_fills() noexcept;
+
+    bool closed_{false};
+    stop_source stop_;
+    const worker_ref& worker_;
+    std::chrono::milliseconds duration_;
+    bool always_enabled_;
+    bool ignore_errors_;
+    // The store's reply limit: a GET of a larger entry fails on every hit, so
+    // such an entry is never written.
+    std::optional<std::size_t> max_entry_reply_bytes_;
+    std::string prefix_;
+    redis_session redis_;
+    std::vector<fill_pointer> fills_;
+};
+#endif
+
+}  // namespace ruvia::detail
+
+#if defined(RUVIA_ENABLE_MARIADB) || defined(RUVIA_ENABLE_POSTGRESQL)
+
+namespace ruvia {
+class redis_session;
+}
+
+namespace ruvia::detail {
+
+class redis_registry;
+struct request_io_metrics;
+#ifdef RUVIA_ENABLE_REDIS
+class db_query_cache_state;
+#endif
+
+class db_registry final {
+public:
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        const db_config& default_config);
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        std::span<const db_definition> databases, redis_registry* redis = nullptr);
+#ifdef RUVIA_ENABLE_REDIS
+    db_registry(asio::io_context& io_context, const worker_ref& worker_value,
+        const db_config& config,
+        const redis_session& redis, const db_cache_config& policy);
+#endif
+    ~db_registry();
+
+    db_registry(const db_registry&) = delete;
+    db_registry& operator=(const db_registry&) = delete;
+
+    task<void> connect();
+    void close_now() noexcept;
+    [[nodiscard]] bool empty() const noexcept;
+    // `io_metrics` is the request's counter block, or null outside a request.
+    [[nodiscard]] db_session get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+    [[nodiscard]] db_session get(
+        std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+
+    template <typename driver_type>
+    using pool_owner_ptr_type = std::unique_ptr<db_pool<driver_type>>;
+#if defined(RUVIA_ENABLE_MARIADB) && defined(RUVIA_ENABLE_POSTGRESQL)
+    using pool_owner_type = std::variant<pool_owner_ptr_type<mariadb_driver>, pool_owner_ptr_type<postgresql_driver>>;
+#elif defined(RUVIA_ENABLE_MARIADB)
+    using pool_owner_type = std::variant<pool_owner_ptr_type<mariadb_driver>>;
+#else
+    using pool_owner_type = std::variant<pool_owner_ptr_type<postgresql_driver>>;
+#endif
+
+private:
+    void add(asio::io_context& io_context, const worker_ref& worker, db_config_storage config);
+
+    struct entry_type final {
+        explicit entry_type(pool_owner_type pool) noexcept;
+        pool_owner_type pool_;
+#ifdef RUVIA_ENABLE_REDIS
+        std::unique_ptr<db_query_cache_state> cache_;
+#endif
+    };
+
+#ifdef RUVIA_ENABLE_REDIS
+    void attach_cache(std::size_t index, const worker_ref& worker_value,
+        const redis_session& redis, const db_cache_config_storage& policy,
+        const db_config_storage& config, std::string_view alias);
+#endif
+    [[nodiscard]] db_session session(
+        const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const;
+
+    std::vector<entry_type> entries_;
+    named_capability_index alias_index_;
+#ifdef RUVIA_ENABLE_REDIS
+    mutable ::ruvia::operation_scope cache_scope_;
+#endif
+};
+
+}  // namespace ruvia::detail
+
+#endif
+
+// Definitions of db_pipeline.h, included after db_pool.h by the driver
+// translation units that instantiate a pipeline and by db_pool.cpp, which runs
+// statements through it (run_pipelined).
+//
+// The io_type hooks, all static, each on a connected, leased slot of a group:
+//   statement_type prepare(std::string_view sql, std::span<const db_value>)
+//       Validates and prepares what queue() needs, before admission.
+//   void open(state_type&, std::size_t slot)
+//       Readies a connection for a new group; a failure closes it.
+//   bool queue(state_type&, std::size_t slot, member_type&, statement_type&, flight_type&)
+//       Queues the member's flight. A failure that leaves the protocol out of
+//       step fails the group before it is thrown. True when a waiting reader
+//       must look again.
+//   bool advance(state_type&, std::size_t slot, member_type& reader)
+//       One step without waiting: sends, reads or finishes a flight, handing
+//       a finished one to complete_head(). False when it needs a wait first.
+//   db_socket_readiness wanted(pool_type&, std::size_t slot)
+//       What the next wait waits for; none pauses the reader for one worker
+//       turn instead, after which advance() is asked again.
+//   db_slot_socket::native_socket_type socket(pool_type&, std::size_t slot)
+//       The connection's socket for that wait; throws when it has none.
+//   void exchange(state_type&, std::size_t slot, db_socket_readiness ready)
+//       Continues the protocol after a readiness wake.
+//   bool reusable(state_type&, std::size_t slot) noexcept
+//       Whether a dissolving group's protocol exchange is complete, with no
+//       unread results. The pool checks transaction state before reassigning it.
+// group_state has reset(), called when its group's flights are cleared.
+
+namespace ruvia::detail {
+
+// db_config's read and write timeouts bound waiting without socket progress in
+// that direction; waiting while output is pending waits to write.
+[[nodiscard]] inline std::optional<timeout_duration> db_io_timeout(
+    const db_config_storage& config, db_socket_readiness wanted) noexcept {
+    return has_db_socket_readiness(wanted, db_socket_readiness::write) ? config.write_timeout_ : config.read_timeout_;
+}
+
+// A socket error ends the connection. A cancelled wait does not: it expired,
+// or it was woken to be armed again.
+inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver driver, std::string_view name) {
+    if (result.error_ && result.error_ != asio::error::operation_aborted) {
+        throw db_error(db_error::code_type::io_error, driver,
+            std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)),
+            result.error_.value());
+    }
+}
+
+// One socket wait on a slot held exclusively by a driver operation, bounded by
+// the operation deadline and optional driver I/O timeout.
+template <typename driver_type>
+struct db_driver_socket_wait final {
+    using pool_type = db_pool<driver_type>;
+    pool_type& pool_;
+    typename pool_type::slot_wait wait_;
+    bool throw_on_expiry_{true};
+
+    [[nodiscard]] bool await_ready() {
+        return wait_.await_ready();
+    }
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+        return wait_.await_suspend(handle);
+    }
+    [[nodiscard]] db_socket_wait_result resume_raw() {
+        const auto wait_result = wait_.await_resume();
+        if (wait_result.expired_ && throw_on_expiry_) {
+            throw pool_.timed_out();
+        }
+        return wait_result;
+    }
+    void await_resume() {
+        check_db_socket_wait(resume_raw(), driver_type::driver, driver_type::name);
+    }
+};
+
+template <typename io_type>
+db_pipeline_member<io_type>::db_pipeline_member(
+    state_type& state, db_rows* rows, const stop_token& stop_token_value)
+    : state_(state),
+      rows_(rows),
+      stop_token_(stop_token_value),
+      cancellation_(state.cancellation_target(), cancellation_id_) {
+    cancellation_.arm(stop_token_);
+    // Linked once binding cannot fail; a stop delivered while binding is seen
+    // through stopped(). Newest first: a stop source runs its newest callback
+    // first, so stopping every statement at once (a client closing) finds each
+    // one at the front.
+    next_ = state_.members_;
+    if (next_ != nullptr) {
+        next_->previous_ = this;
+    }
+    state_.members_ = this;
+    ++state_.statements_;
+}
+
+template <typename io_type>
+db_pipeline_member<io_type>::~db_pipeline_member() {
+    state_.retire(*this);
+}
+
+template <typename io_type>
+db_pipeline_state<io_type>::db_pipeline_state(pool_type& pool, const worker_ref& worker_value)
+    : pool_(pool),
+      worker_(worker_value),
+      cancellation_target_(make_worker_cancellation_target(*this, worker_value)) {}
+
+template <typename io_type>
+db_pipeline_state<io_type>::~db_pipeline_state() {
+    cancellation_target_->detach(*this);
+    // Started statements complete before their pool is destroyed.
+    if (members_ != nullptr || parked_head_ != nullptr) {
+        std::terminate();
+    }
+}
+
+template <typename io_type>
+typename db_pipeline_state<io_type>::group_type& db_pipeline_state<io_type>::group(std::size_t slot) const noexcept {
+    return pool_.slot(slot).session_.pipeline_;
+}
+
+template <typename io_type>
+db_error db_pipeline_state<io_type>::cancelled() const {
+    return db_error(db_error::code_type::cancelled, driver_type::driver, "database operation cancelled");
+}
+
+template <typename io_type>
+bool db_pipeline_state<io_type>::may_share(std::uint64_t arrival) const noexcept {
+    const auto oldest = pool_.oldest_exclusive_arrival();
+    return !oldest.has_value() || arrival < *oldest;
+}
+
+// A resume from inside the reader, a stop callback or a timer would re-enter
+// the woken statement; it is deferred to the worker instead. Taking the
+// continuation makes each suspension resumable exactly once.
+template <typename io_type>
+void db_pipeline_state<io_type>::settle(member_type& member, db_pipeline_event event) noexcept {
+    member.event_ = event;
+    if (auto continuation = std::exchange(member.continuation_, {})) {
+        worker_.defer_resume(continuation);
+    }
+}
+
+template <typename io_type>
+std::optional<std::size_t> db_pipeline_state<io_type>::roomiest_group() const noexcept {
+    std::optional<std::size_t> roomiest;
+    std::size_t lowest_load = db_pipeline_depth;
+    for (std::size_t index = 0; index < pool_.config().pool_size_per_worker_; ++index) {
+        const auto& candidate = group(index);
+        const auto load = candidate.pending_ + candidate.reserved_;
+        if (candidate.members_ != 0 && !candidate.closing_ && !candidate.stalled() && pool_.slot(index).connected_ &&
+            load < lowest_load) {
+            roomiest = index;
+            lowest_load = load;
+        }
+    }
+    return roomiest;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::join(member_type& member, std::size_t slot) noexcept {
+    auto& joined = group(slot);
+    ++joined.members_;
+    ++joined.reserved_;
+    member.slot_ = slot;
+    member.phase_ = db_pipeline_phase::reserved;
+}
+
+template <typename io_type>
+db_pipeline_event db_pipeline_state<io_type>::place(member_type& member) {
+    if (!may_share(member.arrival_)) {
+        return db_pipeline_event::none;
+    }
+    if (const auto slot = pool_.try_lease()) {
+        member.slot_ = *slot;
+        member.phase_ = db_pipeline_phase::leased;
+        return db_pipeline_event::leased;
+    }
+    if (const auto slot = roomiest_group()) {
+        join(member, *slot);
+        return db_pipeline_event::joined;
+    }
+    return db_pipeline_event::none;
+}
+
+// Parked statements go first, so an arrival only places itself when nobody
+// is parked.
+template <typename io_type>
+db_pipeline_event db_pipeline_state<io_type>::admit(member_type& member, const operation_deadline& admission_deadline) {
+    if (pool_.closing()) {
+        throw pool_.closing_error();
+    }
+    if (member.stopped()) {
+        throw cancelled();
+    }
+    member.arrival_ = pool_.next_arrival();
+    if (parked_head_ == nullptr) {
+        if (const auto event = place(member); event != db_pipeline_event::none) {
+            return event;
+        }
+    }
+    park(member, admission_deadline);
+    return db_pipeline_event::none;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::admitted(db_pipeline_event event) const {
+    switch (event) {
+        case db_pipeline_event::leased:
+        case db_pipeline_event::joined:
+            return;
+        case db_pipeline_event::timed_out:
+            pool_type::slot_policy::throw_acquire_failure(pool_, worker_wait_status::timed_out);
+        case db_pipeline_event::cancelled:
+            throw cancelled();
+        case db_pipeline_event::closing:
+            throw pool_.closing_error();
+        default:
+            std::terminate();
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::park(member_type& member, const operation_deadline& admission_deadline) {
+    if (const auto deadline_value = admission_deadline.deadline()) {
+        if (*deadline_value <= std::chrono::steady_clock::now()) {
+            pool_type::slot_policy::throw_acquire_failure(pool_, worker_wait_status::timed_out);
+        }
+        // A stopped timer queue arms nothing; the statement still leaves
+        // through admission, its stop token or close().
+        (void)worker_.schedule_timer(
+            member.admission_timer_, *deadline_value, [this, &member](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired && member.phase_ == db_pipeline_phase::parked) {
+                    unpark(member);
+                    member.phase_ = db_pipeline_phase::admitting;
+                    settle(member, db_pipeline_event::timed_out);
+                }
+            });
+    }
+    member.previous_parked_ = parked_tail_;
+    member.next_parked_ = nullptr;
+    if (parked_tail_ != nullptr) {
+        parked_tail_->next_parked_ = &member;
+    } else {
+        parked_head_ = &member;
+    }
+    parked_tail_ = &member;
+    member.phase_ = db_pipeline_phase::parked;
+}
+
+// Leaves the phase to the caller, which knows where the statement goes next.
+template <typename io_type>
+void db_pipeline_state<io_type>::unpark(member_type& member) noexcept {
+    member.admission_timer_.cancel();
+    if (member.previous_parked_ != nullptr) {
+        member.previous_parked_->next_parked_ = member.next_parked_;
+    } else {
+        parked_head_ = member.next_parked_;
+    }
+    if (member.next_parked_ != nullptr) {
+        member.next_parked_->previous_parked_ = member.previous_parked_;
+    } else {
+        parked_tail_ = member.previous_parked_;
+    }
+    member.previous_parked_ = nullptr;
+    member.next_parked_ = nullptr;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::dispatch() noexcept {
+    while (parked_head_ != nullptr && !pool_.closing()) {
+        auto& head = *parked_head_;
+        const auto event = place(head);
+        if (event == db_pipeline_event::none) {
+            return;
+        }
+        unpark(head);
+        settle(head, event);
+    }
+}
+
+// A released connection goes to the oldest parked statement unless an older
+// caller waits for it in the lease scheduler. Room would have admitted that
+// statement already.
+template <typename io_type>
+bool db_pipeline_state<io_type>::take_released_slot(std::size_t slot) noexcept {
+    if (parked_head_ == nullptr || pool_.closing() || !may_share(parked_head_->arrival_)) {
+        return false;
+    }
+    auto& head = *parked_head_;
+    unpark(head);
+    head.slot_ = slot;
+    head.phase_ = db_pipeline_phase::leased;
+    settle(head, db_pipeline_event::leased);
+    return true;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::exclusive_waiter_left() noexcept {
+    dispatch();
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::close() noexcept {
+    while (parked_head_ != nullptr) {
+        auto& head = *parked_head_;
+        unpark(head);
+        head.phase_ = db_pipeline_phase::admitting;
+        settle(head, db_pipeline_event::closing);
+    }
+}
+
+// Every lease a statement founds a group on passes here first.
+template <typename io_type>
+bool db_pipeline_state<io_type>::must_connect(member_type& member) {
+    pool_.reset_abort(member.slot_);
+    if (member.stopped()) {
+        throw cancelled();
+    }
+    pool_.retire_dead_idle_connection(member.slot_);
+    member.connecting_ = !pool_.slot(member.slot_).connected_;
+    return member.connecting_;
+}
+
+// A stop while connecting closed the slot, which ended the connect.
+template <typename io_type>
+void db_pipeline_state<io_type>::connected(member_type& member, const std::exception_ptr& failure) {
+    member.connecting_ = false;
+    if (failure == nullptr) {
+        return;
+    }
+    if (member.stopped()) {
+        throw cancelled();
+    }
+    std::rethrow_exception(failure);
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::found_group(member_type& member) {
+    io_type::open(*this, member.slot_);
+    auto& founded = group(member.slot_);
+    founded.members_ = 1;
+    founded.reserved_ = 1;
+    member.phase_ = db_pipeline_phase::reserved;
+    dispatch();
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::require_usable(std::size_t slot) const {
+    const auto& checked = group(slot);
+    if (checked.closing_) {
+        std::rethrow_exception(checked.failure_);
+    }
+    pool_.throw_if_aborted(slot);
+    if (!pool_.slot(slot).connected_) {
+        throw pool_.closing_error();
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::send(member_type& member, statement_type& statement) {
+    if (member.stopped()) {
+        throw cancelled();
+    }
+    if (member.deadline_.has_value() && *member.deadline_ <= std::chrono::steady_clock::now()) {
+        throw pool_.timed_out();
+    }
+    const auto index = member.slot_;
+    auto& slot = pool_.slot(index);
+    auto& sending = slot.session_.pipeline_;
+    require_usable(index);
+    typename io_type::flight_type flight{};
+    const bool wake = io_type::queue(*this, index, member, statement, flight);
+    auto& record = sending.record(sending.pending_);
+    record = {&member, std::move(flight), member.rows_ != nullptr};
+    ++sending.pending_;
+    --sending.reserved_;
+    member.record_ = &record;
+    member.phase_ = db_pipeline_phase::pending;
+    if (sending.reader_ == nullptr) {
+        sending.reader_ = &member;
+        return;
+    }
+    if (!slot.wait_active_) {
+        return;
+    }
+    // The waiting reader looks again when the driver asks for it, or when
+    // this statement's deadline comes first.
+    const bool earlier = member.deadline_.has_value() &&
+                         (!sending.wait_deadline_.has_value() || *member.deadline_ < *sending.wait_deadline_);
+    if (wake || earlier) {
+        slot.wait_socket_.cancel();
+    }
+}
+
+template <typename io_type>
+bool db_pipeline_state<io_type>::reads(const member_type& member) const noexcept {
+    return group(member.slot_).reader_ == &member;
+}
+
+template <typename io_type>
+bool db_pipeline_state<io_type>::retries(member_type& member, db_pipeline_event event) const {
+    switch (event) {
+        case db_pipeline_event::completed:
+            if (member.failure_ != nullptr) {
+                std::rethrow_exception(member.failure_);
+            }
+            return false;
+        case db_pipeline_event::retry:
+            return true;
+        case db_pipeline_event::failed:
+            std::rethrow_exception(member.failure_);
+        case db_pipeline_event::timed_out:
+            throw pool_.timed_out();
+        case db_pipeline_event::cancelled:
+            throw cancelled();
+        default:
+            std::terminate();
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::complete_head(std::size_t slot, member_type& reader, db_pipeline_outcome outcome) {
+    auto& completing = group(slot);
+    auto& record = completing.records_[completing.head_];
+    completing.stretch_start_.reset();
+    auto* member = record.member_;
+    record = {};
+    completing.head_ = (completing.head_ + 1) % db_pipeline_depth;
+    --completing.pending_;
+    if (member == nullptr) {
+        dispatch();
+        return;
+    }
+    member->record_ = nullptr;
+    auto event = db_pipeline_event::completed;
+    if (outcome.retry_) {
+        // The retry keeps the room it frees, and goes to the tail.
+        member->may_retry_ = false;
+        member->phase_ = db_pipeline_phase::reserved;
+        ++completing.reserved_;
+        event = db_pipeline_event::retry;
+    } else {
+        member->phase_ = db_pipeline_phase::settled;
+        member->affected_rows_ = outcome.affected_rows_;
+        member->insert_id_ = outcome.insert_id_;
+        member->failure_ = std::move(outcome.failure_);
+    }
+    if (member == &reader) {
+        member->event_ = event;
+    } else {
+        settle(*member, event);
+    }
+    if (event != db_pipeline_event::retry) {
+        dispatch();
+    }
+}
+
+template <typename io_type>
+bool db_pipeline_state<io_type>::read_buffered(member_type& reader) {
+    const auto slot = reader.slot_;
+    require_usable(slot);
+    while (reader.event_ == db_pipeline_event::none) {
+        if (!io_type::advance(*this, slot, reader)) {
+            return false;
+        }
+    }
+    // Results already available reach their members before the role passes
+    // on; a failure among them no longer concerns the reader's own outcome.
+    auto& reading = group(slot);
+    try {
+        while (reading.pending_ != 0 && !reading.closing_ && io_type::advance(*this, slot, reader)) {
+        }
+    } catch (...) {
+        fail_group(slot, std::current_exception());
+    }
+    hand_off(reader);
+    return true;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::expire_followers(
+    member_type& reader, std::chrono::steady_clock::time_point now) noexcept {
+    auto& reading = group(reader.slot_);
+    for (std::size_t offset = 0; offset < reading.pending_; ++offset) {
+        auto* member = reading.record(offset).member_;
+        if (member != nullptr && member != &reader && member->event_ == db_pipeline_event::none &&
+            member->deadline_.has_value() && *member->deadline_ <= now) {
+            abandon(*member);
+            settle(*member, db_pipeline_event::timed_out);
+        }
+    }
+}
+
+template <typename io_type>
+std::optional<std::chrono::steady_clock::time_point> db_pipeline_state<io_type>::earliest_deadline(
+    std::size_t slot) const noexcept {
+    const auto& reading = group(slot);
+    std::optional<std::chrono::steady_clock::time_point> earliest;
+    for (std::size_t offset = 0; offset < reading.pending_; ++offset) {
+        const auto* member = reading.record(offset).member_;
+        if (member != nullptr && member->event_ == db_pipeline_event::none && member->deadline_.has_value() &&
+            (!earliest.has_value() || *member->deadline_ < *earliest)) {
+            earliest = member->deadline_;
+        }
+    }
+    return earliest;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::hand_off(member_type& reader) noexcept {
+    auto& reading = group(reader.slot_);
+    if (reading.reader_ != &reader) {
+        return;
+    }
+    reading.reader_ = nullptr;
+    for (std::size_t offset = 0; offset < reading.pending_; ++offset) {
+        auto* member = reading.record(offset).member_;
+        if (member != nullptr && member != &reader && member->event_ == db_pipeline_event::none) {
+            reading.reader_ = member;
+            settle(*member, db_pipeline_event::reader);
+            return;
+        }
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::abandon(member_type& member) noexcept {
+    if (member.record_ != nullptr) {
+        member.record_->member_ = nullptr;
+        member.record_ = nullptr;
+    }
+    member.phase_ = db_pipeline_phase::settled;
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::clear_flights(group_type& cleared) noexcept {
+    for (std::size_t offset = 0; offset < cleared.pending_; ++offset) {
+        cleared.record(offset) = {};
+    }
+    cleared.io_.reset();
+    cleared.wait_deadline_.reset();
+    cleared.stretch_start_.reset();
+    cleared.reader_ = nullptr;
+    cleared.head_ = 0;
+    cleared.pending_ = 0;
+}
+
+// The first failure is the group's; a designated reader that has not resumed
+// yet learns it instead of its role.
+template <typename io_type>
+void db_pipeline_state<io_type>::fail_group(std::size_t slot, const std::exception_ptr& failure) noexcept {
+    auto& failing = group(slot);
+    if (!failing.closing_) {
+        failing.closing_ = true;
+        failing.failure_ = failure;
+    }
+    for (std::size_t offset = 0; offset < failing.pending_; ++offset) {
+        auto* member = failing.record(offset).member_;
+        if (member == nullptr) {
+            continue;
+        }
+        member->record_ = nullptr;
+        member->phase_ = db_pipeline_phase::settled;
+        if (member->event_ == db_pipeline_event::none || member->event_ == db_pipeline_event::reader) {
+            member->failure_ = failing.failure_;
+            settle(*member, db_pipeline_event::failed);
+        }
+    }
+    clear_flights(failing);
+    pool_.close_slot(slot);
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::unlink(member_type& member) noexcept {
+    if (member.previous_ != nullptr) {
+        member.previous_->next_ = member.next_;
+    } else {
+        members_ = member.next_;
+    }
+    if (member.next_ != nullptr) {
+        member.next_->previous_ = member.previous_;
+    }
+    member.previous_ = nullptr;
+    member.next_ = nullptr;
+}
+
+// A cancelled statement leaves the search, so stopping every statement at once
+// costs one step each.
+template <typename io_type>
+void db_pipeline_state<io_type>::cancel_operation_by_id(std::uint64_t cancellation_id) noexcept {
+    if (cancellation_id == 0) {
+        return;
+    }
+    auto* member = members_;
+    while (member != nullptr && member->cancellation_id_ != cancellation_id) {
+        member = member->next_;
+    }
+    if (member == nullptr) {
+        return;
+    }
+    unlink(*member);
+    member->cancel_requested_ = true;
+    switch (member->phase_) {
+        case db_pipeline_phase::parked:
+            unpark(*member);
+            member->phase_ = db_pipeline_phase::admitting;
+            settle(*member, db_pipeline_event::cancelled);
+            return;
+        case db_pipeline_phase::leased:
+            if (member->connecting_) {
+                pool_.close_slot(member->slot_);
+            }
+            return;
+        case db_pipeline_phase::pending: {
+            auto& slot = pool_.slot(member->slot_);
+            if (slot.session_.pipeline_.reader_ == member) {
+                // The reader leaves its wait and passes the role on.
+                if (slot.wait_active_) {
+                    slot.wait_socket_.cancel();
+                }
+            } else if (member->event_ == db_pipeline_event::none) {
+                abandon(*member);
+                settle(*member, db_pipeline_event::cancelled);
+            }
+            return;
+        }
+        // Running, or about to: it sees stopped() at its next step.
+        case db_pipeline_phase::admitting:
+        case db_pipeline_phase::reserved:
+        case db_pipeline_phase::settled:
+            return;
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::retire(member_type& member) noexcept {
+    --statements_;
+    if (!member.cancel_requested_) {
+        unlink(member);
+    }
+    switch (member.phase_) {
+        case db_pipeline_phase::admitting:
+            break;
+        case db_pipeline_phase::parked:
+            unpark(member);
+            break;
+        case db_pipeline_phase::leased:
+            member.phase_ = db_pipeline_phase::admitting;
+            pool_.release_slot(member.slot_);
+            break;
+        case db_pipeline_phase::reserved:
+            --group(member.slot_).reserved_;
+            leave(member);
+            break;
+        case db_pipeline_phase::pending:
+            hand_off(member);
+            abandon(member);
+            leave(member);
+            break;
+        case db_pipeline_phase::settled:
+            hand_off(member);
+            leave(member);
+            break;
+    }
+}
+
+template <typename io_type>
+void db_pipeline_state<io_type>::leave(member_type& member) noexcept {
+    member.phase_ = db_pipeline_phase::admitting;
+    if (--group(member.slot_).members_ != 0) {
+        dispatch();
+        return;
+    }
+    dissolve(member.slot_);
+}
+
+// The last member gives the connection back. A failed or incomplete protocol
+// exchange closes it here; release_slot() checks transaction state before
+// either scheduler hands it to another caller.
+template <typename io_type>
+void db_pipeline_state<io_type>::dissolve(std::size_t slot) noexcept {
+    auto& connection_slot = pool_.slot(slot);
+    auto& dissolving = connection_slot.session_.pipeline_;
+    if (dissolving.closing_ || !connection_slot.connected_ || !io_type::reusable(*this, slot)) {
+        pool_.close_slot(slot);
+    }
+    clear_flights(dissolving);
+    dissolving.failure_ = nullptr;
+    dissolving.reserved_ = 0;
+    dissolving.closing_ = false;
+    pool_.release_slot(slot);
+}
+
+// Reads the group's results for one statement while it holds the reader role,
+// from taking the role to the statement's outcome. A stop or the statement's
+// deadline abandons the statement, which passes the role on as it leaves; any
+// other failure while reading fails the connection for every member.
+template <typename io_type>
+class db_pipeline_reader final {
+public:
+    using clock_type = std::chrono::steady_clock;
+    using state_type = db_pipeline_state<io_type>;
+    using pool_type = typename state_type::pool_type;
+    using member_type = typename state_type::member_type;
+
+    db_pipeline_reader(pool_type& pool, member_type& member) noexcept
+        : pool_(pool),
+          member_(member) {}
+
+    db_pipeline_reader(const db_pipeline_reader&) = delete;
+    db_pipeline_reader& operator=(const db_pipeline_reader&) = delete;
+
+    // One socket wait; a failure of the wait itself fails the connection.
+    // Without a socket wait it pauses for one worker turn instead: the driver
+    // has queued nothing to wait for yet, and statements arriving in this
+    // turn should go out with what it just sent.
+    class socket_wait final {
+    public:
+        explicit socket_wait(db_pipeline_reader& reader) noexcept
+            : reader_(reader) {}
+        socket_wait(db_pipeline_reader& reader, std::size_t slot, db_slot_socket::native_socket_type native,
+            db_socket_readiness wanted, std::optional<clock_type::time_point> deadline) noexcept
+            : reader_(reader) {
+            wait_.emplace(reader.pool_, slot, db_deadline_kind::socket, native, wanted, deadline, reader.unbounded_);
+        }
+        socket_wait(const socket_wait&) = delete;
+        socket_wait& operator=(const socket_wait&) = delete;
+
+        [[nodiscard]] bool await_ready() {
+            if (!wait_.has_value()) {
+                return false;
+            }
+            try {
+                return wait_->await_ready();
+            } catch (...) {
+                reader_.fail(std::current_exception());
+            }
+        }
+        [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) noexcept {
+            if (!wait_.has_value()) {
+                reader_.pool_.state().worker().defer_resume(handle);
+                return true;
+            }
+            return wait_->await_suspend(handle);
+        }
+        void await_resume() {
+            if (!wait_.has_value()) {
+                return;
+            }
+            try {
+                reader_.waited(wait_->await_resume());
+            } catch (...) {
+                reader_.fail(std::current_exception());
+            }
+        }
+
+    private:
+        db_pipeline_reader& reader_;
+        std::optional<typename pool_type::slot_wait> wait_;
+    };
+
+    // Reads what is available; true once the statement has its outcome.
+    [[nodiscard]] bool read() {
+        auto& state = pool_.state();
+        if (member_.stopped()) {
+            throw state.cancelled();
+        }
+        const auto now = clock_type::now();
+        if (member_.deadline_.has_value() && *member_.deadline_ <= now) {
+            throw pool_.timed_out();
+        }
+        state.expire_followers(member_, now);
+        try {
+            return state.read_buffered(member_);
+        } catch (...) {
+            fail(std::current_exception());
+        }
+    }
+
+    // Waits for what the driver needs until the earliest deadline of a
+    // pending member or the I/O timeout of the direction waited for, counted
+    // from the connection's last progress.
+    [[nodiscard]] socket_wait wait() {
+        try {
+            const auto slot = member_.slot_;
+            auto& group = pool_.state().group(slot);
+            const auto wanted = io_type::wanted(pool_, slot);
+            if (wanted == db_socket_readiness::none) {
+                return socket_wait(*this);
+            }
+            const auto now = clock_type::now();
+            if (!group.stretch_start_.has_value()) {
+                group.stretch_start_ = now;
+            }
+            io_deadline_.reset();
+            if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
+                io_deadline_ = saturating_deadline(
+                    *group.stretch_start_, io_timeout->value());
+            }
+            auto until = pool_.state().earliest_deadline(slot);
+            if (io_deadline_.has_value() && (!until.has_value() || *io_deadline_ < *until)) {
+                until = io_deadline_;
+            }
+            group.wait_deadline_ = until;
+            return socket_wait(*this, slot, io_type::socket(pool_, slot), wanted, until);
+        } catch (...) {
+            fail(std::current_exception());
+        }
+    }
+
+private:
+    // A cancelled wait (a stop, a member joining with an earlier deadline or
+    // a driver asking to look again) returns to read(), which looks again.
+    void waited(const db_socket_wait_result& result) {
+        auto& state = pool_.state();
+        auto& group = state.group(member_.slot_);
+        group.wait_deadline_.reset();
+        check_db_socket_wait(result, io_type::driver_type::driver, io_type::driver_type::name);
+        if (result.ready_ != db_socket_readiness::none) {
+            group.stretch_start_.reset();
+            io_type::exchange(state, member_.slot_, result.ready_);
+        } else if (result.expired_ && io_deadline_.has_value() && clock_type::now() >= *io_deadline_) {
+            throw pool_.timed_out();
+        }
+    }
+
+    [[noreturn]] void fail(const std::exception_ptr& failure) {
+        auto& state = pool_.state();
+        state.fail_group(member_.slot_, failure);
+        if (member_.stopped()) {
+            throw state.cancelled();
+        }
+        std::rethrow_exception(member_.failure_ != nullptr ? member_.failure_ : failure);
+    }
+
+    pool_type& pool_;
+    member_type& member_;
+    const operation_deadline unbounded_{std::nullopt};
+    std::optional<clock_type::time_point> io_deadline_{};
+};
+
+// One buffered statement outside a transaction, as a member of a pipeline
+// group: admission, a connection of its own when it founds a group, its
+// flight, then its outcome -- read by itself while it holds the reader role,
+// else handed over by the reader. Every wait is an awaiter on this frame, so a
+// statement costs no coroutine frame beyond this one unless it connects. The
+// member's destructor gives back whatever it holds on every exit path.
+template <typename io_type, typename result_type>
+task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::string sql,
+    std::vector<db_value> params, operation_options options,
+    request_io_metrics* io_metrics) {
+    using member_type = db_pipeline_member<io_type>;
+    constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
+    scoped_request_io_timer timer(io_metrics, request_io_kind::db);
+    auto statement = io_type::prepare(sql, std::span<const db_value>(params));
+    const operation_deadline timeout(options.timeout_);
+    auto& pipeline = pool.state();
+    auto output = db_result_access::make_result();
+    member_type member(pipeline, returns_rows ? &output : nullptr, options.stop_token_);
+
+    // Waiting for admission is bounded like acquiring a lease.
+    if (pipeline.admit(member, timeout.constrained_by(pool.config().acquire_timeout_)) == db_pipeline_event::none) {
+        pipeline.admitted(co_await typename member_type::wait{member});
+    }
+    if (member.phase_ == db_pipeline_phase::leased) {
+        if (pipeline.must_connect(member)) {
+            std::exception_ptr failure;
+            try {
+                co_await pool.connect_slot(member.slot_, timeout);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            pipeline.connected(member, failure);
+        }
+        pipeline.found_group(member);
+    }
+
+    member.deadline_ = timeout.constrained_by(pool.config().query_timeout_).deadline();
+    for (;;) {
+        pipeline.send(member, statement);
+        auto event = db_pipeline_event::none;
+        while (event == db_pipeline_event::none) {
+            if (pipeline.reads(member)) {
+                db_pipeline_reader<io_type> reader(pool, member);
+                while (!reader.read()) {
+                    co_await reader.wait();
+                }
+                event = member.take_event();
+            } else if ((event = co_await typename member_type::wait{member}) == db_pipeline_event::reader) {
+                event = db_pipeline_event::none;
+            }
+        }
+        if (!pipeline.retries(member, event)) {
+            break;
+        }
+    }
+    if constexpr (returns_rows) {
+        co_return output;
+    } else {
+        co_return db_result_access::make_exec_result(member.affected_rows_, member.insert_id_);
+    }
+}
+
+}  // namespace ruvia::detail
+
+#if defined(RUVIA_ENABLE_REDIS)
+
+struct redisReader;
+struct redisReadTask;
+struct redisReplyObjectFunctions;
+
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_pool.h"
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_pool.h"
 #endif
 
 namespace ruvia::detail {

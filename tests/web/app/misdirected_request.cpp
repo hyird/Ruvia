@@ -25,7 +25,6 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 
 #include "http_server_fixture.h"
 // RFC 9110 §7.4 / §15.5.20: an origin server rejects with 421 a request for

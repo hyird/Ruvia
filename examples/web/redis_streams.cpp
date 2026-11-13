@@ -14,7 +14,7 @@
 #include <string>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
 

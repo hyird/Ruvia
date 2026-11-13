@@ -19,8 +19,8 @@
 
 #include "ruvia/http/borrowed_text.h"
 
-#include "connection_lifecycle.h"
-#include "db_pool.h"
+#include "context_access.h"
+#include "route_table.h"
 namespace ruvia::detail {
 namespace {
 

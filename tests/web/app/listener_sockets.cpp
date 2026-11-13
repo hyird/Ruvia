@@ -42,7 +42,6 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 
 #include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)

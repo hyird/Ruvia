@@ -27,7 +27,6 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 
 #include "http_server_fixture.h"
 namespace http2_goaway_test {

@@ -20,7 +20,6 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 

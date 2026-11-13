@@ -24,12 +24,11 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/controller.h"
+#include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 
-#include "connection_lifecycle.h"
 #include "context_access.h"
 #include "route_table.h"
 
@@ -47,11 +46,11 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/borrowed_text.h"
 
-#include "http_client_pool.h"
+#include "route_table.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
 
-#include "db_pool.h"
+#include "route_table.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
@@ -80,7 +79,7 @@
 #include <openssl/crypto.h>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_pool.h"
+#include "route_table.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "route_table.h"

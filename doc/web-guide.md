@@ -620,7 +620,7 @@ int main() {
 - **并发与失败**：读、写可并行，同方向重叠抛 `std::logic_error`。I/O 错误、超时或取消关闭整条流；`std::system_error` 分别携带底层错误、`timed_out` 或 `operation_canceled`。
 - **寿命**：构造、析构与 `close()` 可在其他线程执行；冷任务保留拥有化输入及状态，`shutdown()` 和循环退出使未启动操作失效并收束在途操作。
 
-### 1.11 显式路由组合（`"ruvia/web/controller.h"`）
+### 1.11 显式路由组合（`"ruvia/web/context.h"`）
 
 `router(worker_ref)` 直接复用路由编译与分发引擎，不依赖 `application`、控制器宏或全局注册表。
 
@@ -644,7 +644,6 @@ int main() {
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"
 
 // 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 redis 与 routes 存活。
@@ -684,7 +683,7 @@ co_await server.start();
 
 ---
 
-## 2. 控制器与路由声明（`"ruvia/web/controller.h"`）
+## 2. 控制器与路由声明（`"ruvia/web/context.h"`）
 
 控制器是不继承任何框架基类、可默认构造的 `final` 类。通过路由宏在类定义内声明并静态注册；首次准备 `routes` 监听器时才构造控制器、编译并封存路由计划。
 
@@ -896,7 +895,7 @@ const auto& user = c.request_state<current_user>();
 
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
-| `ruvia::body_limit<MaxBytes>` (`"ruvia/web/controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
+| `ruvia::body_limit<MaxBytes>` (`"ruvia/web/context.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
 | `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"ruvia/web/middleware.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"ruvia/web/middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"ruvia/web/middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |

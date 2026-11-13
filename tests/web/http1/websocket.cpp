@@ -24,11 +24,10 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"

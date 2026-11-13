@@ -19,7 +19,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"

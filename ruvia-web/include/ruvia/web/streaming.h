@@ -24,7 +24,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/middleware.h"
 namespace ruvia {

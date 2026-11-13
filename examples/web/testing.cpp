@@ -11,8 +11,7 @@
 #include <string_view>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
-
+#include "ruvia/web/context.h"
 RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
 
 namespace {

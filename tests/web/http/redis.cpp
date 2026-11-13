@@ -1,3 +1,5 @@
+#include "ruvia/web/redis/redis.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -50,7 +52,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/redis/redis.h"
 
 #include "backend_client_fixture.h"
 #include "http_server_fixture.h"

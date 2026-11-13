@@ -10,7 +10,6 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 namespace {
 
 class route_encoded_duplicate_controller final {

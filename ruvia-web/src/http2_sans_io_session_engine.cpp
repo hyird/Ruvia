@@ -33,14 +33,11 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "connection_lifecycle.h"
 #include "context_access.h"
-#include "http_client_pool.h"
 #include "route_table.h"
 
 namespace ruvia::detail {

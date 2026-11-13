@@ -41,7 +41,7 @@ ctest --test-dir build -C Release --output-on-failure
 
 ```cpp
 #include "ruvia/web/app.h"
-#include "ruvia/web/controller.h"
+#include "ruvia/web/context.h"
 
 class basic_http_controller final {
 public:

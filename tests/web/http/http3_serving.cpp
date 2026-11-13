@@ -40,10 +40,9 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 

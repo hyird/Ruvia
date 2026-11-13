@@ -21,7 +21,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 namespace ruvia {
 
 // awaiting_peer_eof: a client completed the close handshake and, per RFC 6455

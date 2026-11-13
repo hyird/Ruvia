@@ -44,7 +44,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/web/http_server.h"
 
-#include "connection_lifecycle.h"
 #include "context_access.h"
 #include "route_table.h"
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -65,7 +64,6 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"

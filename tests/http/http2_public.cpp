@@ -18,7 +18,6 @@
 
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_server.h"
 
 #include "content_decoding_fixture.h"
 #include "test_exceptions.h"
