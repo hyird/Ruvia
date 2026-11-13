@@ -20,7 +20,6 @@
 #include "ruvia/web/rate_limit.h"
 
 #include "context/context_access.h"
-#include "ratelimit/rate_limit_key.h"
 namespace ruvia::detail {
 
 namespace {

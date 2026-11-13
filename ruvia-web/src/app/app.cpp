@@ -13,7 +13,7 @@
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
-#include "http/static_root_options_validation.h"
+#include "http/static_root_index.h"
 #include "router/router_impl.h"
 #include "server/config_validation.h"
 

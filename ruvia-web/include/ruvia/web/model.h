@@ -30,7 +30,6 @@
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/detail/decimal_number.h"
 #include "ruvia/web/detail/json_scan.h"
 #include "ruvia/web/detail/request_fields_access.h"
 #include "ruvia/web/fixed_string.h"

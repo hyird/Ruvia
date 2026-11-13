@@ -26,7 +26,7 @@
 #include "ruvia/web/detail/json_scan.h"
 
 #include "auth/constant_time.h"
-#include "auth/hmac.h"
+#include "auth/cookie_signature.h"
 #include "http/inline_text_concat.h"
 
 namespace ruvia {

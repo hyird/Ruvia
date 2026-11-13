@@ -28,7 +28,7 @@
 #include <array>
 #include <mutex>
 
-#include "ruvia/web/detail/controller_descriptors.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
 #include "context/context_access.h"

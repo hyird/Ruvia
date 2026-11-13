@@ -17,7 +17,6 @@
 
 #include "db/db_pipeline.h"
 #include "db/db_slot_socket.h"
-#include "db/db_statement_cache.h"
 
 struct pg_conn;
 struct pg_result;

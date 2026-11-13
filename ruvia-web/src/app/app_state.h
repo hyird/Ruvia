@@ -21,7 +21,6 @@
 #include "redis/redis_config_storage.h"
 #endif
 #include "client/http_client_config_storage.h"
-#include "http/static_root_config_storage.h"
 #include "http/static_root_index.h"
 #include "integration/runtime_control_gate.h"
 #include "server/http_server_listener.h"

@@ -32,9 +32,7 @@
 #include "ruvia/web/session.h"
 #include "ruvia/web/streaming.h"
 
-#include "http/http_error_response.h"
 #include "http/session_access.h"
-#include "http/unsupported_request_content_coding.h"
 #include "ratelimit/rate_limiter.h"
 #include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"

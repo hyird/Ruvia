@@ -7,7 +7,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/web/detail/request_bindings.h"
+#include "ruvia/web/detail/worker_state.h"
 
 // Internal startup-time middleware descriptor.
 

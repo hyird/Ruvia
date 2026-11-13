@@ -15,13 +15,16 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/task.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/request_bindings.h"
+#include "ruvia/web/detail/worker_state.h"
+#include "ruvia/web/error.h"
 
 #include "context/context_services.h"
-#include "context/context_session_state.h"
 #include "context/http_interim_response_output.h"
+#include "http/session_access.h"
 #include "http/static_file_variant.h"
 #include "server/inbound_buffer_budget.h"
 
@@ -565,6 +568,47 @@ public:
 private:
     context* context_;
     context_response_output previous_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] http_response make_default_error_response(http_error_info error);
+
+// The default 404 answer for a request no route matched.
+[[nodiscard]] http_response make_route_not_found_response();
+
+[[nodiscard]] task<http_response> invoke_error_handler(
+    context& context_value, http_error_info error, http_error_handler_ref handler);
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// Web-runtime signal for an otherwise valid request whose complete
+// Content-Encoding stack cannot be decoded. router dispatch owns the 415 JSON
+// mapping and the RFC 9110 Accept-Encoding response advertisement, which names
+// what the failed read accepts: a streaming read decodes nothing.
+class unsupported_request_content_coding final : public std::exception {
+public:
+    enum class read_type { decoded,
+        streaming };
+
+    explicit unsupported_request_content_coding(read_type read) noexcept
+        : read_(read) {}
+
+    [[nodiscard]] const char* what() const noexcept override {
+        return "request Content-Encoding is not supported";
+    }
+
+    // An Accept-Encoding field value with static storage.
+    [[nodiscard]] std::string_view accepted_codings() const noexcept {
+        return read_ == read_type::decoded ? http_supported_request_content_codings() : "identity";
+    }
+
+private:
+    read_type read_;
 };
 
 }  // namespace ruvia::detail

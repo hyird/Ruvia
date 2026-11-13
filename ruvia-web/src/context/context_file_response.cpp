@@ -23,7 +23,6 @@
 
 #include "context/context_access.h"
 #include "context/context_services.h"
-#include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"
 #include "http/static_root_index.h"
 #include "server/http_native_file.h"

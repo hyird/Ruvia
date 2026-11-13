@@ -15,7 +15,6 @@
 
 #include "db/db_pipeline.h"
 #include "db/db_slot_socket.h"
-#include "db/db_statement_cache.h"
 #include "db/mariadb_sql.h"
 
 struct st_mysql;

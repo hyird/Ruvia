@@ -18,7 +18,7 @@
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/detail/decimal_number.h"
+#include "ruvia/web/detail/json_scan.h"
 
 #include "redis/redis_reply_parsers.h"
 

@@ -22,7 +22,7 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/web/detail/controller_descriptors.h"
+#include "ruvia/web/controller.h"
 
 #include "integration/runtime_control_completion.h"
 #include "integration/runtime_control_gate.h"

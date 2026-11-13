@@ -15,7 +15,7 @@
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_error.h"
-#include "ruvia/web/detail/controller_descriptors.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/dotenv.h"
 
 #include "context/context_services.h"

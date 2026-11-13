@@ -34,7 +34,6 @@
 #include "context/context_services.h"
 #include "http/request_body_loader.h"
 #include "http/static_path_normalization.h"
-#include "http/unsupported_request_content_coding.h"
 #include "integration/operation_interrupt.h"
 
 namespace ruvia {

@@ -25,7 +25,6 @@
 #include "auth/constant_time.h"
 #include "context/context_access.h"
 #include "context/context_services.h"
-#include "http/http_error_response.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"

@@ -22,11 +22,10 @@
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/web/detail/controller_descriptors.h"
+#include "ruvia/web/controller.h"
 #include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/web_worker.h"
 
-#include "http/static_root_config_storage.h"
 #include "http/static_root_index.h"
 #include "http3/http3_worker_directory.h"
 #include "integration/worker_capabilities.h"

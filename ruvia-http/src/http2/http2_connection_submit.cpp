@@ -16,13 +16,10 @@
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response_stream.h"
 
-#include "field/http_lower_header_name.h"
-#include "field/http_origin_payload.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
 #include "memory/geometric_reserve.h"
 #include "parser/http_request_target.h"
-#include "request/http_binary_request_fields.h"
 #include "response/http_binary_response_fields.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_response_header_state.h"

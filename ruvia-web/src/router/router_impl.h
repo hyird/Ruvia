@@ -8,8 +8,8 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/controller.h"
 #include "ruvia/web/detail/app_configuration.h"
-#include "ruvia/web/detail/controller_descriptors.h"
 #include "ruvia/web/error.h"
 
 #include "router/compiled_route_plan.h"

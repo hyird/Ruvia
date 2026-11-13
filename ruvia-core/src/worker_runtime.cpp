@@ -24,7 +24,6 @@
 #include "ruvia/core/worker_group.h"
 
 #include "event_loop_state.h"
-#include "worker_dispatcher_impl.h"
 
 namespace ruvia {
 

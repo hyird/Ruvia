@@ -16,7 +16,7 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
-#include "worker_dispatcher_impl.h"
+#include "event_loop_state.h"
 
 namespace ruvia::detail {
 namespace {

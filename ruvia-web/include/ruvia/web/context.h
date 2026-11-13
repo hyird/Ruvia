@@ -36,7 +36,6 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/ip_address.h"
-#include "ruvia/web/detail/request_bindings.h"
 #include "ruvia/web/detail/request_fields_access.h"
 #include "ruvia/web/detail/worker_state.h"
 #include "ruvia/web/error.h"

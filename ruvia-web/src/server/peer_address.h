@@ -11,7 +11,7 @@
 
 #include "ruvia/http/ip_address.h"
 
-#include "ratelimit/rate_limit_key.h"
+#include "ratelimit/rate_limiter.h"
 
 namespace ruvia::detail {
 
