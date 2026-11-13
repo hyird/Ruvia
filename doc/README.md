@@ -26,7 +26,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 
 > **头文件使用原则**：只包含 `include/ruvia/{core,http,web}/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
 
-从 `1.0.0` 起，同一主版本内保持非 `detail` 公开 API 的源码兼容，包括公开宏、配置类型、错误码及所有权和生命周期契约；新增能力以兼容方式加入，破坏性调整进入下一主版本。CMake 包兼容性在 `0.x` 要求主版本和次版本均相同，从 `1.x` 起要求主版本相同。此承诺适用于相同平台、工具链和功能开关组合；不承诺跨版本 ABI 兼容，升级后应重新编译下游程序。
+- **版本与源码兼容**：从 `1.0.0` 起同一主版本内保持非 `detail` 公开 API 源码兼容（含公开宏、配置类型、错误码与生命周期契约）；`0.x` 要求主次版本均相同，`1.x` 起要求主版本相同，不承诺跨版本 ABI 兼容。
 
 ---
 
@@ -45,16 +45,16 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `RUVIA_BUILD_TESTS` | `OFF` | — | 构建 `tests/` 测试套件 |
 | `RUVIA_ENABLE_HTTP2` | `ON` | `RUVIA_ENABLE_HTTP2` | 启用 nghttp2 会话与 HTTP/2 公开 API，可独立关闭 |
 | `RUVIA_ENABLE_HTTP3` | `ON` | `RUVIA_ENABLE_HTTP3` | 启用 nghttp3/ngtcp2 协议层与 Web QUIC TLS 接入，可独立关闭 |
-| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"ruvia/web/db/..."` 公开头 |
-| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"ruvia/web/db/..."` 公开头 |
-| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"ruvia/web/redis/..."`、服务端 `session_middleware` 与数据库查询缓存 |
+| `RUVIA_ENABLE_MARIADB` | `OFF` | `RUVIA_ENABLE_MARIADB`、`RUVIA_ENABLE_DATABASE` | 启用 MariaDB 驱动与 `"ruvia/web/db.h"` 公开头 |
+| `RUVIA_ENABLE_POSTGRESQL` | `OFF` | `RUVIA_ENABLE_POSTGRESQL`、`RUVIA_ENABLE_DATABASE` | 启用 PostgreSQL 驱动、ORM 与 `"ruvia/web/db.h"` 公开头 |
+| `RUVIA_ENABLE_REDIS` | `OFF` | `RUVIA_ENABLE_REDIS` | 启用 `"ruvia/web/redis.h"`、服务端 `session_middleware` 与数据库查询缓存 |
 | `RUVIA_ENABLE_JWT` | `OFF` | `RUVIA_ENABLE_JWT` | 启用 `"ruvia/web/jwt.h"` |
 
-顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
+- **工具链与特性裁剪**：顶层构建未指定 `CMAKE_TOOLCHAIN_FILE` 时从 `VCPKG_ROOT` 加载 triplet 与对应 manifest 特性；未启用功能不编译源码、不安装对应公开头文件。
 
 - **协议裁剪单一来源**：HTTP/2、HTTP/3 的源码与安装头共用协议路径选择规则，新增协议文件不再维护第二份安装排除名单。
 
-依赖使用当前 vcpkg 端口；Core 要求 mimalloc 3.5+，HTTP/3 要求 ngtcp2 1.26.0+ 与 nghttp3 1.17+。非 Windows 静态 mimalloc 必须启用 `override`，不得叠加其他全局分配器替换。
+- **依赖版本基线**：Core 要求 mimalloc 3.5+（非 Windows 静态链接须启用 `override`），HTTP/3 要求 ngtcp2 1.26.0+ 与 nghttp3 1.17+。
 
 ### 2.2 在下游 CMake 项目中使用
 
@@ -110,8 +110,8 @@ ruvia_link_controllers(my_service user_controllers)
 - **单 Worker 独占连接生命周期**：生产应用 `ruvia::app()` 按 `server_config::worker_count_` 启动同构业务 worker 线程。每个 worker 独占一个 standalone Asio `io_context`、控制器实例、中间件实例以及绑定的 `db_client` / `redis_client` 连接池。POSIX 上每个 worker 以 `SO_REUSEPORT` 自行绑定监听器；Windows 由独立 Acceptor 线程以 `SO_EXCLUSIVEADDRUSE` 独占监听。
 - **连接亲和**：socket 一经业务 worker 接收（POSIX 自行 accept；Windows 接管 Acceptor 派发的未绑 IOCP 裸 `SOCKET` 并首次绑定自身 IOCP），其后的 TCP/TLS I/O、HTTP/1 / HTTP/2 / HTTP/3 解析、路由执行与协议定时器全程留在该 worker 线程，无需加锁访问 worker 局部状态（`c.worker_state<T>()`）。`stop()` 直接断开全部连接，不设排空阶段。
 - **跨线程调度与卸载**：
-  - 跨 worker 通信通过 `web_worker_ref::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
-  - 阻塞或 CPU 密集型计算必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
+  - **跨 Worker 通信**：通过 `web_worker_ref::post`、`event_loop::post` 或有界通道 `make_channel` / `make_one_shot` 进行。
+  - **阻塞与 CPU 卸载**：必须通过 `c.run_blocking(...)` 或 `ruvia::run_blocking(...)` 显式卸载到 worker 事件循环借用的 `blocking_pool`；独立事件循环须在创建时通过 `blocking_pool_` 选项交给它一个比它存活更久的池，否则返回 `blocking_status::unavailable`，主机不是 IP 字面量的数据库或 Redis 客户端也无法构造。**卸载闭包必须按值/移动持有自有数据，严禁在阻塞池线程中访问 `ruvia::context` 或任何 worker 局部状态**。
 
 ### 3.2 协程与作用域操作契约
 
@@ -122,10 +122,10 @@ ruvia_link_controllers(my_service user_controllers)
 ### 3.3 内存资源与借用生命周期
 
 - **原生分配器与借用防悬垂保护**：
-  - 拥有型文本与集合直接使用标准容器（`std::string` / `std::vector`），非 Windows 静态构建由 `mimalloc` 全局接管分配与回收，不设额外请求 Arena 或 Worker 内存池。
-  - `c.req().header(...)`、`c.req().query(...)`、`c.req().param(...)`、`c.req().text()` 等返回的 `std::string_view` / `std::span` 均借用自当前请求缓冲，仅在当前请求（或流式读取的下一次 `read()` 之前）有效。
-  - 公开 API 参数广泛使用 `ruvia::borrowed_text`，并在返回借用视图的成员函数上标注 `RUVIA_LIFETIMEBOUND` 且 `= delete` 右值重载，在编译期阻止绑定临时 `std::string` 右值导致的悬垂引用。
-  - 构造响应体时（如 `c.text(...)`、`c.body(...)`），支持传入 `std::string_view`（复制到响应中）、`std::string&&`（零拷贝接管所有权）、字符串字面量或 `ruvia::static_text("...")`（静态存储期零拷贝）。
+  - **拥有型容器与分配器**：拥有型文本与集合直接使用标准容器（`std::string` / `std::vector`），非 Windows 静态构建由 `mimalloc` 全局接管分配与回收，不设额外请求 Arena 或 Worker 内存池。
+  - **请求作用域借用视图**：`c.req().header(...)`、`c.req().query(...)`、`c.req().param(...)`、`c.req().text()` 等返回的 `std::string_view` / `std::span` 均借用自当前请求缓冲，仅在当前请求（或流式读取的下一次 `read()` 之前）有效。
+  - **编译期借用防线**：公开 API 参数广泛使用 `ruvia::borrowed_text`，并在返回借用视图的成员函数上标注 `RUVIA_LIFETIMEBOUND` 且 `= delete` 右值重载，在编译期阻止绑定临时 `std::string` 右值导致的悬垂引用。
+  - **响应体零拷贝接管**：构造响应体时（如 `c.text(...)`、`c.body(...)`），支持传入 `std::string_view`（复制到响应中）、`std::string&&`（零拷贝接管所有权）、字符串字面量或 `ruvia::static_text("...")`（静态存储期零拷贝）。
 
 ### 3.4 配置结构体与错误处理约定
 
@@ -144,7 +144,7 @@ ruvia_link_controllers(my_service user_controllers)
 
 后端示例通过 `backend_config.h` 共享启动配置：先加载可执行文件旁的 `.env`，进程环境优先；`RUVIA_DB_*` 选择 SQL 连接，`RUVIA_REDIS_*` 选择 Redis 连接（包括 `DATABASE`、认证与 TLS）。ORM 查询缓存使用独立前缀 `RUVIA_ORM_CACHE_REDIS_*`。
 
-独立服务使用不同端口：基础 HTTP `8080`、请求策略 `8097`、运维 `8098`、HTTP 客户端网关 `8099`。客户端示例的上游地址保持各自注释所述配置。
+- **监听与上游端口**：各示例独立服务默认端口与客户端上游地址见对应示例源码注释。
 
 | 示例文件 | CMake Target | 所需开关 | 核心演示内容 |
 | --- | --- | --- | --- |

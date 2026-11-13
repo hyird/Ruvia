@@ -53,18 +53,18 @@ ruvia::app().database({
 // co_await client.shutdown();
 ```
 
-数据库 TLS 复用 `client_tls_config`。`verify_identity` 在握手内完成证书链与 RFC 9525 subjectAltName 校验，先于发送登录或启动消息：DNS 名只匹配 DNS SAN，IP 只匹配 IP SAN，不回退到主题 CN；PostgreSQL 可用 `tls_.server_name_` 覆盖验证名，MariaDB 当前要求数字 IP 且不接受覆盖名。`max_outgoing_records_` 默认 `2^23`（范围 `1..2^23`），限制单连接发出的全部 TLS 记录并在到达上限时终止连接。系统 DNS 查询超时、取消、客户端关闭或 Worker 停机时不等待不可抢占的底层 `getaddrinfo` 返回。
+- **数据库 TLS 与 SAN 校验**：数据库 TLS 复用 `client_tls_config`。`verify_identity` 在握手内完成证书链与 RFC 9525 subjectAltName 校验，先于发送登录或启动消息：DNS 名只匹配 DNS SAN，IP 只匹配 IP SAN，不回退到主题 CN；PostgreSQL 可用 `tls_.server_name_` 覆盖验证名，MariaDB 当前要求数字 IP 且不接受覆盖名。`max_outgoing_records_` 默认 `2^23`（范围 `1..2^23`），限制单连接发出的全部 TLS 记录并在到达上限时终止连接。系统 DNS 查询超时、取消、客户端关闭或 Worker 停机时不等待不可抢占的底层 `getaddrinfo` 返回。
 
-`read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算。两者都不晚于下述流的整体截止期。
+- **读写与连接超时折算**：`read_timeout_` / `write_timeout_` 按毫秒限制每次对应方向的 socket 等待，普通查询、事务和流式结果均适用；MariaDB 原生选项的秒级取整不会放宽框架配置。单次流式 `read()` 的 operation timeout 包含 EOF 后的最终状态排空，不会在阶段切换时重新计时；另一次显式 `close()` 使用自己的新预算。两者都不晚于下述流的整体截止期。
 
-`transaction_timeout_`（默认 `60s`，`std::nullopt` 关闭，零或负值作为非法配置以 `std::invalid_argument` 拒绝）是一次连接租约的整体截止期，与每条语句自身的超时构成双轨：事务从 `begin_transaction()` 取得连接起（`BEGIN` 之前，不含等待空闲连接的时间）到 `commit()` / `rollback()` 结束，流式结果从 `query_stream()` 取得连接起到读尽或 `close()` 为止，两次操作之间的空闲时间也计入。其中每条语句（含 `BEGIN`、`COMMIT`、`ROLLBACK` 与每次流式 `read()` / `close()`）的截止期取其自身 operation timeout、`query_timeout_` 与租约剩余时间中最早者。到期时：
+- **事务绝对截止期 `transaction_timeout_`**：`transaction_timeout_`（默认 `60s`，`std::nullopt` 关闭，零或负值作为非法配置以 `std::invalid_argument` 拒绝）是一次连接租约的整体截止期，与每条语句自身的超时构成双轨：事务从 `begin_transaction()` 取得连接起（`BEGIN` 之前，不含等待空闲连接的时间）到 `commit()` / `rollback()` 结束，流式结果从 `query_stream()` 取得连接起到读尽或 `close()` 为止，两次操作之间的空闲时间也计入。其中每条语句（含 `BEGIN`、`COMMIT`、`ROLLBACK` 与每次流式 `read()` / `close()`）的截止期取其自身 operation timeout、`query_timeout_` 与租约剩余时间中最早者。到期时：
 
-- 语句正在执行：该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
-- 调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
+- **在途语句超时**：语句正在执行时，该语句以 `db_error`（`timeout`）失败，连接被关闭而不归还连接池，事务或流随之以失败结束，之后的调用因其已不再活跃而失败。
+- **空闲租约超时**：调用方持有租约但没有操作在执行（如事务中等待远程 I/O）：worker 上由该截止期驱动的定时器（不轮询）立即关闭连接，服务端随之回滚事务并释放锁；之后对该事务或流的下一次调用（包括 `commit()`、`rollback()`、`read()`、`close()`）不再发送任何语句，以 `db_error`（`timeout`）失败并结束它。租约在此之前仍由持有者占用，析构或下一次调用后才回到连接池。
 
-迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
+- **迁移事务超时继承**：迁移器不另设事务超时：PostgreSQL 的 `transactional` 迁移沿用 `transaction_timeout_`，单个迁移及其历史记录共用一次事务租约；超过截止期时以 `timeout` 失败并关闭迁移连接，本次运行终止，服务端结束该会话后释放迁移锁。长时间运行的 PostgreSQL 事务型迁移应同时放宽 `query_timeout_` 与 `transaction_timeout_`。PostgreSQL 的 `unwrapped` 迁移及所有 MariaDB 迁移不创建事务租约，因而不受 `transaction_timeout_` 限制，执行语句仍受 `query_timeout_` 和 socket 读写超时限制。MariaDB 即使指定 `transactional` 也不包裹事务（DDL 会隐式提交）；迁移与历史记录可能只完成前者，迁移 SQL 必须可安全重跑。
 
-池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
+- **连接租出前存活性探测**：池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
 ### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_session`）
 
@@ -87,13 +87,13 @@ ruvia::app().database({
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
 
-缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
+- **查询缓存条目大小上限**：缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
 
 直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
-事务外的 `query()` / `execute()` 会与同一 worker 上的其他调用共享连接：PostgreSQL 使用管线模式，MariaDB 连续发送多条命令后按顺序读取各自的结果。每条语句独立成功或失败，并与等待连接的事务、流式查询保持到达顺序。改变会话状态的语句（`SET`、`USE`、`BEGIN`、`LOCK TABLES` 等）会影响之后共享同一连接的语句，应放在事务中执行；若某条语句使连接停留在事务中，该连接在归还时会被关闭而不会交给下一位调用者。MariaDB 的参数在入队时插值为所有 `sql_mode` 与字符集下含义相同的文本；SQL 或字符串参数含反斜杠时，其含义取决于 `NO_BACKSLASH_ESCAPES`，这类语句会等之前的结果全部读完后，按当时的会话状态插值再发送；若字符串参数中的反斜杠紧跟在大于 0x7F 的字节之后，且会话跟踪不能确认客户端字符集仍是 `utf8mb4`（未跟踪、已报告改为其他字符集，或之后执行过 `CALL`），还会先查询当时的 `@@character_set_client`，按该字符集转义，使 GBK、Big5、SJIS 等字符集中以 0x5C 结尾的多字节字符保持完整。MariaDB 连接在握手前强制关闭 `MYSQL_OPT_LOCAL_INFILE`，任何 `LOAD DATA LOCAL INFILE` 均拒绝读取与发送本地文件，单独报错而不污染同连接上的其他语句。服务器表示会话已结束或收到错序数据包的错误（如 1927、1156）按 I/O 错误处理，该连接不再复用。
+- **连接共享与流水线并入**：事务外的 `query()` / `execute()` 会与同一 worker 上的其他调用共享连接：PostgreSQL 使用管线模式，MariaDB 连续发送多条命令后按顺序读取各自的结果。每条语句独立成功或失败，并与等待连接的事务、流式查询保持到达顺序。改变会话状态的语句（`SET`、`USE`、`BEGIN`、`LOCK TABLES` 等）会影响之后共享同一连接的语句，应放在事务中执行；若某条语句使连接停留在事务中，该连接在归还时会被关闭而不会交给下一位调用者。MariaDB 的参数在入队时插值为所有 `sql_mode` 与字符集下含义相同的文本；SQL 或字符串参数含反斜杠时，其含义取决于 `NO_BACKSLASH_ESCAPES`，这类语句会等之前的结果全部读完后，按当时的会话状态插值再发送；若字符串参数中的反斜杠紧跟在大于 0x7F 的字节之后，且会话跟踪不能确认客户端字符集仍是 `utf8mb4`（未跟踪、已报告改为其他字符集，或之后执行过 `CALL`），还会先查询当时的 `@@character_set_client`，按该字符集转义，使 GBK、Big5、SJIS 等字符集中以 0x5C 结尾的多字节字符保持完整。MariaDB 连接在握手前强制关闭 `MYSQL_OPT_LOCAL_INFILE`，任何 `LOAD DATA LOCAL INFILE` 均拒绝读取与发送本地文件，单独报错而不污染同连接上的其他语句。服务器表示会话已结束或收到错序数据包的错误（如 1927、1156）按 I/O 错误处理，该连接不再复用。
 
-同一连接上重复执行的 SQL 从第二次起作为服务端预处理语句缓存（按 SQL 与参数类型区分，每条连接最多 128 条，按最近最少使用淘汰；不会以预处理执行的语句不占用缓存位置）。MariaDB 在事务中总是使用它；事务外仅当该语句是所在 worker 上唯一进行中的语句时才以二进制协议执行，否则以管线化文本协议执行。预处理语句保留预处理时的会话状态（`sql_mode`、字符集、当前数据库等），因此服务器支持会话状态跟踪时，MariaDB 连接建立后会执行 `SET SESSION session_track_system_variables = 'sql_mode,old_mode,character_set_client,character_set_connection,character_set_results,time_zone,div_precision_increment,default_week_format,lc_time_names,max_sort_length,group_concat_max_len,session_track_system_variables,session_track_schema', session_track_schema = ON`，替换会话原有的跟踪列表；服务器报告其中任一变量（`collation_connection` 的变化按 `character_set_connection` 报告）或当前数据库的变化（`SET sql_mode`、`SET NAMES`、`USE`、存储过程内执行的 `SET` 等）时，该连接缓存的预处理语句全部作废，之后重新预处理；其他报告（如开启 binlog 时每次提交后的 `last_gtid`、`autocommit`）不影响缓存。存储过程可能在不报告的情况下修改跟踪列表，因此执行 `CALL` 后，下一次预处理执行前会先查询 `@@session_track_system_variables` 确认。服务器不支持跟踪、语句文本中出现 `session_track`（关闭跟踪本身不会被报告）、`CALL` 后的确认发现跟踪列表已变，或 `character_set_client` / `character_set_connection` 不是 `utf8mb4` 时，该连接不使用预处理语句。MariaDB 以文本协议的结果为准：二进制协议的值按文本协议的格式转换为字段文本，凡不能保证一致的情况都改用文本协议执行，包括 `CALL`、`LOAD`、`SET`、`USE`、含 `RETURNING` 或可执行注释（`/*! */`）的语句，预处理结果中有 `YEAR` 列的语句，以及含负数、大于 `INT64_MAX` 的无符号整数、负或非有限浮点数参数的调用，和 `LIMIT` / `OFFSET` / `FETCH` 计数位置上不是非负整数的参数。表结构变化使已预处理语句的结果列数改变，或执行时才出现不带 `ZEROFILL` 的 `YEAR` 列时，服务器已执行过该语句，为避免重复其副作用，这次调用作为语句失败返回而不重试；该语句下次使用时重新预处理或改用文本协议。
+- **服务端预处理语句缓存**：同一连接上重复执行的 SQL 从第二次起作为服务端预处理语句缓存（按 SQL 与参数类型区分，每条连接最多 128 条，按最近最少使用淘汰；不会以预处理执行的语句不占用缓存位置）。MariaDB 在事务中总是使用它；事务外仅当该语句是所在 worker 上唯一进行中的语句时才以二进制协议执行，否则以管线化文本协议执行。预处理语句保留预处理时的会话状态（`sql_mode`、字符集、当前数据库等），因此服务器支持会话状态跟踪时，MariaDB 连接建立后会执行 `SET SESSION session_track_system_variables = 'sql_mode,old_mode,character_set_client,character_set_connection,character_set_results,time_zone,div_precision_increment,default_week_format,lc_time_names,max_sort_length,group_concat_max_len,session_track_system_variables,session_track_schema', session_track_schema = ON`，替换会话原有的跟踪列表；服务器报告其中任一变量（`collation_connection` 的变化按 `character_set_connection` 报告）或当前数据库的变化（`SET sql_mode`、`SET NAMES`、`USE`、存储过程内执行的 `SET` 等）时，该连接缓存的预处理语句全部作废，之后重新预处理；其他报告（如开启 binlog 时每次提交后的 `last_gtid`、`autocommit`）不影响缓存。存储过程可能在不报告的情况下修改跟踪列表，因此执行 `CALL` 后，下一次预处理执行前会先查询 `@@session_track_system_variables` 确认。服务器不支持跟踪、语句文本中出现 `session_track`（关闭跟踪本身不会被报告）、`CALL` 后的确认发现跟踪列表已变，或 `character_set_client` / `character_set_connection` 不是 `utf8mb4` 时，该连接不使用预处理语句。MariaDB 以文本协议的结果为准：二进制协议的值按文本协议的格式转换为字段文本，凡不能保证一致的情况都改用文本协议执行，包括 `CALL`、`LOAD`、`SET`、`USE`、含 `RETURNING` 或可执行注释（`/*! */`）的语句，预处理结果中有 `YEAR` 列的语句，以及含负数、大于 `INT64_MAX` 的无符号整数、负或非有限浮点数参数的调用，和 `LIMIT` / `OFFSET` / `FETCH` 计数位置上不是非负整数的参数。表结构变化使已预处理语句的结果列数改变，或执行时才出现不带 `ZEROFILL` 的 `YEAR` 列时，服务器已执行过该语句，为避免重复其副作用，这次调用作为语句失败返回而不重试；该语句下次使用时重新预处理或改用文本协议。
 
 ```cpp
 // 编译期检查 PostgreSQL 的 $1, $2 占位符数量：
@@ -114,7 +114,7 @@ while (auto row = co_await stream.read()) {
 co_await stream.close();
 ```
 
-`query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。MariaDB 的 `close()` 则异步读取并丢弃剩余行，解析行尾状态及后续结果后才归还连接，并受操作取消和超时约束。
+- **流式游标连接独占与归还**：`query_stream()` 在读取期间独占连接。持续调用 `read()` 直到返回 `std::nullopt`，才算完整消费结果（空结果集也需要读取一次）；此时流已结束，连接可用于后续普通查询或事务，PostgreSQL 的单行读取模式不会影响后续缓冲结果集。结束后 `close()` 可重复调用；提前关闭 PostgreSQL 流会关闭底层连接，而不是继续排空未读结果。MariaDB 的 `close()` 则异步读取并丢弃剩余行，解析行尾状态及后续结果后才归还连接，并受操作取消和超时约束。
 
 - **逐次选项**：`read(operation_options)` / `close(operation_options)` 在句柄选项之上收紧本次超时，提供的令牌替换继承的令牌；非正超时在调用处抛 `std::invalid_argument`。
 - **中断即退役**：启动前已停止的令牌抛 `db_error(cancelled)` 且流仍可读；等待中的超时或取消关闭连接（池化连接中途中断后不复用）并以 `timeout` / `cancelled` 结束流。
@@ -122,7 +122,7 @@ co_await stream.close();
 - **列元数据**：`stream.column_names() const&` 在行结果集启动完成时即可读取，包含零行结果；EOF、失败和 `close()` 不清除列名。视图借用流的地址稳定状态，资源及状态必须保持存活；逐行字段仍只借用至下一次读取或关闭。
 - **流启动所有权**：两种驱动均在列元数据构造完成后移交原生结果；失败先释放结果，再关闭连接并归还租约。PostgreSQL 启动会等待首个原生结果，保留首行供第一次 `read()` 消费，不额外复制它。
 
-连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
+- **连接归还事务状态检查**：连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
 ### 1.3 事务与保存点（`"ruvia/web/db.h"`）
 
@@ -152,7 +152,7 @@ PostgreSQL 事务还额外支持：
 
 ### 1.4 启动期数据库迁移（`"ruvia/web/db.h"`）
 
-`ruvia::db_migrator(event_loop, config, options = {})` 与 `db_client` 一样绑定调用方事件循环；`co_await migrator.migrate(migrations, operation = {})` 在该循环上以独立连接执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
+- **迁移器事件循环绑定**：`ruvia::db_migrator(event_loop, config, options = {})` 与 `db_client` 一样绑定调用方事件循环；`co_await migrator.migrate(migrations, operation = {})` 在该循环上以独立连接执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
 
 ```cpp
 const std::array<ruvia::db_migration, 1> migrations{
@@ -170,9 +170,9 @@ auto report = co_await migrator.migrate(migrations);
 - **整次期限与取消**：`operation_options` 约束整次运行（含建连）；非正超时在调用处抛 `std::invalid_argument`，启动前已停止的令牌在建连前抛 `db_error(cancelled)`；到期或取消关闭专用连接（随之释放迁移锁）并抛 `db_error(timeout / cancelled)`，已提交的迁移保留其记录。
 - **迁移锁时长**：`db_migrator_options::lock_timeout_` 使用 `timeout_duration`，默认 `30s`；MariaDB 向上取整至整秒，PostgreSQL 超过 `INT32_MAX` 毫秒时在连接前拒绝。输入与解包规则见 [Core 超时契约](core-and-http.md)。
 
-迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不自动建列，也不把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
+- **迁移历史摘要校验**：迁移历史必须保留原始 SQL 的 SHA-256 摘要。摘要列缺失、对应记录的摘要为 `NULL` / 空值或与正文不符时均拒绝继续，不自动建列，也不把当前正文补记为已执行历史；空迁移列表也要求已有历史表包含摘要列。旧表升级前须独立核实实际执行过的 SQL，再显式补齐其摘要，不能直接采信当前源码。新表的 `checksum` 列为 `NOT NULL`；历史校验失败不改写既有记录，修复历史后可重新运行。
 
-迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。
+- **迁移会话锁与单连接约束**：迁移锁（MariaDB `GET_LOCK`、PostgreSQL 会话级咨询锁）归属取得它的会话，因此迁移器只使用一条连接，且该连接结束后不再重连：会话因传输失败而断开，或某条 `unwrapped` 迁移使连接停留在事务中（如单独执行 `BEGIN`、MariaDB 的 `SET autocommit = 0`）而在归还时被关闭后，后续迁移与历史记录都以 `db_error`（`io_error`）失败，不会在未持锁的新会话上继续执行。失败时迁移器不显式释放锁，而是关闭会话使锁随之释放。
 
 超时会立即关闭客户端连接，但不等同于服务端立即取消正在执行的 SQL：服务端检测断连、结束会话并释放锁可能晚于调用返回 `timeout`。尤其 MariaDB 的自动提交迁移可能在客户端超时后仍执行成功，却没有写入迁移历史；重试前须核对实际效果，不能把 `timeout` 当作回滚证明。PostgreSQL 的 `transactional` 迁移则在会话结束时回滚本次迁移及其历史记录。
 
@@ -191,7 +191,7 @@ auto report = co_await migrator.migrate(migrations);
 - **外部驱动绑定**：`db_statement::params()` 可直接读取 `db_value::type()`（`db_value_type`）及 `text()`、`signed_value()`、`unsigned_value()`、`double_value()`、`bool_value()`；不做隐式类型转换，读取错误分支抛 `std::bad_variant_access`。`null` 通过类型判别，无需取值。
 - **编译参数寿命**：语句拥有编译后的参数文本；`text()` 仅允许左值借用，视图不得超过语句及其 PMR 资源寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
 
-`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
+- **SQL 构建器视图借用生命周期**：`db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
 - **查询子句**：`select`、`add_select`、`distinct`、`distinct_on`、`from`、`from_function`、`join`、`where` / `and_where` / `or_where`、`group_by`、`having`、`order_by`、`limit`、`offset`、`lock`（`FOR UPDATE` / `FOR SHARE` + `NOWAIT` / `SKIP LOCKED`）、`with`（CTE / `RECURSIVE`）、`combine`（`UNION` / `INTERSECT` / `EXCEPT`）。
   `limit`、`offset`、`db_window_boundary::offset_` 及 SQL / Redis Repository 的 `skip_`、`take_` 共用 `"ruvia/web/model.h"` 的 `query_row_count`（可选位置仍包在 `std::optional` 中）。合法整数可直接填入，构造前检查 `0..INT64_MAX`，负数或超范围抛出 `std::invalid_argument`，无异常探测用 `query_row_count::try_from_value()`；不隐式接受浮点或枚举，需要整数时用 `value()` 解包，不要预先转成无符号数。
@@ -299,7 +299,7 @@ RUVIA_DB_PROJECTION(device_summary,
 
 ### 3.4 Builder 与直接 Query 的组合边界
 
-`insert_builder(entity/span)` 与后续 `.values(entity/span)` 使用同一实体写入规则：每批可以包含设置了不同字段的实体，重复调用按行追加，不替换旧行或重新解释旧列。列按首次出现的批次合并（批内遵循实体声明顺序），缺失字段补 `DEFAULT`；因此不同分批方式可以改变 SQL 列顺序，但不改变每行字段对应的数据。单个全默认实体保留为一行，之后可追加显式字段行，也可在已有显式列时追加默认行；所有行都没有显式列的多行 INSERT 仍被拒绝。空批次与失败批次不改变此前 SQL、参数或默认 upsert 更新列集合；`.values()` 与 `.insert_from()` 不可混用。
+- **实体批量插入规则**：`insert_builder(entity/span)` 与后续 `.values(entity/span)` 使用同一实体写入规则：每批可以包含设置了不同字段的实体，重复调用按行追加，不替换旧行或重新解释旧列。列按首次出现的批次合并（批内遵循实体声明顺序），缺失字段补 `DEFAULT`；因此不同分批方式可以改变 SQL 列顺序，但不改变每行字段对应的数据。单个全默认实体保留为一行，之后可追加显式字段行，也可在已有显式列时追加默认行；所有行都没有显式列的多行 INSERT 仍被拒绝。空批次与失败批次不改变此前 SQL、参数或默认 upsert 更新列集合；`.values()` 与 `.insert_from()` 不可混用。
 
 写 Builder 的 `.set(span<db_assignment>)`、`.set({...})` 和 `.set(entity)` 整批提交：字段校验与表达式导入完成后才发布 SET 列表，后续项失败不会留下此前项的部分更新。失败前已构建的 SQL 与参数语义不变；此保证针对查询构建，不等同于数据库事务。
 
@@ -307,9 +307,9 @@ RUVIA_DB_PROJECTION(device_summary,
 - **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；`db_expression` 与类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
 - **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
-读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载在同一 resource 下直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
+- **Builder AST 只读借用**：读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载在同一 resource 下直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 
-读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
+- **读 Builder 子查询边界**：读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
 
 ```cpp
 auto repo = c.db().repository<device>();
@@ -327,7 +327,7 @@ auto statement = outer.compile(ruvia::db_driver::postgresql, nullptr);
 // 外层不持有 changed 的借用，可在 changed 析构后编译或执行。
 ```
 
-读写 Builder 的 `join(type, const db_query&, alias, on, db_source_options)` 接受无实体子查询；读 Builder 的 `inner_join()` / `left_join()` 同样支持此入口。`.lateral_ = true` 直接保留为相关 `JOIN LATERAL (SELECT ...)`，不会提升为普通 CTE。`on` 沿既有 predicate 导入规则把根实体限定名重绑定为外层别名；无实体子查询及其输出列没有可推断的实体表映射，相关引用和 JOIN 输出引用请显式使用外层及子查询别名。`options.columns_` 仅在调用方确实需要 SQL 列别名列表时提供，不要求枚举未知输出字段；方言限制沿底层 Query 的编译校验。
+- **Builder JOIN 与关联选择**：读写 Builder 的 `join(type, const db_query&, alias, on, db_source_options)` 接受无实体子查询；读 Builder 的 `inner_join()` / `left_join()` 同样支持此入口。`.lateral_ = true` 直接保留为相关 `JOIN LATERAL (SELECT ...)`，不会提升为普通 CTE。`on` 沿既有 predicate 导入规则把根实体限定名重绑定为外层别名；无实体子查询及其输出列没有可推断的实体表映射，相关引用和 JOIN 输出引用请显式使用外层及子查询别名。`options.columns_` 仅在调用方确实需要 SQL 列别名列表时提供，不要求枚举未知输出字段；方言限制沿底层 Query 的编译校验。
 
 ```cpp
 auto read = repo.query_builder("d");
@@ -339,7 +339,7 @@ read.left_join(latest, "matched", ruvia::db_expr::value(true).is_true(),
     {.lateral_ = true});
 ```
 
-`db_selection::star()` / `db_selection::star("samples")` 是真实的 `*` / `samples.*` 投影项，可与具名表达式一起传给 `select()`、`add_select()` 和写 Builder 的 `returning()`。通配项不生成 `AS`，也不根据实体或 CTE 描述展开列名；具名项仍要求非空且相互唯一的输出名，并生成 `AS`。
+- **星号投影项**：`db_selection::star()` / `db_selection::star("samples")` 是真实的 `*` / `samples.*` 投影项，可与具名表达式一起传给 `select()`、`add_select()` 和写 Builder 的 `returning()`。通配项不生成 `AS`，也不根据实体或 CTE 描述展开列名；具名项仍要求非空且相互唯一的输出名，并生成 `AS`。
 
 ```cpp
 ruvia::db_query samples;
@@ -353,11 +353,11 @@ mixed.with("samples", samples).from_cte("samples")
 
 通配投影的结果仍按数据库返回的**列名元数据**映射，不按位置猜测，也不假设 CTE 与根实体有相同列清单：
 
-- 实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
-- 显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
-- 通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，重复匹配列被拒绝。
-- 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
-- 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
+- **通配投影解码**：实体 / DTO 中与实际返回列同名的字段被解码；通配部分没有返回的字段保持 unset。通配带出的其他字段保留在 raw rows 中，不强迫 DTO 声明它们。
+- **显式具名列校验**：显式具名项仍是必需列：在映射类型内声明后，结果缺少该列时抛出 `db_conversion_error::missing_column`；具名项不在映射类型内时仍沿既有规则拒绝，`get_raw_and_entities()` 继续允许额外具名列。
+- **同名列冲突拒绝**：通配项的真实名称在构建期未知，无法静态判断它与具名项是否重名。结果若含两个同名且需要映射的列，抛出 `db_conversion_error::invalid_format`，不会任选第一列；只取 raw rows 时不替数据库重命名或丢弃列。无通配项的投影（包括原始 SQL、CTE 或 JOIN 带出的同名列）同样适用：需要映射的列名必须在结果中唯一，重复匹配列被拒绝。
+- **通配 `insert_from` 边界**：对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
+- **关系预加载形状校验**：关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
 ### 3.5 独立字段与实体映射（`"ruvia/web/db.h"`）
 
@@ -398,13 +398,13 @@ ruvia::app()
     .redis({.alias_ = "cache", .config_ = config});
 ```
 
-- 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- **常规池与阻塞池隔离**：每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
+- **独立事件循环宿主**：同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
 - **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebcontexth)。
-- 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
+- **回复解析槽复用**：每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
-- 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
-- `subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
+- **认证口令擦除**：配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
+- **订阅空闲探活配置**：`subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
 - **连接竞速（[RFC 8305 §4–5](https://www.rfc-editor.org/rfc/rfc8305.html#section-4)）**：保留系统解析结果的 RFC 6724 优先级，从首选地址族开始交错 IPv6 / IPv4，每隔 `250ms` 追加一次并行尝试，首个成功者获胜，其余取消并等待结束。
 - **竞速边界**：数字地址与单候选地址直接单次连接；`connect_timeout_` 统一覆盖解析、全部尝试与 TLS 握手；解析为一次合并的 `getaddrinfo`，不实现 RFC 8305 §3 的独立 A / AAAA 查询与 Resolution Delay。
 - **TLS 关闭**：关闭连接时以一次非阻塞写发送 `close_notify`，不等待对端告警；仍有未完整写出的记录、写入失败或已发生 TLS 错误时不发送告警。
@@ -429,17 +429,17 @@ ruvia::app()
 - **SET 结果资源**：`redis_set_result` 复制与移动构造继承源 PMR，赋值保留目标 PMR；空结果仍保留资源绑定，资源须覆盖结果寿命。
 - **SET 结果语义**：赋值失败保持原结果；`previous()` 的 `std::nullopt` 与空字符串保持区分。
 
-`redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。清除过滤时设置 `match_ = std::nullopt` 或调用 `match_.reset()`。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
+- **SCAN 匹配模式 `match_`**：`redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。清除过滤时设置 `match_ = std::nullopt` 或调用 `match_.reset()`。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
 
-`redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
+- **正整数计数 `redis_positive_count`**：`redis_scan_options::count_` 与 `redis_x_read_group_options::count_` 使用 `std::optional<redis_positive_count>`：未指定不发送 `COUNT`，指定整数时在构造阶段检查 `1..INT64_MAX`，零、负数或超范围抛出 `std::invalid_argument`，无异常探测用 `redis_positive_count::try_from_value()`。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。
 
-返回字符串数组的方法（`lrange`、`zrange`、`smembers`、`hkeys`、`hvals`、`sinter`、`sunion`、`sdiff` 以及 `scan`／`sscan` 的 `values()`）要求每个元素都是字符串：回复中出现 nil 元素时抛出 `redis_error(protocol_error)`，不会静默丢弃而改变结果长度或位置。允许缺失值的 `mget`／`hmget` 仍以 `std::optional` 表示 nil。
+- **字符串数组元素校验**：返回字符串数组的方法（`lrange`、`zrange`、`smembers`、`hkeys`、`hvals`、`sinter`、`sunion`、`sdiff` 以及 `scan`／`sscan` 的 `values()`）要求每个元素都是字符串：回复中出现 nil 元素时抛出 `redis_error(protocol_error)`，不会静默丢弃而改变结果长度或位置。允许缺失值的 `mget`／`hmget` 仍以 `std::optional` 表示 nil。
 
-原始 `command()` 与批处理的 `command()` 按 Redis 文档语法识别 `XREAD`／`XREADGROUP` 在 `STREAMS` 之前的选项：`COUNT`、`BLOCK`，以及仅 `XREADGROUP` 支持的 `CLAIM`（Redis 8.4+）与 `NOACK`。含 `BLOCK` 的命令视为阻塞命令，走阻塞池且须由 `timeout_` 或可取消的 `stop_token_` 约束，不能进入 pipeline／transaction；其他未识别的选项同步抛出 `std::invalid_argument`，不会被猜测为非阻塞命令。依据 [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/)。
+- **`XREAD` / `XREADGROUP` 阻塞命令识别**：原始 `command()` 与批处理的 `command()` 按 Redis 文档语法识别 `XREAD`／`XREADGROUP` 在 `STREAMS` 之前的选项：`COUNT`、`BLOCK`，以及仅 `XREADGROUP` 支持的 `CLAIM`（Redis 8.4+）与 `NOACK`。含 `BLOCK` 的命令视为阻塞命令，走阻塞池且须由 `timeout_` 或可取消的 `stop_token_` 约束，不能进入 pipeline／transaction；其他未识别的选项同步抛出 `std::invalid_argument`，不会被猜测为非阻塞命令。依据 [XREADGROUP](https://redis.io/docs/latest/commands/xreadgroup/)。
 
 #### 写入与复制／落盘屏障
 
-`WAIT` / `WAITAOF` 依据 **current connection** 的前序写入 offset 工作；独立的 `handle.set()` 与 `handle.command()` 不保证共享连接。因此单次 `command("WAIT", ...)` / `command("WAITAOF", ...)` 同步抛出 `std::invalid_argument`。请将需要保护的写入和屏障放进同一非事务 `redis_pipeline`：
+- **`WAIT` / `WAITAOF` 连接绑定**：`WAIT` / `WAITAOF` 依据 **current connection** 的前序写入 offset 工作；独立的 `handle.set()` 与 `handle.command()` 不保证共享连接。因此单次 `command("WAIT", ...)` / `command("WAITAOF", ...)` 同步抛出 `std::invalid_argument`。请将需要保护的写入和屏障放进同一非事务 `redis_pipeline`：
 
 ```cpp
 auto batch = c.redis().with_options({
@@ -458,11 +458,11 @@ if (replies[1].integer() < 1) {
 }
 ```
 
-- 整批命令共用普通池的一次租约及同一连接；屏障只保护本批中位于它之前的写入，不保护此前独立调用的写入。`WAITAOF` 可替换为 `.command("WAITAOF", "1", "1", "1000")`，分别检查返回数组中本地与副本的 fsync 计数；需要 Redis 7.2+，请求本地 fsync 时需启用 AOF。
-- 含屏障的批次必须继承 `operation_options.timeout_` 或可取消的 `stop_token_`。独立 `redis_client` 的句柄默认继承 owner 取消；请求句柄可如上显式配置。`timeout_` 覆盖整次操作，普通池 `redis_config::command_timeout_` 仍约束整批发送与全部回复，不为屏障停用，也不逐条重启。Redis 命令参数中的 `0` 只表示服务端无限等待，不能绕过客户端的超时／取消。
-- 超时、取消、传输或协议失败沿已有池执行主链关闭连接并释放租约，不把残留回复交给后续操作；已完成写入不回滚。完整的 Redis 命令错误保留在对应 `redis_value` 中，其他回复仍读取完毕。调用方须先检查写入是否成功，再检查确认计数；服务端超时返回的计数可能小于目标，而不是抛出超时异常。
-- `redis_transaction` 继续拒绝两种屏障：Redis 在 `MULTI` 内不会为它们阻塞等待。其他阻塞命令仍不允许进入 pipeline/transaction，单次阻塞命令继续使用独立阻塞池。
-- `WAIT` / `WAITAOF` 改善数据安全性，但不使 Redis 成为强一致存储，不保证故障切换后绝不丢写。官方连接历史、事务与返回值限制参见 [WAIT](https://redis.io/docs/latest/commands/wait/) 与 [WAITAOF](https://redis.io/docs/latest/commands/waitaof/)。
+- **批次连接与屏障范围**：整批命令共用普通池的一次租约及同一连接；屏障只保护本批中位于它之前的写入，不保护此前独立调用的写入。`WAITAOF` 可替换为 `.command("WAITAOF", "1", "1", "1000")`，分别检查返回数组中本地与副本的 fsync 计数；需要 Redis 7.2+，请求本地 fsync 时需启用 AOF。
+- **屏障取消与超时前置条件**：含屏障的批次必须继承 `operation_options.timeout_` 或可取消的 `stop_token_`。独立 `redis_client` 的句柄默认继承 owner 取消；请求句柄可如上显式配置。`timeout_` 覆盖整次操作，普通池 `redis_config::command_timeout_` 仍约束整批发送与全部回复，不为屏障停用，也不逐条重启。Redis 命令参数中的 `0` 只表示服务端无限等待，不能绕过客户端的超时／取消。
+- **批次异常与脏连接淘汰**：超时、取消、传输或协议失败沿已有池执行主链关闭连接并释放租约，不把残留回复交给后续操作；已完成写入不回滚。完整的 Redis 命令错误保留在对应 `redis_value` 中，其他回复仍读取完毕。调用方须先检查写入是否成功，再检查确认计数；服务端超时返回的计数可能小于目标，而不是抛出超时异常。
+- **事务内禁用阻塞屏障**：`redis_transaction` 继续拒绝两种屏障：Redis 在 `MULTI` 内不会为它们阻塞等待。其他阻塞命令仍不允许进入 pipeline/transaction，单次阻塞命令继续使用独立阻塞池。
+- **复制屏障一致性边界**：`WAIT` / `WAITAOF` 改善数据安全性，但不使 Redis 成为强一致存储，不保证故障切换后绝不丢写。官方连接历史、事务与返回值限制参见 [WAIT](https://redis.io/docs/latest/commands/wait/) 与 [WAITAOF](https://redis.io/docs/latest/commands/waitaof/)。
 
 ### 4.3 Pub/Sub 独占订阅连接（`redis_subscription`）
 
@@ -480,20 +480,20 @@ while (auto event = co_await sub.read()) {
 
 - **逐次读取选项**：`read(operation_options)` 的超时只收紧订阅选项，其令牌只取消本次读取（订阅自身令牌仍以 `std::nullopt` 结束事件流）；非正超时在调用处抛 `std::invalid_argument`。启动前已停止的令牌抛 `redis_error(cancelled)` 且订阅保持打开；等待中的超时或取消关闭订阅连接并抛 `redis_error(timeout / cancelled)`。
 
-`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
+- **Pub/Sub 事件分类**：`read()` 的 `redis_pubsub_event` 恰好包含 `confirmation()` 或 `message()`，通过对应访问器判断事件种类。确认的 `kind()` 使用 `redis_pubsub_confirmation_kind` 区分 `subscribed`、`pattern_subscribed`、`unsubscribed`、`pattern_unsubscribed`；`name()` 是 optional，值为空串表示合法空频道/模式，缺省表示无订阅可退订的 nil 确认。只有确认提供 `subscription_count()`。消息提供 `channel()`、`payload()` 与 optional `pattern()`；无值为直接投递，有值（包括空模式）为模式投递。名称与正文仍借用当前回复，须在下一次 `read()` 开始前消费或复制；按 optional 是否有值区分直接投递与模式投递。
 
 线上 `message` / `pmessage` 与四种确认字段的定义见 [Redis Pub/Sub 推送格式](https://redis.io/docs/latest/develop/pubsub/#format-of-pushed-messages)。
 
 #### 空闲探活（`redis_config::subscription_ping_interval_`）
 
-订阅连接平时只收不发，对端静默宕机或中间设备丢弃连接时 `read()` 会无限等待。`subscription_ping_interval_` 为订阅连接提供与 Pingora `h2_ping_interval`、Go `http2.Transport.ReadIdleTimeout` 同类的读空闲探活，默认 30 秒，`std::nullopt` 显式关闭，配置零或负值在构造客户端时抛出 `std::invalid_argument`：
+- **订阅连接心跳探活**：订阅连接平时只收不发，对端静默宕机或中间设备丢弃连接时 `read()` 会无限等待。`subscription_ping_interval_` 为订阅连接提供与 Pingora `h2_ping_interval`、Go `http2.Transport.ReadIdleTimeout` 同类的读空闲探活，默认 30 秒，`std::nullopt` 显式关闭，配置零或负值在构造客户端时抛出 `std::invalid_argument`：
 
-- 仅在 `read()` 等待期间计时，计时起点为本次 `read()` 开始；收到任何字节（包括半条回复）都会重置计时。计时器由最近到期时间事件驱动，读结束前取消，不轮询，也不比订阅本身活得更久。
-- 一个间隔内无任何输入时，若没有在途的用户命令，就在订阅连接上发送 `PING`；若在途命令（正在写出，或在最近一次输入之后写出、回复尚未到达）存在，则以该命令自身的回复作为存活证明，不再发送 `PING`。
-- 探测开始后又满一个间隔仍无任何输入，订阅关闭，等待中的 `read()` 抛出 `redis_error(timeout)`，之后 `read()` 返回 `std::nullopt`、命令抛出 `redis_error(closing)`。`PING` 本身须在一个间隔内写出，且不超过发起它的 `read()` 的整体截止期（`operation_options::timeout_`），写出超时同样按超时关闭订阅；`read()` 失败时先关闭连接唤醒在途 `PING` 写出再返回，因此 `PING` 不会把 `read()` 拖过其截止期。
-- `PING` 回复在内部消费，从不作为事件从 `read()` 返回：订阅状态下 RESP2 回复为 `["pong", ""]`，退订全部频道后连接回到普通模式，回复为 `+PONG`（与 RESP3 形式相同）；未发送 `PING` 时收到的此类回复仍按畸形推送关闭连接。
-- 一次只有一个 `PING` 写出；与用户命令共用写通道，用户命令遇到正在写出的 `PING` 时等待其完成，不会因此抛出 `std::logic_error`。启用 ACL 时订阅用户须允许 `PING`，否则其错误回复会以 `redis_error(command_error)` 出现在 `read()` 中，此时应关闭探活。
-- 探活只覆盖 `read()` 等待期间；需要整次读取截止期时仍使用 `operation_options::timeout_`，两者独立生效。
+- **探活计时起点与重置**：仅在 `read()` 等待期间计时，计时起点为本次 `read()` 开始；收到任何字节（包括半条回复）都会重置计时。计时器由最近到期时间事件驱动，读结束前取消，不轮询，也不比订阅本身活得更久。
+- **按需发送 `PING`**：一个间隔内无任何输入时，若没有在途的用户命令，就在订阅连接上发送 `PING`；若在途命令（正在写出，或在最近一次输入之后写出、回复尚未到达）存在，则以该命令自身的回复作为存活证明，不再发送 `PING`。
+- **探活超时断连**：探测开始后又满一个间隔仍无任何输入，订阅关闭，等待中的 `read()` 抛出 `redis_error(timeout)`，之后 `read()` 返回 `std::nullopt`、命令抛出 `redis_error(closing)`。`PING` 本身须在一个间隔内写出，且不超过发起它的 `read()` 的整体截止期（`operation_options::timeout_`），写出超时同样按超时关闭订阅；`read()` 失败时先关闭连接唤醒在途 `PING` 写出再返回，因此 `PING` 不会把 `read()` 拖过其截止期。
+- **`PING` 回复静默吸收**：`PING` 回复在内部消费，从不作为事件从 `read()` 返回：订阅状态下 RESP2 回复为 `["pong", ""]`，退订全部频道后连接回到普通模式，回复为 `+PONG`（与 RESP3 形式相同）；未发送 `PING` 时收到的此类回复仍按畸形推送关闭连接。
+- **写通道互斥**：一次只有一个 `PING` 写出；与用户命令共用写通道，用户命令遇到正在写出的 `PING` 时等待其完成，不会因此抛出 `std::logic_error`。启用 ACL 时订阅用户须允许 `PING`，否则其错误回复会以 `redis_error(command_error)` 出现在 `read()` 中，此时应关闭探活。
+- **探活与单次读超时叠加**：探活只覆盖 `read()` 等待期间；需要整次读取截止期时仍使用 `operation_options::timeout_`，两者独立生效。
 
 ### 4.4 Redis HASH 实体与 RediSearch ORM（`RUVIA_REDIS_ENTITY`）
 
@@ -528,7 +528,7 @@ auto rows = co_await repo.find({
 
 ORM 写入和删除先按脚本摘要执行；收到 `NOSCRIPT` 后释放该错误回复，再以脚本正文重试。两次执行共享同一操作超时与取消边界。
 
-NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。需要 float 精度边界时须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
+- **RediSearch 数值谓词精度**：NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类型；比较、`between`、`in` / `not_in` 共用该规则。`0.1f` 与 float 字段写入使用同一 float 十进制编码，向其他数值列比较时只提升为 double；`0.1` 则始终保留 double 编码，两者可能不同。索引比较的对象仍是 RediSearch 解析 HASH 十进制文本得到的 double，而非未序列化的宿主浮点位模式。需要 float 精度边界时须显式传入 float；窄列不能吞掉 `16777216.5` 等更宽的范围边界。
 
 ### 4.5 离线查询与索引编译
 
@@ -592,9 +592,9 @@ if (bearer) {
 }
 ```
 
-- `jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
-- 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
-- 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
-- `exp` / `nbf` 验证直接比较精确 NumericDate 与当前时间及 `leeway_`，不经过宿主时间点转换；边界分别为 `exp == now - leeway` 已过期、`nbf == now + leeway` 已生效（[§4.1.4–4.1.5](https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4)）。签发的正 `expires_in_` / `not_before_delay_` 向上取整到整秒，零偏移向下取整；超出宿主时钟范围的结果仍保留所请求的秒数。`leeway_` 只应补偿实际时钟偏差，通常不超过几分钟。
-- 载荷及 NumericDate 独立拥有解码内容，不借用输入 token；指定的 PMR resource 必须覆盖整个结果及其析构。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
-- `jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。
+- **Bearer 令牌语法校验**：`jwt_bearer_token` 只返回符合 RFC 6750 `b64token` 语法（`ALPHA / DIGIT / - . _ ~ + /`，末尾可跟 `=`）的令牌；含空格、逗号等其他字符时返回 `std::nullopt`。
+- **自定义声明 JSON 访问**：自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
+- **NumericDate 时间声明**：时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
+- **精确时间窗口比较**：`exp` / `nbf` 验证直接比较精确 NumericDate 与当前时间及 `leeway_`，不经过宿主时间点转换；边界分别为 `exp == now - leeway` 已过期、`nbf == now + leeway` 已生效（[§4.1.4–4.1.5](https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4)）。签发的正 `expires_in_` / `not_before_delay_` 向上取整到整秒，零偏移向下取整；超出宿主时钟范围的结果仍保留所请求的秒数。`leeway_` 只应补偿实际时钟偏差，通常不超过几分钟。
+- **载荷内存所有权**：载荷及 NumericDate 独立拥有解码内容，不借用输入 token；指定的 PMR resource 必须覆盖整个结果及其析构。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
+- **未验签解码语法防线**：`jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。
