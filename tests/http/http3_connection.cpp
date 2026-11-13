@@ -27,7 +27,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
-#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
 namespace ruvia::test {
 
 // Stream data delivered to the peer whose QUIC acknowledgement has not been

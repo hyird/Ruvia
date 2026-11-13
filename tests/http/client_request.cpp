@@ -26,7 +26,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
-#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
 namespace {
 
 using ruvia::http1_client_request_buffer_too_small;

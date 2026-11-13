@@ -37,7 +37,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 
-#include "worker_task_fixture.h"
+#include "http_server_fixture.h"
 
 namespace ruvia::test::worker_wait_tests {
 

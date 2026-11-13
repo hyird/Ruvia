@@ -77,7 +77,6 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/model.h"
 
-#include "content_decoding_fixture.h"
 namespace connection_lifecycle_test {
 using namespace std::chrono_literals;
 

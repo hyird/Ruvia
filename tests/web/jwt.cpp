@@ -17,7 +17,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
-#include "worker_task_fixture.h"
+#include "http_server_fixture.h"
 namespace {
 
 using ruvia::jwt_algorithm;

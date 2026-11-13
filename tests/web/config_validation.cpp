@@ -87,7 +87,6 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/model.h"
 
-#include "content_decoding_fixture.h"
 #include "http_server_fixture.h"
 #if defined(__linux__)
 #include <fcntl.h>

@@ -742,7 +742,7 @@ private:
 //
 // application::use<T>() instantiates the descriptor at the call site. Built-in
 // middleware headers already include that machinery. A custom middleware's
-// use<T>() call site needs router.h, controller.h, or testing.h.
+// use<T>() call site needs only context.h or app.h.
 // This header stays free of context so app.h does not pull it in.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> &&
@@ -2450,8 +2450,7 @@ class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: http_client.h, websocket.h, http_tunnel.h,
-// session.h, streaming.h and multipart_reader.h.
+// where they are used: context.h and http_client.h.
 class http_client_ref;
 class http_client_response;
 class websocket;

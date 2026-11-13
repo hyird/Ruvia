@@ -6,7 +6,7 @@
 // Run on port 8090 (RUVIA_PORT overrides it), then GET /redis/ping.
 // Use a disposable Redis database: collection routes, scripts and transactions
 // write demo keys. Blocking reads use the separate blocking pool.
-// See backend_tls.h for RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
+// See backend_config.h for RUVIA_REDIS_TLS/CA/CERT/KEY. A local plaintext Redis
 // requires the explicit setting RUVIA_REDIS_TLS=false.
 
 #include "ruvia/web/redis.h"
@@ -463,7 +463,7 @@ int main() {
 // Build with RUVIA_ENABLE_REDIS=ON; configure RUVIA_REDIS_HOST/PORT/USER/PASSWORD.
 // Run on port 8091. POST {"id":"1","name":"Ada","age":30} as JSON to
 // /users, then GET /users/1. GET /users performs the indexed adult search.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 RUVIA_REDIS_ENTITY(cached_user, "users",
     RUVIA_REDIS_COLUMN(id, ruvia::string, ruvia::redis_column_options{.primary_key_ = true}),
@@ -602,12 +602,12 @@ private:
 
 // Redis Streams consumer groups and the generic command escape hatch.
 // Requires RUVIA_ENABLE_REDIS=ON and Redis configured with RUVIA_REDIS_* below.
-// Run ruvia_example_redis_streams, then POST /streams/setup once on port 8095.
+// Run ruvia_example_redis, then POST /streams/setup once on port 8095.
 // POST /streams/publish with a text body; GET /streams/consume prints and ACKs it.
 // An idle read waits at most 500 ms and returns "no messages". Setup deliberately
 // reports an existing group instead of deleting somebody else's stream/group.
 // Demo data stays under ruvia:example:stream; use a disposable Redis database.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 namespace redis_streams_example {
 
@@ -696,13 +696,13 @@ private:
 
 // Redis Pub/Sub: a dedicated subscription connection fanned out as server-sent events.
 // Requires RUVIA_ENABLE_REDIS=ON and Redis configured with RUVIA_REDIS_* below.
-// Run ruvia_example_redis_pubsub on port 8096, then:
+// Run ruvia_example_redis on port 8096, then:
 // curl -N http://127.0.0.1:8096/pubsub/events
 // curl --data 'hello' http://127.0.0.1:8096/pubsub/publish
 // Every subscriber connection gets its own Redis connection; the request's
 // stop token closes it when the SSE client goes away. Pub/Sub delivers at most
 // once: a closed subscription has missed what was published meanwhile.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
+// backend_config.h defines RUVIA_REDIS_TLS/CA/CERT/KEY for Redis transport.
 
 namespace redis_pubsub_example {
 
@@ -786,13 +786,13 @@ private:
 
 // Redis-backed sessions with browser CSRF protection.
 // Requires RUVIA_ENABLE_REDIS=ON and Redis at RUVIA_REDIS_HOST/PORT (localhost:6379).
-// Run ruvia_example_sessions, then GET http://127.0.0.1:8092/session.
+// Run ruvia_example_redis, then GET http://127.0.0.1:8092/session.
 // Keep the returned XSRF-TOKEN cookie and repeat it in X-XSRF-TOKEN for POSTs:
 //   POST /session with a text body stores a demo preference, not an identity.
 //   POST /session/rotate rotates its cookie; POST /session/clear removes it.
 // Reuse the newest sid cookie on every request. Concurrent stale writes return
 // 409; do not retry stale authenticated state under a newly created session.
-// backend_tls.h defines RUVIA_REDIS_TLS/CA/CERT/KEY; set TLS=false explicitly
+// backend_config.h defines RUVIA_REDIS_TLS/CA/CERT/KEY; set TLS=false explicitly
 // for local plaintext Redis. Optional USER/PASSWORD/DATABASE select its account.
 
 namespace sessions_example {

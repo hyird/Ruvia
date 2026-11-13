@@ -424,8 +424,8 @@ inline event_loop_retirement::lease_token_type::~lease_token_type() {
 }  // namespace ruvia::detail
 
 // The dispatcher's state, declared here because two translation units own parts
-// of it: worker_dispatcher.cpp runs the queue and the worker's lifecycle, while
-// worker_timers.cpp runs the timer heap that shares its mutex.
+// of it: the worker dispatcher runs the queue and the worker's lifecycle, while
+// the worker timer queue runs the timer heap that shares its mutex.
 
 namespace ruvia {
 class blocking_pool;
@@ -6079,7 +6079,7 @@ enum class native_wake_signal : std::uint8_t {
 
 // The platform wake channel: a nonblocking sender and the receiver descriptor that
 // the worker adopts into its Asio stream. Implemented by
-// worker_notification_win32.cpp (named pipe) and worker_notification_posix.cpp
+// the Windows (named pipe) and POSIX
 // (Linux eventfd or a POSIX self-pipe).
 struct native_wake_pair final {
     native_wake_descriptor sender_{invalid_native_wake_descriptor};

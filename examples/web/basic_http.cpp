@@ -207,7 +207,7 @@ int main() {
 // Runtime configuration: dotenv, app-wide middleware via application::use, memory
 // pool, timeouts, limits, compression and optional TLS. Typed Env::get<T>()
 // returns nullopt only when a variable is absent; malformed values fail fast.
-// Run ruvia_example_runtime_config and GET http://127.0.0.1:8087/runtime.
+// Run ruvia_example_basic_http and GET http://127.0.0.1:8087/runtime.
 // RUVIA_HTTP_PORT/PORT and RUVIA_WORKERS override the listener and worker count.
 // RUVIA_GZIP=true enables negotiated gzip/Brotli/zstd; RUVIA_CORS=true enables
 // the CORS policy below. A .env file is optional and preserves existing values.
@@ -362,7 +362,7 @@ private:
 }
 
 // Operational middleware, readiness, proxy trust, logging, statistics, and hooks.
-// Run ruvia_example_ops, then GET http://127.0.0.1:8098/admin/health,
+// Run ruvia_example_basic_http, then GET http://127.0.0.1:8098/admin/health,
 // /admin/ready?db=down (503), /admin/stats, or /admin/peer.
 // /admin/fail-after-head deliberately ends a stream with an error to demonstrate
 // on_connection_failure; it cannot be turned into a second HTTP response.
@@ -483,7 +483,7 @@ private:
 // via application::worker_for / web_worker_ref::post, and context::run_blocking() --
 // the escape hatch for calls that block, which run on application::blocking_pool()'s
 // threads so the worker stays free to serve its other connections.
-// Run ruvia_example_workers_blocking on port 8090; inspect its route macros
+// Run ruvia_example_basic_http on port 8090; inspect its route macros
 // for stats, awaited dispatch, fanout and overload shedding endpoints.
 // Offloaded work takes owned input. Do not capture context or worker state
 // in a blocking job: stopping a request does not stop that native thread.

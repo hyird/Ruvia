@@ -1,5 +1,5 @@
 // Outbound HTTP client usage from a Ruvia controller.
-// First run ruvia_example_http_features (localhost:8093), then this gateway
+// First run ruvia_example_api_surface (localhost:8093), then this gateway
 // (localhost:8099). POST /api/forward or GET /api/forward-stream.
 // RUVIA_UPSTREAM_HOST/PORT override the fixed upstream; RUVIA_UPSTREAM_TLS=true
 // enables HTTPS and RUVIA_TLS_CA selects a custom CA file. Verification stays on.
@@ -163,7 +163,7 @@ int main() {
 
 // Standalone HTTP/1 and HTTP/2 client: streaming uploads, trailers, body readers,
 // interim heads, redirects, push, advertisements, and retained result budgets.
-// First run ruvia_example_http_features, then this executable with 1 or 2.
+// First run ruvia_example_api_surface, then this executable with 1 or 2.
 // RUVIA_CLIENT_TLS=true selects TLS on localhost:8444 instead of HTTP on port 8093.
 // Set RUVIA_TLS_CA to trust the example server certificate.
 
@@ -289,7 +289,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
         std::cout << std::unitbuf;
         const std::string_view protocol = argc > 1 ? argv[1] : "1";
         if (protocol != "1" && protocol != "2") {
-            throw std::invalid_argument("usage: ruvia_example_http_client_advanced [1|2]");
+            throw std::invalid_argument("usage: ruvia_example_http_client [1|2]");
         }
         const example::environment env;
         const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
@@ -321,7 +321,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
 }
 
 // Owning WebSocket session from the fluent HTTP client over HTTP/1 or HTTP/2.
-// First run ruvia_example_http_features, then this executable with 1 or 2.
+// First run ruvia_example_api_surface, then this executable with 1 or 2.
 // Connects to localhost:8093; RUVIA_CLIENT_TLS=true selects TLS on port 8444.
 // Set RUVIA_TLS_CA to trust the local CA. Expected output: text=hello,
 // binary bytes=3, then a clean close.
@@ -368,7 +368,7 @@ ruvia::task<void> exchange(ruvia::event_loop loop, ruvia::http_client_config con
     try {
         const std::string_view protocol = argc > 1 ? argv[1] : "1";
         if (protocol != "1" && protocol != "2") {
-            throw std::invalid_argument("usage: ruvia_example_websocket_client [1|2]");
+            throw std::invalid_argument("usage: ruvia_example_http_client [1|2]");
         }
         const example::environment env;
         const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);

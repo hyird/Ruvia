@@ -40,7 +40,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 
-#include "worker_task_fixture.h"
+#include "http_server_fixture.h"
 
 #if !defined(_WIN32)
 #include <unistd.h>

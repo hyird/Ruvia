@@ -8,7 +8,7 @@
 // /db/transfer expects accounts 1 and 2 to exist; it commits both updates
 // together. An uncommitted transaction rolls back when released.
 // Use a dedicated demo database: writes and migration history persist.
-// See backend_tls.h for RUVIA_DB_TLS/CA/CERT/KEY. Local plaintext servers
+// See backend_config.h for RUVIA_DB_TLS/CA/CERT/KEY. Local plaintext servers
 // require the explicit setting RUVIA_DB_TLS=false.
 
 #include <array>
@@ -346,7 +346,7 @@ void migrations() {
 // CTE writes, locks, returning rows, arrays, trigger functions and query caches.
 // RUVIA_ORM_CACHE_REDIS_HOST/PORT opt into the Redis cache provider when built.
 // Use a demo database: --run inserts, changes and deletes demonstration rows.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
+// backend_config.h defines RUVIA_DB_TLS/CA/CERT/KEY and equivalent cache options.
 
 namespace orm_base_example {
 using namespace ruvia;
@@ -548,7 +548,7 @@ db_config config(const example::environment& env) {
             } else if (std::string_view(argv[i]) == "--run") {
                 execute = true;
             } else {
-                throw std::invalid_argument("usage: ruvia_example_orm [--migrate] [--run]");
+                throw std::invalid_argument("usage: ruvia_example_database [--migrate] [--run]");
             }
         }
         const auto changes = migrations();
@@ -587,7 +587,7 @@ db_config config(const example::environment& env) {
 // database selected by RUVIA_DB_HOST/PORT/USER/PASSWORD/DATABASE.
 // Build with RUVIA_ENABLE_POSTGRESQL=ON. Includes generated columns, RETURNING,
 // retained entity results, transaction isolation and read-only transactions.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
+// backend_config.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 namespace orm_columns_example {
 using namespace ruvia;
@@ -702,7 +702,7 @@ db_config config() {
             } else if (std::string_view(argv[i]) == "--run") {
                 execute = true;
             } else {
-                throw std::invalid_argument("usage: ruvia_example_orm_columns [--migrate] [--run]");
+                throw std::invalid_argument("usage: ruvia_example_database [--migrate] [--run]");
             }
         }
         const auto changes = migrations();
@@ -740,7 +740,7 @@ db_config config() {
 // Build with RUVIA_ENABLE_POSTGRESQL=ON. Demonstrates relation loading,
 // joins, junction tables, relation mutations and cascading entity operations.
 // Keep writes in one explicit transaction when several entities must agree.
-// backend_tls.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
+// backend_config.h defines RUVIA_DB_TLS/CA/CERT/KEY for database transport.
 
 namespace ruvia::examples {
 
@@ -959,7 +959,7 @@ db_config config() {
             } else if (std::string_view(argv[i]) == "--run") {
                 execute = true;
             } else {
-                throw std::invalid_argument("usage: ruvia_example_orm_relations [--migrate] [--run]");
+                throw std::invalid_argument("usage: ruvia_example_database [--migrate] [--run]");
             }
         }
         const auto changes = ruvia::examples::migrations();
@@ -997,7 +997,7 @@ db_config config() {
 // Configure the RUVIA_DB_* and RUVIA_REDIS_HOST variables used in main().
 // Each service is constructed and shut down on its own loop. Request data
 // may be borrowed only while that loop and its resource owners remain alive.
-// backend_tls.h defines RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
+// backend_config.h defines RUVIA_DB_TLS and RUVIA_REDIS_TLS plus CA/CERT/KEY.
 
 namespace event_loop_data_example {
 using namespace ruvia;

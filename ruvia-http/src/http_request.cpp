@@ -14371,7 +14371,7 @@ http1_client_response_planning_result_type plan_http1_client_response(
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
 // quoted-string forms, and validating a Content-Type field. Matching a media
-// type against an Accept media-range lives in http_accept_match.cpp.
+// type against an Accept media-range lives in http_request.cpp.
 
 struct http_media_type_parts final {
     std::string_view type_;

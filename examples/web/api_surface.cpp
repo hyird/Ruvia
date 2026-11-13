@@ -502,7 +502,7 @@ int main() {
 }
 
 // Request policies and local dispatch; no external services are required.
-// Build: cmake --build build --config Release --target ruvia_example_request_policies -j$(nproc)
+// Build: cmake --build build --config Release --target ruvia_example_api_surface -j$(nproc)
 // Run the executable, then try:
 //   curl -i -d hello http://127.0.0.1:8097/policies/small
 //   curl -i -H "X-Demo-Name: reader" http://127.0.0.1:8097/policies/dispatch
@@ -595,7 +595,7 @@ private:
 }
 
 // Middleware continuation, response decoration, and early responses.
-// Run ruvia_example_middleware_next on port 8089.
+// Run ruvia_example_api_surface on port 8089.
 // curl -i http://127.0.0.1:8089/middleware-next
 // /middleware-next/protected returns 401 unless X-Demo-Key: example is present.
 
@@ -662,7 +662,7 @@ private:
 //
 // A standalone static_root is immutable. application document roots refresh every
 // second; see the commented interval configuration below.
-// Run ruvia_example_files_static, then GET http://127.0.0.1:8083/index.html
+// Run ruvia_example_api_surface, then GET http://127.0.0.1:8083/index.html
 // or /files/assets/hello.txt. /files/download describes a file-backed response.
 // Try Range: bytes=0-4 (206), If-None-Match with the returned ETag (304), and
 // Accept-Encoding: gzip. Compression depends on type, size, and negotiation.
@@ -759,7 +759,7 @@ private:
 // fallbacks, url_for and worker state -- without opening a socket. This is the
 // pattern an application's own test suite uses; the example doubles as a
 // runnable check and exits non-zero on any mismatch.
-// Run ruvia_example_testing with no arguments or external services.
+// Run ruvia_example_api_surface with no arguments or external services.
 // Assertions below check functional responses; test_app owns startup/teardown.
 
 RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
@@ -871,7 +871,7 @@ void expect(bool condition, const char* what) {
 
 // Streaming: streaming request bodies, typed multipart chunk phases, chunked
 // response streaming and server-sent events.
-// Run ruvia_example_streaming on port 8082. Try:
+// Run ruvia_example_api_surface on port 8082. Try:
 // curl -N http://127.0.0.1:8082/streaming/events
 // curl --data-binary @file.bin http://127.0.0.1:8082/streaming/upload/raw
 // curl -F file=@file.bin http://127.0.0.1:8082/streaming/upload/multipart
@@ -982,7 +982,7 @@ private:
 }
 
 // HTTP/1, HTTP/2 and HTTP/3 server features through the Web API.
-// Run ruvia_example_http_features, then query it with any HTTP/1.1, HTTP/2 or HTTP/3 client.
+// Run ruvia_example_api_surface, then query it with any HTTP/1.1, HTTP/2 or HTTP/3 client.
 // Plain HTTP listens on 127.0.0.1:8093 and accepts HTTP/2 prior knowledge.
 // Set RUVIA_TLS_CERT and RUVIA_TLS_KEY to enable HTTPS and HTTP/3 on port 8444;
 // the certificate must cover localhost.
@@ -1124,7 +1124,7 @@ private:
 }
 
 // HTTP/1 and HTTP/2 CONNECT byte streams and CONNECT-UDP capsules.
-// Run ruvia_example_tunnels for the server on port 8094; RUVIA_TLS_CERT/KEY
+// Run ruvia_example_api_surface for the server on port 8094; RUVIA_TLS_CERT/KEY
 // enables TLS on port 8445. Any CONNECT or CONNECT-UDP (RFC 9298) client can
 // drive it. The server echoes locally and does not forward to an arbitrary host.
 
@@ -1212,7 +1212,7 @@ private:
 
 // websocket: upgrade routes, subprotocol options, lifecycle timeouts,
 // text/binary echo and the RFC close handshake.
-// Run ruvia_example_websocket, then connect to ws://localhost:8084/ws/echo.
+// Run ruvia_example_api_surface, then connect to ws://localhost:8084/ws/echo.
 // /ws/chat requires one of chat_options()'s advertised subprotocols: an upgrade
 // offering none (send Sec-WebSocket-Protocol: chat.v1) is refused with 400.
 // /ws/ticker pushes ticks and then closes with 4001 while its reader waits.

@@ -28,7 +28,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
-#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
 namespace {
 
 // Appends the trailer section that ends the chunked `wire` the way an HTTP/1
@@ -2143,7 +2143,7 @@ TEST(Ruvia, format_http_vary_cache_key_distinguishes_absent_from_empty_header) {
 // (If-Match / If-None-Match / If-Range, RFC 9110) for static file responses.
 
 // Date formatting, cache framing, and locale-independent IMF-fixdate coverage
-// live in date_parsing.cpp. This file covers precondition evaluation.
+// live in request.cpp. This file covers precondition evaluation.
 
 TEST(Ruvia, conditional_method_plan_follows_precondition_and_range_semantics) {
     using ruvia::http_conditional_method_plan;

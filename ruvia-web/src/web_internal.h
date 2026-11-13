@@ -8326,7 +8326,7 @@ struct worker_failure_sink final {
 };
 
 // Fully normalized, worker-owned runtime options. Public callers configure application
-// with server_config.h values; only the Web runtime constructs this state.
+// with app.h server_config values; only the Web runtime constructs this state.
 struct http_server_options final {
     // The application's document root: one app-scoped publisher shared by
     // every worker, plus this worker's current generation. Validated
@@ -11498,7 +11498,7 @@ enum class client_alpn : std::uint8_t {
 };
 [[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept;
 
-// Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
+// Startup-only. Applies the shared TLS protocol policy (web_internal.h);
 // trust and client identity loading have one implementation; the ALPN offer is
 // installed per connection by the TCP transport.
 // The storage must come from a validated client_tls_config with TLS enabled.
@@ -13821,7 +13821,7 @@ public:
     void throw_if_aborted() const;
 
 #ifdef RUVIA_ENABLE_HTTP2
-    // HTTP/2 (http2/http_client_http2.cpp). False when the multiplexed session
+    // HTTP/2 (http_client_pool.cpp). False when the multiplexed session
     // had ended (or the peer required HTTP/1.1, RFC 9113 section 7) and its
     // replacement connection speaks HTTP/1.1 instead: nothing was sent, and
     // the caller runs the request as an HTTP/1 exchange on that connection.
@@ -16691,7 +16691,7 @@ void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
 struct st_mysql_res;
 struct ma_charset_info_st;
 
-// MariaDB's part of statement pipelining (db_pipeline.h). A group's
+// MariaDB's part of statement pipelining (web_internal.h). A group's
 // statements are sent as separate COM_QUERY commands (mysql_send_query) and
 // their responses read in order (mysql_read_query_result and
 // mysql_store_result). A failed statement does not affect the ones after it:
@@ -16778,7 +16778,7 @@ enum class mariadb_operation : std::uint8_t {
     prepared,
 };
 
-// The pipeline hooks of MariaDB (see db_pipeline_impl.h).
+// The pipeline hooks of MariaDB (see web_internal.h).
 struct mariadb_pipeline_io final {
     using driver_type = mariadb_driver;
     using pool_type = db_pool<mariadb_driver>;
@@ -16857,7 +16857,7 @@ struct mariadb_session final {
 
 struct pg_conn;
 struct pg_result;
-// PostgreSQL's part of statement pipelining (db_pipeline.h): a group's
+// PostgreSQL's part of statement pipelining (web_internal.h): a group's
 // connection runs in libpq pipeline mode, and each statement sends its own
 // flight ending in its own Sync, so the server aborts no statement for another
 // one's failure. Flights are queued and flushed as they are sent; the reader
@@ -16970,7 +16970,7 @@ struct postgresql_flight_results final {
     bool parsed_{false};
 };
 
-// The pipeline hooks of PostgreSQL (see db_pipeline_impl.h).
+// The pipeline hooks of PostgreSQL (see web_internal.h).
 struct postgresql_pipeline_io final {
     using driver_type = postgresql_driver;
     using pool_type = db_pool<postgresql_driver>;
@@ -17104,7 +17104,7 @@ class db_pool;
 // keeps the connection; any other failure closes it.
 //
 // Outside transactions, query() and execute() run through the driver's
-// pipeline (pipeline_io_type, db_pipeline.h), which shares connections between
+// pipeline (pipeline_io_type, web_internal.h), which shares connections between
 // callers; state_type is that pipeline's per-pool state and session_type keeps
 // the group of each connection. The state may keep a lease that release_slot()
 // gives back for a caller of its own (take_released_slot() returns true),
@@ -17765,7 +17765,7 @@ private:
 
 #endif
 
-// Definitions of db_pipeline.h, included after db_pool.h by the driver
+// Pipeline definitions shared by the database driver
 // translation units that instantiate a pipeline and by db_pool.cpp, which runs
 // statements through it (run_pipelined).
 //
@@ -23064,7 +23064,7 @@ private:
 };
 
 // The HTTP/3 rendezvous of every worker of one application run. A datagram
-// for a connection a worker owns (see http3_connection_id.h) is handed to
+// for a connection a worker owns (see web_internal.h) is handed to
 // that worker here when another thread received it: on POSIX another worker
 // whose SO_REUSEPORT socket the kernel chose, on Windows the acceptor that
 // receives every datagram. It travels on the owner's bounded worker queue,
@@ -23182,7 +23182,7 @@ struct http3_worker_services final {
 // serves HTTP/3 alike.
 //
 // A datagram is delivered to the connection its destination ID names in the
-// table. Otherwise an ID that names another worker (http3_connection_id.h)
+// table. Otherwise an ID that names another worker (web_internal.h)
 // is handed to it through the directory; an unknown ID with a valid client
 // Initial opens a connection on this worker, bounded like TCP by
 // max_connections_per_worker_ (the connection idle longest is evicted

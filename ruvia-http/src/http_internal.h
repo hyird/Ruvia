@@ -986,7 +986,7 @@ private:
 // RFC 3986 syntax, one level below any HTTP-specific rule: which byte sequences
 // form a legal URI component, userinfo, port, IPv4 / IPv6 / IPvFuture literal or
 // reg-name. Nothing here knows about request targets, Host fields or origins --
-// those rules live in http_request_target.h and http_serialized_origin.cpp.
+// those rules live in http_request.h and http_request.cpp.
 
 [[nodiscard]] inline bool is_decimal_digit(char c) noexcept {
     return c >= '0' && c <= '9';

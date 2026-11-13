@@ -2115,7 +2115,7 @@ TEST(Ruvia, http3_outbound_concurrent_early_data_retry_and_goaway_drain_stress) 
 
 // End to end over loopback UDP: a real application with an HTTPS listener and
 // an HTTP/3 service on the same port number, four workers, and an ngtcp2 +
-// nghttp3 client (http3_test_client.h).
+// nghttp3 client (http_server_fixture.h).
 
 namespace http3_serving_test {
 using namespace std::chrono_literals;

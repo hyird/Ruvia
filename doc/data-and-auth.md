@@ -400,7 +400,7 @@ ruvia::app()
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
 - 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
-- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebrouterh)。
+- **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebcontexth)。
 - 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
 - **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。

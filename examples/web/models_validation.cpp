@@ -237,7 +237,7 @@ int main() {
 
 // Model values outside a request: owning codecs, borrowed JSON traversal,
 // typed scalars/arrays, form decoding, and explicit business validation.
-// Run ruvia_example_model_values; it prints traversed fields and serialized JSON
+// Run ruvia_example_models_validation; it prints traversed fields and serialized JSON
 // and exits. No server, database, or network connection is required.
 
 RUVIA_MODEL(import_record,
