@@ -3,12 +3,16 @@
 #include <concepts>
 #include <cstddef>
 #include <exception>
+#include <optional>
 #include <ranges>
 #include <span>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <type_traits>
+
+#include <asio/ip/address.hpp>
+#include <asio/ip/tcp.hpp>
 
 namespace ruvia {
 namespace detail {
@@ -101,5 +105,19 @@ void report_unhandled_failure(
 // True for the same exception object, or for two std::exception objects of the
 // same dynamic type with the same what(): the same fault seen by several units.
 [[nodiscard]] bool equivalent_failures(const std::exception_ptr& left, const std::exception_ptr& right) noexcept;
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+// Parse a complete textual IP address, rejecting embedded NUL bytes.
+[[nodiscard]] std::optional<asio::ip::address> parse_ip_address(std::string_view text);
+// Close a socket and cancel any outstanding I/O.
+inline void close_socket(asio::ip::tcp::socket& socket) noexcept {
+    std::error_code ignored;
+    socket.cancel(ignored);
+    socket.shutdown(asio::ip::tcp::socket::shutdown_both, ignored);
+    socket.close(ignored);
+}
 
 }  // namespace ruvia

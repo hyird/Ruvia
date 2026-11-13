@@ -19,10 +19,9 @@
 
 #include "ruvia/http/url_encoding.h"
 
-#include "db/db_pipeline_impl.h"
+#include "db/db_pipeline.h"
 #include "db/db_pool.h"
 #include "db/db_sql_format.h"
-#include "db/postgresql_pipeline.h"
 #include "http/operation_interrupt.h"
 namespace ruvia::detail {
 namespace {

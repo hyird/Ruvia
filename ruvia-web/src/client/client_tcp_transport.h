@@ -30,10 +30,8 @@
 #include <asio/ssl/stream.hpp>
 #include <openssl/types.h>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -41,7 +39,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "http/operation_interrupt.h"

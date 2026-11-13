@@ -1,5 +1,3 @@
-#include "ruvia/core/worker_runtime.h"
-
 #include <atomic>
 #include <condition_variable>
 #include <cstddef>
@@ -13,6 +11,8 @@
 #include <utility>
 
 #include <asio/config.hpp>
+
+#include "ruvia/core/worker_ref.h"
 #if defined(_WIN32)
 #include <windows.h>
 #endif

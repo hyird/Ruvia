@@ -26,14 +26,11 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "http2_wire_fixture.h"
+#include "http_server_fixture.h"
 #endif
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 // How the server ends connections it closes itself. A final response that
 // closes the connection must reach a peer that is still sending (RFC 9112
 // §9.6: lingering close instead of a reset). Over TLS, a close after an idle

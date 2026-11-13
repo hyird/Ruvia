@@ -27,7 +27,7 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/url_encoding.h"
 
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)

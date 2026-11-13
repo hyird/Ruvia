@@ -13,8 +13,6 @@
 #include <vector>
 
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
-
 namespace {
 
 template <typename value_type>

@@ -14,10 +14,8 @@
 #include <variant>
 
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 
-#include "output_drain.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 using pseudo_header = ruvia::http2_request_pseudo_header;

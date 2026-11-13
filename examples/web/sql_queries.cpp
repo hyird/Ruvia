@@ -9,8 +9,8 @@
 #include <exception>
 #include <iostream>
 
+#include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/error.h"
 
 namespace {

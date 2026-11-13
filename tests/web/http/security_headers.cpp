@@ -32,7 +32,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
@@ -47,10 +46,8 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/server_config.h"
 
-#include "context_request_fixture.h"
-#include "scoped_temp_directory.h"
-#include "test_io_context.h"
-
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace security_header_test {
 
 using ruvia::default_security_header_policy;

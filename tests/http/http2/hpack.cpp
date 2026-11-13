@@ -11,7 +11,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 
 #include "test_exceptions.h"
 

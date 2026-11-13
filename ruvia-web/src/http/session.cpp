@@ -11,7 +11,7 @@
 #include "ruvia/web/context.h"
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
@@ -39,13 +39,12 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/url_encoding.h"

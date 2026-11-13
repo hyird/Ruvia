@@ -29,11 +29,10 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis_session.h"
 
-#include "redis_session_store_peer.h"
+#include "http_server_fixture.h"
 #endif
 
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
+#include "http_server_fixture.h"
 namespace public_router_test {
 using namespace std::chrono_literals;
 

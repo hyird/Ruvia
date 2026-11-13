@@ -19,7 +19,7 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"

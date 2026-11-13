@@ -13,10 +13,8 @@
 #include <variant>
 
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 
-#include "output_drain.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 void append_frame(std::string& wire, ruvia::http2_frame_type type,

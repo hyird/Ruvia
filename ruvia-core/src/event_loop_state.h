@@ -23,7 +23,6 @@
 
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia {

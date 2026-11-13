@@ -20,14 +20,12 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/url_encoding.h"
-#include "ruvia/web/db/db_entity.h"
+#include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_schema.h"
-#include "ruvia/web/db/db_types.h"
-
+#include "ruvia/web/db/db_session.h"
 namespace ruvia::detail {
 
 // SHA-256 over input fed in pieces, the one digest the database layer keys

@@ -26,8 +26,7 @@ using ruvia::http_content_encoder;
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 
-#include "http1_request_message_fixture.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 class codec_test_allocation_error final : public std::bad_alloc {

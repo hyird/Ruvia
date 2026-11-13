@@ -27,9 +27,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "raw_http_peer.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Multiple client connections share one application rate-limit budget.
 // This executable owns its application, so its rate limit and short request
 // phase timeouts cannot leak into other suites.

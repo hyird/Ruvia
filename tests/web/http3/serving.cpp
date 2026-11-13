@@ -42,19 +42,16 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_datagram.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
 #include "client_operation_fixture.h"
-#include "http3_raw_request_client.h"
 #include "http3_test_client.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
+#include "http_server_fixture.h"
 // End to end over loopback UDP: a real application with an HTTPS listener and
 // an HTTP/3 service on the same port number, four workers, and an ngtcp2 +
 // nghttp3 client (http3_test_client.h).

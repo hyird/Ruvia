@@ -28,10 +28,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-
+#include "http_server_fixture.h"
 namespace lifecycle_test {
 
 using namespace std::chrono_literals;

@@ -21,16 +21,13 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/web/db/db_entity.h"
-#include "ruvia/web/db/db_repository.h"
-#include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db.h"
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
 #include "test_exceptions.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace {
 
 RUVIA_DB_ENTITY(entity, "users",

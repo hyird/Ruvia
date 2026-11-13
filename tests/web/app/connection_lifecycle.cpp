@@ -21,21 +21,20 @@
 #include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/server_config.h"
 
-#include "app_run.h"
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "http2_wire_fixture.h"
+#include "http_server_fixture.h"
 #endif
 
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_test_client.h"
 #endif

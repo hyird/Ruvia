@@ -11,10 +11,9 @@
 #include <utility>
 
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http2_framing.h"
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 
 #include "client/client_tcp_transport.h"
 #include "client/http_client_pool.h"

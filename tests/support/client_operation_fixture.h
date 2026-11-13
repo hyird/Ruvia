@@ -11,7 +11,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"

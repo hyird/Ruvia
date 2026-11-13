@@ -22,11 +22,10 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
+#include "ruvia/http/http_status.h"
 
-#include "http1_request_message_fixture.h"
-#include "http_client_response_fixture.h"
+#include "content_decoding_fixture.h"
 #include "test_exceptions.h"
 
 namespace {

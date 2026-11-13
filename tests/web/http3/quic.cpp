@@ -56,12 +56,9 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
 #include "http3_test_client.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
+#include "http_server_fixture.h"
 #include "test_exceptions.h"
-#include "test_tls_identity.h"
 namespace {
 
 using namespace std::chrono_literals;

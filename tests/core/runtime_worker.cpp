@@ -31,11 +31,10 @@
 #include <windows.h>
 #endif
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_wait.h"
 

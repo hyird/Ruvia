@@ -19,11 +19,11 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_status.h"
 
-#include "http1_request_message_fixture.h"
+#include "content_decoding_fixture.h"
 #include "test_exceptions.h"
 
 namespace {

@@ -31,9 +31,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "scoped_temp_directory.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Inline buffered-response compression on one worker, whose encoders are
 // reused across responses. This executable owns its application, so the
 // app-wide compression policy cannot change the bodies of other suites.

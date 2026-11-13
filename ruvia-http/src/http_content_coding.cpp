@@ -10,7 +10,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 

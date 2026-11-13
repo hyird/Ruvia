@@ -13,8 +13,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/http/ip_address.h"
-
 namespace ruvia::detail {
 struct http_client_response_head_access;
 }  // namespace ruvia::detail

@@ -18,15 +18,13 @@
 
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_datagram.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "raw_http_peer.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace udp_tunnel_test {
 struct udp_tunnel_observation {
     std::atomic<bool> eof_{};

@@ -15,7 +15,6 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -28,7 +27,7 @@
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"

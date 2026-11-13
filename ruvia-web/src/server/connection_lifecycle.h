@@ -42,18 +42,17 @@
 #include <asio/ssl/error.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/ip_address.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/server_config.h"

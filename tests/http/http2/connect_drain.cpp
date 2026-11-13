@@ -17,11 +17,9 @@
 #include <vector>
 
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_response.h"
 
-#include "output_drain.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 constexpr std::uint8_t end_stream_flag = 0x1;

@@ -38,15 +38,13 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/web/db/db_entity.h"
-#include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/db/db.h"
+#include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_session.h"
 #include "ruvia/web/redis/redis_session.h"
-#include "ruvia/web/redis/redis_types.h"
 
 #include "backend_client_fixture.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Removing a query-result cache id must drop every result a repository builder
 // cached under that id, so the next get_one/get_exists/get_count reads the
 // database again.

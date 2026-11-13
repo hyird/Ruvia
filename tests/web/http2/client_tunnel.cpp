@@ -25,10 +25,9 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 
+#include "content_decoding_fixture.h"
 #include "http_server_fixture.h"
-#include "output_drain.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace {
 struct tunnel_observation {
     std::mutex mutex_;

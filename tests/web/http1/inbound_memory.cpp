@@ -25,8 +25,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Inbound buffer budgets on the streamed request body and CONNECT tunnel
 // paths. This executable owns its application with small inbound budgets.
 

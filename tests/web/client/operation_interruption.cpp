@@ -10,8 +10,7 @@
 
 #include "client_operation_fixture.h"
 #include "http_server_fixture.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace client_operation_interruption_test {
 
 void exercise(const std::string& url, ruvia::http_client_versions versions) {

@@ -30,14 +30,12 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
-#include "ruvia/web/redis/redis_types.h"
 
 #include "backend_client_fixture.h"
 #include "test_exceptions.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace {
 
 using ruvia::redis_index_kind;

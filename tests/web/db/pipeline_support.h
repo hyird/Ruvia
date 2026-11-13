@@ -8,7 +8,6 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
 

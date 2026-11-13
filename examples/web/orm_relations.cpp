@@ -19,8 +19,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_repository.h"
-#include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_session.h"
 #include "ruvia/web/error.h"
 

@@ -21,11 +21,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 // A cleartext listener with auto_https_redirect_ answers every request with a
 // permanent redirect to the HTTPS service and closes. A client that accepts
 // no content coding cannot take the redirect's representation, so it gets a

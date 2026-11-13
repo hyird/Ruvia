@@ -20,11 +20,10 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
 #include "client/client_tcp_transport.h"

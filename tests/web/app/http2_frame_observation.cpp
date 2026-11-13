@@ -19,16 +19,12 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 
-#include "app_run.h"
-#include "http2_wire_fixture.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 namespace http2_frame_observation_test {
 using namespace std::chrono_literals;
 

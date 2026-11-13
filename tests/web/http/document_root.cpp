@@ -19,10 +19,7 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
-#include "raw_http_peer.h"
-#include "scoped_temp_directory.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // A document root shares paths with a guarded wildcard route. This executable
 // owns its application, so the document root cannot leak into other suites.
 

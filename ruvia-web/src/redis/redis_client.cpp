@@ -17,11 +17,10 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/redis/redis_repository.h"
 #include "ruvia/web/redis/redis_session.h"
 
 #include "client/client_tcp_transport.h"

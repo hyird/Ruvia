@@ -32,9 +32,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "tcp_port_reservation.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Application-wide response policy (CORS, access log, session commit) on the
 // heads that do not pass through the buffered response tail: response streams
 // and CONNECT/WebSocket handshakes. This executable owns its application, so

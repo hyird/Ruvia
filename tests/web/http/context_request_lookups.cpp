@@ -9,8 +9,7 @@
 
 #include "ruvia/http/http_header.h"
 
-#include "context_request_fixture.h"
-
+#include "http_server_fixture.h"
 using ruvia::http_header_view;
 
 #include <array>
@@ -27,9 +26,8 @@ using ruvia::http_header_view;
 #include <asio.hpp>
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_response.h"
@@ -41,9 +39,14 @@ using ruvia::http_header_view;
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 
-#include "http_server_fixture.h"
 #include "test_exceptions.h"
-#include "test_io_context.h"
+#include "worker_task_fixture.h"
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+#include "ruvia/web/redis/redis.h"
+#endif
 
 namespace {
 
@@ -643,14 +646,6 @@ TEST(Ruvia, context_request_query_preserves_many_decoded_values) {
         co_return;
     });
 }
-
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
-#endif
-
-#ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
-#endif
 
 #if defined(RUVIA_ENABLE_DATABASE) || defined(RUVIA_ENABLE_REDIS)
 TEST(Ruvia, context_rejects_unconfigured_worker_clients_consistently) {

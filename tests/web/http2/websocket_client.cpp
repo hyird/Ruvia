@@ -23,14 +23,12 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client.h"
 
-#include "output_drain.h"
-#include "test_io_context.h"
-#include "test_tls_identity.h"
-
+#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace {
 void exercise_client(bool reset_peer, bool secure = false) {
     auto& io = ruvia::test::new_test_io_context();

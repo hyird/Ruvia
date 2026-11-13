@@ -21,10 +21,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-
+#include "http_server_fixture.h"
 // A peer that resets its connection while a buffered handler is still running
 // makes that handler's own transport write -- an interim head, or the 100
 // Continue its body read sends -- fail. That is the connection ending, not the

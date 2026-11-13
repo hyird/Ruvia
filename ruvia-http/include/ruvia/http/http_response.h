@@ -21,9 +21,8 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {

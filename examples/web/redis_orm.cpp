@@ -17,7 +17,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis.h"
 
 #include "backend_config.h"
 

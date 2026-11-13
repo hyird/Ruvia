@@ -33,10 +33,10 @@
 #include <tuple>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/ip_address.h"
 #include "ruvia/web/error.h"
 
 namespace ruvia::detail {

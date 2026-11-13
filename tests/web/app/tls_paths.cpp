@@ -32,11 +32,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "scoped_temp_directory.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace tls_paths_test {
 
 using namespace std::chrono_literals;

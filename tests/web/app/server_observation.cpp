@@ -22,22 +22,21 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/http_fingerprint.h"
+#include "ruvia/http/http2_connection.h"
+#include "ruvia/http/http3_connection.h"
+#include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 
-#include "app_run.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 
-#include "http2_wire_fixture.h"
+#include "http_server_fixture.h"
 #endif
 
 #if defined(RUVIA_ENABLE_HTTP3)

@@ -25,21 +25,17 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
-#include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
+#include "http_server_fixture.h"
 #include "test_exceptions.h"
-#include "test_io_context.h"
-#include "test_tls_identity.h"
-
+#include "worker_task_fixture.h"
 namespace ruvia::test {
 
 // Runs one migration to completion on a fresh loop, whose blocking pool looks

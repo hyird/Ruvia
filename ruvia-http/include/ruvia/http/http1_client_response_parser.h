@@ -16,7 +16,7 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 namespace ruvia {
 
 namespace detail {

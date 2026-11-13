@@ -16,14 +16,7 @@ function(ruvia_apply_test_support_includes name lib)
         ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_compile_definitions(${name} PRIVATE
         RUVIA_TEST_TEMP_ROOT="${PROJECT_SOURCE_DIR}/build/test-tmp")
-    if("${lib}" STREQUAL "ruvia::http")
-        target_include_directories(${name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/http/support)
-    elseif("${lib}" STREQUAL "ruvia::web")
-        target_include_directories(${name} PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/http/support
-            ${CMAKE_CURRENT_SOURCE_DIR}/web/support)
-    elseif(NOT "${lib}" STREQUAL "ruvia::core")
+    if(NOT "${lib}" STREQUAL "ruvia::core" AND NOT "${lib}" STREQUAL "ruvia::http" AND NOT "${lib}" STREQUAL "ruvia::web")
         message(FATAL_ERROR "unknown Ruvia test library for ${name}: ${lib}")
     endif()
 endfunction()
@@ -75,29 +68,12 @@ function(ruvia_add_web_standalone_test name timeout)
 endfunction()
 
 if(RUVIA_BUILD_CORE)
+    ruvia_collect_test_sources(_ruvia_core_unit_sources core/*.cpp)
     ruvia_add_test(ruvia_core_unit_tests ruvia::core TIMEOUT 180 SOURCES
-        core/failure_report.cpp
-        core/scoped_operation.cpp
-        core/stop_token.cpp
-        core/worker_notification.cpp
-        core/worker_queue.cpp
-        core/worker_runtime.cpp)
+        ${_ruvia_core_unit_sources})
     # 作用域任务的所有权转移必须在关闭可选拷贝消除时同样有效。
     set_property(SOURCE core/scoped_operation.cpp APPEND PROPERTY COMPILE_OPTIONS
         "$<$<CXX_COMPILER_ID:GNU,Clang,AppleClang>:-fno-elide-constructors>")
-    ruvia_add_test(ruvia_asio_task ruvia::core SOURCES core/asio_task.cpp)
-    ruvia_add_test(ruvia_event_loop_pool ruvia::core SOURCES core/runtime_worker.cpp)
-    ruvia_add_test(ruvia_operation_deadline ruvia::core SOURCES core/operation_deadline.cpp)
-    ruvia_add_test(ruvia_pool_lease_scheduler ruvia::core TIMEOUT 10 SOURCES
-        core/pool_lease_scheduler.cpp)
-    ruvia_add_test(ruvia_task_scope ruvia::core SOURCES core/task_scope.cpp)
-    ruvia_add_test(ruvia_task_completion ruvia::core SOURCES core/task_completion.cpp)
-    ruvia_add_test(ruvia_blocking_pool ruvia::core TIMEOUT 30 SOURCES
-        core/blocking_pool.cpp)
-    ruvia_add_test(ruvia_channel ruvia::core SOURCES core/channel.cpp)
-    ruvia_add_test(ruvia_one_shot ruvia::core SOURCES core/one_shot.cpp)
-    ruvia_add_test(ruvia_worker_timer ruvia::core SOURCES core/worker_timer.cpp)
-    ruvia_add_test(ruvia_worker_wait ruvia::core SOURCES core/worker_wait.cpp)
 endif()
 
 if(RUVIA_BUILD_HTTP)
@@ -156,9 +132,6 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_http_server_group 180 web/app/http_server_group.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/app/connection_lifecycle.cpp)
     ruvia_add_web_standalone_test(ruvia_websocket_standalone_server 180 web/websocket/standalone_server.cpp)
-    ruvia_add_web_standalone_test(ruvia_dotenv_tests 30 web/app/dotenv_parser.cpp)
-    ruvia_add_web_standalone_test(ruvia_tcp_byte_client 60 web/client/tcp_client.cpp)
-    ruvia_add_web_standalone_test(ruvia_request_stream_files 90 web/app/request_stream_files.cpp)
     ruvia_add_web_standalone_test(ruvia_app_listener_transactions 120 web/app/listener_transactions.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dispatch_isolation 60 web/app/route_dispatch_isolation.cpp)
     # A conflicting route pair, like a route with an invalid CONNECT
@@ -169,16 +142,13 @@ if(RUVIA_BUILD_WEB)
     ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
     ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
     set(_ruvia_tcp_client_test_sources
-        web/http1/connect.cpp
         web/http1/websocket.cpp
         web/http/udp_tunnel.cpp)
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_tcp_client_test_sources
             web/http2/client_tunnel.cpp
-            web/http2/client_upload.cpp
             web/http2/connect.cpp
             web/http2/file_flow_control.cpp
-            web/http2/push.cpp
             web/http2/streaming.cpp)
     endif()
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 60
@@ -252,8 +222,7 @@ if(RUVIA_BUILD_WEB)
     endif()
     list(REMOVE_ITEM _ruvia_web_unit_sources ${_ruvia_web_standalone_sources})
     if(RUVIA_ENABLE_JWT)
-        ruvia_collect_test_sources(_ruvia_web_feature_sources web/auth/*.cpp)
-        list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
+        list(APPEND _ruvia_web_unit_sources web/http/jwt.cpp)
     endif()
     if(RUVIA_ENABLE_REDIS)
         ruvia_collect_test_sources(_ruvia_web_feature_sources web/redis/*.cpp)

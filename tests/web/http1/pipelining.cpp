@@ -22,9 +22,7 @@
 #include "ruvia/web/streaming.h"
 
 #include "http_server_fixture.h"
-#include "scoped_temp_directory.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // Pipelined HTTP/1.1 requests: the server may coalesce the responses of
 // requests already buffered behind each other, but every response still
 // leaves in request order, whatever kind it is, and nothing waits on input the

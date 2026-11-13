@@ -25,10 +25,7 @@
 #include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
-#include "raw_http_peer.h"
-#include "scoped_temp_directory.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 // A multi-worker application serves a document root that changes while it
 // runs. This executable owns that application, so the root cannot leak into
 // other suites.

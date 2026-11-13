@@ -21,12 +21,10 @@
 
 #include <asio.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -34,10 +32,8 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "http2_wire_fixture.h"
 #include "http_server_fixture.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace {
 struct connect_observation {
     std::mutex mutex_;

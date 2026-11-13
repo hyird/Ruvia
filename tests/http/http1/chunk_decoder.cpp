@@ -15,11 +15,9 @@
 
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/http/http_status.h"
 
 #include "content_decoding_fixture.h"
-#include "http1_request_message_fixture.h"
-
 namespace {
 
 using ruvia::http1_chunked_body_decoder;

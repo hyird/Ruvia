@@ -41,10 +41,9 @@
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/web/http_client.h"
 
-#include "output_drain.h"
-#include "test_io_context.h"
-#include "test_tls_identity.h"
-
+#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace origin_routing_tests {
 
 using namespace std::chrono_literals;

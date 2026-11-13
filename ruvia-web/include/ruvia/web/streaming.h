@@ -17,7 +17,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -25,9 +24,8 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/multipart_parser.h"
 #include "ruvia/http/websocket_handshake.h"

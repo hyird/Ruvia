@@ -8,7 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db.h"
 
 #include "test_exceptions.h"
 

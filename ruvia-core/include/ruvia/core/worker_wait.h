@@ -16,7 +16,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"

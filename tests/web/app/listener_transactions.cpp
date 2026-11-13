@@ -35,11 +35,7 @@
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 namespace listener_transactions_test {
 
 using namespace std::chrono_literals;

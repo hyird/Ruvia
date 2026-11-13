@@ -21,7 +21,6 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
@@ -1336,4 +1335,59 @@ private:
     std::span<std::byte> output,
     std::size_t max_packet_bytes) noexcept;
 
+}  // namespace ruvia
+
+namespace ruvia {
+struct http3_fingerprint_options final {
+    std::size_t max_frames_{32};
+    std::size_t max_bytes_{16384};
+};
+
+// Collects HTTP/3 frame and QPACK field observations up to the end of the
+// client's first request header block and builds a deterministic HTTP/3
+// fingerprint string: "CONTROL_FRAMES|FIRST_STREAM_ID|PSEUDO_HEADER_ORDER".
+class http3_fingerprint_collector final {
+public:
+    explicit http3_fingerprint_collector(http3_fingerprint_options options = {});
+
+    void observe_frame(const http3_frame_metadata& frame) noexcept;
+    void observe_field(const http3_field_metadata& field) noexcept;
+    void reset() noexcept;
+
+    static void on_frame(void* context, const http3_frame_metadata& frame) noexcept {
+        static_cast<http3_fingerprint_collector*>(context)->observe_frame(frame);
+    }
+    static void on_field(void* context, const http3_field_metadata& field) noexcept {
+        static_cast<http3_fingerprint_collector*>(context)->observe_field(field);
+    }
+
+    [[nodiscard]] constexpr bool complete() const noexcept {
+        return phase_ == phase::complete;
+    }
+    [[nodiscard]] constexpr bool failed() const noexcept {
+        return phase_ == phase::failed;
+    }
+    [[nodiscard]] std::string_view fingerprint() const& noexcept RUVIA_LIFETIMEBOUND {
+        return phase_ == phase::complete ? std::string_view(fingerprint_) : std::string_view{};
+    }
+    std::string_view fingerprint() const&& = delete;
+
+private:
+    enum class phase : std::uint8_t {
+        collecting,
+        complete,
+        failed,
+    };
+
+    std::string control_frames_;
+    std::string pseudo_headers_;
+    std::string fingerprint_;
+    std::size_t max_frames_{32};
+    std::size_t max_bytes_{16384};
+    std::size_t frames_seen_{0};
+    std::size_t bytes_seen_{0};
+    std::int64_t first_request_stream_id_{-1};
+    bool saw_regular_header_{false};
+    phase phase_{phase::collecting};
+};
 }  // namespace ruvia

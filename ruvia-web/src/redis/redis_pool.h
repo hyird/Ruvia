@@ -30,16 +30,15 @@ struct redisReplyObjectFunctions;
 #include <asio/io_context.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/operation_options.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
-#include "ruvia/web/redis/redis_types.h"
 
 #include "client/client_tcp_transport.h"
 #include "http/operation_interrupt.h"

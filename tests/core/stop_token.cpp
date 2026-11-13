@@ -2,19 +2,36 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <barrier>
 #include <chrono>
+#include <concepts>
 #include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
 #include <thread>
 #include <type_traits>
 #include <utility>
+#include <variant>
+#include <vector>
 
-#include "ruvia/core/operation_options.h"
+#include <asio/bind_allocator.hpp>
+#include <asio/bind_executor.hpp>
+#include <asio/error.hpp>
+#include <asio/io_context.hpp>
+
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/core/task.h"
 
 namespace stop_token_test {
 
@@ -682,4 +699,460 @@ TEST(Ruvia, operation_options_replace_cancellation_and_keep_tighter_timeout) {
     auto disabled = ruvia::override_operation_options(original, {.stop_token_ = retired});
     EXPECT_TRUE(disabled.stop_token_ == retired);
     EXPECT_TRUE(!disabled.stop_token_.stoppable());
+}
+
+TEST(Ruvia, equivalent_failures_compare_type_and_message) {
+    const auto first = std::make_exception_ptr(std::runtime_error("redis connect timed out"));
+    const auto same = std::make_exception_ptr(std::runtime_error("redis connect timed out"));
+    // Same length, different bytes: a dangling what() comparison could see the
+    // same freed storage for both and call them equal.
+    const auto other = std::make_exception_ptr(std::runtime_error("redis connect timed in!"));
+    const auto other_type = std::make_exception_ptr(std::logic_error("redis connect timed out"));
+    const auto non_standard = std::make_exception_ptr(42);
+
+    EXPECT_TRUE(ruvia::equivalent_failures(first, first));
+    EXPECT_TRUE(ruvia::equivalent_failures(first, same));
+    EXPECT_TRUE(!ruvia::equivalent_failures(first, other));
+    EXPECT_TRUE(!ruvia::equivalent_failures(other, first));
+    EXPECT_TRUE(!ruvia::equivalent_failures(first, other_type));
+    EXPECT_TRUE(!ruvia::equivalent_failures(first, non_standard));
+    EXPECT_TRUE(!ruvia::equivalent_failures(first, nullptr));
+    EXPECT_TRUE(ruvia::equivalent_failures(non_standard, non_standard));
+}
+
+TEST(Ruvia, equivalent_failures_distinguish_long_messages) {
+    // Messages too long for any small-buffer storage, differing only at the end.
+    const std::string prefix(512, 'x');
+    const auto left = std::make_exception_ptr(std::runtime_error(prefix + "a"));
+    const auto right = std::make_exception_ptr(std::runtime_error(prefix + "b"));
+    EXPECT_TRUE(!ruvia::equivalent_failures(left, right));
+    EXPECT_TRUE(ruvia::equivalent_failures(left, std::make_exception_ptr(std::runtime_error(prefix + "a"))));
+}
+
+TEST(Ruvia, byte_views_preserve_octets_including_embedded_nul) {
+    const char raw[] = {'a', '\0', '\xff'};
+    const auto text = std::string_view(raw, sizeof(raw));
+    const auto bytes_value = ruvia::as_bytes(text);
+    EXPECT_EQ(bytes_value.size(), std::size_t{3});
+    EXPECT_TRUE(bytes_value[0] == std::byte{'a'});
+    EXPECT_TRUE(bytes_value[1] == std::byte{0});
+    EXPECT_TRUE(bytes_value[2] == std::byte{0xff});
+    EXPECT_TRUE(ruvia::as_chars(bytes_value).data() == text.data());
+    EXPECT_EQ(ruvia::as_chars(bytes_value).size(), text.size());
+}
+
+TEST(Ruvia, empty_byte_views_round_trip) {
+    EXPECT_TRUE(ruvia::as_bytes({}).empty());
+    EXPECT_TRUE(ruvia::as_chars({}).empty());
+}
+
+TEST(Ruvia, byte_views_accept_named_owners_and_preserve_storage_addresses) {
+    const std::string owned_text("abc", 3);
+    const std::vector<std::byte> owned_bytes{std::byte{'x'}, std::byte{0}, std::byte{'z'}};
+    const auto text_bytes = ruvia::as_bytes(owned_text);
+    const auto chars_value = ruvia::as_chars(owned_bytes);
+    EXPECT_TRUE(reinterpret_cast<const char*>(text_bytes.data()) == owned_text.data());
+    EXPECT_TRUE(chars_value.data() == reinterpret_cast<const char*>(owned_bytes.data()));
+    EXPECT_EQ(chars_value, std::string_view("x\0z", 3));
+}
+
+TEST(Ruvia, ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {
+    const auto v4 = ruvia::parse_ip_address("192.0.2.1");
+    EXPECT_TRUE(v4.has_value() && v4->is_v4());
+    const auto v6 = ruvia::parse_ip_address("2001:0db8:1234:5678:90ab:cdef:1234:5678");
+    EXPECT_TRUE(v6.has_value() && v6->is_v6());
+    const auto scoped = ruvia::parse_ip_address("fe80::1%12");
+    EXPECT_TRUE(scoped.has_value() && scoped->is_v6() && scoped->to_v6().scope_id() == 12);
+    constexpr std::string_view storage = "192.0.2.1suffix";
+    EXPECT_TRUE(ruvia::parse_ip_address(storage.substr(0, 9)).has_value());
+    EXPECT_TRUE(!ruvia::parse_ip_address(storage).has_value());
+}
+
+TEST(Ruvia, ip_address_parsing_rejects_malformed_and_embedded_nul_input) {
+    EXPECT_TRUE(!ruvia::parse_ip_address(std::string_view{}).has_value());
+    EXPECT_TRUE(!ruvia::parse_ip_address("not an address").has_value());
+    EXPECT_TRUE(!ruvia::parse_ip_address(std::string_view("192.0.2.1\0suffix", 16)).has_value());
+}
+
+TEST(Ruvia, ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4) {
+    for (const std::string_view text : {"192.0.2.1:80", "[::1]:80", "[::1]", "192.0.2", "01.2.3.4", "192.0.2.256",
+             "192.0.2.1.", ".192.0.2.1", "192.0.2.1%1", "fe80::1%", "fe80::1%1%2", "::1 ", "1",
+             "::ffff:01.2.3.4", "::ffff:192.0.2", "fe80::1%12:80", "fe80::1%12 ", "fe80::1%1]:80"}) {
+        EXPECT_TRUE(!ruvia::parse_ip_address(text).has_value());
+    }
+    EXPECT_TRUE(ruvia::parse_ip_address("0.0.0.0").has_value());
+    EXPECT_TRUE(ruvia::parse_ip_address("255.255.255.255").has_value());
+    const auto mapped = ruvia::parse_ip_address("::ffff:192.0.2.1");
+    EXPECT_TRUE(mapped.has_value() && mapped->is_v6());
+}
+
+TEST(Ruvia, ip_address_parsing_handles_long_input_storage) {
+    const auto result_value = ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
+    // An unknown zone name is a platform decision; the storage must round-trip either way.
+    EXPECT_TRUE(!result_value.has_value() || result_value->is_v6());
+}
+
+TEST(Ruvia, ip_address_parsing_rejects_invalid_ipv6_zone_identifiers) {
+    for (const std::string_view text : {
+             "fe80::1%0",
+             "fe80::1%01",
+             "fe80::1%-1",
+             "fe80::1%+1",
+             "fe80::1%12abc",
+             "fe80::1%4294967296",
+             "fe80::1%99999999999999999999",
+             "fe80::1%nonexistent_ruvia_zone_id",
+         }) {
+        EXPECT_TRUE(!ruvia::parse_ip_address(text).has_value());
+    }
+}
+
+namespace {
+
+[[nodiscard]] bool is_utf8(std::string_view text) {
+    std::size_t index = 0;
+    while (index < text.size()) {
+        const auto lead = static_cast<unsigned char>(text[index]);
+        std::size_t length = 0;
+        if (lead < 0x80U) {
+            length = 1;
+        } else if (lead >= 0xC2U && lead <= 0xDFU) {
+            length = 2;
+        } else if (lead >= 0xE0U && lead <= 0xEFU) {
+            length = 3;
+        } else if (lead >= 0xF0U && lead <= 0xF4U) {
+            length = 4;
+        } else {
+            return false;
+        }
+        if (length > text.size() - index) {
+            return false;
+        }
+        for (std::size_t offset = 1; offset < length; ++offset) {
+            if ((static_cast<unsigned char>(text[index + offset]) & 0xC0U) != 0x80U) {
+                return false;
+            }
+        }
+        index += length;
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST(Ruvia, error_code_text_keeps_portable_category_messages) {
+    const auto timed_out = std::make_error_code(std::errc::timed_out);
+    EXPECT_EQ(std::string_view(ruvia::error_code_text(timed_out)), timed_out.message());
+
+    const std::system_error generic(timed_out, "upstream");
+    EXPECT_EQ(ruvia::system_error_text(generic), std::string_view(generic.what()));
+}
+
+TEST(Ruvia, error_code_text_describes_system_codes_in_utf8) {
+    for (const auto& error : {std::error_code(1, std::system_category()),
+             std::error_code(0x7FFFFFF0, std::system_category()),
+             std::error_code(asio::error::connection_reset), std::error_code(asio::error::host_not_found)}) {
+        const auto text = ruvia::error_code_text(error);
+        EXPECT_TRUE(!text.empty());
+        EXPECT_TRUE(is_utf8(text));
+    }
+
+    // The context before the OS message is kept.
+    const std::system_error bind(std::error_code(1, std::system_category()), "bind");
+    const auto text = ruvia::system_error_text(bind);
+    EXPECT_TRUE(text.starts_with("bind: "));
+    EXPECT_TRUE(text.size() > std::string_view("bind: ").size());
+    EXPECT_TRUE(is_utf8(text));
+}
+
+namespace {
+
+struct alignas(4096) retained_process_value final {
+    std::array<std::byte, 4096> bytes_;
+};
+
+}  // namespace
+
+TEST(Ruvia, collect_thread_heap_preserves_live_storage) {
+    std::string retained(30000, 'r');
+    const auto* const retained_address = retained.data();
+    std::vector<std::byte> small(17, std::byte{0x33});
+    {
+        std::vector<std::byte> scratch(1024, std::byte{0xaa});
+        (void)scratch;
+    }
+
+    ruvia::collect_thread_heap();
+    ruvia::collect_thread_heap();
+
+    EXPECT_TRUE(retained.data() == retained_address);
+    EXPECT_EQ(retained.size(), std::size_t{30000});
+    EXPECT_EQ(retained.find_first_not_of('r'), std::string::npos);
+    EXPECT_TRUE(std::ranges::all_of(small, [](std::byte value) {
+        return value == std::byte{0x33};
+    }));
+}
+
+TEST(Ruvia, storage_survives_its_allocating_thread) {
+    constexpr std::size_t text_bytes = 2 * 1024 * 1024;
+    std::optional<std::string> text;
+    std::optional<std::vector<retained_process_value>> values;
+    std::thread([&] {
+        text.emplace(text_bytes, 's');
+        values.emplace(3);
+        for (std::size_t index = 0; index < values->size(); ++index) {
+            (*values)[index].bytes_.fill(static_cast<std::byte>(index + 1));
+        }
+    }).join();
+
+    for (std::size_t index = 0; index < values->size(); ++index) {
+        const auto& value = (*values)[index];
+        EXPECT_EQ(reinterpret_cast<std::uintptr_t>(&value) % alignof(retained_process_value), std::uintptr_t{0});
+        EXPECT_TRUE(std::ranges::all_of(value.bytes_, [index](std::byte byte) {
+            return byte == static_cast<std::byte>(index + 1);
+        }));
+    }
+    EXPECT_EQ(text->size(), text_bytes);
+    EXPECT_EQ(text->find_first_not_of('s'), std::string::npos);
+
+    bool preserved_after_growth = false;
+    std::thread([&] {
+        values->reserve(values->capacity() + 1);
+        text->append(text->capacity() + 1, 't');
+        preserved_after_growth = text->find_first_not_of('s') == text_bytes &&
+                                 text->find_first_not_of('t', text_bytes) == std::string::npos;
+        for (std::size_t index = 0; index < values->size(); ++index) {
+            preserved_after_growth = preserved_after_growth &&
+                                     std::ranges::all_of((*values)[index].bytes_, [index](std::byte byte) {
+                                         return byte == static_cast<std::byte>(index + 1);
+                                     });
+        }
+        text.reset();
+        values.reset();
+    }).join();
+    EXPECT_TRUE(preserved_after_growth);
+}
+
+namespace ruvia::test::asio_task_tests {
+
+struct alignas(4096) aligned_result final {
+    explicit aligned_result(int value)
+        : value_(std::make_unique<int>(value)),
+          addresses_aligned_(is_aligned(this)) {}
+    aligned_result(aligned_result&& other) noexcept
+        : value_(std::move(other.value_)),
+          addresses_aligned_(other.addresses_aligned_ && is_aligned(&other) && is_aligned(this)) {}
+
+    std::unique_ptr<int> value_;
+    bool addresses_aligned_;
+    // Fill the alignment boundary explicitly; C4324 is an error under MSVC /WX.
+    std::array<std::byte, 4096 - sizeof(std::unique_ptr<int>) - sizeof(bool)> padding_;
+
+private:
+    static bool is_aligned(const void* value) noexcept {
+        return reinterpret_cast<std::uintptr_t>(value) % alignof(aligned_result) == 0;
+    }
+};
+
+ruvia::task<aligned_result> make_value(ruvia::worker_ref worker_value,
+    std::unique_ptr<aligned_result> result_value) {
+    if (!worker_value.is_current()) {
+        throw std::logic_error("task started outside its event loop");
+    }
+    // Keep the over-aligned object outside coroutine locals, whose alignment
+    // is independently broken by GCC 13/14.
+    co_return std::move(*result_value);
+}
+
+ruvia::task<void> complete_void(ruvia::worker_ref worker_value, bool& completed) {
+    if (!worker_value.is_current()) {
+        throw std::logic_error("task started outside its event loop");
+    }
+    completed = true;
+    co_return;
+}
+
+ruvia::task<void> fail() {
+    throw std::runtime_error("root task failure");
+    co_return;
+}
+
+ruvia::task<int> answer() {
+    co_return 7;
+}
+
+template <typename t_type>
+// Not final: Asio executors keep an allocator as an empty base.
+struct counting_allocator {
+    using value_type = t_type;
+
+    explicit counting_allocator(std::size_t& allocations) noexcept
+        : allocations_(&allocations) {}
+    template <typename other_type>
+    counting_allocator(const counting_allocator<other_type>& other) noexcept
+        : allocations_(other.allocations_) {}
+
+    [[nodiscard]] t_type* allocate(std::size_t count) {
+        ++*allocations_;
+        return std::allocator<t_type>().allocate(count);
+    }
+    void deallocate(t_type* pointer, std::size_t count) noexcept {
+        std::allocator<t_type>().deallocate(pointer, count);
+    }
+    template <typename other_type>
+    friend bool operator==(const counting_allocator& left, const counting_allocator<other_type>& right) noexcept {
+        return left.allocations_ == right.allocations_;
+    }
+
+    std::size_t* allocations_;
+};
+
+}  // namespace ruvia::test::asio_task_tests
+
+TEST(Ruvia, AsioTaskLifecycle) {
+    {
+        auto ok_void = ruvia::asio_completion<void>::completed({});
+        auto err_void = ruvia::asio_completion<void>::completed(std::make_error_code(std::errc::invalid_argument));
+        auto ok_val = ruvia::asio_completion<int>::completed({}, 17);
+        const auto& const_val = ok_val;
+        EXPECT_TRUE(ok_void.succeeded());
+        EXPECT_FALSE(ok_void.failed());
+        EXPECT_FALSE(err_void.succeeded());
+        EXPECT_TRUE(err_void.failed());
+        EXPECT_TRUE(ok_val.succeeded());
+        EXPECT_FALSE(ok_val.failed());
+        EXPECT_EQ(const_val.result(), 17);
+        EXPECT_EQ(ok_val.result(), 17);
+        EXPECT_EQ(std::move(ok_val).take_result(), 17);
+    }
+    ruvia::event_loop_pool loops({.loop_count_ = 1});
+    const auto loop = loops.loop(0);
+    const auto worker_value = loop.worker();
+    bool void_completed = false;
+
+    auto value = loop.start(ruvia::test::asio_task_tests::make_value(
+        worker_value, std::make_unique<ruvia::test::asio_task_tests::aligned_result>(42)));
+    auto no_value = loop.start(ruvia::test::asio_task_tests::complete_void(worker_value, void_completed));
+    auto failure = loop.start(ruvia::test::asio_task_tests::fail());
+    std::promise<bool> same_loop_get_rejected;
+    auto same_loop_get_result = same_loop_get_rejected.get_future();
+    const auto probe_posted = loop.worker().post([&] {
+        try {
+            static_cast<void>(std::move(value).get());
+            same_loop_get_rejected.set_value(false);
+        } catch (const std::logic_error&) {
+            same_loop_get_rejected.set_value(value.valid());
+        }
+    });
+    ASSERT_TRUE(probe_posted.accepted());
+
+    loops.start();
+    bool valid = false;
+    std::optional<ruvia::test::asio_task_tests::aligned_result> result_value;
+    try {
+        const auto same_loop_guard_held = same_loop_get_result.get();
+        result_value.emplace(std::move(value).get());
+        std::move(no_value).get();
+        bool failure_observed = false;
+        try {
+            std::move(failure).get();
+        } catch (const std::runtime_error& error) {
+            failure_observed = std::string_view(error.what()) == "root task failure";
+        }
+        valid = same_loop_guard_held && void_completed && failure_observed;
+    } catch (...) {
+        valid = false;
+    }
+    loops.stop();
+    loops.join();
+    valid = valid && result_value && result_value->addresses_aligned_ &&
+            result_value->value_ != nullptr && *result_value->value_ == 42;
+    EXPECT_TRUE(valid);
+}
+
+TEST(Ruvia, AsioTaskAbandonedFailureReachesJoin) {
+    ruvia::event_loop_pool abandoned_pool({.loop_count_ = 1});
+    {
+        auto unobserved = abandoned_pool.loop(0).start(ruvia::test::asio_task_tests::fail());
+    }
+    abandoned_pool.start();
+    abandoned_pool.stop();
+    try {
+        abandoned_pool.join();
+    } catch (const std::runtime_error& error) {
+        EXPECT_EQ(std::string_view(error.what()), "root task failure");
+        return;
+    }
+    ADD_FAILURE() << "Expected abandoned root task failure";
+}
+
+TEST(Ruvia, AsyncStartUsesHandlerExecutorAndAllocator) {
+    asio::io_context io_context;
+    std::size_t allocations = 0;
+    std::optional<int> delivered;
+    bool failure_delivered = false;
+    ruvia::async_start(ruvia::test::asio_task_tests::answer(),
+        asio::bind_allocator(ruvia::test::asio_task_tests::counting_allocator<int>(allocations),
+            asio::bind_executor(io_context.get_executor(),
+                [&delivered](ruvia::task_completion_result<int>&& result_value) {
+                    if (result_value.index() == 0) {
+                        delivered = std::get<0>(result_value);
+                    }
+                })));
+    ruvia::async_start(ruvia::test::asio_task_tests::fail(),
+        asio::bind_executor(io_context.get_executor(), [&failure_delivered](std::exception_ptr failure) {
+            failure_delivered = failure != nullptr;
+        }));
+    // Both tasks complete inline; delivery waits for the handler's executor.
+    EXPECT_FALSE(delivered.has_value());
+    EXPECT_FALSE(failure_delivered);
+    io_context.run();
+    EXPECT_EQ(delivered, 7);
+    EXPECT_TRUE(failure_delivered);
+    EXPECT_GT(allocations, 0U);
+}
+
+TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
+    const auto loop = loops.loop(0);
+    auto accepted = loop.try_start(ruvia::test::asio_task_tests::answer());
+    ASSERT_TRUE(accepted.accepted());
+    EXPECT_EQ(accepted.rejected(), nullptr);
+    auto root = std::move(accepted).take_value();
+
+    auto full = loop.try_start(ruvia::test::asio_task_tests::answer());
+    EXPECT_EQ(full.status(), ruvia::post_status::queue_full);
+    ASSERT_NE(full.rejected(), nullptr);
+    EXPECT_THROW(static_cast<void>(full.value()), std::logic_error);
+    auto returned = std::move(full).take_rejected();
+    try {
+        static_cast<void>(loop.start(std::move(returned)));
+        ADD_FAILURE() << "a full queue must reject start()";
+    } catch (const ruvia::event_loop_start_rejected& error) {
+        EXPECT_EQ(error.status(), ruvia::post_status::queue_full);
+    }
+
+    EXPECT_FALSE(root.ready());
+    EXPECT_FALSE(root.wait_for(ruvia::operation_timeout(std::chrono::steady_clock::now())));
+    EXPECT_FALSE(root.wait_for(ruvia::operation_timeout(std::chrono::steady_clock::time_point{})));
+    EXPECT_FALSE(root.wait_for(std::chrono::milliseconds(1)));
+    EXPECT_THROW(static_cast<void>(root.wait_for(std::chrono::milliseconds(0))), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(root.wait_for(std::chrono::milliseconds(-1))), std::invalid_argument);
+    loops.start();
+    EXPECT_TRUE(root.wait_for(std::chrono::seconds(30)));
+    EXPECT_TRUE(root.ready());
+    EXPECT_EQ(std::move(root).get(), 7);
+    EXPECT_FALSE(root.ready());
+
+    loops.stop();
+    loops.join();
+    auto stopped = loop.try_start(ruvia::test::asio_task_tests::answer());
+    EXPECT_EQ(stopped.status(), ruvia::post_status::worker_stopping);
+    EXPECT_NE(stopped.rejected(), nullptr);
+    try {
+        static_cast<void>(loop.start(std::move(stopped).take_rejected()));
+        ADD_FAILURE() << "a retired loop must reject start()";
+    } catch (const ruvia::event_loop_start_rejected& error) {
+        EXPECT_EQ(error.status(), ruvia::post_status::worker_stopping);
+    }
 }

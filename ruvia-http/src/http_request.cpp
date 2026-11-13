@@ -18,8 +18,8 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/url_encoding.h"
 

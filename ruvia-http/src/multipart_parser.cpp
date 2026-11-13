@@ -11,7 +11,7 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_header.h"
 
 #include "http_websocket_permessage_deflate.h"
 // The MIME entity grammar multipart bodies are validated against (RFC 2045

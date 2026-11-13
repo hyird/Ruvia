@@ -48,10 +48,9 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 

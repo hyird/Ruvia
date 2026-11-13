@@ -17,7 +17,6 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/url_encoding.h"
@@ -36,14 +35,13 @@
 #include <system_error>
 #include <variant>
 
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"

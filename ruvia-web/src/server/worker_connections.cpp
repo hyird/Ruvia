@@ -38,10 +38,9 @@
 #include <asio/ssl.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/socket.h"
-#include "ruvia/core/worker_runtime.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/http_server.h"
@@ -50,7 +49,6 @@
 #include "http/operation_interrupt.h"
 #include "server/app_state.h"
 #include "server/connection_lifecycle.h"
-#include "server/http2_sans_io_session.h"
 #include "server/route_table.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>

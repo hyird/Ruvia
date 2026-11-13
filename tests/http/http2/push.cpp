@@ -18,15 +18,13 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 
-#include "output_drain.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 void submit_buffered_response(

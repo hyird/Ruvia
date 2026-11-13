@@ -33,9 +33,8 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/server_config.h"
 
-#include "context_request_fixture.h"
-#include "scoped_temp_directory.h"
-
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace static_file_test {
 
 [[nodiscard]] std::string read_file_response_body(const ruvia::http_response_file_view& file) {

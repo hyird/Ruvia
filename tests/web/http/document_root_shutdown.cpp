@@ -20,11 +20,8 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "scoped_temp_directory.h"
-#include "tcp_port_reservation.h"
-
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace document_root_shutdown_test {
 
 using namespace std::chrono_literals;

@@ -16,6 +16,10 @@
 
 #include "environment.h"
 
+#ifdef RUVIA_ENABLE_DATABASE
+#include "ruvia/web/db/db.h"
+#endif
+
 namespace example {
 
 // Shared startup configuration for SQL and Redis examples. With prefix
@@ -47,10 +51,6 @@ inline ruvia::client_tls_config backend_tls(std::string_view prefix, const envir
 }
 
 }  // namespace example
-
-#ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_schema.h"
-#endif
 
 namespace example {
 

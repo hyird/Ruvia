@@ -12,11 +12,10 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_status.h"
 
-#include "http1_request_message_fixture.h"
-
+#include "content_decoding_fixture.h"
 namespace {
 
 using ruvia::http1_chunk_decode_error;

@@ -32,19 +32,15 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
+#include "http_server_fixture.h"
 #include "test_exceptions.h"
-#include "test_io_context.h"
-#include "test_tls_identity.h"
 #include "worker_task_fixture.h"
 
 namespace {

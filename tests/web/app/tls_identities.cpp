@@ -42,10 +42,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
 
-#include "app_run.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
 

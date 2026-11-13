@@ -27,11 +27,8 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/server_config.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "scoped_temp_directory.h"
-#include "tcp_port_reservation.h"
-
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 // A file body that fails before its head is sent is answered with an error
 // response, and only real faults reach the connection failure channel. The
 // open a file response waits on, and every read after it, is bounded by

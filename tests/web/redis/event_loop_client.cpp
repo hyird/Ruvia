@@ -34,11 +34,10 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
 
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 namespace {
 
 RUVIA_REDIS_ENTITY(client_user, "client_users",

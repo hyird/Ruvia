@@ -1,5 +1,3 @@
-#include "ruvia/core/worker_runtime.h"
-
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -19,6 +17,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 
 #include "test_exceptions.h"

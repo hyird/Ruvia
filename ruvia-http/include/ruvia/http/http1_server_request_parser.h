@@ -16,9 +16,7 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/url_encoding.h"
 

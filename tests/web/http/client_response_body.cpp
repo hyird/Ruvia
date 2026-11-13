@@ -39,7 +39,6 @@
 #include <openssl/err.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
@@ -47,20 +46,18 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"
 
-#include "output_drain.h"
-#include "test_io_context.h"
-#include "test_tls_identity.h"
-
+#include "content_decoding_fixture.h"
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace {
 class test_worker final {
 public:

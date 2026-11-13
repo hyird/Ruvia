@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
@@ -25,11 +24,8 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/http/ip_address.h"
-
 namespace ruvia {
 
 // One certificate chain and its private key, from exactly one source: two PEM

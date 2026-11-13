@@ -12,11 +12,9 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/socket.h"
 #include "ruvia/core/worker_wait.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/web/streaming.h"
 
 #include "client/client_tcp_transport.h"

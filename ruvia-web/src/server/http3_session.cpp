@@ -30,12 +30,11 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "ruvia/core/async.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"

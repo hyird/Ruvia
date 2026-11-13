@@ -18,10 +18,9 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http_connection_fields.h"
@@ -36,7 +35,7 @@
 
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"

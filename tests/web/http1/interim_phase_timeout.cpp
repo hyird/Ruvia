@@ -25,10 +25,7 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 // An interim head sent from a handler first writes the pipelined responses
 // held before it; over TLS that write always completes asynchronously. Once
 // it and the interim head are out, the handler is timed as a handler again

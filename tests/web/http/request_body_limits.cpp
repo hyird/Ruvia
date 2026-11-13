@@ -17,23 +17,19 @@
 #include <asio/io_context.hpp>
 #include <asio/use_future.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/socket.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_protocol_error.h"
+#include "ruvia/http/http_status.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
 #include "content_decoding_fixture.h"
-#include "context_request_fixture.h"
 #include "http_server_fixture.h"
-#include "multipart_boundary_fixture.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 namespace ruvia::test {
 
 struct context_body_read_observation final {

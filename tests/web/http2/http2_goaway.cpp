@@ -24,16 +24,12 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
-#include "app_run.h"
-#include "http2_wire_fixture.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-
+#include "http_server_fixture.h"
 namespace http2_goaway_test {
 using namespace std::chrono_literals;
 

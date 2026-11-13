@@ -14,8 +14,7 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_protocol_error.h"
-
+#include "ruvia/http/http_status.h"
 namespace ruvia {
 
 namespace detail {

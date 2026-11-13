@@ -27,20 +27,17 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/streaming.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "http2_wire_fixture.h"
+#include "http_server_fixture.h"
 #endif
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 namespace stream_disconnect_test {
 using namespace std::chrono_literals;
 using clock_type = std::chrono::steady_clock;

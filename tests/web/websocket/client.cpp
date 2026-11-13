@@ -40,8 +40,8 @@
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/http_client.h"
 
-#include "test_io_context.h"
-#include "test_tls_identity.h"
+#include "http_server_fixture.h"
+#include "worker_task_fixture.h"
 namespace websocket_client_test {
 
 template <typename value_type>

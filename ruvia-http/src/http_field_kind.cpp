@@ -7,10 +7,9 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 
@@ -28,7 +27,7 @@
 #include <stdexcept>
 #include <vector>
 
-#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/url_encoding.h"
 

@@ -22,9 +22,9 @@
 #include <asio/ssl.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/socket.h"
+#include "ruvia/core/event_loop.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
@@ -32,15 +32,13 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
 
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
+#include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
-#include "ruvia/http/http2_framing.h"
+#include "ruvia/http/http2_connection.h"
 
-#include "http2_wire_fixture.h"
+#include "http_server_fixture.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3_raw_request_client.h"
 #include "http3_test_client.h"
 #endif
 

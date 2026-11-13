@@ -17,12 +17,10 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
 #include "pipeline_support.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_MARIADB
 namespace mariadb_statement_test {
 

@@ -34,9 +34,7 @@
 #include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"
-#include "redis_session_store_peer.h"
-#include "test_io_context.h"
-
+#include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_REDIS
 
 #include "ruvia/web/redis/redis_session.h"

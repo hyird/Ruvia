@@ -27,11 +27,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 
-#include "app_run.h"
-#include "raw_http_peer.h"
-#include "tcp_port_reservation.h"
-#include "test_tls_identity.h"
-
+#include "http_server_fixture.h"
 // RFC 9110 §7.4 / §15.5.20: an origin server rejects with 421 a request for
 // an "https" resource unless the connection is secured by a certificate valid
 // for the target's origin, and unless the peer is a trusted gateway. The
