@@ -1,5 +1,3 @@
-#include "tls/tls_session_ticket_keys.h"
-
 #include <algorithm>
 #include <stdexcept>
 
@@ -10,6 +8,7 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
+#include "server/http_server_listener.h"
 #include "tls/tls_random.h"
 
 namespace ruvia::detail {

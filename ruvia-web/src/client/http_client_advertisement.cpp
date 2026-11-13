@@ -7,7 +7,7 @@
 
 #include "ruvia/web/http_client.h"
 
-#include "client/http_client_advertisement_queue.h"
+#include "client/http_client_pool.h"
 
 namespace ruvia::detail {
 

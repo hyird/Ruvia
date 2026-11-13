@@ -5,6 +5,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -16,15 +17,182 @@
 
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
 #include <asio/ssl/context.hpp>
+#include <openssl/types.h>
 
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/tls_config.h"
 
-#include "server/inherited_listener_sockets.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
-#include "tls/tls_session_ticket_keys.h"
+
+namespace ruvia::detail {
+
+#if defined(_WIN32)
+// INVALID_SOCKET.
+inline constexpr native_socket invalid_native_socket = ~native_socket{0};
+#else
+inline constexpr native_socket invalid_native_socket = -1;
+#endif
+
+// Closes a socket the server owns; an invalid handle is ignored.
+void close_native_socket(native_socket socket) noexcept;
+
+// listen_config::inherited_sockets_ adoption: checks that `socket` is a
+// listening TCP socket bound to exactly `endpoint` (std::invalid_argument
+// with `message` otherwise), then marks it close-on-exec (non-inheritable on
+// Windows).
+void adopt_inherited_tcp_socket(native_socket socket, const asio::ip::tcp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only);
+// The same for a UDP socket bound to exactly `endpoint`.
+void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpoint& endpoint, const char* message, std::optional<bool> ipv6_only);
+
+#if !defined(_WIN32)
+// A dup() of `socket`, without FD_CLOEXEC, that the caller owns.
+[[nodiscard]] native_socket duplicate_native_socket(native_socket socket);
+#endif
+
+// The adopted sockets of one listener: its TCP service's and, for a TLS
+// listener, its HTTP/3 service's, in worker order on POSIX and one each on
+// Windows. Shared by the listener's definition and its clones until the run
+// that prepares the listener claims them; whatever is still unclaimed closes
+// with the last owner.
+class inherited_listener_sockets final {
+public:
+    inherited_listener_sockets(std::vector<native_socket> tcp, std::vector<native_socket> udp) noexcept
+        : tcp_(std::move(tcp)),
+          udp_(std::move(udp)) {}
+    ~inherited_listener_sockets();
+
+    inherited_listener_sockets(const inherited_listener_sockets&) = delete;
+    inherited_listener_sockets& operator=(const inherited_listener_sockets&) = delete;
+    inherited_listener_sockets(inherited_listener_sockets&&) = delete;
+    inherited_listener_sockets& operator=(inherited_listener_sockets&&) = delete;
+
+    [[nodiscard]] std::span<const native_socket> tcp() const& noexcept RUVIA_LIFETIMEBOUND {
+        return tcp_;
+    }
+    std::span<const native_socket> tcp() const&& = delete;
+    [[nodiscard]] std::span<const native_socket> udp() const& noexcept RUVIA_LIFETIMEBOUND {
+        return udp_;
+    }
+    std::span<const native_socket> udp() const&& = delete;
+
+    // Takes TCP socket `index` (invalid when none): on POSIX on the thread of
+    // worker `index`, so distinct indices are claimed concurrently; on
+    // Windows on the acceptor's.
+    [[nodiscard]] native_socket claim_tcp(std::size_t index) noexcept {
+        return index < tcp_.size() ? std::exchange(tcp_[index], invalid_native_socket) : invalid_native_socket;
+    }
+    // Takes every UDP socket at once, for the one opener of the HTTP/3 service.
+    [[nodiscard]] std::vector<native_socket> claim_udp() noexcept {
+        std::vector<native_socket> claimed(udp_.get_allocator());
+        claimed.swap(udp_);
+        return claimed;
+    }
+
+private:
+    std::vector<native_socket> tcp_;
+    std::vector<native_socket> udp_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+// RFC 9325 §3.4: ticket encryption keys change regularly and are destroyed at
+// the end of their validity. A key encrypts tickets for one rotation interval,
+// still decrypts them for the next, and is then destroyed. The interval equals
+// the server session lifetime (also the TLS 1.3 ticket lifetime and TLS 1.2
+// lifetime hint), so every ticket stays decryptable for its whole lifetime and
+// no key outlives two intervals.
+inline constexpr std::chrono::seconds tls_session_lifetime{std::chrono::hours{2}};
+
+// Product limit: after a failed copy_to, a worker retries this soon instead of
+// at the next rotation, so a transient random-generator failure (or a key
+// another worker has since generated) costs seconds of ticketless handshakes,
+// not an epoch.
+inline constexpr std::chrono::seconds tls_ticket_key_retry_delay{5};
+
+// One ticket key: 16-byte key name, HMAC-SHA256 key and AES-256-CBC key, the
+// protection OpenSSL applies to its own tickets. Cleansed on destruction.
+struct tls_session_ticket_key final {
+    tls_session_ticket_key() noexcept = default;
+    tls_session_ticket_key(const tls_session_ticket_key&) noexcept = default;
+    tls_session_ticket_key& operator=(const tls_session_ticket_key&) noexcept = default;
+    ~tls_session_ticket_key();
+
+    std::array<unsigned char, 16> name_{};
+    std::array<unsigned char, 32> hmac_key_{};
+    std::array<unsigned char, 32> aes_key_{};
+};
+
+class tls_session_ticket_key_set;
+
+// One TLS listener's authoritative ticket keys, shared by every worker so a
+// ticket issued by one worker resumes on any worker of the same listener.
+// Epochs are counted from a steady-clock origin; the first worker to reach a
+// new epoch generates its key under the mutex. Handshakes never touch this
+// object: each worker copies the keys into its own set once per epoch.
+class tls_session_ticket_key_ring final {
+public:
+    // Generates the key of the epoch starting at `origin`; throws when the
+    // random generator fails.
+    explicit tls_session_ticket_key_ring(std::chrono::steady_clock::time_point origin);
+
+    tls_session_ticket_key_ring(const tls_session_ticket_key_ring&) = delete;
+    tls_session_ticket_key_ring& operator=(const tls_session_ticket_key_ring&) = delete;
+
+    // Any thread. Advances to the epoch containing `now`, destroying keys
+    // whose validity ended, and copies the keys still valid into `target`.
+    // Returns false when the new epoch's key could not be generated: `target`
+    // then issues no tickets and only accepts the previous key, and a later
+    // call retries the generation.
+    [[nodiscard]] bool copy_to(std::chrono::steady_clock::time_point now, tls_session_ticket_key_set& target);
+
+    // When the epoch containing `now` ends.
+    [[nodiscard]] std::chrono::steady_clock::time_point next_rotation(
+        std::chrono::steady_clock::time_point now) const noexcept;
+
+private:
+    [[nodiscard]] std::uint64_t epoch_at(std::chrono::steady_clock::time_point now) const noexcept;
+
+    const std::chrono::steady_clock::time_point origin_;
+    std::mutex mutex_;
+    // Guarded by mutex_.
+    std::uint64_t epoch_{0};
+    std::optional<tls_session_ticket_key> current_;
+    std::optional<tls_session_ticket_key> previous_;
+};
+
+// One worker's copy of a listener's ticket keys, installed as the ticket key
+// callback of every TLS context of that listener. Only the owning worker
+// thread reads it (inside handshakes) and refreshes it (between handshakes),
+// so the handshake path takes no lock and touches no shared state.
+class tls_session_ticket_key_set final {
+public:
+    tls_session_ticket_key_set();
+    ~tls_session_ticket_key_set();
+
+    tls_session_ticket_key_set(const tls_session_ticket_key_set&) = delete;
+    tls_session_ticket_key_set& operator=(const tls_session_ticket_key_set&) = delete;
+
+    // Startup only, before `context` serves a connection: issues and accepts
+    // tickets with this set's keys and sets the matching session lifetime.
+    void install(SSL_CTX& context);
+
+private:
+    friend class tls_session_ticket_key_ring;
+
+    static int protect_ticket(SSL* ssl, unsigned char* key_name, unsigned char* iv, EVP_CIPHER_CTX* cipher,
+        EVP_MAC_CTX* mac, int encrypt) noexcept;
+
+    EVP_CIPHER* aes_256_cbc_;
+    std::optional<tls_session_ticket_key> current_;
+    std::optional<tls_session_ticket_key> previous_;
+};
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

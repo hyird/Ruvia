@@ -1,5 +1,3 @@
-#include "redis/redis_subscription_connection.h"
-
 #include <algorithm>
 #include <exception>
 #include <span>
@@ -15,6 +13,7 @@
 #include "ruvia/web/redis/redis_session.h"
 
 #include "integration/operation_lane_lease.h"
+#include "redis/redis_client_runtime.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_reply_parsers.h"
 #include "redis/redis_types_access.h"

@@ -1,4 +1,3 @@
-#include "client/http3_client_connection.h"
 
 #ifdef RUVIA_ENABLE_HTTP3
 #include <ngtcp2/ngtcp2_crypto.h>

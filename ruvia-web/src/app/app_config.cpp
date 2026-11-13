@@ -37,7 +37,6 @@
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_identity.h"
-#include "server/owned_listen_configs.h"
 #include "server/prepared_listener_state.h"
 
 #ifdef RUVIA_ENABLE_DATABASE

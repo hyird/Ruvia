@@ -15,7 +15,7 @@
 #include "ruvia/core/worker_ref.h"
 
 #include "http3/http3_connection_id.h"
-#include "server/inherited_listener_sockets.h"
+#include "server/http_server_listener.h"
 
 namespace ruvia::detail {
 

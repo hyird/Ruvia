@@ -1,5 +1,3 @@
-#include "server/web_worker_runtime.h"
-
 #include <exception>
 #include <memory>
 #include <utility>
@@ -9,6 +7,7 @@
 
 #include "ruvia/core/async.h"
 
+#include "app/app_runtime_graph.h"
 #include "app/web_worker_dispatch.h"
 #include "router/route_table.h"
 #include "server/http_server_options_validation.h"

@@ -1,5 +1,3 @@
-#include "db/mariadb_statements.h"
-
 #include <errmsg.h>
 #include <mysql.h>
 #include <mysqld_error.h>
@@ -24,6 +22,7 @@
 
 #include "ruvia/http/http_ascii.h"
 
+#include "db/mariadb_pipeline.h"
 #include "db/mariadb_sql.h"
 namespace ruvia::detail {
 namespace {

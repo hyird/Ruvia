@@ -32,7 +32,6 @@
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_identity.h"
 #include "server/inbound_buffer_budget.h"
-#include "server/owned_listen_configs.h"
 #include "server/prepared_listener_state.h"
 #include "server/worker_codecs.h"
 #include "server/worker_connections.h"
