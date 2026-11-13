@@ -107,6 +107,16 @@ ruvia::task<void> await_refusal_reader(const ruvia::worker_handle& worker, ruvia
     EXPECT_TRUE(refusal_read.load());
 }
 
+// A refusal handler sets refusal_returned only after its response ended on
+// the wire, which the client can observe first. Each exchange waits for its
+// own handler to return, so a late store cannot leak into the next exchange.
+ruvia::task<void> await_refusal_return(const ruvia::worker_handle& worker, const std::string& label) {
+    for (int attempt = 0; attempt != 5000 && !refusal_returned.load(); ++attempt) {
+        (void)co_await ruvia::sleep_for(worker, 1ms);
+    }
+    EXPECT_TRUE(refusal_returned.load()) << label;
+}
+
 class ping_controller final {
 public:
     RUVIA_ROUTES_BEGIN(ping_controller)
@@ -627,6 +637,7 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
             if (!proxy && version != ruvia::http_protocol_version::http11) {
                 EXPECT_EQ(response->trailer("x-denial-finished").value_or(""), "yes") << label;
             }
+            co_await await_refusal_return(worker, label);
         }
     }
     if (version != ruvia::http_protocol_version::http11) {
@@ -643,6 +654,7 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
             refusal_read = true;
             EXPECT_FALSE((co_await response->stream().text()).has_value()) << label;
             EXPECT_EQ(response->trailer("x-denial-finished").value_or(""), "yes") << label;
+            co_await await_refusal_return(worker, label);
         }
     }
     const auto previous_reset = reset_finished.load();
