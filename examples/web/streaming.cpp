@@ -16,11 +16,11 @@
 #include <system_error>
 
 #include "ruvia/core/task_scope.h"
-#include "ruvia/http/multipart_parser.h"
-#include "ruvia/http/url_encoding.h"
+#include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 class streaming_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/streaming")

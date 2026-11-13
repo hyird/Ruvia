@@ -16,7 +16,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/server_config.h"
+#include "ruvia/web/http_server.h"
 
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"

@@ -20,8 +20,8 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/middleware.h"
 
 #include "backend_config.h"
 namespace {

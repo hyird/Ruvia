@@ -18,11 +18,11 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/model.h"
 
-#include "operation_interrupt.h"
+#include "connection_lifecycle.h"
 namespace ruvia {
 
 namespace detail {

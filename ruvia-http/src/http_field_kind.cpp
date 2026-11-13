@@ -13,8 +13,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 
-#include "http_websocket_permessage_deflate.h"
-
+#include "http_connection_fields.h"
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
 // type/subtype and parameters, comparing parameter values across token and
 // quoted-string forms, and validating a Content-Type field. Matching a media
@@ -27,9 +26,9 @@
 #include <stdexcept>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
 namespace ruvia::detail {

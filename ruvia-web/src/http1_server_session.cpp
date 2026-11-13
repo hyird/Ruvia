@@ -31,16 +31,12 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
-#include "http_websocket_connection.h"
-#include "operation_interrupt.h"
 #include "route_table.h"
 namespace ruvia::detail {
 

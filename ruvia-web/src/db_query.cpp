@@ -12,8 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "db_pipeline.h"
-
+#include "db_pool.h"
 namespace ruvia::detail {
 
 namespace {

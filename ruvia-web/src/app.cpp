@@ -24,11 +24,10 @@
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_status.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/server_config.h"
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
@@ -38,7 +37,7 @@
 #include "ruvia/web/db/db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 #endif
 
 #include <fstream>
@@ -46,18 +45,17 @@
 #include <system_error>
 
 #include "ruvia/core/stop_token.h"
-#include "ruvia/http/url_encoding.h"
+#include "ruvia/http/borrowed_text.h"
 
+#include "connection_lifecycle.h"
 #include "http_client_pool.h"
-#include "operation_interrupt.h"
-
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 
 #include "db_pool.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 
 #include "redis_pool.h"
 #endif
@@ -82,9 +80,9 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/crypto.h>
 
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/stop_token.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_pipeline.h"
+#include "db_pool.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis_pool.h"

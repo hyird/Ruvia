@@ -24,14 +24,11 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/server_config.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
 #endif

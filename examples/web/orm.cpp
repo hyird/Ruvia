@@ -22,11 +22,11 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 
 #include "backend_config.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 #endif
 
 namespace {

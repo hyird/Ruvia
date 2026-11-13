@@ -46,7 +46,6 @@
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
-#include "operation_interrupt.h"
 #include "route_table.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
@@ -64,24 +63,22 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "http_websocket_connection.h"
+#include "context_access.h"
 #include "route_table.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 #endif
 
 namespace ruvia::detail {

@@ -3,8 +3,8 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 
+#include "connection_lifecycle.h"
 #include "db_pool.h"
-#include "operation_interrupt.h"
 #ifdef RUVIA_ENABLE_REDIS
 #endif
 
@@ -25,8 +25,8 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/web/db/db_session.h"
 
-#include "client_tcp_transport.h"
-#include "db_pipeline.h"
+#include "db_pool.h"
+#include "http_client_pool.h"
 #include "redis_pool.h"
 
 namespace ruvia {

@@ -27,7 +27,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/server_config.h"
 
 #include "http_server_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)

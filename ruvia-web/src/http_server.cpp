@@ -38,13 +38,12 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/controller.h"
 
 #include "connection_lifecycle.h"
-#include "operation_interrupt.h"
 #include "route_table.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)

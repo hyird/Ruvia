@@ -21,15 +21,12 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/multipart_parser.h"
 #include "ruvia/http/websocket_handshake.h"
-#include "ruvia/web/error.h"
-
+#include "ruvia/web/middleware.h"
 namespace ruvia {
 
 class context;

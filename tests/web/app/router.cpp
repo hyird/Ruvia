@@ -26,7 +26,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 
 #include "http_server_fixture.h"
 #endif

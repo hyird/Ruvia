@@ -77,18 +77,13 @@ if(RUVIA_BUILD_CORE)
 endif()
 
 if(RUVIA_BUILD_HTTP)
-    set(_ruvia_http_test_patterns
-        http/unit/*.cpp
-        http/http1/*.cpp
-        http/websocket/*.cpp)
-    if(RUVIA_ENABLE_HTTP2)
-        list(APPEND _ruvia_http_test_patterns http/http2/*.cpp)
+    ruvia_collect_test_sources(_ruvia_http_unit_sources http/*.cpp)
+    if(NOT RUVIA_ENABLE_HTTP2)
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http2/")
     endif()
-    if(RUVIA_ENABLE_HTTP3)
-        list(APPEND _ruvia_http_test_patterns http/http3/*.cpp)
+    if(NOT RUVIA_ENABLE_HTTP3)
+        list(FILTER _ruvia_http_unit_sources EXCLUDE REGEX "^http/http3/")
     endif()
-    ruvia_collect_test_sources(_ruvia_http_unit_sources
-        ${_ruvia_http_test_patterns})
     list(SORT _ruvia_http_unit_sources)
 
     ruvia_add_test(ruvia_http_unit_tests ruvia::http TIMEOUT 180 SOURCES
@@ -230,10 +225,6 @@ if(RUVIA_BUILD_WEB)
     endif()
     if(RUVIA_ENABLE_MARIADB OR RUVIA_ENABLE_POSTGRESQL)
         ruvia_collect_test_sources(_ruvia_web_feature_sources web/db/*.cpp)
-        # The event-loop DB client is PostgreSQL-only.
-        if(NOT RUVIA_ENABLE_POSTGRESQL)
-            list(REMOVE_ITEM _ruvia_web_feature_sources web/db/event_loop_client.cpp)
-        endif()
         list(APPEND _ruvia_web_unit_sources ${_ruvia_web_feature_sources})
     endif()
     list(SORT _ruvia_web_unit_sources)

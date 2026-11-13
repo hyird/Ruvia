@@ -18,14 +18,12 @@
 #include <string_view>
 
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_status.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
-#include "ruvia/web/server_config.h"
 
 #include "worker_task_fixture.h"
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));

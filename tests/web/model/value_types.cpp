@@ -18,7 +18,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 
 #include "test_exceptions.h"

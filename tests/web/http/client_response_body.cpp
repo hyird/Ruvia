@@ -47,7 +47,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/model.h"

@@ -15,8 +15,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_timer.h"
-
 namespace ruvia {
 
 class task_scope final {

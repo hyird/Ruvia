@@ -23,8 +23,6 @@
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_status.h"
-
 namespace ruvia {
 
 // Platform-native path text (wchar_t on Windows, char elsewhere), as carried

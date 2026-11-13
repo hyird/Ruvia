@@ -21,13 +21,11 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
-#include "http_websocket_permessage_deflate.h"
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

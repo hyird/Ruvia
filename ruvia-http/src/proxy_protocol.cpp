@@ -20,7 +20,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
 

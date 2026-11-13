@@ -40,7 +40,7 @@
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_session.h"
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 
 #include "backend_client_fixture.h"
 #include "worker_task_fixture.h"

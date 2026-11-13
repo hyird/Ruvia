@@ -34,15 +34,11 @@ struct redisReplyObjectFunctions;
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/redis/redis_session.h"
 
-#include "client_tcp_transport.h"
 #include "connection_lifecycle.h"
-#include "operation_interrupt.h"
-
+#include "http_client_pool.h"
 namespace ruvia::detail {
 
 // Serializes a command into RESP multi-bulk form, appending directly to the

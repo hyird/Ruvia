@@ -12,16 +12,14 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/streaming.h"

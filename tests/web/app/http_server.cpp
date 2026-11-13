@@ -27,9 +27,9 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/server_config.h"
+#include "ruvia/web/http_server.h"
+#include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"

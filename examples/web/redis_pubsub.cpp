@@ -15,10 +15,10 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/url_encoding.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/streaming.h"
 

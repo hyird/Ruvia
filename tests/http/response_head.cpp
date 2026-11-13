@@ -20,7 +20,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
 
 #include "content_decoding_fixture.h"
 #include "test_exceptions.h"

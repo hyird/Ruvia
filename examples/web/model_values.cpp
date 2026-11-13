@@ -11,7 +11,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 RUVIA_MODEL(import_record,
     RUVIA_REQUIRED_FIELD(name, ruvia::string),

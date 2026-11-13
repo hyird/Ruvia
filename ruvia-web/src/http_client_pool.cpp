@@ -34,16 +34,14 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_wait.h"
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/streaming.h"
 
-#include "client_tcp_transport.h"
 #include "connection_lifecycle.h"
-#include "operation_interrupt.h"
-
+#include "http_client_pool.h"
 namespace ruvia::detail {
 namespace {
 void throw_if_abandoned(const http_client_response_state& state_value) {

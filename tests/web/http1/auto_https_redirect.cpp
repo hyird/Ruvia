@@ -19,7 +19,7 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"
 // A cleartext listener with auto_https_redirect_ answers every request with a

@@ -6,7 +6,7 @@
 
 ## 1. 流式请求体与流式响应 / SSE
 
-头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/multipart_parser.h"`。
+头文件：`"ruvia/web/streaming.h"`、`"ruvia/http/http_content_coding.h"`。
 不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发ruviawebrequest_streamh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主ruviawebhttp_serverh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
@@ -114,7 +114,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 `sse_writer` 是可复制句柄，操作借用其响应流；`operation` 语义同 `response_stream_writer`。
 
-出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/multipart_parser.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
+出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/http_content_coding.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
 
 #### 客户端断开即取消请求
 
@@ -132,7 +132,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ```cpp
 #include <string>
-#include "ruvia/core/channel.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/streaming.h"
 

@@ -19,8 +19,7 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/worker_timer.h"
-
+#include "ruvia/core/stop_token.h"
 namespace ruvia {
 
 // 64-bit FNV-1a parameters (non-cryptographic; dispatch and fingerprint use only).

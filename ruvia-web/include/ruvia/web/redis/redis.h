@@ -1,16 +1,14 @@
 #pragma once
 
-#include "ruvia/web/redis/redis_session.h"
-#ifdef RUVIA_ENABLE_REDIS
-#endif
-
 #include <array>
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <compare>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <initializer_list>
 #include <limits>
 #include <memory>
@@ -26,13 +24,1589 @@
 #include <variant>
 #include <vector>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/url_encoding.h"
-#include "ruvia/web/error.h"
+#include "ruvia/web/http_client_types.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
+
+namespace ruvia {
+
+class redis_value;
+class redis_key_value;
+class redis_scored_value;
+class redis_scan_result;
+class redis_hash_scan_result;
+class redis_z_scan_result;
+class redis_x_read_group_result;
+
+class redis_search_mapping;
+
+// Owns every command argument, including binary text. Copies inherit the source
+// resource; assignment retains the destination resource.
+class redis_compiled_command final {
+public:
+    redis_compiled_command(const redis_compiled_command&) = default;
+    redis_compiled_command(redis_compiled_command&&) noexcept = default;
+    redis_compiled_command& operator=(const redis_compiled_command&) = default;
+    redis_compiled_command& operator=(redis_compiled_command&& other) noexcept {
+        if (this != &other) {
+            arguments_ = std::move(other.arguments_);
+            other.arguments_.clear();
+        }
+        return *this;
+    }
+
+    [[nodiscard]] std::span<const std::string> arguments() const& noexcept RUVIA_LIFETIMEBOUND {
+        return arguments_;
+    }
+    std::span<const std::string> arguments() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_arguments() && noexcept {
+        return std::move(arguments_);
+    }
+
+private:
+    friend class redis_search_mapping;
+    explicit redis_compiled_command(std::vector<std::string>&& arguments) noexcept
+        : arguments_(std::move(arguments)) {}
+
+    std::vector<std::string> arguments_;
+};
+
+struct redis_config final {
+    // Validated unbracketed transport host; DNS names may retain one trailing dot.
+    std::string host_{"127.0.0.1"};
+    // Checked before narrowing; must be non-zero.
+    port_number port_{6379};
+    std::string username_;
+    std::string password_;
+    client_tls_config tls_{};
+    std::uint32_t database_{0};
+    // Must be greater than zero.
+    std::size_t pool_size_per_worker_{4};
+    // Blocking commands are routed to a separate lazy-connect pool under the
+    // same alias, so they cannot consume ordinary request/reply connections.
+    // Must be greater than zero.
+    std::size_t blocking_pool_size_per_worker_{1};
+    // Absence explicitly disables the corresponding timeout. connect_timeout is one
+    // deadline shared by DNS resolution, TCP establishment, AUTH, and SELECT.
+    // command_timeout bounds a whole logical command or pipeline on the ordinary
+    // pool, including write and every reply read, rather than restarting for
+    // each I/O wait; startup commands honor the earlier of both deadlines.
+    // The isolated blocking pool does not inherit this timeout: typed finite
+    // waits bound the reply by their Redis wait plus a one-second grace, armed
+    // when the command is written, so slot acquisition (acquire_timeout) and a
+    // lazy connect (connect_timeout) do not consume the server-side window.
+    // Infinite waits require an explicit stop_token or operation timeout.
+    std::optional<timeout_duration> connect_timeout_{std::chrono::seconds(5)};
+    std::optional<timeout_duration> command_timeout_{std::chrono::seconds(30)};
+    std::optional<timeout_duration> acquire_timeout_{std::chrono::seconds(5)};
+    // Absence disables the reply byte limit.
+    std::optional<std::size_t> max_reply_bytes_{64 * 1024 * 1024};
+    // Must be greater than zero.
+    std::size_t max_array_depth_{64};
+    client_tcp_config tcp_{.keep_alive_ = tcp_keep_alive_policy::system_default};
+    // Liveness of a redis_subscription's dedicated connection while a read()
+    // waits: after one interval without input it sends PING (unless a command
+    // written since the last input is still awaiting its reply), and after one
+    // more interval without input it closes the subscription, failing the
+    // read with redis_error(timeout). Any received byte restarts the interval;
+    // PING replies are consumed and never surface as events. Absence disables
+    // the probe; a configured interval must be greater than zero.
+    std::optional<timeout_duration> subscription_ping_interval_{std::chrono::seconds(30)};
+};
+
+class redis_block_wait final {
+public:
+    // Positive fractional milliseconds round up; values beyond the millisecond
+    // range saturate. Non-positive waits must use an explicit policy instead.
+    [[nodiscard]] static redis_block_wait for_duration(timeout_duration duration) {
+        if (duration.value().count() <= 0) {
+            throw std::invalid_argument("redis block duration must be greater than zero");
+        }
+        return redis_block_wait(duration);
+    }
+
+    [[nodiscard]] static redis_block_wait indefinitely() noexcept {
+        return redis_block_wait(std::nullopt);
+    }
+
+    [[nodiscard]] bool infinite() const noexcept {
+        return !duration_.has_value();
+    }
+
+    // Canonical, safely converted Redis wire duration; absence means infinite.
+    [[nodiscard]] std::optional<std::chrono::milliseconds> duration() const noexcept {
+        return duration_.has_value() ? std::optional(duration_->value()) : std::nullopt;
+    }
+
+private:
+    explicit redis_block_wait(std::optional<timeout_duration> duration) noexcept
+        : duration_(duration) {}
+
+    std::optional<timeout_duration> duration_;
+};
+
+struct redis_stream_read_view final {
+    borrowed_text stream_{};
+    borrowed_text id_{};
+};
+
+enum class redis_x_read_group_acknowledgement_policy : std::uint8_t {
+    track_pending,
+    no_ack,
+};
+// Strictly positive Redis batch count in signed 64-bit wire range. Checked
+// before narrowing so negative or zero inputs cannot wrap into huge counts.
+class redis_positive_count final {
+public:
+    constexpr redis_positive_count() noexcept = default;
+
+    template <std::integral integer_type>
+    constexpr redis_positive_count(integer_type value)
+        : value_(is_valid_value(value)
+                     ? static_cast<std::uint64_t>(value)
+                     : throw std::invalid_argument("Redis count must be in 1..9223372036854775807")) {}
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr bool is_valid_value(integer_type value) noexcept {
+        return std::cmp_greater(+value, 0) && std::in_range<std::int64_t>(+value);
+    }
+
+    template <std::integral integer_type>
+    [[nodiscard]] static constexpr std::optional<redis_positive_count> try_from_value(integer_type value) noexcept {
+        if (!is_valid_value(value)) {
+            return std::nullopt;
+        }
+        return redis_positive_count(static_cast<std::uint64_t>(value), validated_tag_type{});
+    }
+
+    [[nodiscard]] constexpr std::uint64_t value() const noexcept {
+        return value_;
+    }
+
+    friend constexpr auto operator<=>(redis_positive_count, redis_positive_count) = default;
+
+private:
+    struct validated_tag_type {};
+
+    constexpr redis_positive_count(std::uint64_t value, validated_tag_type) noexcept
+        : value_(value) {}
+
+    std::uint64_t value_{1};
+};
+
+static_assert(std::is_trivially_copyable_v<redis_positive_count>);
+static_assert(sizeof(redis_positive_count) == sizeof(std::uint64_t));
+
+struct redis_x_read_group_options final {
+    std::optional<redis_positive_count> count_{};
+    std::optional<redis_block_wait> block_{};
+    redis_x_read_group_acknowledgement_policy acknowledgement_{
+        redis_x_read_group_acknowledgement_policy::track_pending};
+};
+
+enum class redis_set_condition : std::uint8_t {
+    if_absent,
+    if_present,
+};
+
+class redis_set_expiration final {
+public:
+    [[nodiscard]] static redis_set_expiration expires_after(std::chrono::milliseconds duration) {
+        if (duration.count() <= 0) {
+            throw std::invalid_argument("redis set expiration must be greater than zero");
+        }
+        return redis_set_expiration(duration);
+    }
+
+    [[nodiscard]] static redis_set_expiration keep_existing() noexcept {
+        return redis_set_expiration(keep_existing_type{});
+    }
+
+    [[nodiscard]] const std::chrono::milliseconds* duration() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<std::chrono::milliseconds>(&value_);
+    }
+    [[nodiscard]] const std::chrono::milliseconds* duration() const&& = delete;
+
+    [[nodiscard]] bool keeps_existing() const noexcept {
+        return std::get_if<keep_existing_type>(&value_) != nullptr;
+    }
+
+private:
+    struct keep_existing_type final {};
+    using value_type = std::variant<std::chrono::milliseconds, keep_existing_type>;
+
+    explicit redis_set_expiration(std::chrono::milliseconds duration) noexcept
+        : value_(duration) {}
+
+    explicit redis_set_expiration(keep_existing_type keep) noexcept
+        : value_(keep) {}
+
+    value_type value_;
+};
+
+enum class redis_set_previous_value_policy : std::uint8_t {
+    discard,
+    return_value,
+};
+
+struct redis_set_options final {
+    std::optional<redis_set_condition> condition_{};
+    std::optional<redis_set_expiration> expiration_{};
+    redis_set_previous_value_policy previous_value_{redis_set_previous_value_policy::discard};
+};
+
+namespace detail {
+struct redis_types_access;
+}
+
+class redis_set_result final {
+public:
+    redis_set_result(const redis_set_result&) = default;
+    redis_set_result(redis_set_result&&) noexcept = default;
+    redis_set_result& operator=(const redis_set_result&) = default;
+    redis_set_result& operator=(redis_set_result&&) noexcept = default;
+
+    [[nodiscard]] constexpr bool applied() const noexcept {
+        return applied_;
+    }
+
+    [[nodiscard]] const std::optional<std::string>& previous() const& noexcept RUVIA_LIFETIMEBOUND {
+        return previous_;
+    }
+    const std::optional<std::string>& previous() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_set_result(bool applied, std::optional<std::string> previous) noexcept
+        : applied_(applied),
+          previous_(std::move(previous)) {}
+    bool applied_{false};
+    std::optional<std::string> previous_;
+};
+
+class redis_scan_cursor final {
+public:
+    friend constexpr bool operator==(redis_scan_cursor, redis_scan_cursor) noexcept = default;
+
+private:
+    friend struct detail::redis_types_access;
+
+    explicit constexpr redis_scan_cursor(std::uint64_t value) noexcept
+        : value_(value) {}
+
+    std::uint64_t value_{0};
+};
+
+enum class redis_ttl_state : std::uint8_t {
+    missing,
+    persistent,
+    expiring,
+};
+
+class redis_ttl final {
+public:
+    [[nodiscard]] constexpr redis_ttl_state state() const noexcept {
+        return state_;
+    }
+
+    [[nodiscard]] constexpr std::optional<std::chrono::milliseconds> remaining() const noexcept {
+        return remaining_;
+    }
+
+private:
+    friend struct detail::redis_types_access;
+
+    constexpr redis_ttl(
+        redis_ttl_state state_value, std::optional<std::chrono::milliseconds> remaining) noexcept
+        : state_(state_value),
+          remaining_(remaining) {}
+
+    redis_ttl_state state_;
+    std::optional<std::chrono::milliseconds> remaining_;
+};
+
+struct redis_scan_options final {
+    // A scan options value may be retained before the command copies its
+    // arguments. Keep MATCH zero-copy while rejecting owning-string rvalues
+    // that would leave a saved options value with an already-dangling view.
+    std::optional<redis_scan_cursor> cursor_{};
+    // nullopt omits MATCH; an engaged empty pattern matches only empty names.
+    // Assign nullopt (not "") to disable filtering.
+    std::optional<::ruvia::borrowed_text> match_{};
+    std::optional<redis_positive_count> count_{};
+};
+
+class redis_key_value final {
+public:
+    redis_key_value(const redis_key_value&) = default;
+    redis_key_value& operator=(const redis_key_value&) = default;
+    redis_key_value(redis_key_value&&) noexcept = default;
+    redis_key_value& operator=(redis_key_value&&) noexcept = default;
+
+    [[nodiscard]] std::string_view key() const& noexcept RUVIA_LIFETIMEBOUND {
+        return key_;
+    }
+    [[nodiscard]] std::string_view key() const&& = delete;
+
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
+        return value_;
+    }
+    [[nodiscard]] std::string_view value() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_key_value(std::string&& key, std::string&& value) noexcept
+        : key_(std::move(key)),
+          value_(std::move(value)) {}
+
+    std::string key_;
+    std::string value_;
+};
+
+class redis_scored_value final {
+public:
+    redis_scored_value(const redis_scored_value&) = default;
+    redis_scored_value& operator=(const redis_scored_value&) = default;
+    redis_scored_value(redis_scored_value&&) noexcept = default;
+    redis_scored_value& operator=(redis_scored_value&&) noexcept = default;
+
+    [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
+        return value_;
+    }
+    [[nodiscard]] std::string_view value() const&& = delete;
+
+    [[nodiscard]] double score() const noexcept {
+        return score_;
+    }
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_scored_value(std::string&& value, double score) noexcept
+        : value_(std::move(value)),
+          score_(score) {}
+
+    std::string value_;
+    double score_{0};
+};
+
+// Composite results retain their destination resource during move assignment.
+// Allocator-extended moves and move assignment own every nested value in the
+// target resource, even when a different source resource compares equal. Such
+// rebinding may allocate; failure leaves both values unchanged. Moves within
+// the same resource transfer storage without allocation.
+class redis_scan_result final {
+public:
+    redis_scan_result(const redis_scan_result&) = delete;
+    redis_scan_result& operator=(const redis_scan_result&) = delete;
+    redis_scan_result(redis_scan_result&&) noexcept = default;
+    redis_scan_result& operator=(redis_scan_result&& other) noexcept = default;
+
+    [[nodiscard]] bool done() const noexcept {
+        return !next_cursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<redis_scan_cursor> next_cursor() const noexcept {
+        return next_cursor_;
+    }
+
+    [[nodiscard]] std::span<const std::string> values() const& noexcept RUVIA_LIFETIMEBOUND {
+        return values_;
+    }
+    [[nodiscard]] std::span<const std::string> values() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_scan_result() noexcept = default;
+
+    std::optional<redis_scan_cursor> next_cursor_;
+    std::vector<std::string> values_;
+};
+
+class redis_hash_scan_result final {
+public:
+    redis_hash_scan_result(const redis_hash_scan_result&) = delete;
+    redis_hash_scan_result& operator=(const redis_hash_scan_result&) = delete;
+    redis_hash_scan_result(redis_hash_scan_result&&) noexcept = default;
+    redis_hash_scan_result& operator=(redis_hash_scan_result&& other) noexcept = default;
+
+    [[nodiscard]] bool done() const noexcept {
+        return !next_cursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<redis_scan_cursor> next_cursor() const noexcept {
+        return next_cursor_;
+    }
+
+    [[nodiscard]] std::span<const redis_key_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
+        return entries_;
+    }
+    [[nodiscard]] std::span<const redis_key_value> entries() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_hash_scan_result() noexcept = default;
+
+    std::optional<redis_scan_cursor> next_cursor_;
+    std::vector<redis_key_value> entries_;
+};
+
+class redis_z_scan_result final {
+public:
+    redis_z_scan_result(const redis_z_scan_result&) = delete;
+    redis_z_scan_result& operator=(const redis_z_scan_result&) = delete;
+    redis_z_scan_result(redis_z_scan_result&&) noexcept = default;
+    redis_z_scan_result& operator=(redis_z_scan_result&& other) noexcept = default;
+
+    [[nodiscard]] bool done() const noexcept {
+        return !next_cursor_.has_value();
+    }
+
+    [[nodiscard]] std::optional<redis_scan_cursor> next_cursor() const noexcept {
+        return next_cursor_;
+    }
+
+    [[nodiscard]] std::span<const redis_scored_value> entries() const& noexcept RUVIA_LIFETIMEBOUND {
+        return entries_;
+    }
+    [[nodiscard]] std::span<const redis_scored_value> entries() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_z_scan_result() noexcept = default;
+
+    std::optional<redis_scan_cursor> next_cursor_;
+    std::vector<redis_scored_value> entries_;
+};
+
+class redis_stream_entry final {
+public:
+    redis_stream_entry(const redis_stream_entry&) = default;
+    redis_stream_entry& operator=(const redis_stream_entry&) = default;
+    redis_stream_entry(redis_stream_entry&&) noexcept = default;
+    redis_stream_entry& operator=(redis_stream_entry&&) noexcept = default;
+
+    [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND {
+        return id_;
+    }
+    [[nodiscard]] std::string_view id() const&& = delete;
+
+    // XREADGROUP retains the ID of a deleted pending message with no fields.
+    [[nodiscard]] std::span<const redis_key_value> fields() const& noexcept RUVIA_LIFETIMEBOUND {
+        return fields_;
+    }
+    [[nodiscard]] std::span<const redis_key_value> fields() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    explicit redis_stream_entry(std::string&& id) noexcept
+        : id_(std::move(id)) {}
+
+    std::string id_;
+    std::vector<redis_key_value> fields_;
+};
+
+class redis_stream_read_result final {
+public:
+    redis_stream_read_result(const redis_stream_read_result&) = default;
+    redis_stream_read_result& operator=(const redis_stream_read_result&) = default;
+    redis_stream_read_result(redis_stream_read_result&&) noexcept = default;
+    redis_stream_read_result& operator=(redis_stream_read_result&&) noexcept = default;
+
+    [[nodiscard]] std::string_view stream() const& noexcept RUVIA_LIFETIMEBOUND {
+        return stream_;
+    }
+    [[nodiscard]] std::string_view stream() const&& = delete;
+
+    [[nodiscard]] std::span<const redis_stream_entry> entries() const& noexcept RUVIA_LIFETIMEBOUND {
+        return entries_;
+    }
+    [[nodiscard]] std::span<const redis_stream_entry> entries() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    explicit redis_stream_read_result(std::string&& stream) noexcept
+        : stream_(std::move(stream)) {}
+
+    std::string stream_;
+    std::vector<redis_stream_entry> entries_;
+};
+
+class redis_x_read_group_result final {
+public:
+    redis_x_read_group_result(const redis_x_read_group_result&) = delete;
+    redis_x_read_group_result& operator=(const redis_x_read_group_result&) = delete;
+    redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
+    redis_x_read_group_result& operator=(redis_x_read_group_result&& other) noexcept = default;
+
+    [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept RUVIA_LIFETIMEBOUND {
+        return streams_;
+    }
+    [[nodiscard]] std::span<const redis_stream_read_result> streams() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+
+    redis_x_read_group_result() noexcept = default;
+    std::vector<redis_stream_read_result> streams_;
+};
+
+namespace detail {
+
+class redis_pool;
+
+}  // namespace detail
+
+class redis_error final : public std::runtime_error {
+public:
+    enum class code_type : std::uint8_t {
+        not_configured,
+        connect_failed,
+        auth_failed,
+        protocol_error,
+        command_error,
+        io_error,
+        timeout,
+        cancelled,
+        closing
+    };
+
+    redis_error(code_type code, std::string_view message);
+
+    [[nodiscard]] code_type code() const noexcept;
+
+private:
+    code_type code_;
+};
+
+namespace detail {
+
+template <text_scalar t_type>
+[[nodiscard]] t_type convert_redis_text(std::string_view text) {
+    auto parsed = parse_text_scalar<t_type>(text);
+    if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
+        if constexpr (std::is_same_v<t_type, bool>) {
+            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+        } else {
+            throw redis_error(redis_error::code_type::protocol_error, "redis value is not a valid number");
+        }
+    }
+    return std::get<t_type>(std::move(parsed));
+}
+
+}  // namespace detail
+class redis_value final {
+public:
+    enum class kind_type : std::uint8_t { null,
+        string,
+        integer,
+        array,
+        error };
+
+    redis_value(const redis_value& other) = default;
+    redis_value& operator=(const redis_value& other);
+    redis_value(redis_value&&) noexcept = default;
+    redis_value& operator=(redis_value&& other) noexcept;
+
+    [[nodiscard]] kind_type kind() const noexcept;
+    [[nodiscard]] bool null() const noexcept;
+    [[nodiscard]] bool is_null() const noexcept {
+        return null();
+    }
+    [[nodiscard]] bool is_string() const noexcept {
+        return kind() == kind_type::string;
+    }
+    [[nodiscard]] bool is_integer() const noexcept {
+        return kind() == kind_type::integer;
+    }
+    [[nodiscard]] bool is_array() const noexcept {
+        return kind() == kind_type::array;
+    }
+    [[nodiscard]] bool is_error() const noexcept {
+        return kind() == kind_type::error;
+    }
+    [[nodiscard]] std::string_view string() const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view string() const&& = delete;
+    [[nodiscard]] std::string_view error() const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::string_view error() const&& = delete;
+    [[nodiscard]] std::int64_t integer() const;
+    [[nodiscard]] std::span<const redis_value> array() const& RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const redis_value> array() const&& = delete;
+
+    template <detail::text_scalar t_type>
+    [[nodiscard]] std::optional<t_type> as() const& {
+        if (is_null()) {
+            return std::nullopt;
+        }
+        if (is_integer()) {
+            if constexpr (std::is_same_v<t_type, bool>) {
+                if (integer_ == 0) {
+                    return false;
+                }
+                if (integer_ == 1) {
+                    return true;
+                }
+                throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
+            } else if constexpr (detail::is_model_integer<t_type>) {
+                if (!std::in_range<t_type>(integer_)) {
+                    throw redis_error(redis_error::code_type::protocol_error, "redis value is out of range");
+                }
+                return static_cast<t_type>(integer_);
+            } else if constexpr (std::is_floating_point_v<t_type>) {
+                return static_cast<t_type>(integer_);
+            }
+        }
+        return detail::convert_redis_text<t_type>(string());
+    }
+    template <detail::text_scalar t_type>
+    [[nodiscard]] std::optional<t_type> as() const&& = delete;
+
+private:
+    friend class detail::redis_pool;
+    friend struct detail::redis_types_access;
+
+    redis_value() noexcept;
+    [[nodiscard]] static redis_value null_value() noexcept;
+    [[nodiscard]] static redis_value string_value(std::string_view value);
+    [[nodiscard]] static redis_value error_value(std::string_view value);
+    [[nodiscard]] static redis_value integer_value(std::int64_t value) noexcept;
+    [[nodiscard]] static redis_value array_value(std::size_t capacity);
+
+    kind_type kind_{kind_type::null};
+    std::string string_;
+    std::int64_t integer_{0};
+    std::vector<redis_value> array_;
+};
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+class redis_session;
+
+namespace detail {
+class redis_client_runtime;
+class redis_client_state;
+class redis_pool;
+struct request_io_metrics;
+struct redis_orm_script;
+class redis_subscription_connection;
+class redis_subscription_set;
+struct redis_types_access;
+class worker_client_registry_view;
+
+// One textual argument the variadic Redis entry points accept. A span of
+// string_view is not itself convertible to string_view, so a caller that already
+// holds a contiguous sequence still selects the span overload.
+//
+// Variadic entry points synchronously clone every view into operation- or
+// batch-owned storage, so owning-string temporaries remain alive long enough.
+// Explicit span/view APIs keep their existing caller-owned lifetime contract.
+template <typename arg_type>
+concept redis_argument = std::convertible_to<arg_type&&, std::string_view>;
+
+template <typename... args_type>
+concept redis_argument_pack = sizeof...(args_type) > 0 && (redis_argument<args_type> && ...);
+
+// Commands that take alternating name/value arguments (MSET, HSET). An odd
+// count would leave a trailing name with no value, which Redis rejects at the
+// wire level; requiring an even count turns that into a compile error.
+template <typename... args_type>
+concept redis_pair_argument_pack = redis_argument_pack<args_type...> && sizeof...(args_type) % 2 == 0;
+
+// One scoped operation owns the command and its decoding. Mappers must return
+// owning values in the handle's reclaimable worker memory domain.
+template <typename result_type, typename mapper_type>
+task<result_type> map_redis_command(task<redis_value> command, mapper_type mapper) {
+    auto reply = co_await std::move(command);
+    if constexpr (std::is_void_v<result_type>) {
+        mapper(std::move(reply));
+    } else {
+        co_return mapper(std::move(reply));
+    }
+}
+
+struct redis_owned_command final {
+    std::string wire_;
+};
+
+[[nodiscard]] redis_owned_command make_owned_redis_command(std::span<const std::string_view> args);
+[[nodiscard]] redis_owned_command make_owned_redis_command(std::string_view first, std::span<const std::string_view> rest = {});
+
+// Shared typed command layouts for direct execution, pipelines and transactions.
+[[nodiscard]] redis_owned_command make_redis_integer_command(std::string_view command,
+    std::string_view key, std::int64_t value);
+[[nodiscard]] redis_owned_command make_redis_range_command(std::string_view command,
+    std::string_view key, std::int64_t start, std::int64_t stop,
+    bool with_scores = false);
+[[nodiscard]] redis_owned_command make_redis_zadd_command(std::string_view key, double score,
+    std::string_view member);
+struct redis_command_payload final {
+    std::reference_wrapper<redis_pool> pool_;
+    operation_options options_;
+    std::vector<redis_owned_command> commands_;
+};
+
+enum class redis_batch_mode : std::uint8_t {
+    pipeline,
+    transaction,
+};
+
+template <redis_batch_mode mode>
+class redis_batch final {
+public:
+    redis_batch(const redis_batch&) = delete;
+    redis_batch& operator=(const redis_batch&) = delete;
+    redis_batch(redis_batch&& other) noexcept;
+    redis_batch& operator=(redis_batch&&) = delete;
+
+    // 非事务 pipeline 接受 WAIT/WAITAOF；其他阻塞命令以及事务内屏障均拒绝。
+    // 屏障要求继承的 operation_options 有 timeout_ 或可取消的 stop_token_。
+    redis_batch& command(std::span<const std::string_view> args);
+    redis_batch& command(std::initializer_list<std::string_view> args) = delete;
+
+    // Every command owns its arguments before this call returns.
+    template <typename... args_type>
+        requires redis_argument_pack<args_type...>
+    redis_batch& command(args_type&&... args) {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views));
+    }
+
+    redis_batch& get(std::string_view key) {
+        return trusted("GET", key);
+    }
+
+    redis_batch& set(std::string_view key, std::string_view value) {
+        return trusted("SET", key, value);
+    }
+
+    redis_batch& get_del(std::string_view key) {
+        return trusted("GETDEL", key);
+    }
+
+    redis_batch& append(std::string_view key, std::string_view value) {
+        return trusted("APPEND", key, value);
+    }
+
+    redis_batch& strlen(std::string_view key) {
+        return trusted("STRLEN", key);
+    }
+
+    redis_batch& del(std::string_view key) {
+        return trusted("DEL", key);
+    }
+
+    redis_batch& unlink(std::string_view key) {
+        return trusted("UNLINK", key);
+    }
+
+    redis_batch& exists(std::string_view key) {
+        return trusted("EXISTS", key);
+    }
+
+    redis_batch& touch(std::string_view key) {
+        return trusted("TOUCH", key);
+    }
+
+    redis_batch& type(std::string_view key) {
+        return trusted("TYPE", key);
+    }
+
+    redis_batch& rename(std::string_view key, std::string_view new_key) {
+        return trusted("RENAME", key, new_key);
+    }
+
+    redis_batch& rename_nx(std::string_view key, std::string_view new_key) {
+        return trusted("RENAMENX", key, new_key);
+    }
+
+    redis_batch& incr(std::string_view key) {
+        return trusted("INCR", key);
+    }
+
+    redis_batch& incr_by(std::string_view key, std::int64_t value) {
+        require_ready();
+        return append_owned(make_redis_integer_command("INCRBY", key, value));
+    }
+
+    redis_batch& decr(std::string_view key) {
+        return trusted("DECR", key);
+    }
+
+    redis_batch& decr_by(std::string_view key, std::int64_t value) {
+        require_ready();
+        return append_owned(make_redis_integer_command("DECRBY", key, value));
+    }
+
+    redis_batch& hget(std::string_view key, std::string_view field) {
+        return trusted("HGET", key, field);
+    }
+
+    redis_batch& hset(std::string_view key, std::string_view field, std::string_view value) {
+        return trusted("HSET", key, field, value);
+    }
+
+    redis_batch& hdel(std::string_view key, std::string_view field) {
+        return trusted("HDEL", key, field);
+    }
+
+    redis_batch& hexists(std::string_view key, std::string_view field) {
+        return trusted("HEXISTS", key, field);
+    }
+
+    redis_batch& hlen(std::string_view key) {
+        return trusted("HLEN", key);
+    }
+
+    redis_batch& hget_all(std::string_view key) {
+        return trusted("HGETALL", key);
+    }
+
+    redis_batch& lpush(std::string_view key, std::string_view value) {
+        return trusted("LPUSH", key, value);
+    }
+
+    redis_batch& rpush(std::string_view key, std::string_view value) {
+        return trusted("RPUSH", key, value);
+    }
+
+    redis_batch& lpop(std::string_view key) {
+        return trusted("LPOP", key);
+    }
+
+    redis_batch& rpop(std::string_view key) {
+        return trusted("RPOP", key);
+    }
+
+    redis_batch& llen(std::string_view key) {
+        return trusted("LLEN", key);
+    }
+
+    redis_batch& lrange(std::string_view key, std::int64_t start, std::int64_t stop) {
+        require_ready();
+        return append_owned(make_redis_range_command("LRANGE", key, start, stop));
+    }
+
+    redis_batch& sadd(std::string_view key, std::string_view member) {
+        return trusted("SADD", key, member);
+    }
+
+    redis_batch& srem(std::string_view key, std::string_view member) {
+        return trusted("SREM", key, member);
+    }
+
+    redis_batch& smembers(std::string_view key) {
+        return trusted("SMEMBERS", key);
+    }
+
+    redis_batch& scard(std::string_view key) {
+        return trusted("SCARD", key);
+    }
+
+    redis_batch& zadd(std::string_view key, double score, std::string_view member) {
+        require_ready();
+        return append_owned(make_redis_zadd_command(key, score, member));
+    }
+
+    redis_batch& zrem(std::string_view key, std::string_view member) {
+        return trusted("ZREM", key, member);
+    }
+
+    redis_batch& zrange(std::string_view key, std::int64_t start, std::int64_t stop) {
+        require_ready();
+        return append_owned(make_redis_range_command("ZRANGE", key, start, stop));
+    }
+
+    redis_batch& zscore(std::string_view key, std::string_view member) {
+        return trusted("ZSCORE", key, member);
+    }
+
+    redis_batch& zcard(std::string_view key) {
+        return trusted("ZCARD", key);
+    }
+
+    redis_batch& publish(std::string_view channel, std::string_view payload) {
+        return trusted("PUBLISH", channel, payload);
+    }
+
+    // Consumes the batch before returning the lazy task, so the coroutine frame
+    // owns every command and never borrows this builder through `this`.
+    [[nodiscard]] task<std::vector<redis_value>> exec() &&;
+
+private:
+    friend class ::ruvia::redis_session;
+
+    // `io_metrics` is the request's counter block, or null outside a request.
+    redis_batch(redis_pool& pool, operation_options options,
+        operation_scope& scope, request_io_metrics* io_metrics) noexcept;
+    void require_ready() const;
+    [[nodiscard]] redis_command_payload consume();
+    void expire() noexcept;
+    redis_batch& append_owned(redis_owned_command command);
+
+    template <typename... args_type>
+    redis_batch& trusted(std::string_view command_name, args_type... args) {
+        require_ready();
+        const std::string_view rest[]{args...};
+        return append_owned(make_owned_redis_command(command_name, std::span<const std::string_view>(rest)));
+    }
+
+    [[nodiscard]] static task<std::vector<redis_value>> execute_owned(
+        request_io_metrics* io_metrics, redis_command_payload payload);
+    static void expire_capability(void* target) noexcept;
+
+    redis_pool* pool_;
+    operation_options options_;
+    std::vector<redis_owned_command> commands_;
+    request_io_metrics* io_metrics_;
+    scoped_capability_registration registration_;
+};
+
+}  // namespace detail
+
+using redis_pipeline = detail::redis_batch<detail::redis_batch_mode::pipeline>;
+using redis_transaction = detail::redis_batch<detail::redis_batch_mode::transaction>;
+
+enum class redis_pubsub_confirmation_kind : std::uint8_t {
+    subscribed,
+    pattern_subscribed,
+    unsubscribed,
+    pattern_unsubscribed,
+};
+
+class redis_pubsub_confirmation final {
+public:
+    [[nodiscard]] redis_pubsub_confirmation_kind kind() const noexcept {
+        return kind_;
+    }
+    // Present empty names are legal. Absence is Redis's nil confirmation when
+    // an unsubscribe-all command has no matching subscriptions to remove.
+    [[nodiscard]] std::optional<std::string_view> name() const noexcept {
+        return name_;
+    }
+    [[nodiscard]] std::int64_t subscription_count() const noexcept {
+        return subscription_count_;
+    }
+
+private:
+    friend struct detail::redis_types_access;
+    redis_pubsub_confirmation(redis_pubsub_confirmation_kind kind,
+        std::optional<std::string_view> name, std::int64_t subscription_count) noexcept
+        : kind_(kind),
+          name_(name),
+          subscription_count_(subscription_count) {}
+
+    redis_pubsub_confirmation_kind kind_;
+    std::optional<std::string_view> name_;
+    std::int64_t subscription_count_;
+};
+
+class redis_pubsub_message final {
+public:
+    [[nodiscard]] std::string_view channel() const noexcept {
+        return channel_;
+    }
+    // Absence means a direct message; a present empty pattern is still a
+    // pattern delivery. Neither channel nor payload has an absence sentinel.
+    [[nodiscard]] std::optional<std::string_view> pattern() const noexcept {
+        return pattern_;
+    }
+    [[nodiscard]] std::string_view payload() const noexcept {
+        return payload_;
+    }
+
+private:
+    friend struct detail::redis_types_access;
+    redis_pubsub_message(std::string_view channel, std::optional<std::string_view> pattern,
+        std::string_view payload) noexcept
+        : channel_(channel),
+          pattern_(pattern),
+          payload_(payload) {}
+
+    std::string_view channel_;
+    std::optional<std::string_view> pattern_;
+    std::string_view payload_;
+};
+
+// Exactly one confirmation or message, in wire order. Every text view borrows
+// the subscription's current reply until its next read() starts or destruction.
+// Copy text that must outlive that boundary.
+class redis_pubsub_event final {
+public:
+    [[nodiscard]] const redis_pubsub_confirmation* confirmation() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<redis_pubsub_confirmation>(&value_);
+    }
+    const redis_pubsub_confirmation* confirmation() const&& = delete;
+    [[nodiscard]] const redis_pubsub_message* message() const& noexcept RUVIA_LIFETIMEBOUND {
+        return std::get_if<redis_pubsub_message>(&value_);
+    }
+    const redis_pubsub_message* message() const&& = delete;
+
+private:
+    friend struct detail::redis_types_access;
+    explicit redis_pubsub_event(redis_pubsub_confirmation value) noexcept
+        : value_(value) {}
+    explicit redis_pubsub_event(redis_pubsub_message value) noexcept
+        : value_(value) {}
+
+    std::variant<redis_pubsub_confirmation, redis_pubsub_message> value_;
+};
+
+// One dedicated Pub/Sub connection, created by redis_session::subscription().
+// Channels and patterns are multiplexed on it; ordinary commands stay on the
+// handle's pools. The connection is opened by the first subscribe() and lives
+// until abort(), the handle's stop token, worker shutdown, a failed operation
+// or destruction. There is no reconnect: Pub/Sub delivers at most once, and a
+// closed subscription has lost whatever was published meanwhile, so the
+// application decides how to recover.
+//
+// Commands only write; their confirmations arrive through read() in wire order,
+// interleaved with messages. One command and one read may be in flight at a
+// time (a second throws std::logic_error); unstarted operations may coexist.
+// Reads observe the subscription's stop token and operation timeout; a timeout
+// closes the subscription and throws redis_error(timeout). While a read waits,
+// redis_config::subscription_ping_interval_ probes an idle connection with
+// PING; a peer that stays silent for one more interval closes the
+// subscription and the read throws redis_error(timeout). PING replies are
+// consumed internally and never returned by read().
+//
+// Worker-affine: use and destroy it on the owning worker before the handle's
+// scope ends. Destroying it with an operation in flight terminates.
+class redis_subscription final {
+public:
+    redis_subscription(const redis_subscription&) = delete;
+    redis_subscription& operator=(const redis_subscription&) = delete;
+    redis_subscription(redis_subscription&&) = delete;
+    redis_subscription& operator=(redis_subscription&&) = delete;
+    ~redis_subscription();
+
+    // Non-empty name lists; names are binary-safe.
+    [[nodiscard]] task<void> subscribe(std::span<const std::string_view> channels) &;
+    task<void> subscribe(std::span<const std::string_view>) && = delete;
+    [[nodiscard]] task<void> psubscribe(std::span<const std::string_view> patterns) &;
+    task<void> psubscribe(std::span<const std::string_view>) && = delete;
+    // An empty list unsubscribes from every channel (pattern) of this connection.
+    [[nodiscard]] task<void> unsubscribe(std::span<const std::string_view> channels = {}) &;
+    task<void> unsubscribe(std::span<const std::string_view> = {}) && = delete;
+    [[nodiscard]] task<void> punsubscribe(std::span<const std::string_view> patterns = {}) &;
+    task<void> punsubscribe(std::span<const std::string_view> = {}) && = delete;
+
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    [[nodiscard]] task<void> subscribe(channels_type&&... channels) & {
+        const std::string_view views[]{std::string_view(channels)...};
+        return subscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    task<void> subscribe(channels_type&&...) && = delete;
+
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    [[nodiscard]] task<void> psubscribe(patterns_type&&... patterns) & {
+        const std::string_view views[]{std::string_view(patterns)...};
+        return psubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    task<void> psubscribe(patterns_type&&...) && = delete;
+
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    [[nodiscard]] task<void> unsubscribe(channels_type&&... channels) & {
+        const std::string_view views[]{std::string_view(channels)...};
+        return unsubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... channels_type>
+        requires detail::redis_argument_pack<channels_type...>
+    task<void> unsubscribe(channels_type&&...) && = delete;
+
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    [[nodiscard]] task<void> punsubscribe(patterns_type&&... patterns) & {
+        const std::string_view views[]{std::string_view(patterns)...};
+        return punsubscribe(std::span<const std::string_view>(views));
+    }
+    template <typename... patterns_type>
+        requires detail::redis_argument_pack<patterns_type...>
+    task<void> punsubscribe(patterns_type&&...) && = delete;
+    // The next confirmation or message. std::nullopt once the subscription is
+    // closed by abort(), its stop token or worker shutdown. The server ending
+    // the connection throws redis_error(io_error); an error reply (for example
+    // a denied channel) throws redis_error(command_error) and leaves the
+    // connection open; a malformed push closes it with protocol_error; an
+    // unanswered idle probe closes it with timeout.
+    // Requires a completed subscribe() first: std::logic_error otherwise.
+    // `operation` bounds this read only: its timeout may only tighten the
+    // subscription's, and its token cancels the read while the subscription's
+    // own token still ends the stream with std::nullopt. A non-positive
+    // timeout throws std::invalid_argument at the call; an already-stopped
+    // token throws redis_error(cancelled) and leaves the subscription open.
+    // Once started, its timeout or stop request closes the connection -- a
+    // Redis connection interrupted mid-reply is never reused -- and throws
+    // redis_error(timeout / cancelled).
+    [[nodiscard]] task<std::optional<redis_pubsub_event>> read(operation_options operation = {}) &;
+    task<std::optional<redis_pubsub_event>> read(operation_options = {}) && = delete;
+
+    // Closes the connection now; a pending read() completes with std::nullopt.
+    void abort() noexcept;
+
+private:
+    friend class redis_session;
+
+    redis_subscription(detail::redis_subscription_set& subscriptions, operation_scope& scope,
+        operation_options options);
+
+    static void expire_capability(void* target) noexcept;
+    task<void> send(std::string_view command, std::span<const std::string_view> names, bool require_names);
+
+    std::unique_ptr<detail::redis_subscription_connection>
+        connection_;
+    // Declared after the connection so it unlinks before the connection closes.
+    scoped_capability_registration registration_;
+};
+
+struct redis_repository_config;
+template <typename entity_type>
+class redis_repository;
+
+class redis_session final {
+public:
+    redis_session(const redis_session& other) noexcept;
+    redis_session& operator=(const redis_session&) = delete;
+
+    // Returns a request-scoped view whose policy is applied to every typed
+    // command and inherited by pipelines and transactions created from it.
+    // Empty tokens inherit; supplied states replace user cancellation. Timeout
+    // can only tighten. Accumulation requires a caller-owned stop_group.
+    [[nodiscard]] redis_session with_options(operation_options options) const;
+
+    // Borrows the owning worker; an expired capability cannot expose it.
+    [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
+
+    // 单次租约没有可依赖的前序写入历史；WAIT/WAITAOF 在此同步拒绝。
+    // 将写入与屏障合并到同一非事务 pipeline，参见 pipeline()。
+    // XREAD/XREADGROUP 在 STREAMS 前只接受 COUNT、BLOCK 及 XREADGROUP 的 CLAIM、NOACK；
+    // 含 BLOCK 时走阻塞池，其他选项同步抛出 std::invalid_argument。
+    [[nodiscard]] task<redis_value> command(std::span<const std::string_view> args) const;
+    task<redis_value> command(
+        std::initializer_list<std::string_view> args) const = delete;
+    // Takes ownership synchronously, before the returned cold task can suspend.
+    [[nodiscard]] task<redis_value> command(redis_compiled_command command) const {
+        if (command.arguments().empty()) {
+            throw std::invalid_argument("Redis compiled command has been consumed");
+        }
+        return scoped(command_owned(std::move(command).take_arguments()));
+    }
+
+    [[nodiscard]] task<void> ping() const;
+    [[nodiscard]] task<std::string> ping(std::string_view message) const;
+    [[nodiscard]] task<std::optional<std::string>> get(std::string_view key) const;
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(
+        std::span<const std::string_view> keys) const;
+    task<std::vector<std::optional<std::string>>> mget(
+        std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<redis_set_result> set(
+        std::string_view key, std::string_view value, redis_set_options options = {}) const;
+    [[nodiscard]] task<void> mset(
+        std::span<const std::pair<std::string_view, std::string_view>> items) const;
+    task<void> mset(
+        std::initializer_list<std::pair<std::string_view, std::string_view>> items) const = delete;
+    [[nodiscard]] task<std::optional<std::string>> get_del(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> append(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> strlen(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> incr_by(std::string_view key, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> decr(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> decr_by(std::string_view key, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> del(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> del(std::span<const std::string_view> keys) const;
+    task<std::int64_t> del(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::int64_t> unlink(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> unlink(std::span<const std::string_view> keys) const;
+    task<std::int64_t> unlink(std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<bool> exists(std::string_view key) const;
+    [[nodiscard]] task<bool> touch(std::string_view key) const;
+    [[nodiscard]] task<std::string> type(std::string_view key) const;
+    [[nodiscard]] task<void> rename(std::string_view key, std::string_view new_key) const;
+    [[nodiscard]] task<bool> rename_nx(std::string_view key, std::string_view new_key) const;
+    [[nodiscard]] task<bool> expire(std::string_view key, std::chrono::seconds ttl) const;
+    [[nodiscard]] task<bool> pexpire(std::string_view key, std::chrono::milliseconds ttl) const;
+    [[nodiscard]] task<bool> expire_at(
+        std::string_view key, std::chrono::system_clock::time_point expires_at) const;
+    [[nodiscard]] task<bool> persist(std::string_view key) const;
+    [[nodiscard]] task<redis_ttl> ttl(std::string_view key) const;
+    [[nodiscard]] task<redis_ttl> pttl(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> incr(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::string>> hget(
+        std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<std::int64_t> hset(
+        std::string_view key, std::string_view field, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> hset(std::string_view key,
+        std::span<const std::pair<std::string_view, std::string_view>> fields) const;
+    task<std::int64_t> hset(std::string_view key,
+        std::initializer_list<std::pair<std::string_view, std::string_view>> fields_value) const = delete;
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(
+        std::string_view key, std::span<const std::string_view> fields) const;
+    task<std::vector<std::optional<std::string>>> hmget(
+        std::string_view key, std::initializer_list<std::string_view> fields_value) const = delete;
+    [[nodiscard]] task<std::vector<redis_key_value>> hget_all(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> hdel(std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<bool> hexists(std::string_view key, std::string_view field) const;
+    [[nodiscard]] task<std::int64_t> hlen(std::string_view key) const;
+    [[nodiscard]] task<std::vector<std::string>> hkeys(std::string_view key) const;
+    [[nodiscard]] task<std::vector<std::string>> hvals(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> hincr_by(
+        std::string_view key, std::string_view field, std::int64_t value) const;
+    [[nodiscard]] task<std::int64_t> lpush(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> rpush(std::string_view key, std::string_view value) const;
+    [[nodiscard]] task<std::optional<std::string>> lpop(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::string>> rpop(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> llen(std::string_view key) const;
+    [[nodiscard]] task<std::vector<std::string>> lrange(
+        std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::optional<std::string>> lindex(
+        std::string_view key, std::int64_t index) const;
+    [[nodiscard]] task<void> lset(
+        std::string_view key, std::int64_t index, std::string_view value) const;
+    [[nodiscard]] task<void> ltrim(std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::int64_t> lrem(
+        std::string_view key, std::int64_t count, std::string_view value) const;
+    [[nodiscard]] task<std::int64_t> sadd(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::int64_t> srem(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::vector<std::string>> smembers(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> scard(std::string_view key) const;
+    [[nodiscard]] task<bool> sismember(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::optional<std::string>> spop(std::string_view key) const;
+    [[nodiscard]] task<std::optional<std::string>> srand_member(std::string_view key) const;
+    [[nodiscard]] task<std::vector<std::string>> sinter(
+        std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sinter(
+        std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::vector<std::string>> sunion(
+        std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sunion(
+        std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::vector<std::string>> sdiff(
+        std::span<const std::string_view> keys) const;
+    task<std::vector<std::string>> sdiff(
+        std::initializer_list<std::string_view> keys) const = delete;
+    [[nodiscard]] task<std::int64_t> zadd(
+        std::string_view key, double score, std::string_view member) const;
+    [[nodiscard]] task<std::int64_t> zrem(std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::vector<std::string>> zrange(
+        std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::vector<redis_scored_value>> zrange_with_scores(
+        std::string_view key, std::int64_t start, std::int64_t stop) const;
+    [[nodiscard]] task<std::optional<double>> zscore(
+        std::string_view key, std::string_view member) const;
+    [[nodiscard]] task<std::int64_t> zcard(std::string_view key) const;
+    [[nodiscard]] task<std::int64_t> zcount(std::string_view key, double min, double max) const;
+    [[nodiscard]] task<redis_scan_result> scan(redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_hash_scan_result> hscan(
+        std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_scan_result> sscan(
+        std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_z_scan_result> zscan(
+        std::string_view key, redis_scan_options options = {}) const;
+    [[nodiscard]] task<redis_value> eval(std::string_view script,
+        std::span<const std::string_view> keys = {},
+        std::span<const std::string_view> args = {}) const;
+    [[nodiscard]] task<redis_value> eval_sha(std::string_view sha1,
+        std::span<const std::string_view> keys = {},
+        std::span<const std::string_view> args = {}) const;
+    [[nodiscard]] task<std::string> script_load(std::string_view script) const;
+    [[nodiscard]] task<std::vector<bool>> script_exists(
+        std::span<const std::string_view> sha1s) const;
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
+        std::string_view key, redis_block_wait wait) const {
+        const std::string_view keys[]{key};
+        return blpop(std::span<const std::string_view>(keys), wait);
+    }
+    [[nodiscard]] task<std::optional<redis_key_value>> blpop(
+        std::span<const std::string_view> keys, redis_block_wait wait) const;
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
+        std::string_view key, redis_block_wait wait) const {
+        const std::string_view keys[]{key};
+        return brpop(std::span<const std::string_view>(keys), wait);
+    }
+    [[nodiscard]] task<std::optional<redis_key_value>> brpop(
+        std::span<const std::string_view> keys, redis_block_wait wait) const;
+    [[nodiscard]] task<std::optional<redis_x_read_group_result>> xread_group(std::string_view group,
+        std::string_view consumer, std::span<const redis_stream_read_view> streams,
+        redis_x_read_group_options options = {}) const;
+
+    // Multi-argument commands as ordinary arguments: mget(a, b, c) instead of a
+    // hand-built array plus a span. Every span overload above clones its
+    // arguments into owned storage before returning -- the command is built
+    // synchronously and only the owned copy is moved into the coroutine -- so the
+    // temporary array each of these creates only has to outlive the call.
+    //
+    // A span argument is not convertible to string_view and therefore never
+    // selects one of these; a caller that already holds a sequence keeps using
+    // the span overload unchanged.
+    template <typename... args_type>
+        requires detail::redis_argument_pack<args_type...>
+    [[nodiscard]] task<redis_value> command(args_type&&... args) const {
+        const std::string_view views[]{std::string_view(args)...};
+        return command(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> mget(
+        keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return mget(std::span<const std::string_view>(views));
+    }
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    [[nodiscard]] task<std::int64_t> del(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return del(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires(detail::redis_argument_pack<keys_type...> && sizeof...(keys_type) >= 2)
+    [[nodiscard]] task<std::int64_t> unlink(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return unlink(std::span<const std::string_view>(views));
+    }
+
+    // Alternating key/value arguments: mset(k1, v1, k2, v2).
+    template <typename... args_type>
+        requires detail::redis_pair_argument_pack<args_type...>
+    [[nodiscard]] task<void> mset(args_type&&... args) const {
+        const auto items = pair_arguments(std::string_view(args)...);
+        return mset(std::span<const std::pair<std::string_view, std::string_view>>(items));
+    }
+
+    // Four or more arguments; hset(key, field, value) stays on the single-field
+    // overload above rather than routing one pair through the batch path.
+    template <typename... args_type>
+        requires(detail::redis_pair_argument_pack<args_type...> && sizeof...(args_type) >= 4)
+    [[nodiscard]] task<std::int64_t> hset(std::string_view key, args_type&&... args) const {
+        const auto fields_value = pair_arguments(std::string_view(args)...);
+        return hset(key, std::span<const std::pair<std::string_view, std::string_view>>(fields_value));
+    }
+
+    template <typename... field_types>
+        requires detail::redis_argument_pack<field_types...>
+    [[nodiscard]] task<std::vector<std::optional<std::string>>> hmget(
+        std::string_view key, field_types&&... fields) const {
+        const std::string_view views[]{std::string_view(fields)...};
+        return hmget(key, std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    [[nodiscard]] task<std::vector<std::string>> sinter(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sinter(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    [[nodiscard]] task<std::vector<std::string>> sunion(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sunion(std::span<const std::string_view>(views));
+    }
+
+    template <typename... keys_type>
+        requires detail::redis_argument_pack<keys_type...>
+    [[nodiscard]] task<std::vector<std::string>> sdiff(keys_type&&... keys) const {
+        const std::string_view views[]{std::string_view(keys)...};
+        return sdiff(std::span<const std::string_view>(views));
+    }
+
+    template <typename... sha1s_type>
+        requires detail::redis_argument_pack<sha1s_type...>
+    [[nodiscard]] task<std::vector<bool>> script_exists(sha1s_type&&... sha1s) const {
+        const std::string_view views[]{std::string_view(sha1s)...};
+        return script_exists(std::span<const std::string_view>(views));
+    }
+
+    // 每批命令共享一次租约及同一连接，WAIT/WAITAOF 只保护该批中位于
+    // 屏障之前的写入，不保护此前通过独立 handle 调用完成的写入。
+    // 迁移示例（不能写成先 co_await set()，再独立 command("WAIT", ...)）：
+    //   auto batch = redis.with_options({.timeout_ = std::chrono::seconds(2)}).pipeline();
+    //   batch.set("key", "value").command("WAIT", "1", "1000");
+    //   auto replies = co_await std::move(batch).exec();
+    // 检查每条写入回复是否为 error，再检查 replies[1].integer() >= 1；
+    // WAITAOF 使用 command("WAITAOF", "1", "1", "1000")，检查返回数组的
+    // 本地与副本 fsync 数量。服务端超时仍返回计数，不代表已达到目标。
+    // 整批继承 operation_options 的总超时/取消；普通池 command_timeout_
+    // 仍限制整批写入与全部回复，不因屏障而停用或逐条重启。
+    // 屏障必须有 operation timeout 或可取消 token；timeout=0 的 Redis
+    // 参数不绕过客户端限制。取消/传输失败关闭连接，已完成写入不回滚。
+    // WAIT/WAITAOF 不赋予 Redis 强一致性；事务内不阻塞，故 transaction 拒绝。
+    // Redis 的 current connection 契约：
+    // https://redis.io/docs/latest/commands/wait/
+    // https://redis.io/docs/latest/commands/waitaof/
+    [[nodiscard]] redis_pipeline pipeline() const;
+    [[nodiscard]] redis_transaction transaction() const;
+
+    // Delivers to a channel on the ordinary pool; returns the receiver count.
+    [[nodiscard]] task<std::int64_t> publish(std::string_view channel, std::string_view payload) const;
+    // A dedicated Pub/Sub connection bound to this handle's scope, stop token
+    // and operation timeout. Like an infinite blocking wait, it requires a
+    // stoppable token or a finite timeout (std::invalid_argument otherwise).
+    [[nodiscard]] redis_subscription subscription() const;
+
+    // Validates `config` against the entity schema: the prefix must be
+    // non-empty without NUL bytes, and each index column must be a unique,
+    // identifier-named entity column whose type fits the index kind.
+    // Violations throw std::invalid_argument.
+    template <typename entity_type>
+    [[nodiscard]] redis_repository<entity_type> repository() const;
+    template <typename entity_type>
+    [[nodiscard]] redis_repository<entity_type> repository(
+        const redis_repository_config& config) const;
+
+private:
+    // Reassembles a flat alternating argument list into the pair sequence the
+    // span overloads take.
+    template <typename... args_type>
+    [[nodiscard]] static constexpr auto pair_arguments(args_type... args) {
+        static_assert(sizeof...(args_type) % 2 == 0);
+        const std::string_view flat[]{args...};
+        std::array<std::pair<std::string_view, std::string_view>, sizeof...(args_type) / 2> pairs{};
+        for (std::size_t index = 0; index < pairs.size(); ++index) {
+            pairs[index] = {flat[2 * index], flat[2 * index + 1]};
+        }
+        return pairs;
+    }
+
+    friend class detail::redis_client_runtime;
+    template <typename entity_type>
+    friend class redis_repository;
+
+    // ORM commands are compiled by the framework straight into owned storage
+    // and are never stateful or blocking. The storage is moved into the
+    // command when it already lives in the handle's resource and copied into
+    // that resource otherwise.
+    [[nodiscard]] task<redis_value> command_owned(std::vector<std::string>&& args) const;
+    // ORM scripts run as EVALSHA; a NOSCRIPT reply loads the body through
+    // EVAL within the same operation.
+    [[nodiscard]] task<redis_value> script_owned(
+        const detail::redis_orm_script& script, std::vector<std::string>&& args) const;
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> command_mapped(
+        std::vector<std::string>&& args, mapper_type mapper) const {
+        registration_.require_active();
+        return scoped(detail::map_redis_command<result_type>(command_owned(std::move(args)), std::move(mapper)));
+    }
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> script_mapped(const detail::redis_orm_script& script,
+        std::vector<std::string>&& args, mapper_type mapper) const {
+        registration_.require_active();
+        return scoped(detail::map_redis_command<result_type>(
+            script_owned(script, std::move(args)), std::move(mapper)));
+    }
+
+    // `io_metrics` is the request's counter block, or null outside a request.
+    redis_session(detail::redis_client_runtime& runtime,
+        operation_scope& operation_scope, detail::request_io_metrics* io_metrics) noexcept;
+    // A standalone client handle: no request, so no request I/O metrics.
+    redis_session(detail::redis_client_runtime& runtime,
+        operation_scope& operation_scope, operation_options options) noexcept;
+
+    template <typename t_type>
+    [[nodiscard]] task<t_type> scoped(ruvia::task<t_type> task_value) const {
+        return make_scoped_operation(registration_.scope(), std::move(task_value));
+    }
+
+    // `reply_timeout` starts when the command is written (see redis_pool).
+    [[nodiscard]] task<redis_value> execute(detail::redis_pool& pool, detail::redis_owned_command&& command,
+        std::optional<timeout_duration> reply_timeout = std::nullopt) const;
+
+    // One scoped pooled command whose reply `mapper` decodes in the handle's
+    // memory domain, with the map_redis_command mapper contract.
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> execute_mapped(detail::redis_pool& pool, detail::redis_owned_command&& command,
+        mapper_type mapper, std::optional<timeout_duration> reply_timeout = std::nullopt) const {
+        return scoped(detail::map_redis_command<result_type>(
+            execute(pool, std::move(command), reply_timeout), std::move(mapper)));
+    }
+
+    template <typename result_type, typename mapper_type>
+    [[nodiscard]] task<result_type> mapped(
+        std::initializer_list<std::string_view> args, mapper_type mapper) const {
+        registration_.require_active();
+        return execute_mapped<result_type>(pool(),
+            detail::make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size())),
+            std::move(mapper));
+    }
+
+    friend class detail::worker_client_registry_view;
+    [[nodiscard]] redis_session bind_caller_scope(::ruvia::operation_scope& scope,
+        detail::request_io_metrics* io_metrics, const stop_token& stop_token_value) &&;
+    static void expire_capability(void* target) noexcept;
+    [[nodiscard]] detail::redis_pool& pool() const noexcept;
+    [[nodiscard]] detail::redis_pool& blocking_pool() const noexcept;
+    detail::redis_client_runtime* runtime_;
+    detail::request_io_metrics* io_metrics_{nullptr};
+    operation_options operation_options_;
+    scoped_capability_registration registration_;
+};
+
+#ifdef RUVIA_ENABLE_REDIS
+// One Redis client bound to one event_loop, independent of HTTP and application.
+// Handles, repositories, cold operations and PMR results borrow this owner.
+// Destroy them on the bound loop before destroying the client; shutdown joins
+// started operations but does not extend the allocator lifetime of results.
+class redis_client final {
+public:
+    redis_client(event_loop loop, const redis_config& config);
+    ~redis_client();
+    redis_client(const redis_client&) = delete;
+    redis_client& operator=(const redis_client&) = delete;
+    redis_client(redis_client&&) = delete;
+    redis_client& operator=(redis_client&&) = delete;
+
+    // Lazy, single-start and worker-affine, like ordinary commands.
+    [[nodiscard]] task<void> connect() &;
+    task<void> connect() && = delete;
+    // Each call registers one allocation-free capability with the client
+    // operation scope, so keep the returned handle for a sequence of commands
+    // instead of calling redis() per command. Like context::redis(), the
+    // handle carries no operation options; derive them with with_options().
+    [[nodiscard]] redis_session redis() const&;
+    redis_session redis() const&& = delete;
+
+    // Thread-safe close request; sockets are closed only on the bound loop.
+    void close() noexcept;
+    // Await on the bound loop to cancel and join all started operations.
+    [[nodiscard]] task<void> shutdown() &;
+    task<void> shutdown() && = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
+
+private:
+    std::shared_ptr<detail::redis_client_state> state_;
+};
+#endif
+
+}  // namespace ruvia
+
+#ifdef RUVIA_ENABLE_REDIS
+#endif
 
 namespace ruvia {
 enum class redis_index_kind : std::uint8_t;

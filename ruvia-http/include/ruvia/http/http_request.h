@@ -20,8 +20,6 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_status.h"
-
 namespace ruvia {
 
 // Outbound Content-Length in 0..UINT64_MAX. Checked before narrowing so

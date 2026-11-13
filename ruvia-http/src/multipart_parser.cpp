@@ -1,5 +1,3 @@
-#include "ruvia/http/multipart_parser.h"
-
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -11,9 +9,10 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
 
-#include "http_websocket_permessage_deflate.h"
+#include "http_connection_fields.h"
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field
 // body, parameter and media type may contain, and the duplicate-parameter guard
@@ -25,11 +24,11 @@
 #include <span>
 #include <string>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http_connection_fields.h"

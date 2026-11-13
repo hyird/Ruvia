@@ -29,8 +29,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 namespace ruvia {

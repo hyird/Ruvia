@@ -29,17 +29,13 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/redis/redis_session.h"
 
-#include "client_tcp_transport.h"
-#include "operation_interrupt.h"
-
+#include "connection_lifecycle.h"
+#include "http_client_pool.h"
 namespace ruvia::detail {
 namespace {
 

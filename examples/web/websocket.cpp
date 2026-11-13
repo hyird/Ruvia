@@ -14,8 +14,7 @@
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
-
+#include "ruvia/web/middleware.h"
 class websocket_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/ws")

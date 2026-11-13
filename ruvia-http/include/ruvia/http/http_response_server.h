@@ -22,9 +22,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/url_encoding.h"
-
 namespace ruvia {
 
 enum class http_transfer_coding : std::uint8_t { gzip,

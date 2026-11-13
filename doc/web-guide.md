@@ -73,7 +73,7 @@ int main() {
 
 ---
 
-### 1.2 服务器、监听、TLS、压缩与 CORS 配置（`"ruvia/web/server_config.h"`）
+### 1.2 服务器、监听、TLS、压缩与 CORS 配置（`"ruvia/web/http_server.h"`）
 
 #### `ruvia::server_config`
 
@@ -285,7 +285,7 @@ ruvia::app().listen({
 
 ---
 
-### 1.4 错误处理与异常（`"ruvia/web/error.h"`, `"ruvia/web/app.h"`）
+### 1.4 错误处理与异常（`"ruvia/web/middleware.h"`, `"ruvia/web/app.h"`）
 
 - **抛出或构造业务错误**：
   - 在路由或中间件中可抛出 `ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "bad_input", .message_ = "..."})`，或直接 `co_return c.error({...});`。`http_error` 是唯一的拥有型应用错误：status / code / message / status_text 以及 `.validation_issues_` 全部深拷贝持有，`info()` 返回携带 issues 的 `http_error_info`。
@@ -643,7 +643,7 @@ int main() {
 ```cpp
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"
 
@@ -1029,7 +1029,7 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 ## 6. 静态文件服务与内存级测试
 
-### 6.1 静态文件服务（`"ruvia/web/server_config.h"`）
+### 6.1 静态文件服务（`"ruvia/web/http_server.h"`）
 
 Ruvia 提供三种静态文件服务方式：
 

@@ -20,8 +20,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
-
+#include "ruvia/web/middleware.h"
 namespace {
 
 // One instance per worker, touched only from that worker's thread: no locks.

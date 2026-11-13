@@ -15,8 +15,8 @@
 
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/jwt.h"
+#include "ruvia/web/middleware.h"
 
 namespace {
 

@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/multipart_parser.h"
+#include "ruvia/http/http_content_coding.h"
 
 #include "content_decoding_fixture.h"
 #include "test_exceptions.h"
@@ -811,9 +811,8 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
 #include <vector>
 
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-
 namespace {
 
 using ruvia::http_parse_error;

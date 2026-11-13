@@ -30,15 +30,13 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/web/redis/redis_session.h"
-
+#include "ruvia/web/redis/redis.h"
 TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
     const auto rejected = [](const ruvia::session_config& config) {
         try {

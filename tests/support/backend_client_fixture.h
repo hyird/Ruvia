@@ -37,7 +37,7 @@
 #include "ruvia/web/db/db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_session.h"
+#include "ruvia/web/redis/redis.h"
 #endif
 
 #include "ruvia/core/task.h"

@@ -26,10 +26,8 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
-#include "ruvia/http/multipart_parser.h"
-
 namespace ruvia::test {
 
 using ruvia::decode_http_content;

@@ -17,11 +17,10 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/url_encoding.h"
+#include "ruvia/http/borrowed_text.h"
 
-#include "db_pipeline.h"
+#include "connection_lifecycle.h"
 #include "db_pool.h"
-#include "operation_interrupt.h"
 namespace ruvia::detail {
 namespace {
 

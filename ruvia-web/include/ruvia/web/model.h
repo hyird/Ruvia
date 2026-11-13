@@ -28,8 +28,6 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/url_encoding.h"
-
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #define RUVIA_JSON_SCAN_SSE2 1
@@ -42,7 +40,6 @@
 
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
 
 namespace ruvia::detail {

@@ -31,10 +31,8 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/db/db_session.h"
 
-#include "db_pipeline.h"
+#include "connection_lifecycle.h"
 #include "db_pool.h"
-#include "operation_interrupt.h"
-
 namespace ruvia::detail {
 namespace {
 

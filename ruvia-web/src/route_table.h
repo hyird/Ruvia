@@ -49,7 +49,6 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http3_connection.h"
@@ -58,22 +57,17 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_status.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/error.h"
 #include "ruvia/web/http_server.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/server_config.h"
 #include "ruvia/web/streaming.h"
 
 #include "connection_lifecycle.h"
 #include "context_access.h"
 #include "http_client_pool.h"
-#include "http_websocket_connection.h"
-#include "operation_interrupt.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_pool.h"
 #endif
@@ -81,7 +75,7 @@
 #include "redis_pool.h"
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db_pipeline.h"
+#include "db_pool.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis_pool.h"

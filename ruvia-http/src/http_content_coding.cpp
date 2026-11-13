@@ -15,7 +15,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "http_connection_fields.h"
-#include "http_websocket_permessage_deflate.h"
 // The Content-Encoding field itself (RFC 9110 sections 8.4 and 5.6.1): the token
 // each coding is spelled with, the list-grammar accumulator across field lines,
 // and which codec a decode or encode of that coding runs on.
