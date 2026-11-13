@@ -1231,13 +1231,24 @@ public:
         item.timer_.write_deadline_.reset();
         schedule(item);
     }
-    task<void> send_body(stream& item, std::string_view bytes) {
+    // Submits `bytes` as request DATA, then waits for the peer to acknowledge
+    // them. True once the codec accepted every byte: like a write handed to
+    // the HTTP/1 socket or flushed to the HTTP/2 connection, that completes
+    // the write even when a later STOP_SENDING ends the wait for the
+    // acknowledgement, because the peer may stop the request only after
+    // processing the bytes (RFC 9114 §4.1.2). False when the stream stopped
+    // first; the rest of `bytes` was never sent.
+    task<bool> send_body(stream& item, std::string_view bytes) {
+        const auto stopped = [&item]() noexcept {
+            return item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_);
+        };
         item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(worker_timer_deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
         schedule(item);
         while (!bytes.empty()) {
             check(item);
-            if (item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_)) {
-                co_return;
+            if (stopped()) {
+                item.timer_.write_deadline_.reset();
+                co_return false;
             }
             const auto sent = quic_->http3().submit_data(item.id_, std::as_bytes(std::span(bytes.data(), bytes.size())));
             if (sent.status_ != http3_status::accepted && sent.status_ != http3_status::would_block) {
@@ -1255,11 +1266,8 @@ public:
             }
         }
         auto outstanding = quic_->http3().pending_output_bytes(item.id_);
-        while (outstanding != 0) {
+        while (outstanding != 0 && !stopped()) {
             check(item);
-            if (item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_)) {
-                co_return;
-            }
             co_await item.signal_.wait();
             const auto remaining = quic_->http3().pending_output_bytes(item.id_);
             if (remaining < outstanding && item.response_.effective_write_timeout_) {
@@ -1269,6 +1277,7 @@ public:
             outstanding = remaining;
         }
         item.timer_.write_deadline_.reset();
+        co_return true;
     }
 
     http_client_pool& pool_;
@@ -1940,7 +1949,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                 self.submit_request_head(item, request, prepared.headers_);
                 co_await self.flush_stream(item);
                 if (!request.body().empty()) {
-                    co_await self.send_body(item, request.body());
+                    (void)co_await self.send_body(item, request.body());
                     if (!item.retry_ && !item.write_stopped_) {
                         require_accepted(self.quic_->http3().finish_request(item.id_));
                         item.request_end_submitted_ = true;
@@ -1958,8 +1967,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                         },
                         []() noexcept { return true; },
                         [&](std::string_view chunk) -> task<bool> {
-                            co_await self.send_body(item, chunk);
-                            co_return !output->stopped_;
+                            co_return co_await self.send_body(item, chunk);
                         },
                         [&]() -> task<bool> {
                             std::pmr::vector<http_header_view> trailers(process_resource());
