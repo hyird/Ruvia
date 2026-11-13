@@ -107,9 +107,11 @@
 #include <asio/ip/udp.hpp>
 #endif
 
+#if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
 #include <ngtcp2/ngtcp2_crypto.h>
 #include <ngtcp2/ngtcp2_crypto_ossl.h>
+#endif
 
 #include <cmath>
 #include <condition_variable>
@@ -125,10 +127,16 @@
 #include <asio/write.hpp>
 #include <openssl/sha.h>
 
+#if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
+#endif
 #include "ruvia/http/http_client.h"
+#ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
+#endif
 
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/http2_connection.h"
@@ -14892,6 +14900,7 @@ private:
 
 }  // namespace ruvia::detail
 
+#ifdef RUVIA_ENABLE_DATABASE
 namespace ruvia::detail {
 
 // SHA-256 over input fed in pieces, the one digest the database layer keys
@@ -19045,6 +19054,7 @@ task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& 
 }
 
 }  // namespace ruvia::detail
+#endif
 
 #if defined(RUVIA_ENABLE_REDIS)
 

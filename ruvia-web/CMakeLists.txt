@@ -3,23 +3,24 @@ ruvia_collect_cpp_sources(ruvia_web_sources src
 # Keep the shared database sources whenever either driver is enabled; only the
 # driver-specific translation units and disabled feature directories are omitted.
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/db/")
+    list(FILTER ruvia_web_sources EXCLUDE
+        REGEX "/src/(db_pool|mariadb_driver|postgresql_driver)\\.cpp$")
 else()
     if(NOT RUVIA_ENABLE_MARIADB)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/(mariadb_driver|mariadb_statements|mariadb_sql)\\.cpp$")
+            REGEX "/src/mariadb_driver\\.cpp$")
     endif()
     if(NOT RUVIA_ENABLE_POSTGRESQL)
         list(FILTER ruvia_web_sources EXCLUDE
-            REGEX "/src/db/postgresql_driver\\.cpp$")
+            REGEX "/src/postgresql_driver\\.cpp$")
     endif()
 endif()
 # The database query-result cache stores rows in Redis.
 if(NOT RUVIA_ENABLE_REDIS)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis/")
-  endif()
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/redis_pool\\.cpp$")
+endif()
 if(NOT RUVIA_ENABLE_JWT)
-    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/auth/jwt[^/]*\\.cpp$")
+    list(FILTER ruvia_web_sources EXCLUDE REGEX "/src/jwt\\.cpp$")
 endif()
 
 add_library(ruvia-web STATIC ${ruvia_web_sources})

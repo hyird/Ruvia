@@ -174,8 +174,12 @@
 #include <openssl/rand.h>
 #include <openssl/x509v3.h>
 
+#ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
+#endif
+#ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis.h"
+#endif
 namespace ruvia::detail {
 
 app_state::app_state() {

@@ -33,7 +33,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
@@ -15410,10 +15409,18 @@ std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std:
     if (output.size() < 13 + std::get<0>(length)) {
         return http_priority_error::output_too_small;
     }
-    (void)encode_http2_frame_header(output.first(http2_frame_header_bytes),
-        static_cast<std::uint32_t>(4 + std::get<0>(length)), http2_frame_type::priority_update, 0, 0);
+    const auto frame_length = static_cast<std::uint32_t>(4 + std::get<0>(length));
+    output[0] = static_cast<char>((frame_length >> 16) & 0xffU);
+    output[1] = static_cast<char>((frame_length >> 8) & 0xffU);
+    output[2] = static_cast<char>(frame_length & 0xffU);
+    output[3] = static_cast<char>(0x10U);
+    output[4] = 0;
+    output[5] = 0;
+    output[6] = 0;
+    output[7] = 0;
+    output[8] = 0;
     for (std::size_t index = 0; index < 4; ++index) {
-        output[http2_frame_header_bytes + index] = static_cast<char>((id >> (24 - 8 * index)) & 0xffU);
+        output[9 + index] = static_cast<char>((id >> (24 - 8 * index)) & 0xffU);
     }
     std::copy_n(value.begin(), std::get<0>(length), output.begin() + 13);
     return 13 + std::get<0>(length);

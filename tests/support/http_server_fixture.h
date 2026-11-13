@@ -553,30 +553,37 @@ private:
 
 inline void reset_app_callbacks(application& app_value) {
     http_server_fixture::reset_shared();
-    app_value.rate_limit(nullptr)
+    app_value.document_root(nullptr)
+        .rate_limit(nullptr)
         .trusted_proxies({})
+        .client(nullptr)
+#ifdef RUVIA_ENABLE_DATABASE
+        .database(nullptr)
+#endif
+#ifdef RUVIA_ENABLE_REDIS
+        .redis(nullptr)
+#endif
         .on_start(nullptr)
         .on_stop(nullptr)
         .on_error(nullptr)
         .on_not_found(nullptr)
         .on_access(nullptr)
-        .on_connection_failure(nullptr)
-        .on_tls_client_hello(nullptr)
-        .on_http2_input(nullptr)
-#ifdef RUVIA_ENABLE_HTTP2
-        .on_http2_frame(nullptr)
-        .on_http2_headers(nullptr)
-#endif
-#ifdef RUVIA_ENABLE_HTTP3
-        .on_http3_frame(nullptr)
-        .on_http3_field(nullptr)
-#endif
         .on_connection_admission(nullptr)
         .on_connection_open(nullptr)
         .on_connection_close(nullptr)
-        .on_connection(nullptr)
+        .on_connection_failure(nullptr)
+        .on_tls_client_hello(nullptr)
+        .on_http2_input(nullptr)
+#if defined(RUVIA_ENABLE_HTTP2)
+        .on_http2_frame(nullptr)
+        .on_http2_headers(nullptr)
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+        .on_http3_frame(nullptr)
+        .on_http3_field(nullptr)
+#endif
         .on_request_stream(nullptr)
-        .trusted_proxies({})
+        .on_connection(nullptr)
         .blocking_pool(blocking_pool_options{});
 }
 
