@@ -1,13 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <functional>
-#include <map>
 #include <memory>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include <asio/io_context.hpp>
 
@@ -65,10 +64,11 @@ public:
 private:
     using pool_owner_type = std::shared_ptr<http_client_pool>;
     struct alias_binding final {
+        std::string alias_;
         pool_owner_type pool_;
         std::size_t order_;
     };
-    using alias_map_type = std::map<std::string, alias_binding, std::less<>>;
+    using alias_map_type = std::vector<alias_binding>;
     struct origin_preparation;
     // Startup aliases without a ca_file_ share system_trust_.
     [[nodiscard]] http_client_config_storage startup_config(const http_client_definition_type& definition);

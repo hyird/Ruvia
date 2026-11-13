@@ -2,7 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <list>
+#include <deque>
 #include <memory>
 #include <optional>
 #include <string>
@@ -285,7 +285,7 @@ private:
     std::optional<http_origin_view> origin_;
     client_request_policy policy_;
     http_client_advertisement_queue advertisements_;
-    std::list<http_client_push> pushes_;
+    std::deque<http_client_push> pushes_;
 #ifdef RUVIA_ENABLE_HTTP2
     std::size_t active_pushes_{};
 #endif

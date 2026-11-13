@@ -21,7 +21,6 @@
 #include "http/inline_text_concat.h"
 #include "http/session_access.h"
 #include "router/route_table.h"
-#include "server/http_alternative_service.h"
 namespace ruvia {
 
 namespace {

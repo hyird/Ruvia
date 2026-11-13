@@ -2,11 +2,11 @@
 
 #include <variant>
 
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_limits.h"
 
 #include "field/http_field_kind.h"
-#include "field/http_header_lookup.h"
 #include "http1/http1_field_parsing.h"
 #include "http1/http_client_response_head.h"
 #include "http1/http_header_block_parser.h"

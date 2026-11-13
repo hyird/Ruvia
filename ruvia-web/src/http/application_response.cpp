@@ -3,7 +3,6 @@
 
 #include "context/context_services.h"
 #include "router/route_table.h"
-#include "server/http_alternative_service.h"
 #include "server/http_buffered_response.h"
 #include "server/http_request_admission.h"
 

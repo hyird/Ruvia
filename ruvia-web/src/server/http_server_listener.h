@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <memory>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -18,8 +19,51 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/web/server_config.h"
+#include "ruvia/web/tls_config.h"
 
-#include "server/http_server_tls_identities.h"
+#include "tls/tls_credential.h"
+
+namespace ruvia::detail {
+
+// Fixed identities are immutable; a live library publishes its own snapshots.
+struct http_server_tls_identities final {
+    // Certificate and staple form one immutable selection.
+    struct identity final {
+        identity(tls_certificate certificate, std::span<const std::byte> ocsp_response)
+            : certificate_(std::move(certificate)),
+              ocsp_response_(ocsp_response.begin(), ocsp_response.end()) {}
+        tls_certificate certificate_;
+        std::vector<std::byte> ocsp_response_;
+    };
+    struct named_identity final {
+        named_identity(std::string_view name, identity value)
+            : name_(name),
+              value_(std::move(value)) {}
+        std::string name_;
+        identity value_;
+    };
+    struct addressed_identity final {
+        asio::ip::address address_;
+        identity value_;
+    };
+
+    http_server_tls_identities(identity primary)
+        : primary_(std::move(primary)) {}
+    http_server_tls_identities() = default;
+
+    [[nodiscard]] const identity& select(
+        std::string_view server_name, const asio::ip::address* local_address) const noexcept;
+
+    std::optional<identity> primary_;
+    std::vector<named_identity> exact_names_;
+    std::vector<named_identity> wildcard_names_;
+    std::vector<addressed_identity> local_addresses_;
+    std::shared_ptr<tls_certificate_store> certificate_store_;
+    std::shared_ptr<const tls_certificate_selector> select_certificate_;
+    tls_certificate_id default_certificate_{};
+};
+
+}  // namespace ruvia::detail
 #include "server/inherited_listener_sockets.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"

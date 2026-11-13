@@ -16,8 +16,8 @@ using stream_encoder_lease = http_stream_encoder_lease;
 
 class worker_codecs final {
 public:
-    worker_codecs() noexcept;
-    ~worker_codecs();
+    worker_codecs() noexcept = default;
+    ~worker_codecs() = default;
     worker_codecs(const worker_codecs&) = delete;
     worker_codecs& operator=(const worker_codecs&) = delete;
 

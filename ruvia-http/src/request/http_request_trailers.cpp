@@ -1,8 +1,8 @@
 #include "ruvia/http/http_request_trailers.h"
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
+#include "ruvia/http/http_field_section.h"
 
-#include "field/http_header_lookup.h"
 #include "field/http_request_field_validation.h"
 
 namespace ruvia {

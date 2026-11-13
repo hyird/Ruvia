@@ -1,7 +1,9 @@
 #include "client/http_client_registry.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -77,10 +79,12 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
 
 template <typename config_type>
 void http_client_registry::initialize(std::span<const config_type> configs) {
+    aliases_.reserve(configs.size());
     for (const auto& config : configs) {
         auto pool = std::make_shared<http_client_pool>(io_context_, worker_, startup_config(config), services_);
-        aliases_.emplace(std::string(std::string_view(config.alias_)),
-            alias_binding{std::move(pool), next_origin_order_++});
+        const std::string_view alias_view(config.alias_);
+        const auto pos = std::ranges::lower_bound(aliases_, alias_view, std::less<>{}, &alias_binding::alias_);
+        aliases_.insert(pos, alias_binding{std::string(alias_view), std::move(pool), next_origin_order_++});
     }
 }
 
@@ -160,27 +164,27 @@ task<void> http_client_registry::prepare_origin(preparation_owner_type input, op
 }
 
 void http_client_registry::publish(std::string alias, pool_owner_type replacement) {
-    const auto position = aliases_.find(alias);
-    if (position != aliases_.end()) {
-        auto joining = position->second.pool_->join();
+    const auto position = std::ranges::lower_bound(aliases_, std::string_view(alias), std::less<>{}, &alias_binding::alias_);
+    if (position != aliases_.end() && position->alias_ == alias) {
+        auto joining = position->pool_->join();
         retirements_.spawn(retire_origin(position, std::move(replacement), std::move(joining)));
         return;
     }
     if (next_origin_order_ == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("HTTP client origin registration order is exhausted");
     }
-    aliases_.emplace(std::move(alias), alias_binding{std::move(replacement), next_origin_order_});
+    aliases_.insert(position, alias_binding{std::move(alias), std::move(replacement), next_origin_order_});
     ++next_origin_order_;
 }
 
 bool http_client_registry::remove(std::string_view alias) {
     require_mutable();
     validate_capability_alias(alias, "HTTP client alias must not be empty");
-    const auto position = aliases_.find(alias);
-    if (position == aliases_.end()) {
+    const auto position = std::ranges::lower_bound(aliases_, alias, std::less<>{}, &alias_binding::alias_);
+    if (position == aliases_.end() || position->alias_ != alias) {
         return false;
     }
-    auto joining = position->second.pool_->join();
+    auto joining = position->pool_->join();
     retirements_.spawn(retire_origin(position, {}, std::move(joining)));
     return true;
 }
@@ -189,8 +193,8 @@ task<void> http_client_registry::retire_origin(alias_map_type::iterator position
     pool_owner_type replacement, task<void> joining) {
     // task_scope allocates its child before starting this coroutine. Everything
     // through publication is then noexcept: a failed admission changes nothing.
-    auto retired = std::exchange(position->second.pool_, std::move(replacement));
-    if (!position->second.pool_) {
+    auto retired = std::exchange(position->pool_, std::move(replacement));
+    if (!position->pool_) {
         aliases_.erase(position);
     }
     retired->close_now();
@@ -203,7 +207,7 @@ void http_client_registry::close_now() noexcept {
     }
     closing_ = true;
     preparation_stop_.request_stop();
-    for (auto& [alias, binding] : aliases_) {
+    for (auto& binding : aliases_) {
         binding.pool_->close_now();
     }
 }
@@ -219,7 +223,7 @@ task<void> http_client_registry::join() {
     } catch (...) {
         failure = std::current_exception();
     }
-    for (auto& [alias, binding] : aliases_) {
+    for (auto& binding : aliases_) {
         try {
             co_await binding.pool_->join();
         } catch (...) {
@@ -234,7 +238,7 @@ task<void> http_client_registry::join() {
 }
 
 http_client_ref http_client_registry::get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop) const {
-    return aliases_.size() == 1 ? get(aliases_.begin()->first, scope, std::move(host_stop)) : get(scope, std::move(host_stop));
+    return aliases_.size() == 1 ? get(aliases_.front().alias_, scope, std::move(host_stop)) : get(scope, std::move(host_stop));
 }
 
 http_client_ref http_client_registry::get(::ruvia::operation_scope& scope, stop_token host_stop) const {
@@ -245,12 +249,12 @@ http_client_ref http_client_registry::get(std::string_view alias, ::ruvia::opera
     if (closing_) {
         throw http_client_error(make_error_code(http_client_errc::closing), "http client registry is closing", std::nullopt, nullptr, false);
     }
-    const auto found = aliases_.find(alias);
-    if (found == aliases_.end()) {
+    const auto found = std::ranges::lower_bound(aliases_, alias, std::less<>{}, &alias_binding::alias_);
+    if (found == aliases_.end() || found->alias_ != alias) {
         throw http_client_error(make_error_code(http_client_errc::not_configured), "named HTTP client is not configured", std::nullopt, nullptr, false);
     }
-    http_client_ref result(*found->second.pool_, scope);
-    result.pool_owner_ = found->second.pool_;
+    http_client_ref result(*found->pool_, scope);
+    result.pool_owner_ = found->pool_;
     result.registry_ = this;
     result.host_stop_token_ = std::move(host_stop);
     return result;
@@ -263,7 +267,7 @@ std::shared_ptr<http_client_pool> http_client_registry::find_origin(http_scheme 
     const alias_binding* found = nullptr;
     // Aliases sharing one origin retain registration precedence, independent
     // of lexical lookup order or a replacement pool's storage position.
-    for (const auto& [alias, binding] : aliases_) {
+    for (const auto& binding : aliases_) {
         const auto& pool = binding.pool_;
         if ((found == nullptr || binding.order_ < found->order_) && pool->scheme() == scheme &&
             http_authorities_equal(pool->config().authority_, authority, scheme == http_scheme::https ? 443 : 80)) {

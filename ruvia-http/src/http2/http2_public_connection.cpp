@@ -22,7 +22,6 @@
 #include "http2/http2_websocket_handshake.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "request/http_request_access.h"
-#include "websocket/websocket_extended_connect_fields.h"
 #include "websocket/websocket_server_negotiation.h"
 namespace ruvia {
 

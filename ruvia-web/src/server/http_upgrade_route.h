@@ -89,31 +89,12 @@ template <typename stream_type>
 template <typename stream_type>
 task<std::error_code> write_websocket_handshake(stream_type& stream,
     const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
-    static constexpr std::size_t inline_head_capacity = 512;
-    std::array<char, inline_head_capacity> inline_head;
-    std::string overflow_head;
-    std::size_t inline_size = 0;
-    bool using_overflow = false;
+    http_response_head_buffer head;
     handshake.for_each_response_part([&](std::string_view part) {
-        if (part.empty()) {
-            return;
-        }
-        if (!using_overflow) {
-            if (part.size() <= inline_head.size() - inline_size) {
-                std::char_traits<char>::copy(inline_head.data() + inline_size, part.data(), part.size());
-                inline_size += part.size();
-                return;
-            }
-            overflow_head.reserve((std::max)(inline_size + part.size(), inline_head.size() * 2));
-            overflow_head.append(inline_head.data(), inline_size);
-            using_overflow = true;
-        }
-        overflow_head.append(part);
+        head.append(part);
     });
-    const auto head_view = using_overflow ? std::string_view(overflow_head)
-                                          : std::string_view(inline_head.data(), inline_size);
     co_return co_await write_http1_upgrade_response_head(
-        stream, expectations, http_status::switching_protocols, head_view, scanner_entry);
+        stream, expectations, http_status::switching_protocols, head.view(), scanner_entry);
 }
 
 }  // namespace ruvia::detail

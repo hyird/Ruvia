@@ -355,7 +355,7 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 selected = (*identities.select_certificate_)(input);
             }
             if (selected) {
-                if (const auto found = snapshot->find(*selected); found != snapshot->end() && found->second->present(*ssl)) {
+                if (const auto* cert = snapshot->find(*selected); cert != nullptr && cert->present(*ssl)) {
                     return true;
                 }
             }

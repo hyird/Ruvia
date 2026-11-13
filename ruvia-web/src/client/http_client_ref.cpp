@@ -18,6 +18,7 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "context/context_services.h"
+#include "http/inline_http_header_views.h"
 #include "integration/operation_lane_lease.h"
 
 namespace ruvia {
@@ -775,29 +776,14 @@ task<http_client_tunnel_result> http_client_ref::dispatch_udp(const http_client_
             throw std::invalid_argument("CONNECT-UDP Capsule-Protocol is driver-owned");
         }
     }
-    static constexpr std::size_t inline_field_capacity = 16;
-    const std::size_t total_fields = head.headers_.size() + 1U;
-    std::array<http_header_view, inline_field_capacity> inline_fields{};
-    std::vector<http_header_view> heap_fields;
-    std::span<const http_header_view> fields{};
-    if (total_fields <= inline_fields.size()) {
-        std::size_t index = 0;
-        for (const auto& field : head.headers_) {
-            inline_fields[index++] = field;
-        }
-        inline_fields[index++] = http_header_view{"Capsule-Protocol", "?1"};
-        fields = std::span<const http_header_view>(inline_fields.data(), total_fields);
-    } else {
-        heap_fields.reserve(total_fields);
-        for (const auto& field : head.headers_) {
-            heap_fields.push_back(field);
-        }
-        heap_fields.emplace_back("Capsule-Protocol", "?1");
-        fields = heap_fields;
+    detail::inline_http_header_views<16> fields(head.headers_.size() + 1U);
+    for (const auto& field : head.headers_) {
+        fields.push_back(field);
     }
+    fields.push_back(http_header_view{"Capsule-Protocol", "?1"});
     // The dispatch owns fields before temporary preparation storage dies.
     const std::string_view authority = request_options.authority_ ? std::string_view(*request_options.authority_) : std::string_view(pool_->config().authority_);
-    return dispatch_connect({.authority_ = authority, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields}, config, request_options, informational);
+    return dispatch_connect({.authority_ = authority, .protocol_ = "connect-udp", .target_ = head.target_, .headers_ = fields.view()}, config, request_options, informational);
 }
 
 task<http_client_tunnel_result> http_client_ref::dispatch_connect(const http_client_tunnel_request_view& head, http_client_tunnel_config config, const http_client_request_options& request_options,

@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <list>
+#include <deque>
 #include <optional>
 
 #include "ruvia/core/worker_ref.h"
@@ -35,7 +35,7 @@ private:
     const worker_ref& worker_;
     http_client_advertisement_config config_;
     http_client_advertisement_memory* memory_{};
-    std::list<http_client_advertisement> pending_;
+    std::deque<http_client_advertisement> pending_;
     std::size_t dropped_{};
 };
 }  // namespace ruvia::detail
