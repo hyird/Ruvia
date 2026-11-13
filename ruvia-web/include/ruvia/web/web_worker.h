@@ -49,20 +49,15 @@ public:
     }
 
     // The callable owns its inputs and must not borrow worker state. Completion
-    // resumes here; worker shutdown and timeout end the wait, not the callable.
+    // resumes here; worker shutdown and options.timeout_ end the wait, not the callable.
     // Rejection and callable exceptions are retained in blocking_result; inspect
     // status() or use std::move(result).take_value() to throw. The worker stop token
-    // is bound automatically. With application::blocking_pool(nullptr) the
+    // is bound automatically and combined with options.stop_token_. With application::blocking_pool(nullptr) the
     // result reports blocking_status::unavailable.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
-        return capabilities_.run_blocking(std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return capabilities_.run_blocking(timeout, std::move(callable));
+        callable_type callable, operation_options options = {}) const {
+        return capabilities_.run_blocking(std::move(callable), std::move(options));
     }
 
 #ifdef RUVIA_ENABLE_DATABASE

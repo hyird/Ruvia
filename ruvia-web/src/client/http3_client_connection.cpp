@@ -83,7 +83,7 @@ void require_accepted(http3_status status) {
     }
 }
 [[nodiscard]] bool can_fallback_from_http3(std::exception_ptr failure, bool fallback, stop_token stop,
-    const http_client_response_state& response, const operation_timeout& timeout, bool retired) noexcept {
+    const http_client_response_state& response, const operation_deadline& timeout, bool retired) noexcept {
     if (!fallback || retired || stop.stop_requested() || response.abandoned_ || timeout.expired()) {
         return false;
     }
@@ -196,14 +196,14 @@ public:
         session& owner_;
     };
     struct stream final {
-        stream(session& owner, http_client_response_state& response, const operation_timeout& timeout)
+        stream(session& owner, http_client_response_state& response, const operation_deadline& timeout)
             : owner_(owner),
               response_(response),
               timeout_(timeout),
               signal_(owner.pool_.worker()) {}
         session& owner_;
         http_client_response_state& response_;
-        operation_timeout timeout_;
+        operation_deadline timeout_;
         worker_signal signal_;
         std::int64_t id_{-1};
         std::uint64_t cancellation_id_{};
@@ -361,7 +361,7 @@ public:
             return;
         }
         try {
-            (void)pool_.worker().schedule_timer(idle_timer_, worker_timer_deadline_after(pool_.config().idle_timeout_->value()),
+            (void)pool_.worker().schedule_timer(idle_timer_, deadline_after(pool_.config().idle_timeout_->value()),
                 [this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired && streams_.empty()) {
                         close();
@@ -433,7 +433,7 @@ public:
         // An accepted tunnel is bounded by its own idle timeout, not read_timeout_.
         if (!item.websocket_ && item.response_.tunnel_ && item.response_.tunnel_->accepted_ &&
             item.response_.tunnel_->config_.idle_timeout_ && !item.done_) {
-            item.timer_.read_deadline_ = worker_timer_deadline_after(item.response_.tunnel_->config_.idle_timeout_->value());
+            item.timer_.read_deadline_ = deadline_after(item.response_.tunnel_->config_.idle_timeout_->value());
             schedule(item);
             return;
         }
@@ -446,7 +446,7 @@ public:
             return;
         }
         if (!item.response_.informational_active_ && item.response_.effective_read_timeout_ && !item.done_ && !item.response_.http3_data_credit_) {
-            item.timer_.read_deadline_ = worker_timer_deadline_after(item.response_.effective_read_timeout_->value());
+            item.timer_.read_deadline_ = deadline_after(item.response_.effective_read_timeout_->value());
             schedule(item);
         }
     }
@@ -616,7 +616,7 @@ public:
             accept_extended_connect_websocket_response(*item.websocket_,
                 semantic_status, response.headers_, stream_ended,
                 "invalid HTTP/3 WebSocket handshake response");
-            item.timeout_ = operation_timeout(std::nullopt);
+            item.timeout_ = operation_deadline();
         }
         const auto origin_target = item.origin_ ? std::optional(item.target_) : std::nullopt;
         publish_http_client_final_head(response, pool_.policy(),
@@ -628,7 +628,7 @@ public:
         if (response.tunnel_ && response.tunnel_->accepted_) {
             const auto settings = quic_->http3().peer_settings();
             response.http3_native_datagrams_ = settings && settings->h3_datagram_;
-            item.timeout_ = operation_timeout(std::nullopt);
+            item.timeout_ = operation_deadline();
             item.timer_.read_deadline_.reset();
         }
         read_progress(item);
@@ -745,7 +745,7 @@ public:
         response.http3_datagram_bytes_ += value.payload_.size();
         response.data_signal_.notify();
     }
-    task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_timeout timeout) {
+    task<void> deliver_informational(std::int64_t id, http_client_response_state* response, operation_deadline timeout) {
         struct callback_guard final {
             session& owner_;
             http_client_response_state* response_;
@@ -988,8 +988,8 @@ public:
         }
     }
     task<void> connect(stream& item, std::string_view host, bool allow_early,
-        const operation_timeout& acquire_timeout, stop_token stop) {
-        const auto slot = co_await connect_slots_.acquire(acquire_timeout, stop);
+        const operation_deadline& acquire_timeout, stop_token stop) {
+        const auto slot = co_await connect_slots_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = std::move(stop)});
         if (!slot.has_value()) {
             throw_http_client_wait_failure(slot.status(), "HTTP/3 connection admission");
         }
@@ -1064,7 +1064,7 @@ public:
         } connecting{connecting_stream_};
         item.error_.reset();
         worker_timer_registration timer;
-        const auto bound = item.timeout_.constrained_by(acquire_timeout.remaining()).constrained_by(item.response_.effective_connect_timeout_);
+        const auto bound = item.timeout_.constrained_by(acquire_timeout.timeout()).constrained_by(item.response_.effective_connect_timeout_);
         if (const auto deadline = bound.deadline()) {
             (void)pool_.worker().schedule_timer(timer, *deadline, [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
@@ -1150,7 +1150,7 @@ public:
             .destination_connection_id_ = random_cid(),
             .initial_path_ = path(local_, remote_),
             .initial_timestamp_ = http3_quic_now(),
-            .handshake_timeout_ = bound.remaining() ? http3_quic_duration(*bound.remaining()) : UINT64_MAX,
+            .handshake_timeout_ = bound.remaining() ? http3_quic_duration(timeout_duration(*bound.remaining())) : UINT64_MAX,
             .idle_timeout_ = 0,
             .initial_max_data_ = receive_window,
             .initial_max_stream_data_ = 64 * 1024,
@@ -1218,7 +1218,7 @@ public:
         attempt.completed_ = true;
     }
     task<void> flush_stream(stream& item) {
-        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(worker_timer_deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
+        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
         schedule(item);
         writer_.notify();
         while ((!item.request_end_flushed_ && !quic_->http3().output_flushed(item.id_)) || packet_pending_) {
@@ -1249,7 +1249,7 @@ public:
         const auto stopped = [&item]() noexcept {
             return item.retry_ || item.write_stopped_ || (item.response_.output() && item.response_.output()->stopped_);
         };
-        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(worker_timer_deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
+        item.timer_.write_deadline_ = item.response_.effective_write_timeout_ ? std::optional(deadline_after(item.response_.effective_write_timeout_->value())) : std::nullopt;
         schedule(item);
         while (!bytes.empty()) {
             check(item);
@@ -1264,7 +1264,7 @@ public:
             bytes.remove_prefix(sent.accepted_bytes_);
             pool_.wire_counters().sent_ += sent.accepted_bytes_;
             if (sent.accepted_bytes_ != 0 && item.response_.effective_write_timeout_) {
-                item.timer_.write_deadline_ = worker_timer_deadline_after(item.response_.effective_write_timeout_->value());
+                item.timer_.write_deadline_ = deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
             // Until the final head, and through an accepted tunnel, sending
@@ -1284,7 +1284,7 @@ public:
             co_await item.signal_.wait();
             const auto remaining = quic_->http3().pending_output_bytes(item.id_);
             if (remaining < outstanding && item.response_.effective_write_timeout_) {
-                item.timer_.write_deadline_ = worker_timer_deadline_after(item.response_.effective_write_timeout_->value());
+                item.timer_.write_deadline_ = deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
             outstanding = remaining;
@@ -1374,7 +1374,7 @@ public:
         return false;
     }
     [[nodiscard]] task<void> run_candidate(std::size_t index, std::string_view host,
-        operation_timeout bound, http_client_response_state& response) {
+        operation_deadline bound, http_client_response_state& response) {
         auto& entry = candidates_[index];
         auto& connection = *entry.connection_;
         session::stream item(connection, response, bound);
@@ -1404,7 +1404,7 @@ public:
     }
     void arm_next() {
         delay_.cancel();
-        (void)pool_.worker().schedule_timer(delay_, worker_timer_deadline_after(client_connection_attempt_delay),
+        (void)pool_.worker().schedule_timer(delay_, deadline_after(client_connection_attempt_delay),
             [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     launch_ready_ = true;
@@ -1434,12 +1434,12 @@ public:
 };
 
 task<void> http3_client_connection::select_endpoint(bool allow_early,
-    const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+    const operation_deadline& timeout, const operation_deadline& acquire_timeout,
     stop_token stop, http_client_response_state& response) {
     auto& race = *race_;
     const std::string_view host = route_.host_;
     const auto port = route_.port_;
-    const auto acquired = co_await race.selection_.acquire(acquire_timeout, stop);
+    const auto acquired = co_await race.selection_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = stop});
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/3 endpoint selection");
     }
@@ -1479,7 +1479,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
     http_client_response_cancellation cancellation(
         race.pool_.cancellation_target(), race.cancellation_id_, response);
     cancellation.arm(stop);
-    const auto bound = timeout.constrained_by(acquire_timeout.remaining())
+    const auto bound = timeout.constrained_by(acquire_timeout.timeout())
                            .constrained_by(response.effective_connect_timeout_);
     worker_timer_registration deadline_timer;
     if (const auto deadline = bound.deadline()) {
@@ -1575,7 +1575,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
                     auto candidate_bound = bound;
                     if (const auto left = bound.remaining()) {
                         const auto divisor = static_cast<std::int64_t>((std::min)(waves, static_cast<std::size_t>((std::numeric_limits<std::int64_t>::max)())));
-                        const auto slice = (std::max)(client_connection_attempt_delay, left->value() / (std::max)(divisor, std::int64_t{1}));
+                        const auto slice = (std::max)(client_connection_attempt_delay, *left / (std::max)(divisor, std::int64_t{1}));
                         candidate_bound = bound.constrained_by(slice);
                     }
                     entry.running_ = true;
@@ -1824,7 +1824,7 @@ void http3_client_connection::release_data(http_client_response_state& response)
 }
 
 task<bool> http3_client_connection::execute(const http_client_request_storage& request, bool fallback,
-    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
     http_client_response_state& response) {
     const std::string_view host = route_.host_;
     if (request.is_upgrade()) {
@@ -2071,7 +2071,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
 }
 
 task<void> http3_client_connection::migrate(std::string_view local_address, std::uint16_t port,
-    const operation_timeout& timeout, stop_token stop) {
+    const operation_deadline& timeout, stop_token stop) {
     if (stop.stop_requested()) {
         throw http_client_error(error_code::cancelled, "HTTP/3 migration cancelled");
     }

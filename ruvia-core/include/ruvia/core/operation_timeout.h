@@ -1,176 +1,93 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <optional>
 #include <stdexcept>
-#include <type_traits>
-#include <utility>
 #include <variant>
 
-#include "ruvia/core/operation_options.h"
-#include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/duration.h"
 
 namespace ruvia {
 
-inline void validate_operation_options(const operation_options& options) {
-    if (options.timeout_.has_value() && options.timeout_->value().count() <= 0) {
-        throw std::invalid_argument("operation timeout must be greater than zero");
-    }
-}
-
-// Unspecified fields inherit. A supplied token replaces the user cancellation
-// state; callers needing accumulation own a stop_group until their work joins.
-// Timeout remains the tighter bound.
-[[nodiscard]] inline operation_options override_operation_options(
-    const operation_options& base, operation_options overrides) {
-    operation_options merged = base;
-    if (overrides.timeout_.has_value() &&
-        (!merged.timeout_.has_value() || *overrides.timeout_ < *merged.timeout_)) {
-        merged.timeout_ = overrides.timeout_;
-    }
-    if (overrides.stop_token_.has_state()) {
-        merged.stop_token_ = std::move(overrides.stop_token_);
-    }
-    return merged;
-}
-
-// Absolute timeout shared across the asynchronous phases of one operation:
-// relative to its construction, or an explicit steady-clock deadline. Every
-// timed core wait accepts it as its deadline overload.
+// The bound of one operation: either a positive relative limit that starts
+// when the operation starts, or an absolute steady-clock deadline, which may
+// already have passed. A value is valid by construction: the relative
+// constructors throw std::invalid_argument for a non-positive limit, and
+// try_create() is the tolerant form for values that may legitimately be
+// non-positive (configuration, remaining budgets).
 class operation_timeout final {
 public:
     using clock_type = std::chrono::steady_clock;
 
-    explicit operation_timeout(std::optional<timeout_duration> timeout) noexcept {
-        if (timeout.has_value()) {
-            deadline_ = worker_timer_deadline_after(timeout->value());
-        }
-    }
+    // Implicit so `{.timeout_ = 5s}` stays writable. Rounds up to whole
+    // milliseconds and saturates, so a positive input is at least 1 ms.
+    template <std::integral rep_type, typename period_type>
+    operation_timeout(std::chrono::duration<rep_type, period_type> value)
+        : value_(require_positive(saturating_duration_cast<std::chrono::milliseconds>(value), value.count() > 0)) {}
+
+    operation_timeout(timeout_duration value)
+        : value_(require_positive(value.value(), value.value().count() > 0)) {}
 
     explicit operation_timeout(clock_type::time_point deadline) noexcept
-        : deadline_(deadline) {}
+        : value_(deadline) {}
 
+    template <std::integral rep_type, typename period_type>
+    [[nodiscard]] static std::optional<operation_timeout> try_create(
+        std::chrono::duration<rep_type, period_type> value) noexcept {
+        if (value.count() <= 0) {
+            return std::nullopt;
+        }
+        return operation_timeout(relative_tag{}, saturating_duration_cast<std::chrono::milliseconds>(value));
+    }
+
+    [[nodiscard]] static std::optional<operation_timeout> try_create(timeout_duration value) noexcept {
+        if (value.value().count() <= 0) {
+            return std::nullopt;
+        }
+        return operation_timeout(relative_tag{}, value.value());
+    }
+
+    // The relative limit; empty for an absolute deadline.
+    [[nodiscard]] std::optional<std::chrono::milliseconds> duration() const noexcept {
+        if (const auto* relative = std::get_if<std::chrono::milliseconds>(&value_)) {
+            return *relative;
+        }
+        return std::nullopt;
+    }
+
+    // The absolute deadline; empty for a relative limit.
     [[nodiscard]] std::optional<clock_type::time_point> deadline() const noexcept {
-        return deadline_;
+        if (const auto* absolute = std::get_if<clock_type::time_point>(&value_)) {
+            return *absolute;
+        }
+        return std::nullopt;
     }
 
-    [[nodiscard]] std::optional<timeout_duration> remaining() const noexcept {
-        if (!deadline_.has_value()) {
-            return std::nullopt;
+    // Resolves the bound for an operation that starts at `start`.
+    [[nodiscard]] clock_type::time_point deadline_from(clock_type::time_point start) const noexcept {
+        if (const auto* relative = std::get_if<std::chrono::milliseconds>(&value_)) {
+            return saturating_deadline(start, *relative);
         }
-        const auto now = clock_type::now();
-        if (now >= *deadline_) {
-            return timeout_duration{};
-        }
-        return timeout_duration(worker_timer_ceil_milliseconds(*deadline_ - now));
+        return std::get<clock_type::time_point>(value_);
     }
 
-    [[nodiscard]] bool expired() const noexcept {
-        return deadline_.has_value() && clock_type::now() >= *deadline_;
-    }
-
-    [[nodiscard]] operation_timeout constrained_by(
-        std::optional<timeout_duration> timeout) const noexcept {
-        operation_timeout constrained(timeout);
-        if (!deadline_.has_value()) {
-            return constrained;
-        }
-        if (!constrained.deadline_.has_value() || *deadline_ < *constrained.deadline_) {
-            constrained.deadline_ = deadline_;
-        }
-        return constrained;
-    }
+    friend bool operator==(const operation_timeout&, const operation_timeout&) noexcept = default;
 
 private:
-    std::optional<clock_type::time_point> deadline_;
-};
+    struct relative_tag final {};
 
-// One allocation-free deadline lifecycle. A deadline is either absent, armed
-// with its cancellation kind and exact time point, or expired with that same
-// kind retained until the awaiting operation consumes the outcome.
-template <typename kind_type = std::monostate>
-    requires(std::is_enum_v<kind_type> || std::is_same_v<kind_type, std::monostate>)
-class operation_deadline final {
-public:
-    using clock_type = std::chrono::steady_clock;
+    operation_timeout(relative_tag, std::chrono::milliseconds value) noexcept
+        : value_(value) {}
 
-    void arm(clock_type::time_point deadline_value, kind_type kind) noexcept {
-        state_.template emplace<active>(deadline_value, std::move(kind));
-    }
-
-    void arm(clock_type::time_point deadline_value) noexcept
-        requires std::is_same_v<kind_type, std::monostate>
-    {
-        arm(deadline_value, std::monostate{});
-    }
-
-    void arm(std::optional<timeout_duration> timeout) noexcept
-        requires std::is_same_v<kind_type, std::monostate>
-    {
-        if (timeout.has_value()) {
-            arm(worker_timer_deadline_after(timeout->value()), std::monostate{});
-        } else {
-            reset();
+    [[nodiscard]] static std::chrono::milliseconds require_positive(std::chrono::milliseconds value, bool positive) {
+        if (!positive) {
+            throw std::invalid_argument("operation timeout must be greater than zero");
         }
-    }
-    void reset() noexcept {
-        state_.template emplace<inactive>();
+        return value;
     }
 
-    [[nodiscard]] bool expired() const noexcept {
-        return std::holds_alternative<expired_state>(state_);
-    }
-
-    [[nodiscard]] const kind_type* kind() const& noexcept {
-        if (const auto* armed = std::get_if<active>(&state_)) {
-            return &armed->kind_;
-        }
-        if (const auto* expired_value = std::get_if<expired_state>(&state_)) {
-            return &expired_value->kind_;
-        }
-        return nullptr;
-    }
-    const kind_type* kind() const&& = delete;
-
-    [[nodiscard]] std::optional<kind_type> expire(clock_type::time_point now) noexcept {
-        const auto* armed = std::get_if<active>(&state_);
-        if (armed == nullptr || armed->deadline_ > now) {
-            return std::nullopt;
-        }
-        auto kind = armed->kind_;
-        state_.template emplace<expired_state>(kind);
-        return kind;
-    }
-
-    [[nodiscard]] bool clear() noexcept {
-        const bool was_expired = expired();
-        reset();
-        return was_expired;
-    }
-
-private:
-    struct inactive final {};
-
-    struct active final {
-        active(clock_type::time_point armed_deadline, kind_type armed_kind) noexcept
-            : deadline_(armed_deadline),
-              kind_(std::move(armed_kind)) {}
-
-        clock_type::time_point deadline_;
-        kind_type kind_;
-    };
-
-    struct expired_state final {
-        explicit expired_state(kind_type expired_kind) noexcept
-            : kind_(std::move(expired_kind)) {}
-
-        kind_type kind_;
-    };
-
-    using state_type = std::variant<inactive, active, expired_state>;
-
-    state_type state_;
+    std::variant<std::chrono::milliseconds, clock_type::time_point> value_;
 };
 
 }  // namespace ruvia

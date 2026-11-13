@@ -164,7 +164,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
 // the operation like its overall deadline does: libpq has no per-I/O timeout
 // to hand the wait back to.
 [[nodiscard]] db_driver_socket_wait<postgresql_driver> wait_for_postgresql(postgresql_pool& pool,
-    std::size_t index, db_socket_readiness wanted, const operation_timeout& deadline_value) {
+    std::size_t index, db_socket_readiness wanted, const operation_deadline& deadline_value) {
     if (deadline_value.expired()) {
         throw pool.timed_out();
     }
@@ -175,7 +175,7 @@ void materialize_borrowed_result(db_rows& output, PGresult& result_value, std::p
 
 // Called only after PQflush() reports pending output: waits for read or write
 // readiness until the output is sent.
-task<void> flush_output(postgresql_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<void> flush_output(postgresql_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     do {
         co_await wait_for_postgresql(
@@ -183,7 +183,7 @@ task<void> flush_output(postgresql_pool& pool, std::size_t index, const operatio
     } while (exchange_postgresql_io(connection, true));
 }
 
-task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<void> wait_until_result_ready(postgresql_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     auto* connection = pool.slot(index).connection_;
     while (PQisBusy(connection) != 0) {
         co_await wait_for_postgresql(pool, index, db_socket_readiness::read, deadline_value);
@@ -428,7 +428,7 @@ enum class postgresql_flight_end : std::uint8_t {
 // failed.
 template <typename result_type>
 task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     const postgresql_params encoded(params);
     auto* connection = pool.slot(index).connection_;
@@ -743,7 +743,7 @@ bool postgresql_pipeline_io::reusable(state_type& state, std::size_t index) noex
 
 template class db_pipeline_state<postgresql_pipeline_io>;
 
-task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const operation_deadline& deadline_value) {
     const auto& config = pool.config();
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
@@ -843,19 +843,19 @@ bool postgresql_driver::idle_connection_alive(connection_type& connection) noexc
 }
 
 task<db_rows> postgresql_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     return run_cached_statement<db_rows>(pool, index, sql, params, resource, deadline_value);
 }
 
 task<db_exec_result> postgresql_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     return run_cached_statement<db_exec_result>(pool, index, sql, params, resource, deadline_value);
 }
 
 // Retain the first libpq result so column metadata is available even for an
 // empty row set, without consuming or copying the first row.
 task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     if (send_stream_query(pool, index, sql, params)) {
         co_await flush_output(pool, index, deadline_value);
     }
@@ -877,7 +877,7 @@ task<db_stream_start> postgresql_driver::start_stream(pool_type& pool, std::size
 
 task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::size_t index, void*& pending_result,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-    std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     auto* connection = pool.slot(index).connection_;
     postgresql_result_owner result_value(static_cast<PGresult*>(std::exchange(pending_result, nullptr)));
     if (result_value.get() == nullptr) {
@@ -915,7 +915,7 @@ task<db_stream_step> postgresql_driver::read_stream_row(pool_type& pool, std::si
 // Abandoning a libpq single-row result still requires draining the whole
 // command. Closing the connection instead is bounded and keeps the worker
 // non-blocking.
-task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*& pending_result, const operation_timeout&) {
+task<void> postgresql_driver::close_stream(pool_type& pool, std::size_t index, void*& pending_result, const operation_deadline&) {
     discard_stream(std::exchange(pending_result, nullptr));
     pool.close_slot(index);
     co_return;

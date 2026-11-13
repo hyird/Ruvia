@@ -154,14 +154,14 @@ void client_tcp_transport::cancel_wait() noexcept {
     (void)stream_.next_layer().socket().cancel(ignored);
 }
 
-bool client_tcp_transport::arm(lane_deadline& lane, const operation_timeout& timeout) {
+bool client_tcp_transport::arm(lane_deadline& lane, const operation_deadline& timeout) {
     lane.timer_.cancel();
     const auto remaining = timeout.remaining();
     if (!remaining) {
         lane.deadline_.reset();
         return true;
     }
-    if (remaining->value().count() == 0) {
+    if (remaining->count() == 0) {
         lane.deadline_.reset();
         return false;
     }
@@ -185,7 +185,7 @@ client_transport_result client_tcp_transport::aborted() const noexcept {
         .abort_ = abort_reason_ == client_abort_reason::none ? client_abort_reason::timeout : abort_reason_};
 }
 
-client_transport_result client_tcp_transport::finish(lane_deadline& lane, const operation_timeout& timeout,
+client_transport_result client_tcp_transport::finish(lane_deadline& lane, const operation_deadline& timeout,
     const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept {
     if ((clear(lane) || timeout.expired()) && abort_reason_ == client_abort_reason::none) {
         abort_reason_ = client_abort_reason::timeout;
@@ -204,7 +204,7 @@ client_transport_result client_tcp_transport::finish(lane_deadline& lane, const 
     return {.bytes_ = bytes};
 }
 
-task<client_transport_result> client_tcp_transport::connect(const operation_timeout& timeout) {
+task<client_transport_result> client_tcp_transport::connect(const operation_deadline& timeout) {
     const auto connect_started = std::chrono::steady_clock::now();
     connect_duration_ = {};
     tls_duration_ = {};
@@ -324,7 +324,7 @@ std::string_view client_tcp_transport::alpn() noexcept {
     return tls_started_ ? tls_selected_alpn(*stream_.native_handle()) : std::string_view{};
 }
 
-task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_timeout& timeout) {
+task<client_transport_result> client_tcp_transport::read_some(std::span<char> bytes_value, const operation_deadline& timeout) {
     if (abort_reason_ != client_abort_reason::none || !arm(read_, timeout)) {
         co_return aborted();
     }
@@ -351,7 +351,7 @@ task<client_transport_result> client_tcp_transport::read_some(std::span<char> by
 }
 
 template <typename buffers_type>
-task<client_transport_result> client_tcp_transport::write_buffers(buffers_type buffers, const operation_timeout& timeout) {
+task<client_transport_result> client_tcp_transport::write_buffers(buffers_type buffers, const operation_deadline& timeout) {
     if (abort_reason_ != client_abort_reason::none) {
         co_return aborted();
     }
@@ -392,12 +392,12 @@ task<client_transport_result> client_tcp_transport::write_buffers(buffers_type b
     co_return result_value;
 }
 
-task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_timeout& timeout) {
+task<client_transport_result> client_tcp_transport::write(std::string_view bytes_value, const operation_deadline& timeout) {
     return write_buffers(asio::buffer(bytes_value), timeout);
 }
 
 task<client_transport_result> client_tcp_transport::write(
-    std::span<const asio::const_buffer> buffers, const operation_timeout& timeout) {
+    std::span<const asio::const_buffer> buffers, const operation_deadline& timeout) {
     return write_buffers(buffers, timeout);
 }
 

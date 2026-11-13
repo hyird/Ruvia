@@ -13,7 +13,7 @@
 #include <system_error>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -90,7 +90,7 @@ public:
     // the handler), then spawns the reader and writer. The previous
     // generation's tasks must have finished.
     [[nodiscard]] task<http2_client_session_start_result> start(
-        http2_connection_options options, const operation_timeout& timeout);
+        http2_connection_options options, const operation_deadline& timeout);
 
     // The live connection of the current generation; check usable() first.
     [[nodiscard]] ::ruvia::http2_connection& connection() noexcept;
@@ -354,7 +354,7 @@ public:
         std::uint64_t cancellation_id_{0};
         std::uint32_t stream_id_{0};
         // Borrowed from the request or push driver while registered.
-        const operation_timeout* timeout_{nullptr};
+        const operation_deadline* timeout_{nullptr};
         std::string_view request_target_;
         http_client_stream_timer timer_;
         bool complete_{false};
@@ -430,7 +430,7 @@ public:
     // A previous HTTP/2 generation that is draining or still unwinding is
     // waited for first, within `acquire_timeout`.
     [[nodiscard]] task<bool> ensure_connected(
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
         stop_token stop_token_value, http_client_response_state& response);
     // Terminal close of the current connection; a running HTTP/2 session
     // fails through its single transition so every stream is woken.
@@ -469,7 +469,7 @@ public:
     // client.) `acquire_timeout` bounds the first attempt's reconnect and
     // stream-capacity waits; a retry attempt gets its own acquisition bound.
     [[nodiscard]] task<bool> execute_http2(const http_client_request_storage& request,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
         http_client_response_state& state_value);
     // Registers a stream whose timeout_ is set and arms its deadline timer.
     void register_http2_stream(http2_stream& stream);
@@ -565,7 +565,7 @@ private:
     // The one wait for a previous HTTP/2 generation to retire: its session and
     // every stream that borrows its transport.
     [[nodiscard]] task<void> wait_for_http2_session_stop(
-        const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& response);
+        const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response);
 #endif
 
     http_client_pool& pool_;

@@ -14,8 +14,8 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/redis/redis_handle.h"
 
@@ -57,15 +57,15 @@ public:
     task<redis_value> execute_owned(redis_owned_command command,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<timeout_duration> reply_timeout = std::nullopt,
-        request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
+        request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     task<redis_value> execute_owned(std::pmr::vector<std::pmr::string> args,
         std::pmr::memory_resource* resource, operation_options options = {},
         std::optional<timeout_duration> reply_timeout = std::nullopt,
-        request_io_metrics* io_metrics = nullptr, std::optional<operation_timeout> deadline = std::nullopt);
+        request_io_metrics* io_metrics = nullptr, std::optional<operation_deadline> deadline = std::nullopt);
     // The caller keeps `args` alive until the operation completes. `deadline`
     // is copied, so repeated commands share the operation's absolute bound.
     task<redis_value> execute_borrowed(redis_command_args_view args, std::pmr::memory_resource* resource,
-        operation_options options, operation_timeout deadline);
+        operation_options options, operation_deadline deadline);
     task<std::pmr::vector<redis_value>> execute_pipeline(
         std::pmr::vector<redis_owned_command> commands, operation_options options,
         std::pmr::memory_resource* resource, bool wrap_transaction = false);
@@ -88,7 +88,7 @@ private:
     template <typename result_type, typename command_source_type>
     task<result_type> execute_commands(command_source_type source, operation_options options,
         std::optional<timeout_duration> reply_timeout, std::pmr::memory_resource* resource,
-        std::optional<operation_timeout> deadline, request_io_metrics* io_metrics = nullptr,
+        std::optional<operation_deadline> deadline, request_io_metrics* io_metrics = nullptr,
         bool wrap_transaction = false);
 
     const redis_config_storage& config_;

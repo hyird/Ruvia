@@ -209,8 +209,8 @@ TEST(Ruvia, independent_group_trusted_proxy_replacement_is_atomic_and_defaults_t
     EXPECT_THROW(trusted.trusted_proxies({}), std::logic_error);
     runtime.loops_[0].start(trusted.shutdown(runtime.loops_[0].handle())).get();
     runtime.loops_[0].start(direct.shutdown(runtime.loops_[0].handle())).get();
-    EXPECT_TRUE(runtime.loops_[0].accepting());
-    EXPECT_TRUE(runtime.loops_[1].accepting());
+    EXPECT_TRUE(runtime.loops_[0].handle().accepting());
+    EXPECT_TRUE(runtime.loops_[1].handle().accepting());
 }
 
 TEST(Ruvia, independent_group_stages_configuration_before_external_loops_are_driven) {
@@ -357,7 +357,7 @@ TEST(Ruvia, independent_group_accepts_member_worker_controls_and_coordinates_loo
     });
     ASSERT_EQ(finished.wait_for(5s), std::future_status::ready);
     finished.get();
-    EXPECT_TRUE(runtime.loops_[1].accepting());
+    EXPECT_TRUE(runtime.loops_[1].handle().accepting());
     EXPECT_EQ(retiring.stats().active_connections_, std::size_t{0});
     EXPECT_EQ(resumed_result.wait_for(0s), std::future_status::timeout);
     unrelated_stop.request_stop();
@@ -573,10 +573,10 @@ TEST(Ruvia, independent_group_cross_worker_add_preserves_caller_timers_and_cold_
     held_work held;
     std::promise<void> blocked;
     auto blocked_result = blocked.get_future();
-    ASSERT_TRUE(runtime.loops_[1].post([gate = held.gate_, &blocked] {
-                                     blocked.set_value();
-                                     gate->acquire();
-                                 })
+    ASSERT_TRUE(runtime.loops_[1].handle().post([gate = held.gate_, &blocked] {
+                                              blocked.set_value();
+                                              gate->acquire();
+                                          })
             .accepted());
     blocked_result.get();
     auto operation = runtime.loops_[0].start(std::move(addition));
@@ -649,8 +649,8 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     asio::error_code error;
     refused.connect(port.endpoint(), error);
     EXPECT_EQ(error, asio::error::connection_refused);
-    EXPECT_TRUE(runtime.loops_[0].accepting());
-    EXPECT_TRUE(runtime.loops_[1].accepting());
+    EXPECT_TRUE(runtime.loops_[0].handle().accepting());
+    EXPECT_TRUE(runtime.loops_[1].handle().accepting());
 }
 
 TEST(Ruvia, independent_group_cold_adoption_owns_socket_and_endpoint_before_execution) {
@@ -734,10 +734,10 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     held_work held;
     std::promise<void> blocked;
     auto blocked_result = blocked.get_future();
-    ASSERT_TRUE(runtime.loops_[1].post([gate = held.gate_, &blocked] {
-                                     blocked.set_value();
-                                     gate->acquire();
-                                 })
+    ASSERT_TRUE(runtime.loops_[1].handle().post([gate = held.gate_, &blocked] {
+                                              blocked.set_value();
+                                              gate->acquire();
+                                          })
             .accepted());
     blocked_result.get();
     auto operation = runtime.loops_[0].start(group.add_listener(runtime.loops_[0].handle(),
@@ -757,7 +757,7 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     EXPECT_ANY_THROW(std::move(operation).get());
     runtime.loops_[0].start(group.shutdown(runtime.loops_[0].handle())).get();
     EXPECT_EQ(group.stats().active_connections_, 0U);
-    EXPECT_TRUE(runtime.loops_[0].accepting());
+    EXPECT_TRUE(runtime.loops_[0].handle().accepting());
     asio::ip::tcp::socket refused(ports);
     asio::error_code error;
     refused.connect(port.endpoint(), error);

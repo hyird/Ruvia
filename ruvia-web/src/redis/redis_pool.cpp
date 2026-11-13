@@ -123,9 +123,9 @@ void redis_pool::slot_policy::throw_acquire_failure(const redis_pool&, worker_wa
         case worker_wait_status::cancelled:
             throw redis_error(redis_error::code_type::cancelled, "redis operation cancelled");
         case worker_wait_status::closed:
+        case worker_wait_status::worker_stopping:
             throw redis_error(redis_error::code_type::closing, "redis pool is closing");
         case worker_wait_status::value:
-        case worker_wait_status::worker_stopping:
             break;
     }
     std::terminate();
@@ -150,7 +150,7 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
 task<redis_value> redis_pool::execute_owned(redis_owned_command command,
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
-    std::optional<operation_timeout> deadline) {
+    std::optional<operation_deadline> deadline) {
     return execute_commands<redis_value>(
         std::move(command), std::move(options), reply_timeout, resource, deadline, io_metrics);
 }
@@ -158,13 +158,13 @@ task<redis_value> redis_pool::execute_owned(redis_owned_command command,
 task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
     std::pmr::memory_resource* resource, operation_options options,
     std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
-    std::optional<operation_timeout> deadline) {
+    std::optional<operation_deadline> deadline) {
     return execute_commands<redis_value>(
         std::move(args), std::move(options), reply_timeout, resource, deadline, io_metrics);
 }
 
 task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
-    std::pmr::memory_resource* resource, operation_options options, operation_timeout deadline) {
+    std::pmr::memory_resource* resource, operation_options options, operation_deadline deadline) {
     return execute_commands<redis_value>(args, std::move(options), std::nullopt, resource, deadline);
 }
 
@@ -174,7 +174,7 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
     std::optional<timeout_duration> reply_timeout, std::pmr::memory_resource* resource,
-    std::optional<operation_timeout> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
+    std::optional<operation_deadline> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
     const auto reply_count = [&]() -> std::size_t {
@@ -194,7 +194,7 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
 
     // Ordinary commands start their budget here; an ORM retry retains the
     // deadline established when its enclosing operation started.
-    const operation_timeout operation_timeout_value = deadline ? *deadline : operation_timeout(options.timeout_);
+    const operation_deadline operation_timeout_value = deadline ? *deadline : operation_deadline(options.timeout_);
     const auto slot = co_await slots_.acquire(operation_timeout_value, config_.acquire_timeout_, options.stop_token_);
     const slot_pool_type::lease_guard lease(slots_, slot);
     slot_pool_type::cancellation_guard cancellation(slots_, slot, options.stop_token_);

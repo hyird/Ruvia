@@ -90,8 +90,9 @@ private:
     // the error path, and a deadline so one wedged call cannot pin the request
     // forever.
     ruvia::task<ruvia::http_response> offload_or_shed(ruvia::context& c) {
-        auto result_value = co_await c.run_blocking(std::chrono::seconds(2),
-            [input = std::pmr::string("expensive input", ruvia::process_resource())] { return slow_checksum(input); });
+        auto result_value = co_await c.run_blocking(
+            [input = std::pmr::string("expensive input", ruvia::process_resource())] { return slow_checksum(input); },
+            {.timeout_ = std::chrono::seconds(2)});
         if (!result_value.completed()) {
             co_return c.error({.status_ = ruvia::http_status::service_unavailable,
                 .code_ = "busy",

@@ -148,14 +148,9 @@ public:
 
     // Bound to this request's cancellation, including client abandonment.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
-        return context_.run_blocking(std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return context_.run_blocking(timeout, std::move(callable));
+        callable_type callable, operation_options options = {}) const {
+        return context_.run_blocking(std::move(callable), std::move(options));
     }
 
     [[nodiscard]] std::pmr::memory_resource* arena() const noexcept {

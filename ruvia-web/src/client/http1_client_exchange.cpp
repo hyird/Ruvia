@@ -195,7 +195,7 @@ void publish_body_progress(http_client_response_state& state_value,
 
 }  // namespace
 
-task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout) {
+task<void> http1_client_exchange::write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout) {
     const auto written =
         co_await connection_.transport_.write(parts, timeout.constrained_by(response_->effective_write_timeout_));
     if (!written.ok()) {
@@ -209,7 +209,7 @@ void http1_client_exchange::restart_inactivity() noexcept {
         return;
     }
     try {
-        (void)pool_.worker().schedule_timer(inactivity_timer_, worker_timer_deadline_after(inactivity_bound_->value()),
+        (void)pool_.worker().schedule_timer(inactivity_timer_, deadline_after(inactivity_bound_->value()),
             [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     connection_.cancel(generation, client_abort_reason::timeout);
@@ -227,7 +227,7 @@ void http1_client_exchange::stop_inactivity() noexcept {
 }
 
 task<client_transport_result> http1_client_exchange::read_append(
-    http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout, bool read_inactivity_bound) {
+    http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout, bool read_inactivity_bound) {
     auto read_space = target.prepare_spare();
     if (read_space.empty()) {
         read_space = target.prepare(max_bytes);
@@ -253,7 +253,7 @@ task<client_transport_result> http1_client_exchange::read_append(
 }
 
 task<void> http1_client_exchange::run(
-    const http_client_request_storage& request, const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    const http_client_request_storage& request, const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     if (!request.is_upgrade() && !request.tunnel_protocol().empty() && !request.udp_tunnel() && request.websocket() == nullptr) {
         throw http_client_error(http_client_error::code_type::protocol_unavailable, "Extended CONNECT requires HTTP/2");
     }
@@ -378,7 +378,7 @@ task<void> http1_client_exchange::run(
     connection_.throw_if_aborted();
 }
 
-task<void> http1_client_exchange::receive(const http_client_request_storage& request, const operation_timeout& timeout,
+task<void> http1_client_exchange::receive(const http_client_request_storage& request, const operation_deadline& timeout,
     http_client_response_state& state_value, http1_client_response_parser& parser) {
     auto& read_buffer = connection_.read_buffer_;
     // The parsed head is move-constructible only, so it is emplaced once.
@@ -467,7 +467,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     if (tunnel_opened) {
         // The HTTP request deadline ends at a WebSocket's accepted Upgrade.
         // Its subsequent operations carry their own deadlines.
-        const auto tunnel_timeout = request.websocket() ? operation_timeout(std::nullopt) : timeout;
+        const auto tunnel_timeout = request.websocket() ? operation_deadline() : timeout;
         co_await run_tunnel(state_value, tunnel_timeout, request.websocket() != nullptr);
         co_return;
     }
@@ -556,7 +556,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
 }
 
 task<void> http1_client_exchange::wait_for_body_space(
-    http_client_response_state& state_value, const operation_timeout& timeout) {
+    http_client_response_state& state_value, const operation_deadline& timeout) {
     while (!state_value.collect_all_ && (!state_value.pending_.empty() || !state_value.buffered_.empty())) {
         connection_.throw_if_aborted();
         const auto deadline = timeout.deadline();
@@ -593,7 +593,7 @@ void http1_client_exchange::expire_tunnel() noexcept {
 }
 
 task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& output,
-    const operation_timeout& timeout, tls_tunnel_output* tls, std::exception_ptr& failure) {
+    const operation_deadline& timeout, tls_tunnel_output* tls, std::exception_ptr& failure) {
     const bool secure = connection_.transport_.secure();
     auto& stream = connection_.transport_.stream();
     try {
@@ -650,7 +650,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
     }
 }
 
-task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout,
+task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout,
     bool websocket) {
     auto& connection = connection_;
     auto& output = state_value.tunnel_->output_;
@@ -751,7 +751,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
 }
 
 task<void> http1_client_exchange::write_immediate(std::span<const asio::const_buffer> parts,
-    const operation_timeout& timeout, http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure) {
+    const operation_deadline& timeout, http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure) {
     try {
         co_await write(parts, timeout);
         restart_inactivity();
@@ -771,12 +771,12 @@ task<void> http1_client_exchange::write_immediate(std::span<const asio::const_bu
     }
 }
 
-task<void> http1_client_exchange::write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
+task<void> http1_client_exchange::write_upload(http_client_response_state& state_value, const operation_deadline& timeout,
     http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure) {
     auto& upload = *state_value.upload_;
     worker_timer_registration continue_timer;
     if (!upload.content_released_) {
-        (void)pool_.worker().schedule_timer(continue_timer, worker_timer_deadline_after(upload.config_.continue_timeout_.value()),
+        (void)pool_.worker().schedule_timer(continue_timer, deadline_after(upload.config_.continue_timeout_.value()),
             [&upload, &parser](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && !upload.output_.stopped_) {
                     parser.release_request_content();

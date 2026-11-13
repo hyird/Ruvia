@@ -460,7 +460,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
         EXPECT_FALSE(observed.expired());
         cold.reset();
         ruvia::worker_timer_registration deadline;
-        (void)worker.schedule_timer(deadline, ruvia::worker_timer_deadline_after(std::chrono::seconds(2)),
+        (void)worker.schedule_timer(deadline, ruvia::deadline_after(std::chrono::seconds(2)),
             [&](ruvia::worker_timer_outcome outcome) noexcept {
                 if (outcome == ruvia::worker_timer_outcome::expired) {
                     expired = true;

@@ -913,11 +913,11 @@ public:
             throw std::invalid_argument("HTTP server group requires at least one event loop");
         }
         for (std::size_t index = 0; index != loops.size(); ++index) {
-            if (!loops[index].valid() || !loops[index].accepting()) {
+            if (!loops[index].valid() || !loops[index].handle().accepting()) {
                 throw std::invalid_argument("HTTP server group requires valid event loops");
             }
             for (std::size_t previous = 0; previous != index; ++previous) {
-                if (loops[index].id() == loops[previous].id()) {
+                if (loops[index].handle().id() == loops[previous].handle().id()) {
                     throw std::invalid_argument("HTTP server group requires distinct event loops");
                 }
             }
@@ -1540,7 +1540,7 @@ private:
             throw std::logic_error("HTTP server group is closing");
         }
         for (const auto& worker : workers_) {
-            if (!worker->loop_.valid() || !worker->loop_.accepting()) {
+            if (!worker->loop_.valid() || !worker->loop_.handle().accepting()) {
                 throw std::logic_error("HTTP server group worker is stopping");
             }
         }

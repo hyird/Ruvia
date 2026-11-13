@@ -134,7 +134,7 @@ task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_scr
     redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options,
     std::pmr::memory_resource* resource) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
-    const operation_timeout deadline(options.timeout_);
+    const operation_deadline deadline(options.timeout_);
     {
         auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);
         if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {

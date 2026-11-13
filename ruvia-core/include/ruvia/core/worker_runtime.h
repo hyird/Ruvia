@@ -21,6 +21,7 @@ enum class worker_runtime_state : std::uint8_t {
 };
 
 class blocking_pool;
+class event_loop;
 class worker_group;
 class worker_runtime_context;
 
@@ -152,6 +153,14 @@ public:
     asio::io_context& io_context() && = delete;
     [[nodiscard]] const worker_handle& handle() const& noexcept;
     const worker_handle& handle() const&& = delete;
+    // The event loop over this runtime's worker, created on first use, for
+    // try_start()/start(), on_stop(), defer_cleanup() and report_failure()
+    // (which fails this runtime). Once a loop exists, the runtime's stop
+    // admission waits for the loop's root tasks, stop callbacks, and cleanup
+    // to drain before stop_admission_ (or the default finalize) runs. The loop
+    // borrows this runtime: no copy of it may outlive the runtime.
+    [[nodiscard]] event_loop loop() &;
+    event_loop loop() && = delete;
 
 private:
     friend class worker_group;
@@ -161,6 +170,9 @@ private:
     [[nodiscard]] std::exception_ptr recorded_failure() const noexcept;
     void bind_group(worker_group& group);
     void unbind_group(worker_group& group) noexcept;
+    // Owner thread: the loop's retirement gate has drained; continue the stop
+    // admission the gate deferred.
+    void finish_loop_stop_admission() noexcept;
 
     struct impl_deleter_type final {
         void operator()(impl_type* value) const noexcept;

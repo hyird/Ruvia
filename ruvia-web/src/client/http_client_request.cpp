@@ -507,17 +507,16 @@ task<http_client_response> http_client_request::send() {
 }
 
 task<http_client_response> http_client_request::send_owned(http_client_request request) {
-    const auto started = std::chrono::steady_clock::now();
-    const auto total = request.client_.options_.timeout_.has_value() ? request.client_.options_.timeout_ : request.client_.pool_->config().request_timeout_;
+    // One deadline spans every redirect hop; each hop receives it as an absolute bound.
+    const operation_deadline total(request.client_.options_.timeout_.has_value()
+                                       ? request.client_.options_.timeout_
+                                       : std::optional<operation_timeout>(request.client_.pool_->config().request_timeout_));
     for (std::size_t redirects = 0;; ++redirects) {
         request.client_.registration_.require_active();
-        if (total) {
-            const auto elapsed = std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now() - started);
-            if (elapsed >= total->value()) {
-                throw http_client_error(http_client_error::code_type::timeout, "HTTP redirect deadline expired");
-            }
-            request.client_.options_.timeout_ = total->value() - elapsed;
+        if (total.expired()) {
+            throw http_client_error(http_client_error::code_type::timeout, "HTTP redirect deadline expired");
         }
+        request.client_.options_.timeout_ = total.timeout();
         std::optional<task<http_client_response>> dispatched;
         {
             const detail::inline_http_header_views<16> fields(
@@ -567,8 +566,8 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                 stop_group cancellation{request.client_.options_.stop_token_, request.client_.host_stop_token_,
                     deadline_stop.token()};
                 worker_timer_registration timer;
-                if (total) {
-                    (void)request.client_.pool_->worker().schedule_timer(timer, started + total->value(),
+                if (const auto deadline_value = total.deadline()) {
+                    (void)request.client_.pool_->worker().schedule_timer(timer, *deadline_value,
                         [&deadline_stop](worker_timer_outcome outcome) noexcept {
                             if (outcome == worker_timer_outcome::expired) {
                                 deadline_stop.request_stop();
@@ -576,7 +575,7 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
                         });
                 }
                 const auto require_live_policy = [&]() {
-                    if (total && std::chrono::steady_clock::now() - started >= total->value()) {
+                    if (total.expired()) {
                         throw http_client_error(http_client_error::code_type::timeout,
                             "HTTP redirect policy deadline expired", std::nullopt, &response.connection_info());
                     }
@@ -745,7 +744,6 @@ task<void> http_client_response::pipe_to(context& output, operation_options oper
         throw std::logic_error("response owner has moved");
     }
     state_->require_owner_worker("HTTP response requires its owner worker");
-    validate_operation_options(operation);
     if (!state_->body_operation_scope_.active() || !output.operation_scope_.active()) {
         throw std::logic_error("HTTP response pipe_to scope is closed");
     }

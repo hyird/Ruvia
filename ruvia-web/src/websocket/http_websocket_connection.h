@@ -207,7 +207,7 @@ private:
         operation_interrupt_registration(
             server_websocket_connection& connection, operation_lane lane, const operation_options& options) {
             if (options.timeout_.has_value()) {
-                (void)connection.worker_->schedule_timer(timer_, worker_timer_deadline_after(options.timeout_->value()),
+                (void)connection.worker_->schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()),
                     [&connection, lane](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             connection.interrupt(lane, operation_interrupt::timed_out);

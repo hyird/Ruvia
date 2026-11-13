@@ -221,9 +221,11 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     }
 
     EXPECT_FALSE(root.ready());
-    EXPECT_FALSE(root.wait_until(std::chrono::steady_clock::now()));
+    EXPECT_FALSE(root.wait_for(ruvia::operation_timeout(std::chrono::steady_clock::now())));
+    EXPECT_FALSE(root.wait_for(ruvia::operation_timeout(std::chrono::steady_clock::time_point{})));
     EXPECT_FALSE(root.wait_for(std::chrono::milliseconds(1)));
     EXPECT_THROW(static_cast<void>(root.wait_for(std::chrono::milliseconds(0))), std::invalid_argument);
+    EXPECT_THROW(static_cast<void>(root.wait_for(std::chrono::milliseconds(-1))), std::invalid_argument);
     loops.start();
     EXPECT_TRUE(root.wait_for(std::chrono::seconds(30)));
     EXPECT_TRUE(root.ready());

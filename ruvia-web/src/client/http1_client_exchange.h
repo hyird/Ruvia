@@ -7,7 +7,7 @@
 
 #include <asio/buffer.hpp>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
@@ -42,28 +42,28 @@ public:
     http1_client_exchange(const http1_client_exchange&) = delete;
     http1_client_exchange& operator=(const http1_client_exchange&) = delete;
 
-    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_timeout& timeout,
+    [[nodiscard]] task<void> run(const http_client_request_storage& request, const operation_deadline& timeout,
         stop_token stop_token_value, http_client_response_state& state_value);
 
 private:
     // Receives the final response head, then the body or an accepted tunnel.
-    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_timeout& timeout,
+    [[nodiscard]] task<void> receive(const http_client_request_storage& request, const operation_deadline& timeout,
         http_client_response_state& state_value, http1_client_response_parser& parser);
     // Waits until the consumer releases pending and borrowed response bytes.
     [[nodiscard]] task<void> wait_for_body_space(
-        http_client_response_state& state_value, const operation_timeout& timeout);
+        http_client_response_state& state_value, const operation_deadline& timeout);
     void expire_tunnel() noexcept;
-    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_timeout& timeout,
+    [[nodiscard]] task<void> write_tunnel_output(http_client_output_queue& output, const operation_deadline& timeout,
         tls_tunnel_output* tls, std::exception_ptr& failure);
-    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_timeout& timeout,
+    [[nodiscard]] task<void> run_tunnel(http_client_response_state& state_value, const operation_deadline& timeout,
         bool websocket);
-    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_timeout& timeout,
+    [[nodiscard]] task<void> write_immediate(std::span<const asio::const_buffer> parts, const operation_deadline& timeout,
         http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure);
-    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_timeout& timeout,
+    [[nodiscard]] task<void> write_upload(http_client_response_state& state_value, const operation_deadline& timeout,
         http1_request_content_writer writer, http1_client_response_parser& parser, std::exception_ptr& failure);
     // One transport write of all `parts` (a head, or a framed upload chunk:
     // prefix, payload, suffix) under the write timeout.
-    [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout);
+    [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_deadline& timeout);
     // Restarts the exchange-level inactivity bound, when armed: read
     // inactivity counted from the last progress in either direction.
     void restart_inactivity() noexcept;
@@ -72,7 +72,7 @@ private:
     // read inactivity bound; returns the read, which is not ok() at the peer's
     // end of stream, and throws any other transport failure.
     [[nodiscard]] task<client_transport_result> read_append(
-        http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout,
+        http_io_buffer& target, std::size_t max_bytes, const operation_deadline& timeout,
         bool read_inactivity_bound = true);
 
     http_client_pool& pool_;

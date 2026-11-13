@@ -366,7 +366,7 @@ void connection_scanner::impl_type::schedule() {
     const auto timer_state = timer_state_;
     // A stopped timer queue arms nothing: scanning ends with the worker, as it
     // does for a scan timer that stop_timers() cancels.
-    (worker_).schedule_timer(timer_, ::ruvia::worker_timer_deadline_after(options_.scan_interval_.value()), [timer_state](worker_timer_outcome outcome) {
+    (worker_).schedule_timer(timer_, ::ruvia::deadline_after(options_.scan_interval_.value()), [timer_state](worker_timer_outcome outcome) {
         if (outcome == worker_timer_outcome::cancelled) {
             return;
         }

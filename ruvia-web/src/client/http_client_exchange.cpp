@@ -19,7 +19,6 @@ struct http_client_upload_end_input final {
 
 task<http_client_response> http_client_response_handoff::receive(
     http_client_response pin, std::string_view head_message, operation_options operation) {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(scope_, receive_owned(std::move(pin), head_message, std::move(operation)));
 }
 
@@ -129,7 +128,6 @@ task<void> http_client_request_body_writer::write(std::string_view bytes_value, 
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
-    validate_operation_options(operation);
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
@@ -141,7 +139,6 @@ task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
-    validate_operation_options(operation);
     if (bytes_value.size() > state_->upload_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
@@ -153,7 +150,6 @@ task<void> http_client_request_body_writer::end(std::span<const http_header_view
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
-    validate_operation_options(operation);
     http_request_trailers validation(state_->resource_);
     if (validation.append(fields_value).has_value()) {
         throw std::invalid_argument("invalid request trailer section");

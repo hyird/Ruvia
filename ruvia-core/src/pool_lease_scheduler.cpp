@@ -93,22 +93,23 @@ public:
             return true;
         }
 
-        [[nodiscard]] bool expire(pool_lease_acquire& waiter) noexcept {
+        [[nodiscard]] bool expire(pool_lease_acquire& waiter, worker_wait_status status) noexcept {
             if (!waiter.queued_) {
                 return false;
             }
-            if (auto continuation = waiter.resolve(worker_wait_status::timed_out)) {
+            if (auto continuation = waiter.resolve(status)) {
                 continuation.resume();
             }
             return true;
         }
 
-        // Commit closure for the entire current queue and resume every waiter in a
-        // later worker turn, as release() does: closure runs inside the owner's own
-        // teardown, which must finish before any waiter observes it.
-        void close_all(const worker_handle& worker) noexcept {
+        // Commit closure or shutdown for the entire current queue and resume
+        // every waiter in a later worker turn, as release() does: closure runs
+        // inside the owner's own teardown, which must finish before any waiter
+        // observes it.
+        void complete_all(const worker_handle& worker, worker_wait_status status) noexcept {
             while (head_ != nullptr) {
-                if (auto continuation = head_->resolve(worker_wait_status::closed)) {
+                if (auto continuation = head_->resolve(status)) {
                     worker.defer_resume(continuation);
                 }
             }
@@ -139,6 +140,10 @@ public:
             next_free_[i] = free_head_;
             free_head_ = i;
         }
+        if (worker_.register_shutdown(waiter_state_, &waiter_state_type::shutdown_registration_) !=
+            worker_registration_status::registered) {
+            waiter_state_->stopping_ = true;
+        }
     }
 
     ~impl_type() {
@@ -151,8 +156,32 @@ public:
         explicit waiter_state_type(worker_handle worker_value) noexcept
             : worker_(std::move(worker_value)) {}
 
+        // First member: unlinks from the worker registry after every other member is gone.
+        worker_shutdown_registration shutdown_registration_;
         worker_handle worker_;
         waiter_queue_type queue_;
+        // Worker-affine: set once the shutdown notification reaches the worker.
+        bool stopping_{false};
+
+        void stop_waiters() noexcept {
+            stopping_ = true;
+            queue_.complete_all(worker_, worker_wait_status::worker_stopping);
+        }
+
+        // The notification may arrive on the stopping thread; the queue is
+        // touched only on the worker.
+        void worker_stopping() noexcept {
+            if (worker_.is_current()) {
+                stop_waiters();
+                return;
+            }
+            try {
+                // A detached worker has already retired every suspended acquire.
+                (void)worker_.defer_completion([retained = shared_from_this()] { retained->stop_waiters(); });
+            } catch (...) {
+                std::terminate();
+            }
+        }
 
         void request_cancellation(pool_lease_acquire& waiter, std::uint64_t waiter_id) {
             if (worker_.is_current()) {
@@ -184,8 +213,11 @@ public:
             return worker_wait_result<std::size_t>::with_status(worker_wait_status::cancelled);
         }
         if (free_head_ == no_free_slot) {
-            if (deadline.has_value() && *deadline <= std::chrono::steady_clock::now() &&
-                worker_.valid() && !detail::worker_handle_access::timers_stopping(worker_)) {
+            if (waiter_state_->stopping_ || !worker_.accepting() ||
+                detail::worker_handle_access::timers_stopping(worker_)) {
+                return worker_wait_result<std::size_t>::with_status(worker_wait_status::worker_stopping);
+            }
+            if (deadline.has_value() && *deadline <= std::chrono::steady_clock::now()) {
                 return worker_wait_result<std::size_t>::with_status(worker_wait_status::timed_out);
             }
             return std::nullopt;
@@ -223,7 +255,7 @@ public:
             return false;
         }
         closing_ = true;
-        waiter_state_->queue_.close_all(worker_);
+        waiter_state_->queue_.complete_all(worker_, worker_wait_status::closed);
         return true;
     }
 
@@ -247,20 +279,13 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_h
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
 pool_lease_acquire pool_lease_scheduler::acquire(operation_options options) & {
-    validate_operation_options(options);
-    return pool_lease_acquire(*impl_, options.timeout_, std::nullopt, std::move(options.stop_token_));
-}
-
-pool_lease_acquire pool_lease_scheduler::acquire(const operation_timeout& deadline, stop_token stop_token_value) & {
-    return pool_lease_acquire(*impl_, std::nullopt, deadline.deadline(), std::move(stop_token_value));
+    return pool_lease_acquire(*impl_, options.timeout_, std::move(options.stop_token_));
 }
 
 pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-    std::optional<timeout_duration> timeout, std::optional<std::chrono::steady_clock::time_point> deadline,
-    stop_token stop_token_value) noexcept
+    std::optional<operation_timeout> timeout, stop_token stop_token_value) noexcept
     : owner_(&owner_value),
       timeout_(timeout),
-      deadline_(deadline),
       stop_token_(std::move(stop_token_value)) {
     ++owner_->reserved_acquires_;
 }
@@ -315,7 +340,7 @@ bool pool_lease_acquire::await_ready() {
     }
     awaited_ = true;
     if (timeout_.has_value()) {
-        deadline_ = worker_timer_deadline_after(timeout_->value());
+        deadline_ = timeout_->deadline_from(std::chrono::steady_clock::now());
     }
     if (auto acquired = owner_->try_acquire(deadline_, stop_token_)) {
         result_.emplace(std::move(*acquired));
@@ -330,23 +355,26 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     auto* const waiter_state = owner_->waiter_state_.get();
     waiter_state->queue_.enqueue(*this);
 
-    // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
-    // pending deadline: the waiter still completes on release, close(), or
-    // its stop token.
-    if (deadline_.has_value() && owner_->worker_.valid()) {
+    // A deadline arms a worker-local timer owned by this acquire and cancelled
+    // before it can be destroyed. Its expiry can unlink the waiter directly;
+    // cross-thread stop notifications still use waiter IDs. A timer queue that
+    // stops, before or after arming, ends the wait as worker_stopping.
+    if (deadline_.has_value()) {
+        auto status = worker_timer_schedule_status::worker_stopping;
         try {
-            // The worker-local timer belongs to this acquire and is cancelled
-            // before it can be destroyed. Its expiry can unlink the waiter
-            // directly; cross-thread stop notifications still use waiter IDs.
-            (void)owner_->worker_.schedule_timer(deadline_timer_, *deadline_,
+            status = owner_->worker_.schedule_timer(deadline_timer_, *deadline_,
                 [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
-                    if (outcome == worker_timer_outcome::expired) {
-                        (void)waiter_state->queue_.expire(*waiter);
-                    }
+                    (void)waiter_state->queue_.expire(*waiter, outcome == worker_timer_outcome::expired
+                                                                   ? worker_wait_status::timed_out
+                                                                   : worker_wait_status::worker_stopping);
                 });
         } catch (...) {
             cancel_registrations();
             throw;
+        }
+        if (status == worker_timer_schedule_status::worker_stopping) {
+            (void)resolve(worker_wait_status::worker_stopping);
+            return false;
         }
     }
 

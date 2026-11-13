@@ -82,7 +82,6 @@ template <typename guard_type>
 
 task<std::optional<db_row>> db_stream_result::read(operation_options operation) & {
     registration_.require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(registration_.scope(),
         read_task(io_metrics_, operation_guard_type(state_->operation_), state_->column_names_, std::move(operation)));
 }
@@ -108,7 +107,6 @@ task<std::optional<db_row>> db_stream_result::read_task(
 
 task<void> db_stream_result::close(operation_options operation) & {
     registration_.require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         registration_.scope(), close_task(io_metrics_, operation_guard_type(state_->operation_), std::move(operation)));
 }

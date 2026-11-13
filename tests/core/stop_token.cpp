@@ -14,7 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_options.h"
 
 namespace stop_token_test {
 
@@ -670,7 +670,7 @@ TEST(Ruvia, operation_options_replace_cancellation_and_keep_tighter_timeout) {
     base.request_stop();
     EXPECT_TRUE(inherited.stop_token_.stop_requested());
     EXPECT_TRUE(!replaced.stop_token_.stop_requested());
-    EXPECT_TRUE(replaced.timeout_ == ruvia::timeout_duration(std::chrono::milliseconds(20)));
+    EXPECT_TRUE(replaced.timeout_ == ruvia::operation_timeout(std::chrono::milliseconds(20)));
     replacement.request_stop();
     EXPECT_TRUE(replaced.stop_token_.stop_requested());
 

@@ -20,7 +20,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -147,21 +147,21 @@ struct mariadb_driver final {
     static constexpr db_driver driver = db_driver::mariadb;
     static constexpr std::string_view name{"MariaDB"};
 
-    static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
+    static task<void> connect(pool_type& pool, std::size_t slot, const operation_deadline& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
         std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::pmr::memory_resource* resource, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle.
-    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_timeout& deadline);
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
     static void discard_stream(void* result) noexcept;
 };
 
@@ -174,22 +174,22 @@ struct postgresql_driver final {
     static constexpr db_driver driver = db_driver::postgresql;
     static constexpr std::string_view name{"PostgreSQL"};
 
-    static task<void> connect(pool_type& pool, std::size_t slot, const operation_timeout& deadline);
+    static task<void> connect(pool_type& pool, std::size_t slot, const operation_deadline& deadline);
     static void close_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
     static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
         std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_timeout& deadline);
+        std::pmr::memory_resource* resource, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle
     // or closed.
-    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_timeout& deadline);
+    static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
     static void discard_stream(void* result) noexcept;
 };
 
@@ -223,7 +223,7 @@ struct db_slot final {
     void* stream_result_{nullptr};
     // Whole-lease deadline (db_config::transaction_timeout_) of the
     // transaction or stream holding this slot; unbounded for any other lease.
-    operation_timeout lease_timeout_{std::nullopt};
+    operation_deadline lease_timeout_{std::nullopt};
     bool connected_{false};
     // Shutdown may request closure while an asynchronous wait still borrows
     // this slot and its socket. The transport stays alive until that wait
@@ -378,11 +378,11 @@ public:
     // Connects a leased slot unless it is connected; a failure closes it. A
     // pool that does not reconnect (db_config_storage::reconnect_) fails here
     // for a slot whose connection ended.
-    task<void> connect_slot(std::size_t index, const operation_timeout& timeout);
+    task<void> connect_slot(std::size_t index, const operation_deadline& timeout);
     // Closes the slot's connection now, or -- while a wait still borrows it --
     // wakes that wait so the driving coroutine finishes the close.
     void close_slot(std::size_t index) noexcept;
-    task<db_resolved_addresses_type> resolve_host(std::size_t index, const operation_timeout& deadline);
+    task<db_resolved_addresses_type> resolve_host(std::size_t index, const operation_deadline& deadline);
     // One wait on a leased slot: readiness of the driver's current socket, or
     // a timed pause without a socket (MariaDB connect), under an optional
     // per-wait timeout. Not a coroutine: await_ready() registers the socket and
@@ -397,7 +397,7 @@ public:
     public:
         slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind, db_slot_socket::native_socket_type native,
             db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-            const operation_timeout& operation_deadline) noexcept;
+            const operation_deadline& operation_deadline_value) noexcept;
         ~slot_wait();
 
         slot_wait(const slot_wait&) = delete;
@@ -413,7 +413,7 @@ public:
         db_deadline_kind kind_;
         db_slot_socket::native_socket_type native_;
         std::optional<std::chrono::steady_clock::time_point> wait_deadline_;
-        const operation_timeout& operation_deadline_;
+        const operation_deadline& operation_deadline_;
         db_slot_socket::readiness_awaiter socket_wait_;
         // The slot is marked borrowed between arming and resumption.
         bool borrowed_{false};
@@ -421,13 +421,13 @@ public:
 
     [[nodiscard]] slot_wait wait_socket(std::size_t index, db_slot_socket::native_socket_type native,
         db_socket_readiness wanted, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-        const operation_timeout& operation_deadline) noexcept {
-        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline);
+        const operation_deadline& operation_deadline_value) noexcept {
+        return slot_wait(*this, index, db_deadline_kind::socket, native, wanted, wait_deadline, operation_deadline_value);
     }
     [[nodiscard]] slot_wait sleep(std::size_t index, std::optional<std::chrono::steady_clock::time_point> wait_deadline,
-        const operation_timeout& operation_deadline) noexcept {
+        const operation_deadline& operation_deadline_value) noexcept {
         return slot_wait(*this, index, db_deadline_kind::sleep, db_slot_socket::invalid_socket,
-            db_socket_readiness::none, wait_deadline, operation_deadline);
+            db_socket_readiness::none, wait_deadline, operation_deadline_value);
     }
     [[nodiscard]] db_error timed_out() const;
     [[nodiscard]] db_error closing_error() const;
@@ -435,7 +435,7 @@ public:
 private:
     template <typename result_type>
     using statement_hook_type = task<result_type> (*)(db_pool&, std::size_t, std::string_view,
-        std::span<const db_value>, std::pmr::memory_resource*, const operation_timeout&);
+        std::span<const db_value>, std::pmr::memory_resource*, const operation_deadline&);
 
     // A caller waiting for a lease, listed in arrival order for the duration
     // of its acquire.
@@ -461,7 +461,7 @@ private:
     // lives for its co_await expression, so it adds no coroutine frame.
     class lease_acquire final {
     public:
-        lease_acquire(db_pool& pool, const operation_timeout& timeout, const stop_token& stop)
+        lease_acquire(db_pool& pool, const operation_deadline& timeout, const stop_token& stop)
             : pool_(pool),
               waiting_(pool, stop),
               acquire_(pool.leases_.acquire(timeout, pool.config_.acquire_timeout_, stop)) {}
@@ -491,12 +491,12 @@ private:
         std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,
         statement_hook_type<result_type> statement);
     task<void> execute_control(std::size_t index, std::string_view sql, std::pmr::memory_resource* resource,
-        const operation_timeout& timeout);
+        const operation_deadline& timeout);
     task<void> finish_transaction(std::size_t index, std::string_view command,
         std::pmr::memory_resource* resource, const operation_options& options);
     task<void> retire_failed_transaction_slot(std::size_t index, std::pmr::memory_resource* resource,
-        const operation_timeout& timeout, const std::exception_ptr& failure);
-    task<void> open_slot(std::size_t index, const operation_timeout& timeout);
+        const operation_deadline& timeout, const std::exception_ptr& failure);
+    task<void> open_slot(std::size_t index, const operation_deadline& timeout);
     // Starts the lease deadline of a transaction or stream on its fresh lease,
     // with its first operation running.
     void start_lease(std::size_t index);
@@ -508,8 +508,8 @@ private:
     // and its caller retires the lease.
     void leave_lease_operation(std::size_t index);
     // The earlier of an operation's own deadline and its lease deadline.
-    [[nodiscard]] operation_timeout lease_operation_timeout(
-        std::size_t index, const operation_timeout& timeout) const noexcept;
+    [[nodiscard]] operation_deadline lease_operation_timeout(
+        std::size_t index, const operation_deadline& timeout) const noexcept;
     // Lease timer expiry: closes an idle lease's connection, so the server
     // ends its transaction and releases its locks while the holder keeps the
     // lease.

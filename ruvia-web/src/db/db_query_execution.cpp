@@ -91,7 +91,7 @@ template <bool with_count>
 task<db_query_result<with_count>> execute_db_query_plan(
     db_query_plan plan, db_query_backend backend, operation_options options) {
     const auto driver = db_pool_driver(backend.pool_);
-    const operation_timeout deadline_value(options.timeout_);
+    const operation_deadline deadline_value(options.timeout_);
     std::array<std::optional<db_rows>, with_count ? 2 : 1> results;
     for (std::size_t index = 0; index < results.size(); ++index) {
         auto& step = index == 0 ? plan.first_ : plan.second_.value();

@@ -22,7 +22,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -343,7 +343,7 @@ struct client_tcp_endpoint final {
     std::string_view identity_host_{};
     void* resolve_context_{};
     // Resolves host_ and port_ in place of the transport's own resolver.
-    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_timeout&, std::string_view, std::uint16_t){};
+    task<client_resolve_result> (*resolve_)(void*, client_host_resolver&, const operation_deadline&, std::string_view, std::uint16_t){};
 };
 
 // True for an OpenSSL failure or a TLS stream truncated without close_notify.
@@ -378,7 +378,7 @@ public:
     // require TLS 1.2; a peer selecting h2 below TLS 1.2 is rejected before
     // application I/O. Every operation borrowing a previous connection must
     // have finished.
-    [[nodiscard]] task<client_transport_result> connect(const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> connect(const operation_deadline& timeout);
     // Replaces the endpoint's ALPN offer for every later connect().
     void offer_alpn(client_alpn alpn) noexcept {
         endpoint_.alpn_ = client_alpn_bytes(alpn);
@@ -403,13 +403,13 @@ public:
         const auto selected = alpn();
         return selected.empty() || selected == "http/1.1";
     }
-    [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> read_some(std::span<char> bytes, const operation_deadline& timeout);
     // Writes every byte under the write lane's own deadline. The buffer
     // sequence form sends framed parts (chunk prefix, payload, suffix) as one
     // transport write, which is one TLS record sequence and one deadline cycle.
-    [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> write(std::string_view bytes, const operation_deadline& timeout);
     [[nodiscard]] task<client_transport_result> write(
-        std::span<const asio::const_buffer> buffers, const operation_timeout& timeout);
+        std::span<const asio::const_buffer> buffers, const operation_deadline& timeout);
 
     [[nodiscard]] client_abort_reason abort_reason() const noexcept {
         return abort_reason_;
@@ -452,16 +452,16 @@ public:
 
 private:
     struct lane_deadline final {
-        operation_deadline<> deadline_;
+        deadline_lifecycle<> deadline_;
         worker_timer_registration timer_;
     };
 
     template <typename buffers_type>
-    [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_timeout& timeout);
+    [[nodiscard]] task<client_transport_result> write_buffers(buffers_type buffers, const operation_deadline& timeout);
     void send_close_notify() noexcept;
-    [[nodiscard]] bool arm(lane_deadline& lane, const operation_timeout& timeout);
+    [[nodiscard]] bool arm(lane_deadline& lane, const operation_deadline& timeout);
     [[nodiscard]] bool clear(lane_deadline& lane) noexcept;
-    [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_timeout& timeout,
+    [[nodiscard]] client_transport_result finish(lane_deadline& lane, const operation_deadline& timeout,
         const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
     [[nodiscard]] client_transport_result aborted() const noexcept;
 

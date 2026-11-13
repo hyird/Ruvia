@@ -15,7 +15,7 @@ class worker_capabilities;
 class worker_state_registry;
 
 // The endpoint behind every web_worker_handle. Core owns admission: posts go
-// through worker_handle::post_factory and accepted jobs start only while that
+// through worker_handle::post_payload and accepted jobs start only while that
 // worker accepts and its stop token is clear. Started jobs run in the worker's
 // task_scope, which the server worker joins before retiring capabilities.
 //

@@ -141,7 +141,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
                 if (client_failure) std::rethrow_exception(client_failure);
             }
             co_await server.shutdown();
-            EXPECT_TRUE(attachment.loop().accepting());
+            EXPECT_TRUE(attachment.loop().handle().accepting());
             const auto delay = co_await ruvia::sleep_for(other.worker(), 1ms);
             EXPECT_EQ(delay, ruvia::timer_sleep_result::elapsed);
             const std::string origin = "http://127.0.0.1:" + std::to_string(another);
@@ -392,7 +392,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
         server.reset();
         co_await std::move(shutdown);
         EXPECT_TRUE(retired);
-        EXPECT_TRUE(attachment.loop().accepting());
+        EXPECT_TRUE(attachment.loop().handle().accepting());
         attachment.stop();
     };
     auto root = attachment.loop().start(run());

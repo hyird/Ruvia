@@ -1411,7 +1411,7 @@ void http3_session::enter_closing() noexcept {
     armed_expiry_ = UINT64_MAX;
     try {
         const auto status = services_.worker_.schedule_timer(timer_,
-            worker_timer_deadline_after(http3_quic_nanoseconds(connection_->close_period())),
+            deadline_after(http3_quic_nanoseconds(connection_->close_period())),
             [this](worker_timer_outcome outcome) { timer_fired(outcome); });
         if (status == worker_timer_schedule_status::worker_stopping) {
             lifecycle_ = lifecycle_type::ended;

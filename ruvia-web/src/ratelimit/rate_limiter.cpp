@@ -205,7 +205,7 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     if (elapsed - window_ms < window_ms) {
         slot.previous_count_ = slot.current_count_;
         // The elapsed check guarantees this advance fits before now.
-        slot.window_start_ += worker_timer_saturating_duration_cast(rule.window_);
+        slot.window_start_ += saturating_duration_cast(rule.window_);
     } else {
         slot.previous_count_ = 0;
         slot.window_start_ = now;

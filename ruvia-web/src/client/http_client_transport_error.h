@@ -91,10 +91,10 @@ namespace ruvia::detail {
             throw http_client_error(http_client_error::code_type::cancelled,
                 std::pmr::string(operation, process_resource()).append(" cancelled"));
         case worker_wait_status::closed:
+        case worker_wait_status::worker_stopping:
             throw http_client_error(http_client_error::code_type::closing,
                 http_client_error_message(http_client_error::code_type::closing));
         case worker_wait_status::value:
-        case worker_wait_status::worker_stopping:
             break;
     }
     std::terminate();

@@ -7,7 +7,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/http_client.h"

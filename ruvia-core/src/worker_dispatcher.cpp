@@ -134,11 +134,11 @@ post_result_type worker_dispatcher::post(move_only_function<void()> task_value) 
     }
     std::size_t index = no_node;
     if (const auto status = reserve(index); status != post_status::accepted) {
-        return post_result_type::reject(status, std::move(task_value));
+        return detail::worker_delivery_access::reject<post_result_type>(status, std::move(task_value));
     }
     nodes_[index].task_ = std::move(task_value);
     publish(index);
-    return post_result_type::accept();
+    return detail::worker_delivery_access::accept<post_result_type>();
 }
 
 post_status worker_dispatcher::post_factory(move_only_function<move_only_function<void()>()> factory) {
@@ -692,8 +692,8 @@ worker_id_type worker_handle::id() const noexcept {
     return dispatcher_ ? dispatcher_->id() : 0;
 }
 
-bool worker_handle::has_blocking_pool() const noexcept {
-    return dispatcher_ && dispatcher_->blocking_pool() != nullptr;
+blocking_pool* worker_handle::blocking_pool() const noexcept {
+    return dispatcher_ ? dispatcher_->blocking_pool() : nullptr;
 }
 
 asio::io_context::executor_type worker_handle::executor() const {
@@ -703,8 +703,12 @@ asio::io_context::executor_type worker_handle::executor() const {
     return dispatcher_->executor();
 }
 
-blocking_pool* detail::worker_handle_access::blocking_pool(const worker_handle& worker) noexcept {
-    return worker.dispatcher_ ? worker.dispatcher_->blocking_pool() : nullptr;
+worker_handle detail::worker_handle_access::current() noexcept {
+    const auto* dispatcher = detail::current_worker_dispatcher();
+    if (dispatcher == nullptr) {
+        return {};
+    }
+    return worker_handle(std::const_pointer_cast<detail::worker_dispatcher>(dispatcher->shared_from_this()));
 }
 
 post_result_type worker_handle::post_task(move_only_function<void()> task_value) const {
@@ -712,7 +716,7 @@ post_result_type worker_handle::post_task(move_only_function<void()> task_value)
         throw std::invalid_argument("worker post requires a callable task");
     }
     return dispatcher_ ? dispatcher_->post(std::move(task_value))
-                       : post_result_type::reject(post_status::worker_stopping, std::move(task_value));
+                       : detail::worker_delivery_access::reject<post_result_type>(post_status::worker_stopping, std::move(task_value));
 }
 
 void worker_handle::defer_resume(std::coroutine_handle<> continuation) const noexcept {

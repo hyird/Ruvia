@@ -23,7 +23,6 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -649,21 +648,17 @@ public:
     }
 
     // The callable executes on the blocking pool and must own everything it
-    // touches. Completion resumes on this worker; timeout or shutdown stops
-    // the wait without joining a still-running foreign callable.
+    // touches. Completion resumes on this worker; options.timeout_ or shutdown
+    // stops the wait without joining a still-running foreign callable, and
+    // options.stop_token_ is combined with stop_token().
     // Rejection and callable exceptions are retained in blocking_result. Inspect
     // status() for load shedding or use std::move(result).take_value() to throw.
     // With application::blocking_pool(nullptr) the result reports
     // blocking_status::unavailable without submitting the callable.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
-        return capabilities_.run_blocking(std::move(callable));
-    }
-
-    template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return capabilities_.run_blocking(timeout, std::move(callable));
+        callable_type callable, operation_options options = {}) const {
+        return capabilities_.run_blocking(std::move(callable), std::move(options));
     }
 
     // Observes worker shutdown (application::stop() closes every connection
@@ -1041,7 +1036,6 @@ template <validation_target target, typename model_type>
 template <typename t_type>
 task<std::optional<t_type>> context_request::json_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "JSON body type must use RUVIA_MODEL");
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(context_->operation_scope_,
         detail::parse_optional_request_model<validation_target::json, t_type>(*context_, std::move(operation)));
 }
@@ -1049,7 +1043,6 @@ task<std::optional<t_type>> context_request::json_if(operation_options operation
 template <typename t_type>
 task<std::optional<t_type>> context_request::form_if(operation_options operation) const {
     static_assert(detail::is_model<t_type>, "form body type must use RUVIA_MODEL");
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(context_->operation_scope_,
         detail::parse_optional_request_model<validation_target::form, t_type>(*context_, std::move(operation)));
 }

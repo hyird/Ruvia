@@ -14,7 +14,7 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
@@ -77,14 +77,14 @@ private:
     // Idle probe of one read(); `ping_writes` is that read's scope and
     // `read_timeout` its overall deadline, both borrowed until
     // end_idle_probe().
-    void begin_idle_probe(task_scope& ping_writes, const operation_timeout& read_timeout) noexcept;
+    void begin_idle_probe(task_scope& ping_writes, const operation_deadline& read_timeout) noexcept;
     void end_idle_probe() noexcept;
     void arm_idle_probe(clock_type::time_point deadline) noexcept;
     void idle_probe_expired() noexcept;
     // Records the exception being handled for the read, then closes.
     void fail_idle_probe() noexcept;
     // Bounded by `timeout`: one interval, capped by the joining read's deadline.
-    task<void> write_ping(operation_timeout timeout);
+    task<void> write_ping(operation_deadline timeout);
     static void cancel_read(void* connection) noexcept;
 
     redis_subscription_set& owner_;
@@ -107,7 +107,7 @@ private:
     // The read()'s scope its PING writes join and that read's deadline; null
     // while no read waits.
     task_scope* ping_writes_{nullptr};
-    const operation_timeout* read_timeout_{nullptr};
+    const operation_deadline* read_timeout_{nullptr};
     // Idle clock: the latest received bytes, the start of the waiting read,
     // the latest request written (a command or PING whose reply is owed when
     // it is newer than the input) and the start of the current probe.

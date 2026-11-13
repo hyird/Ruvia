@@ -15,7 +15,6 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_wait.h"
@@ -125,7 +124,7 @@ public:
         // Payload code may synchronously rebind this handle while the call is active.
         const auto state = state_;
         if (state == nullptr) {
-            return one_shot_complete_result<t_type>::reject(
+            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(
                 one_shot_complete_status::receiver_closed, std::move(value));
         }
         std::optional<one_shot_complete_status> rejection;
@@ -148,7 +147,7 @@ public:
             }
         }
         if (rejection) {
-            return one_shot_complete_result<t_type>::reject(*rejection, std::move(value));
+            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, std::move(value));
         }
         try {
             state->ready_value_.emplace(std::move(value));
@@ -176,9 +175,9 @@ public:
             }
         }
         if (rejection) {
-            return one_shot_complete_result<t_type>::reject(*rejection, state->take_ready_value());
+            return detail::worker_delivery_access::reject<one_shot_complete_result<t_type>>(*rejection, state->take_ready_value());
         }
-        return one_shot_complete_result<t_type>::accept();
+        return detail::worker_delivery_access::accept<one_shot_complete_result<t_type>>();
     }
 
 private:
@@ -254,11 +253,8 @@ public:
         friend class one_shot_receiver;
         using state_type = detail::one_shot_state<t_type>;
 
-        wait_operation(std::shared_ptr<state_type> state_value, operation_options options)
+        wait_operation(std::shared_ptr<state_type> state_value, operation_options options) noexcept
             : wait_(std::move(state_value), std::move(options)) {}
-        wait_operation(std::shared_ptr<state_type> state_value, const operation_timeout& deadline,
-            stop_token stop_token_value) noexcept
-            : wait_(std::move(state_value), deadline, std::move(stop_token_value)) {}
 
         worker_single_wait_awaiter<std::monostate, state_type> wait_;
     };
@@ -266,17 +262,12 @@ public:
     // The receiver owns the receive side: destroying it closes every cold or
     // running wait. Require a named owner so storing an operation cannot
     // silently turn a temporary receiver into an already-closed operation.
-    // options.timeout_ must be positive and bounds the wait from its start; a
-    // deadline that has passed reports timed_out unless a value is ready.
+    // A relative options.timeout_ bounds the wait from its start; a deadline
+    // that has passed reports timed_out unless a value is ready.
     [[nodiscard]] wait_operation wait(operation_options options = {}) const& {
         return wait_operation(state_, std::move(options));
     }
     wait_operation wait(operation_options = {}) const&& = delete;
-
-    [[nodiscard]] wait_operation wait(const operation_timeout& deadline, stop_token stop_token_value = {}) const& {
-        return wait_operation(state_, deadline, std::move(stop_token_value));
-    }
-    wait_operation wait(const operation_timeout&, stop_token = {}) const&& = delete;
 
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
@@ -325,7 +316,7 @@ template <typename t_type>
 // transferring the stable dispatcher endpoint into the one-shot state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
 [[nodiscard]] auto make_one_shot(worker_handle worker_value, one_shot_options options = {}) {
-    auto state_value = detail::make_worker_bound_state<detail::one_shot_state<t_type>>(
+    auto state_value = make_worker_wait_state<detail::one_shot_state<t_type>>(
         pmr_resource_or_default(options.resource_), std::move(worker_value));
     one_shot_completion<t_type> completion(state_value);
     return std::pair(std::move(completion), one_shot_receiver<t_type>(std::move(state_value)));

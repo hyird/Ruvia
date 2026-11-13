@@ -32,7 +32,7 @@ public:
         const worker_handle& worker_value)
         : guard_(scanner, entry_, connection_transport::tcp(socket)) {
         entry_.set_phase(connection_scanner::phase::writing);
-        armed_ = worker_value.schedule_timer(timer_, worker_timer_deadline_after(graceful_close_time),
+        armed_ = worker_value.schedule_timer(timer_, deadline_after(graceful_close_time),
                      [target = &socket](worker_timer_outcome outcome) {
                          if (outcome == worker_timer_outcome::expired) {
                              close_socket(*target);

@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
@@ -207,7 +207,7 @@ void publish_http_client_final_head(
     state_value.head_signal_.notify();
 }
 
-void finish_http_client_response_body(http_client_response_state& state_value, const operation_timeout& timeout,
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
     bool content_semantics_present, std::size_t max_decoded_bytes) {
     if (timeout.expired()) {
         throw_body_decoding_timeout();

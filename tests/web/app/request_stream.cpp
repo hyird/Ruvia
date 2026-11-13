@@ -251,7 +251,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         auto upstream = co_await stream.client().get("/ping").send();
         auto body = co_await upstream.text();
         EXPECT_EQ(body.text().size(), 2048);
-        EXPECT_THROW(static_cast<void>(stream.run_blocking(0ms, [] { return 1; })), std::invalid_argument);
+        EXPECT_THROW(static_cast<void>(stream.run_blocking([] { return 1; }, {.timeout_ = 0ms})), std::invalid_argument);
         (void)co_await stream.response().commit();
         co_await stream.response().write(std::string_view("runtime-ready"));
         co_await stream.response().end();

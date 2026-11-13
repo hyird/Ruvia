@@ -36,7 +36,7 @@ bool client_host_needs_lookup(std::string_view host) {
 }
 
 void require_client_host_lookup(std::string_view host, const worker_handle& worker) {
-    if (!worker.has_blocking_pool() && client_host_needs_lookup(host)) {
+    if (worker.blocking_pool() == nullptr && client_host_needs_lookup(host)) {
         throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
     }
 }
@@ -57,7 +57,7 @@ client_host_resolver& client_host_resolver::operator=(client_host_resolver&& oth
 }
 
 client_resolve_operation client_host_resolver::resolve(std::string_view host, std::uint16_t port,
-    const operation_timeout& timeout, stop_token stop) {
+    const operation_deadline& timeout, stop_token stop) {
     if (stop.stop_requested()) {
         return client_resolve_result{.error_ = asio::error::operation_aborted};
     }
@@ -67,7 +67,7 @@ client_resolve_operation client_host_resolver::resolve(std::string_view host, st
     return resolve_query(query{std::pmr::string(host, process_resource()), port}, timeout, std::move(stop));
 }
 
-task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_timeout timeout, stop_token stop) {
+task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_deadline timeout, stop_token stop) {
     if (stop_) {
         throw std::logic_error("host resolver already has a pending query");
     }
@@ -80,7 +80,7 @@ task<client_resolve_result> client_host_resolver::resolve_query(query input, ope
     } guard{stop_};
     stop_group cancellation(stop_->token(), stop);
     auto result = co_await run_blocking(
-        *worker_, {.timeout_ = timeout.remaining(), .stop_token_ = cancellation.token()}, std::move(input));
+        *worker_, {.timeout_ = timeout.timeout(), .stop_token_ = cancellation.token()}, std::move(input));
     switch (result.status()) {
         case blocking_status::completed:
             co_return std::move(result).take_value();

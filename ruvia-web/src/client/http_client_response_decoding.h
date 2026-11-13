@@ -11,7 +11,7 @@
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {
-class operation_timeout;
+class operation_deadline;
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -55,7 +55,7 @@ void accept_extended_connect_websocket_response(http_client_websocket_handshake&
 // Ends a received body: decodes a collected Content-Encoding within the
 // response byte limit, failing with timeout when `timeout` expired before or
 // during decoding.
-void finish_http_client_response_body(http_client_response_state& state_value, const operation_timeout& timeout,
+void finish_http_client_response_body(http_client_response_state& state_value, const operation_deadline& timeout,
     bool content_semantics_present, std::size_t max_decoded_bytes);
 
 }  // namespace ruvia::detail

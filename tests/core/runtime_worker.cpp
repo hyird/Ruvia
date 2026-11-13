@@ -1122,29 +1122,20 @@ bool test_event_loop_post_protects_reentrant_heap_copy() {
 }
 
 bool test_post_outcome_invariants_and_empty_callbacks() {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
+    const auto loop = loops.loop(0);
+    // Results come only from real deliveries: an accepted one has nothing to return.
+    auto accepted = loop.handle().post([] {});
     bool accepted_take_rejected = false;
     try {
-        static_cast<void>(std::move(ruvia::post_outcome<>::accept()).take_rejected());
+        static_cast<void>(std::move(accepted).take_rejected());
     } catch (const std::logic_error&) {
         accepted_take_rejected = true;
     }
+    auto full = loop.handle().post([] {});
+    bool full_returns_task = full.status() == ruvia::post_status::queue_full && full.rejected() != nullptr &&
+                             static_cast<bool>(std::move(full).take_rejected()) && full.rejected() == nullptr;
 
-    bool accepted_rejection_status = false;
-    try {
-        static_cast<void>(ruvia::post_outcome<>::reject(ruvia::post_status::accepted, [] {}));
-    } catch (const std::invalid_argument&) {
-        accepted_rejection_status = true;
-    }
-
-    bool empty_rejected_task = false;
-    try {
-        static_cast<void>(ruvia::post_outcome<>::reject(ruvia::post_status::queue_full, {}));
-    } catch (const std::invalid_argument&) {
-        empty_rejected_task = true;
-    }
-
-    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
-    const auto loop = loops.loop(0);
     bool empty_post = false;
     using null_callback_type = void (*)();
     try {
@@ -1160,8 +1151,7 @@ bool test_post_outcome_invariants_and_empty_callbacks() {
         empty_stop_callback = true;
     }
     loops.join();
-    return accepted_take_rejected && accepted_rejection_status && empty_rejected_task && empty_post &&
-           empty_stop_callback;
+    return accepted.accepted() && accepted_take_rejected && full_returns_task && empty_post && empty_stop_callback;
 }
 
 ruvia::task<void> wait_for_signal(ruvia::worker_signal& signal, bool& resumed,
@@ -1198,6 +1188,14 @@ bool test_worker_signal_is_worker_affine() {
     } catch (const std::logic_error&) {
         wait_creation_rejected = true;
     }
+    // notify() shares wait()'s affinity contract: a wrong thread throws, and
+    // the signal stays usable (no pending wake is recorded).
+    bool notify_rejected = false;
+    try {
+        first_signal.notify();
+    } catch (const std::logic_error&) {
+        notify_rejected = true;
+    }
     bool first_resumed = false;
     bool second_resumed = false;
     std::size_t remaining = 2;
@@ -1214,7 +1212,8 @@ bool test_worker_signal_is_worker_affine() {
         second_signal.notify();
     });
     io_context.run();
-    return invalid_worker_rejected && worker_borrowed && wait_creation_rejected && first_resumed && second_resumed;
+    return invalid_worker_rejected && worker_borrowed && wait_creation_rejected && notify_rejected && first_resumed &&
+           second_resumed;
 }
 
 ruvia::task<void> wait_signal_once(ruvia::worker_signal& signal, bool& resumed) {
@@ -2777,7 +2776,7 @@ TEST(Ruvia, WorkerAttachmentOnlyReportsUnconsumedRootFailures) {
         EXPECT_THROW(std::move(consumed).get(), std::runtime_error);
     }
     EXPECT_EQ(reports, 0);
-    EXPECT_TRUE(loop.accepting());
+    EXPECT_TRUE(loop.handle().accepting());
 
     auto abandoned = std::make_optional(loop.start(failed_abandoned_attachment_root()));
     context.poll();
@@ -2790,7 +2789,7 @@ TEST(Ruvia, WorkerAttachmentOnlyReportsUnconsumedRootFailures) {
     EXPECT_EQ(reports, 1);
     EXPECT_EQ(reporting_thread, abandoning_thread);
     EXPECT_NE(received, nullptr);
-    EXPECT_FALSE(loop.accepting());
+    EXPECT_FALSE(loop.handle().accepting());
     context.run();
     EXPECT_FALSE(attachment.valid());
 }

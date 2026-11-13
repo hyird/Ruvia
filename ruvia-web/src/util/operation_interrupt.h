@@ -6,8 +6,8 @@
 #include <system_error>
 #include <utility>
 
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
@@ -68,7 +68,7 @@ public:
             source_.target_ = make_worker_cancellation_target(source_, worker_value);
         }
         if (options.timeout_.has_value()) {
-            (void)worker_value.schedule_timer(timer_, worker_timer_deadline_after(options.timeout_->value()),
+            (void)worker_value.schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()),
                 [this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         fire(operation_interrupt_cause::timed_out);
@@ -174,11 +174,10 @@ public:
     // The time left and the same stop token for the next step; std::nullopt
     // once the deadline has passed.
     [[nodiscard]] std::optional<operation_options> try_next() const {
-        const auto remaining = deadline_.remaining();
-        if (remaining.has_value() && remaining->value().count() <= 0) {
+        if (deadline_.expired()) {
             return std::nullopt;
         }
-        return operation_options{.timeout_ = remaining, .stop_token_ = stop_};
+        return operation_options{.timeout_ = deadline_.timeout(), .stop_token_ = stop_};
     }
 
     // Throws std::system_error (timed_out) once the deadline has passed.
@@ -202,7 +201,7 @@ public:
     }
 
 private:
-    operation_timeout deadline_;
+    operation_deadline deadline_;
     stop_token stop_;
 };
 

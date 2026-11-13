@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/web/context.h"
@@ -212,12 +212,10 @@ task<timer_sleep_result> sleep_stopped_by_either(void* target,
 }  // namespace
 
 task<std::optional<std::span<const std::byte>>> body_reader::read(operation_options operation) & {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_, std::move(operation)));
 }
 
 task<std::optional<std::string_view>> body_reader::text(operation_options operation) & {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_, std::move(operation)));
 }
 
@@ -229,7 +227,6 @@ void response_stream_writer::require_output() const {
 }
 
 task<stream_commit_result> response_stream_writer::commit(operation_options operation) & {
-    validate_operation_options(operation);
     require_output();
     return ::ruvia::make_scoped_operation(operation_scope_,
         run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream commit",
@@ -251,7 +248,6 @@ task<void> response_stream_writer::write(std::string_view chunk, operation_optio
 }
 
 task<void> response_stream_writer::write_owned(std::pmr::string&& chunk, operation_options operation) {
-    validate_operation_options(operation);
     require_output();
     auto owned = detail::rebind_owned_storage(chunk, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -277,7 +273,6 @@ task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration
 }
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
-    validate_operation_options(operation);
     require_output();
     std::pmr::vector<http_header> owned_trailers_value(resource_);
     owned_trailers_value.reserve(trailers.size());
@@ -298,7 +293,6 @@ task<void> sse_writer::end(std::span<const http_header_view> trailers, operation
 
 task<std::optional<websocket_message>> websocket::read(operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(operation_scope_, read_websocket(target_, read_, read_active_, std::move(operation)));
 }
 
@@ -324,7 +318,6 @@ task<void> websocket::ping(std::string_view payload_value, operation_options ope
 
 task<void> websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     if (fragmented_message_active_) {
         throw std::logic_error("a fragmented websocket message is in progress");
     }
@@ -337,7 +330,6 @@ task<void> websocket::send(websocket_message&& message, websocket_send_options o
 
 task<void> websocket::close(websocket_close_options options, operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     std::pmr::string owned(options.reason_.view(), resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
         close_websocket_with_reason(target_, close_, options, std::move(owned), std::move(operation),
@@ -414,7 +406,6 @@ task<void> websocket::write(websocket_opcode opcode, std::string_view payload_va
 task<void> websocket::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress, operation_options operation,
     detail::websocket_write_extent extent) {
     require_active();
-    validate_operation_options(operation);
     if (extent == detail::websocket_write_extent::message && fragmented_message_active_ &&
         (opcode == websocket_opcode::text || opcode == websocket_opcode::binary)) {
         throw std::logic_error("a fragmented websocket message is in progress");
@@ -514,7 +505,6 @@ task<void> sse_writer::write(const sse_message& message, operation_options opera
 
 task<std::optional<multipart_stream_part>> multipart_reader::read(operation_options operation) & {
     registration_.require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(operation_scope_, read_task(std::move(operation)));
 }
 

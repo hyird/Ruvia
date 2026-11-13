@@ -296,12 +296,11 @@ namespace {
 
 // The options of one Redis operation under the deadline it shares with the
 // query it caches.
-[[nodiscard]] operation_options db_cache_options(const operation_options& base, const operation_timeout& timeout) {
-    auto result_value = db_remaining_options(base, timeout);
-    if (result_value.timeout_.has_value() && result_value.timeout_->value().count() == 0) {
+[[nodiscard]] operation_options db_cache_options(const operation_options& base, const operation_deadline& timeout) {
+    if (timeout.expired()) {
         throw_db_cache_timeout();
     }
-    return result_value;
+    return db_remaining_options(base, timeout);
 }
 
 bool is_fatal_redis_cache_error(const redis_error& error) noexcept {
@@ -310,7 +309,7 @@ bool is_fatal_redis_cache_error(const redis_error& error) noexcept {
 }
 
 void rethrow_or_timeout_redis_cache_error(
-    const redis_error& error, const operation_timeout& deadline, bool ignore_errors) {
+    const redis_error& error, const operation_deadline& deadline, bool ignore_errors) {
     if (is_fatal_redis_cache_error(error)) {
         throw;
     }
@@ -325,7 +324,7 @@ void rethrow_or_timeout_redis_cache_error(
 // Rows of a cached entry, or nullopt for a corrupt entry the cache ignores.
 // The bytes are released before the caller goes on to the database.
 [[nodiscard]] std::optional<db_rows> decode_cached_rows(std::pmr::string bytes_value,
-    std::pmr::memory_resource* resource, const operation_timeout& deadline, bool ignore_errors) {
+    std::pmr::memory_resource* resource, const operation_deadline& deadline, bool ignore_errors) {
     std::optional<db_rows> rows;
     try {
         rows.emplace(decode_db_cache_rows(std::move(bytes_value), resource));
@@ -344,7 +343,7 @@ void rethrow_or_timeout_redis_cache_error(
     return rows;
 }
 
-task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, const operation_timeout& deadline_value) {
+task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, const operation_deadline& deadline_value) {
     if (!deletion) {
         co_return;
     }
@@ -359,7 +358,7 @@ task<void> finish_delete_key_batch(std::optional<task<std::int64_t>> deletion, c
 }
 
 task<void> delete_key_batch(const redis_handle& redis, std::span<const std::pmr::string> keys,
-    std::pmr::memory_resource* resource, const operation_options& options, const operation_timeout& deadline_value) {
+    std::pmr::memory_resource* resource, const operation_options& options, const operation_deadline& deadline_value) {
     if (keys.empty()) {
         return finish_delete_key_batch(std::nullopt, deadline_value);
     }
@@ -393,7 +392,7 @@ task<void> remove_keys(redis_handle redis, std::pmr::vector<std::pmr::string> ke
     stop_group cancellation{options.stop_token_, std::move(shutdown)};
     options.stop_token_ = cancellation.token();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
-    const operation_timeout deadline_value(options.timeout_);
+    const operation_deadline deadline_value(options.timeout_);
     auto deletion = delete_key_batch(redis, keys, keys.get_allocator().resource(), options, deadline_value);
     // The command owns the keys; release their source before network IO.
     std::pmr::vector<std::pmr::string>(keys.get_allocator().resource()).swap(keys);
@@ -406,7 +405,7 @@ task<void> clear_keys(
     stop_group cancellation{options.stop_token_, std::move(shutdown)};
     options.stop_token_ = cancellation.token();
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
-    const operation_timeout deadline_value(options.timeout_);
+    const operation_deadline deadline_value(options.timeout_);
     auto* const resource = pattern.get_allocator().resource();
     std::optional<redis_scan_cursor> cursor;
     do {
@@ -511,7 +510,7 @@ std::optional<std::pmr::string> db_query_cache_state::key(
 }
 
 task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
-    db_cache_query database, operation_options options, operation_timeout deadline) {
+    db_cache_query database, operation_options options, operation_deadline deadline) {
     require_open();
     return query(std::move(key), duration.value_or(duration_), std::move(database), std::move(options), deadline);
 }
@@ -527,7 +526,7 @@ task<db_rows> db_query_cache_state::wrap(std::optional<std::chrono::milliseconds
 // the first to miss again leads the next fill. Each worker fills a key at most
 // once at a time; other workers and processes fill it independently.
 task<db_rows> db_query_cache_state::query(std::pmr::string key, std::chrono::milliseconds duration,
-    db_cache_query database, operation_options options, operation_timeout deadline) {
+    db_cache_query database, operation_options options, operation_deadline deadline) {
     stop_group cancellation{options.stop_token_, stop_.token()};
     options.stop_token_ = cancellation.token();
     const auto started = std::chrono::steady_clock::now();

@@ -11,7 +11,7 @@
 #include <optional>
 #include <utility>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_handle.h"
@@ -266,7 +266,7 @@ public:
     // The statement's way through a group, in order. admit() places it, or
     // parks it to be woken with the event admitted() checks. A statement that
     // leased a connection connects it if needed and founds a group on it.
-    [[nodiscard]] db_pipeline_event admit(member_type& member, const operation_timeout& admission_deadline);
+    [[nodiscard]] db_pipeline_event admit(member_type& member, const operation_deadline& admission_deadline);
     void admitted(db_pipeline_event event) const;
     [[nodiscard]] bool must_connect(member_type& member);
     void connected(member_type& member, const std::exception_ptr& failure);
@@ -318,7 +318,7 @@ private:
     [[nodiscard]] db_pipeline_event place(member_type& member);
     [[nodiscard]] std::optional<std::size_t> roomiest_group() const noexcept;
     void join(member_type& member, std::size_t slot) noexcept;
-    void park(member_type& member, const operation_timeout& admission_deadline);
+    void park(member_type& member, const operation_deadline& admission_deadline);
     void unpark(member_type& member) noexcept;
     // Serves parked statements in arrival order.
     void dispatch() noexcept;

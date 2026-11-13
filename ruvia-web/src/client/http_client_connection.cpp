@@ -38,7 +38,7 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
         .alpn_ = https ? client_alpn_bytes(alpn) : std::span<const unsigned char>{},
         .identity_host_ = server_name,
         .resolve_context_ = &pool,
-        .resolve_ = [](void* context, client_host_resolver& resolver, const operation_timeout& timeout, std::string_view host, std::uint16_t port) -> task<client_resolve_result> {
+        .resolve_ = [](void* context, client_host_resolver& resolver, const operation_deadline& timeout, std::string_view host, std::uint16_t port) -> task<client_resolve_result> {
             return static_cast<http_client_pool*>(context)->resolve_addresses(host, port, resolver, timeout);
         }};
 }
@@ -227,7 +227,7 @@ void http_client_connection::begin_idle() noexcept {
         return;
     }
     try {
-        (void)pool_.worker().schedule_timer(idle_timer_, worker_timer_deadline_after(idle_timeout->value()),
+        (void)pool_.worker().schedule_timer(idle_timer_, deadline_after(idle_timeout->value()),
             [this](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     close_idle();
@@ -381,10 +381,10 @@ bool http_client_connection::cancel_by_id(std::uint64_t cancellation_id) noexcep
 #endif
 }
 
-task<bool> http_client_connection::ensure_connected(const operation_timeout& operation_timeout_value,
-    const operation_timeout& acquire_timeout, stop_token stop_token_value,
+task<bool> http_client_connection::ensure_connected(const operation_deadline& operation_timeout_value,
+    const operation_deadline& acquire_timeout, stop_token stop_token_value,
     http_client_response_state& response) {
-    const auto acquired = co_await connect_scheduler_.acquire(acquire_timeout, stop_token_value);
+    const auto acquired = co_await connect_scheduler_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = stop_token_value});
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP client connect wait");
     }

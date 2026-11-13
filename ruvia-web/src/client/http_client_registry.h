@@ -13,7 +13,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -78,7 +78,7 @@ private:
     using preparation_owner_type = std::unique_ptr<origin_preparation, pmr_object_deleter<origin_preparation>>;
 
     [[nodiscard]] task<void> prepare_origin(preparation_owner_type input, operation_options options);
-    void require_prepared(stop_token stop, const operation_timeout& timeout) const;
+    void require_prepared(stop_token stop, const operation_deadline& timeout) const;
     void publish(std::pmr::string alias, pool_owner_type replacement);
 
     void require_mutable() const;

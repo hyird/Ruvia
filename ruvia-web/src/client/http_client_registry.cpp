@@ -122,14 +122,13 @@ void http_client_registry::require_mutable() const {
 
 task<void> http_client_registry::upsert(const http_client_config& config, operation_options options) {
     require_mutable();
-    validate_operation_options(options);
     validate_capability_alias(config.alias_.view(), "HTTP client alias must not be empty");
     auto input = make_pmr_object<origin_preparation>(
         process_resource(), config, worker_, preparation_stop_.token(), options.stop_token_, system_trust_);
     return make_scoped_operation(preparations_, prepare_origin(std::move(input), std::move(options)));
 }
 
-void http_client_registry::require_prepared(stop_token stop, const operation_timeout& timeout) const {
+void http_client_registry::require_prepared(stop_token stop, const operation_deadline& timeout) const {
     require_mutable();
     if (stop.stop_requested()) {
         throw http_client_error(http_client_error::code_type::cancelled, "HTTP origin update cancelled");
@@ -140,7 +139,7 @@ void http_client_registry::require_prepared(stop_token stop, const operation_tim
 }
 
 task<void> http_client_registry::prepare_origin(preparation_owner_type input, operation_options options) {
-    const operation_timeout timeout(options.timeout_);
+    const operation_deadline timeout(options.timeout_);
     const auto stop = input->cancellation_.token();
     require_prepared(stop, timeout);
     if (input->tls_) {

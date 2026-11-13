@@ -10,7 +10,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 
 #include "http/tls_tunnel_output.h"
 #include "server/inbound_buffer_resource.h"
@@ -84,13 +84,11 @@ void server_connection::require_active() const {
 
 task<std::optional<std::span<const std::byte>>> server_connection::read(operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, std::move(operation)));
 }
 
 task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
@@ -101,7 +99,6 @@ task<void> server_connection::write(std::span<const std::byte> bytes, operation_
 
 task<void> server_connection::finish(operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }

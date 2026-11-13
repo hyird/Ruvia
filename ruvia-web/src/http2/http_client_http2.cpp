@@ -54,7 +54,7 @@ http2_client_session::http2_client_session(http_client_connection& handler, clie
       capacity_signal_(worker_value) {}
 
 task<http2_client_session_start_result> http2_client_session::start(
-    http2_connection_options options, const operation_timeout& timeout) {
+    http2_connection_options options, const operation_deadline& timeout) {
     if (session_tasks_ != 0) {
         std::terminate();
     }
@@ -113,7 +113,7 @@ task<http2_client_session_start_result> http2_client_session::start(
             last_input_ = std::chrono::steady_clock::now();
             ping_pending_ = false;
             schedule_ping(generation,
-                worker_timer_saturating_deadline(last_input_, ping_interval_->value()));
+                saturating_deadline(last_input_, ping_interval_->value()));
         }
     } catch (...) {
         const auto failure = std::current_exception();
@@ -200,7 +200,7 @@ bool http2_client_session::begin_close(const client_transport_result& transport)
     try {
         // A client drain queues its final GOAWAY at once; idempotent.
         connection_->begin_drain();
-        if (worker_.schedule_timer(close_timer_, worker_timer_deadline_after(http2_client_goaway_flush_time),
+        if (worker_.schedule_timer(close_timer_, deadline_after(http2_client_goaway_flush_time),
                 [this, generation](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         fail(generation, close_result_, {});
@@ -270,15 +270,15 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
             ping_pending_ = false;
         }
         if (ping_pending_) {
-            if (now >= worker_timer_saturating_deadline(ping_sent_at_, interval)) {
+            if (now >= saturating_deadline(ping_sent_at_, interval)) {
                 fail(generation,
                     {.status_ = client_transport_status::aborted, .abort_ = client_abort_reason::timeout}, {});
             } else {
-                schedule_ping(generation, worker_timer_saturating_deadline(ping_sent_at_, interval));
+                schedule_ping(generation, saturating_deadline(ping_sent_at_, interval));
             }
             return;
         }
-        if (const auto idle_deadline = worker_timer_saturating_deadline(last_input_, interval); idle_deadline > now) {
+        if (const auto idle_deadline = saturating_deadline(last_input_, interval); idle_deadline > now) {
             schedule_ping(generation, idle_deadline);
             return;
         }
@@ -289,7 +289,7 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
         ping_pending_ = true;
         ping_sent_at_ = now;
         wake_writer();
-        schedule_ping(generation, worker_timer_saturating_deadline(now, interval));
+        schedule_ping(generation, saturating_deadline(now, interval));
     } catch (...) {
         fail(generation, {}, std::current_exception());
     }
@@ -342,7 +342,7 @@ http2_client_session::task_guard::~task_guard() {
 task<void> http2_client_session::run_reader(std::uint64_t generation) {
     const task_guard guard{*this, generation};
     const auto input = read_buffer_.prepare(read_buffer_bytes);
-    const operation_timeout unbounded(std::nullopt);
+    const operation_deadline unbounded(std::nullopt);
     try {
         while (generation_ == generation && !failed_) {
             const auto read = co_await transport_.read_some(input, unbounded);
@@ -385,7 +385,7 @@ task<void> http2_client_session::run_writer(std::uint64_t generation) {
                 take_output_batch(write_buffer_);
                 writing_ = true;
                 const auto written =
-                    co_await transport_.write(write_buffer_, operation_timeout(handler_.http2_write_timeout()));
+                    co_await transport_.write(write_buffer_, operation_deadline(handler_.http2_write_timeout()));
                 writing_ = false;
                 // Retain ordinary heads and frame-sized DATA batches, but
                 // return an unexpectedly larger indivisible frame before
@@ -494,7 +494,7 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
     }
-    stream.timer_.read_deadline_ = worker_timer_deadline_after(read_timeout->value());
+    stream.timer_.read_deadline_ = deadline_after(read_timeout->value());
     schedule_http2_stream_timer(stream);
 }
 
@@ -604,7 +604,7 @@ void http_client_connection::publish_http2_head(http2_stream& stream, http2_resp
             stream_ended, "invalid HTTP/2 WebSocket handshake response");
         // HTTP request lifetime ends at the accepted handshake. WebSocket
         // operations own their deadlines; the session itself has no total cap.
-        static const operation_timeout websocket_lifetime(std::nullopt);
+        static const operation_deadline websocket_lifetime(std::nullopt);
         stream.timeout_ = &websocket_lifetime;
         // WebSocket receive operations own their active-read inactivity timer.
         stream.timer_.read_deadline_.reset();
@@ -958,7 +958,7 @@ void http_client_connection::reprioritize(http_client_response_state& state_valu
 }
 
 task<void> http_client_connection::wait_for_http2_session_stop(
-    const operation_timeout& timeout, stop_token stop_token_value, http_client_response_state& response) {
+    const operation_deadline& timeout, stop_token stop_token_value, http_client_response_state& response) {
     worker_timer_registration deadline_timer;
     if (const auto deadline = timeout.deadline()) {
         if (*deadline <= std::chrono::steady_clock::now()) {
@@ -1001,7 +1001,7 @@ task<void> http_client_connection::wait_for_http2_session_stop(
 }
 
 task<bool> http_client_connection::execute_http2(const http_client_request_storage& request,
-    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
+    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
     http_client_response_state& state_value) {
     if (request.is_upgrade()) {
         throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP Upgrade requires HTTP/1.1");
@@ -1304,7 +1304,7 @@ struct http_client_pool::http2_push_driver final {
     http_client_connection& connection_;
     http_client_response response_;
     http_client_response_state& state_;
-    operation_timeout timeout_;
+    operation_deadline timeout_;
     http_client_connection::http2_stream stream_;
     bool registered_{false};
 };

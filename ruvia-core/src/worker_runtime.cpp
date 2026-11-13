@@ -18,10 +18,12 @@
 #include <windows.h>
 #endif
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
 
+#include "event_loop_state.h"
 #include "worker_dispatcher_impl.h"
 #include "worker_runtime_context.h"
 #include "worker_stop_chain.h"
@@ -121,7 +123,19 @@ public:
                                                      ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                                                      : ASIO_CONCURRENCY_HINT_DEFAULT)),
           context_(io_context_, options.queue_capacity_, options.blocking_pool_),
-          stop_(context_) {}
+          stop_(context_) {
+        stop_.configure({
+            .stop_admission_ = [this] { begin_stop_admission(); },
+            // The hook's target may reenter finalize() while it moves or dies.
+            .finalize_ =
+                [this] {
+                    auto hook = std::move(hooks_.finalize_);
+                    if (hook) {
+                        hook();
+                    }
+                },
+        });
+    }
 
     // Returns true for the winning failure.
     [[nodiscard]] bool record_failure(std::exception_ptr failure, bool observed) noexcept {
@@ -212,11 +226,72 @@ public:
         }
         // Configuration precedes publication and launch. The reservation
         // rejects reentry; callable moves run without the runtime mutex.
-        stop_.configure({
-            .stop_admission_ = std::move(hooks.stop_admission_),
-            .finalize_ = std::move(hooks.finalize_),
-        });
         hooks_ = std::move(hooks);
+    }
+
+    // Owner thread, once, from the stop chain. A runtime with a loop first
+    // drains the loop's retirement gate, which then resumes here through
+    // finish_loop_stop_admission().
+    void begin_stop_admission() {
+        std::shared_ptr<detail::event_loop_state> loop;
+        {
+            const std::lock_guard lock(mutex_);
+            loop = loop_;
+            stop_admission_delegated_ = loop != nullptr;
+        }
+        if (loop) {
+            loop->complete_stop_admission();
+            return;
+        }
+        run_stop_admission();
+    }
+
+    void finish_loop_stop_admission() noexcept {
+        {
+            const std::lock_guard lock(mutex_);
+            if (!std::exchange(stop_admission_delegated_, false)) {
+                return;
+            }
+        }
+        run_stop_admission();
+    }
+
+    void run_stop_admission() noexcept {
+        try {
+            if (hooks_.stop_admission_) {
+                hooks_.stop_admission_();
+            } else {
+                finalize();
+            }
+        } catch (...) {
+            std::terminate();
+        }
+    }
+
+    [[nodiscard]] std::shared_ptr<detail::event_loop_state> loop(worker_runtime& owner) {
+        {
+            const std::lock_guard lock(mutex_);
+            if (loop_) {
+                return loop_;
+            }
+        }
+        auto created = std::allocate_shared<detail::event_loop_state>(
+            std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()), owner);
+        created->failure_sink_ = [&owner](std::exception_ptr failure) { (void)owner.fail(std::move(failure)); };
+        {
+            const std::lock_guard lock(mutex_);
+            if (loop_) {
+                return loop_;
+            }
+            loop_ = created;
+        }
+        // A worker that already stops never notifies the loop; retire its
+        // admission directly.
+        if (context_.handle().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) !=
+            worker_registration_status::registered) {
+            created->stop();
+        }
+        return created;
     }
 
     [[nodiscard]] bool start() {
@@ -502,6 +577,8 @@ public:
     worker_group* group_{nullptr};
     worker_runtime* group_member_{nullptr};
     std::size_t group_notifications_{0};
+    std::shared_ptr<detail::event_loop_state> loop_;
+    bool stop_admission_delegated_{false};
 };
 
 void worker_runtime::impl_deleter_type::operator()(impl_type* value) const noexcept {
@@ -644,6 +721,14 @@ asio::io_context& worker_runtime::io_context() & noexcept {
 
 const worker_handle& worker_runtime::handle() const& noexcept {
     return impl_->context_.handle();
+}
+
+event_loop worker_runtime::loop() & {
+    return event_loop(impl_->loop(*this));
+}
+
+void worker_runtime::finish_loop_stop_admission() noexcept {
+    impl_->finish_loop_stop_admission();
 }
 
 worker_runtime_context& worker_runtime::context() & noexcept {

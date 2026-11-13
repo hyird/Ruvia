@@ -75,7 +75,7 @@ template <typename lock_requested_type>
     if (stop != nullptr) {
         stop->request_stop();
     }
-    EXPECT_TRUE(run.wait_until(std::chrono::steady_clock::now() + std::chrono::seconds(5)));
+    EXPECT_TRUE(run.wait_for(std::chrono::seconds(5)));
     loops.join();
     try {
         (void)std::move(run).get();

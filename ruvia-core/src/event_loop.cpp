@@ -258,6 +258,12 @@ event_loop_state::event_loop_state(std::size_t queue_capacity, blocking_pool* po
       executor_(io_context_->get_executor()),
       runtime_(owned_runtime().context()) {}
 
+event_loop_state::event_loop_state(worker_runtime& runtime)
+    : context_ownership_(std::in_place_type<borrowed_runtime>, &runtime),
+      io_context_(&runtime.io_context()),
+      executor_(io_context_->get_executor()),
+      runtime_(runtime.context()) {}
+
 event_loop_state::event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
     move_only_function<void(std::exception_ptr)> failure)
     : context_ownership_(std::in_place_type<attached_context>, external_context, queue_capacity, pool, std::move(failure)),
@@ -353,6 +359,8 @@ void event_loop_state::stop() noexcept {
     }
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
         attached->stop_.request_stop();
+    } else if (auto* borrowed = std::get_if<borrowed_runtime>(&context_ownership_)) {
+        borrowed->runtime_->request_stop();
     } else {
         owned_runtime().request_stop();
     }
@@ -396,6 +404,8 @@ void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> sel
 void event_loop_state::finalize_stop() noexcept {
     if (auto* attached = std::get_if<attached_context>(&context_ownership_)) {
         attached->stop_.finalize();
+    } else if (auto* borrowed = std::get_if<borrowed_runtime>(&context_ownership_)) {
+        borrowed->runtime_->finish_loop_stop_admission();
     } else {
         owned_runtime().finalize();
     }
@@ -447,18 +457,6 @@ event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) no
 
 bool event_loop::valid() const noexcept {
     return handle().valid();
-}
-
-bool event_loop::accepting() const noexcept {
-    return handle().accepting();
-}
-
-bool event_loop::is_current() const noexcept {
-    return handle().is_current();
-}
-
-worker_id_type event_loop::id() const noexcept {
-    return handle().id();
 }
 
 asio::io_context& event_loop::io_context() const& {

@@ -120,7 +120,7 @@ public:
         expired_type on_expired, failure_type on_failure) noexcept {
         try {
             const auto status = worker_value.schedule_timer(timer_,
-                worker_timer_deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
+                deadline_after(bound), [on_expired](worker_timer_outcome outcome) {
                     // Cancellation belongs to worker shutdown, which closes the session.
                     if (outcome == worker_timer_outcome::expired) {
                         on_expired();

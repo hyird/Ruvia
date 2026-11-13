@@ -120,7 +120,11 @@ public:
     }
     const worker_handle& worker() const&& = delete;
 
-    void notify() noexcept;
+    // Wakes every waiter, or leaves one pending wake when none waits. Like
+    // wait(), it must run on the bound worker and throws std::logic_error
+    // elsewhere. A failed resume dispatch after waiters were detached has no
+    // recoverable owner and terminates.
+    void notify();
 
 private:
     [[nodiscard]] static const worker_handle& require_worker(const worker_handle& worker_value) {
@@ -147,10 +151,8 @@ private:
     bool pending_{false};
 };
 
-inline void worker_signal::notify() noexcept {
-    if (!worker_.is_current()) {
-        std::terminate();
-    }
+inline void worker_signal::notify() {
+    require_current_worker();
 
     auto* waiter = std::exchange(waiters_, nullptr);
     if (waiter == nullptr) {

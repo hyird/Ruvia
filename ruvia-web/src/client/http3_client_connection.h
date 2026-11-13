@@ -16,7 +16,7 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_priority.h"
@@ -67,7 +67,7 @@ public:
     http3_client_connection(const http3_client_connection&) = delete;
     http3_client_connection& operator=(const http3_client_connection&) = delete;
     [[nodiscard]] task<bool> execute(const http_client_request_storage& request, bool fallback,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
         stop_token stop, http_client_response_state& response);
     void close() noexcept;
     void retire_addresses() noexcept;
@@ -81,7 +81,7 @@ public:
     [[nodiscard]] std::size_t available() const noexcept;
     [[nodiscard]] bool active() const noexcept;
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port,
-        const operation_timeout& timeout, stop_token stop);
+        const operation_deadline& timeout, stop_token stop);
     [[nodiscard]] task<bool> send_datagram(http_client_response_state& response, std::span<const std::byte> bytes);
     [[nodiscard]] std::uint64_t serial() const noexcept {
         return serial_;
@@ -110,7 +110,7 @@ private:
     class session;
     class address_race;
     [[nodiscard]] task<void> select_endpoint(bool allow_early,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
         stop_token stop, http_client_response_state& response);
     http3_client_tls& tls_;
     http3_client_route route_;

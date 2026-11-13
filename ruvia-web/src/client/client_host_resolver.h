@@ -8,7 +8,7 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -44,12 +44,12 @@ public:
     client_host_resolver& operator=(client_host_resolver&& other) noexcept;
 
     [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port,
-        const operation_timeout& timeout, stop_token stop = {});
+        const operation_deadline& timeout, stop_token stop = {});
     void cancel() noexcept;
 
 private:
     struct query;
-    [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_timeout timeout, stop_token stop);
+    [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_deadline timeout, stop_token stop);
     const worker_handle* worker_;
     std::optional<stop_source> stop_;
 };

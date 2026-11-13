@@ -96,7 +96,6 @@ redis_handle::redis_handle(const redis_handle& other) noexcept
 
 redis_handle redis_handle::with_options(operation_options options) const {
     registration_.require_active();
-    validate_operation_options(options);
     redis_handle configured(*this);
     configured.operation_options_ =
         override_operation_options(operation_options_, std::move(options));

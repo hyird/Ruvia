@@ -48,91 +48,12 @@ private:
     post_status status_;
 };
 
-// The outcome of event_loop::try_start(). The category is fixed at
-// construction: accepted owns the started root_task, and a rejection owns the
-// unconsumed cold task with its post_status.
+// The outcome of event_loop::try_start(): accepted owns the started
+// root_task (value()/take_value()); a rejection owns the unconsumed cold task
+// (rejected()/take_rejected()) with its post_status.
 template <typename t_type>
-class event_loop_start_result final {
-public:
-    event_loop_start_result(const event_loop_start_result&) = delete;
-    event_loop_start_result& operator=(const event_loop_start_result&) = delete;
-    event_loop_start_result(event_loop_start_result&&) noexcept = default;
-    event_loop_start_result& operator=(event_loop_start_result&&) = delete;
-
-    [[nodiscard]] post_status status() const noexcept {
-        return status_;
-    }
-
-    [[nodiscard]] bool accepted() const noexcept {
-        return status_ == post_status::accepted;
-    }
-
-    [[nodiscard]] root_task<t_type>& value() & {
-        return std::get<root_task<t_type>>(require_accepted());
-    }
-    [[nodiscard]] const root_task<t_type>& value() const& {
-        return std::get<root_task<t_type>>(require_accepted());
-    }
-    root_task<t_type>& value() && = delete;
-    const root_task<t_type>& value() const&& = delete;
-
-    [[nodiscard]] root_task<t_type> take_value() && {
-        return std::move(std::get<root_task<t_type>>(require_accepted()));
-    }
-
-    [[nodiscard]] task<t_type>* rejected() & noexcept {
-        return std::get_if<task<t_type>>(&payload_);
-    }
-    [[nodiscard]] const task<t_type>* rejected() const& noexcept {
-        return std::get_if<task<t_type>>(&payload_);
-    }
-    task<t_type>* rejected() && = delete;
-    const task<t_type>* rejected() const&& = delete;
-
-    [[nodiscard]] task<t_type> take_rejected() && {
-        auto* rejected_task = std::get_if<task<t_type>>(&payload_);
-        if (rejected_task == nullptr) {
-            throw std::logic_error("accepted start result has no rejected task");
-        }
-        return std::move(*rejected_task);
-    }
-
-    [[nodiscard]] static event_loop_start_result accept(root_task<t_type>&& started) noexcept {
-        return event_loop_start_result(post_status::accepted, std::move(started));
-    }
-
-    [[nodiscard]] static event_loop_start_result reject(post_status status, task<t_type>&& rejected_task) {
-        if (status == post_status::accepted) {
-            throw std::invalid_argument("rejected start result requires a rejection status");
-        }
-        return event_loop_start_result(status, std::move(rejected_task));
-    }
-
-private:
-    using payload_type = std::variant<root_task<t_type>, task<t_type>>;
-
-    template <typename payload_value_type>
-    event_loop_start_result(post_status status, payload_value_type&& payload_value) noexcept
-        : status_(status),
-          payload_(std::in_place_type<std::remove_cvref_t<payload_value_type>>,
-              std::forward<payload_value_type>(payload_value)) {}
-
-    [[nodiscard]] payload_type& require_accepted() {
-        if (status_ != post_status::accepted) {
-            throw std::logic_error("rejected start result has no root task");
-        }
-        return payload_;
-    }
-    [[nodiscard]] const payload_type& require_accepted() const {
-        if (status_ != post_status::accepted) {
-            throw std::logic_error("rejected start result has no root task");
-        }
-        return payload_;
-    }
-
-    post_status status_;
-    payload_type payload_;
-};
+using event_loop_start_result =
+    worker_delivery_result<task<t_type>, post_status, post_status::accepted, root_task<t_type>>;
 
 namespace detail {
 
@@ -248,12 +169,6 @@ public:
     event_loop() noexcept = default;
 
     [[nodiscard]] bool valid() const noexcept;
-    [[nodiscard]] bool accepting() const noexcept;
-    [[nodiscard]] bool is_current() const noexcept;
-    [[nodiscard]] worker_id_type id() const noexcept;
-    [[nodiscard]] bool has_blocking_pool() const noexcept {
-        return handle().has_blocking_pool();
-    }
 
     // A retired pool loop or attachment is invalid; accessing its context or
     // obtaining a fresh executor then throws std::logic_error. Previously
@@ -261,7 +176,9 @@ public:
     [[nodiscard]] asio::io_context& io_context() const&;
     asio::io_context& io_context() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
-    // Rvalue loops return a copy: the handle must not outlive its loop owner.
+    // The loop's worker endpoint: admission state, identity, posting, timers,
+    // and the completion lane. Rvalue loops return a copy: the handle must not
+    // outlive its loop owner.
     [[nodiscard]] const worker_handle& handle() const& noexcept;
     [[nodiscard]] worker_handle handle() const&& noexcept;
 
@@ -271,16 +188,13 @@ public:
     // diagnostic, then retire without throwing from the host's run().
     void report_failure(std::exception_ptr failure) const noexcept;
 
-    template <typename fn_type>
-        requires detail::move_only_function_target<void, fn_type>
-    [[nodiscard]] post_result_type post(fn_type&& fn) const {
-        return handle().post(std::forward<fn_type>(fn));
-    }
-
-    // Cold-path cleanup for an already owned resource, not new business work.
-    // Bypasses bounded admission but acquires retirement protection; returns
-    // false once final retirement begins. Accepted callbacks and their owned
-    // inputs retire before the loop can release its execution context.
+    // Loop-level cold-path cleanup of an already owned resource; it belongs
+    // to no admitted operation and is not new business work. Bypasses bounded
+    // admission but takes retirement protection, so it can still return false
+    // after retirement has begun. Accepted callbacks and their owned inputs
+    // retire before the loop can release its execution context. Contrast
+    // worker_handle::defer_completion(), the completion, cancellation, and
+    // resume lane of an operation the worker already admitted.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
     [[nodiscard]] bool defer_cleanup(fn_type&& fn) const {
@@ -302,7 +216,7 @@ public:
         using result_type = event_loop_start_result<t_type>;
         auto retirement_lease = acquire_root_lease();
         if (!retirement_lease) {
-            return result_type::reject(post_status::worker_stopping, std::move(task_value));
+            return detail::worker_delivery_access::reject<result_type>(post_status::worker_stopping, std::move(task_value));
         }
         auto completion = std::allocate_shared<detail::root_task_state<t_type>>(
             std::pmr::polymorphic_allocator<detail::root_task_state<t_type>>(process_resource()),
@@ -323,9 +237,9 @@ public:
             };
         });
         if (status != post_status::accepted) {
-            return result_type::reject(status, std::move(task_value));
+            return detail::worker_delivery_access::reject<result_type>(status, std::move(task_value));
         }
-        return result_type::accept(root_task<t_type>(std::move(completion)));
+        return detail::worker_delivery_access::accept<result_type>(root_task<t_type>(std::move(completion)));
     }
 
     // The local strict form of try_start(): a rejection destroys the cold task
@@ -366,6 +280,7 @@ private:
     std::shared_ptr<detail::event_loop_state> state_;
     friend class event_loop_pool;
     friend class event_loop_attachment;
+    friend class worker_runtime;
 };
 
 struct event_loop_attachment_options final {

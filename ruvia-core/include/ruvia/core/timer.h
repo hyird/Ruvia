@@ -28,10 +28,10 @@ class sleep_operation;
 // `deadline`. The result distinguishes a normal elapsed delay from
 // cancellation caused by worker shutdown (stop_timers): a sleep pending at
 // that point, or started after the worker's timer queue stopped, returns
-// stop_requested without throwing. The duration is the sleep's target rather
-// than an operation bound: sleep_for(d) is sleep_until(now + d), so a
-// non-positive duration, like a deadline that has passed, elapses without
-// suspending. Durations saturate, so an effectively unbounded delay such as
+// stop_requested without throwing. The duration is the sleep's target, not
+// an operation bound (operation_timeout): sleep_for(d) is sleep_until(now +
+// d), so a non-positive duration, like a deadline that has passed, elapses
+// without suspending. Durations saturate, so an effectively unbounded delay such as
 // hours::max() waits for stop instead of overflowing.
 //
 // The sleep is also cut short when `stop_token_value` is stopped. A

@@ -123,7 +123,7 @@ bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
     continuation_ = continuation;
     const auto deadline = [&] {
         if (const auto* duration = std::get_if<timeout_duration>(&target_)) {
-            return worker_timer_deadline_after(duration->value());
+            return deadline_after(duration->value());
         }
         return std::get<std::chrono::steady_clock::time_point>(target_);
     }();

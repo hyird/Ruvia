@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
+#include <memory_resource>
 #include <mutex>
 #include <semaphore>
 #include <stdexcept>
@@ -20,7 +21,6 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -67,6 +67,16 @@ struct semaphore_state final {
 static_assert(worker_wait_state<semaphore_state, std::monostate>);
 static_assert(worker_shutdown_observer<semaphore_state>);
 
+// The concept names the shutdown registration member, not just the observer.
+struct unregistered_state final {
+    [[nodiscard]] const worker_handle& worker() const noexcept;
+    [[nodiscard]] std::unique_lock<std::mutex> lock_state();
+    [[nodiscard]] worker_wait_slot<std::monostate, unregistered_state>& wait_slot() noexcept;
+    void worker_stopping() noexcept;
+    worker_shutdown_registration registration_;
+};
+static_assert(!worker_wait_state<unregistered_state, std::monostate>);
+
 class worker_semaphore final {
 public:
     class acquire_operation final {
@@ -104,29 +114,17 @@ public:
     private:
         friend class worker_semaphore;
 
-        acquire_operation(std::shared_ptr<semaphore_state> state_value, operation_options options)
+        acquire_operation(std::shared_ptr<semaphore_state> state_value, operation_options options) noexcept
             : wait_(std::move(state_value), std::move(options)) {}
-        acquire_operation(std::shared_ptr<semaphore_state> state_value, const operation_timeout& deadline,
-            stop_token stop_token_value) noexcept
-            : wait_(std::move(state_value), deadline, std::move(stop_token_value)) {}
 
         worker_single_wait_awaiter<std::monostate, semaphore_state> wait_;
     };
 
     worker_semaphore(const worker_handle& worker_value, std::size_t permits)
-        : state_(std::make_shared<semaphore_state>(worker_value, permits)) {
-        if (worker_value.register_shutdown(state_, &semaphore_state::shutdown_registration_) !=
-            worker_registration_status::registered) {
-            throw std::runtime_error("semaphore worker is stopping");
-        }
-    }
+        : state_(make_worker_wait_state<semaphore_state>(std::pmr::get_default_resource(), worker_value, permits)) {}
 
     [[nodiscard]] acquire_operation acquire(operation_options options = {}) {
         return acquire_operation(state_, std::move(options));
-    }
-
-    [[nodiscard]] acquire_operation acquire(const operation_timeout& deadline, stop_token stop_token_value = {}) {
-        return acquire_operation(state_, deadline, std::move(stop_token_value));
     }
 
     // Any thread: hands the permit to the pending acquire, or banks it.
@@ -164,7 +162,7 @@ task<void> exercise_semaphore(
     outcomes.timed_out_ =
         (co_await semaphore.acquire({.timeout_ = std::chrono::milliseconds(5)})).status() == worker_wait_status::timed_out;
     outcomes.deadline_passed_ =
-        (co_await semaphore.acquire(operation_timeout(std::chrono::steady_clock::time_point{}))).status() ==
+        (co_await semaphore.acquire({.timeout_ = operation_timeout(std::chrono::steady_clock::time_point{})})).status() ==
         worker_wait_status::timed_out;
 
     stop_source source;
@@ -178,7 +176,7 @@ task<void> exercise_semaphore(
         semaphore.release();
     });
     static_cast<void>(worker_value.post([&released] { released.release(); }));
-    const auto handed_off = co_await semaphore.acquire(operation_timeout(std::chrono::seconds(30)));
+    const auto handed_off = co_await semaphore.acquire({.timeout_ = std::chrono::seconds(30)});
     releaser.join();
     outcomes.released_ = handed_off.has_value();
 }

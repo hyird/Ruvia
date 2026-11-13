@@ -187,7 +187,7 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
     const worker_handle& worker_value, const stop_token& stop_token_value,
     std::span<const http_content_coding> codings, std::string_view raw,
     http_content_decode_options options) {
-    if (worker_value.has_blocking_pool() && options.max_decoded_bytes_ > inline_request_decode_bytes) {
+    if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
         if (raw.size() <= inline_request_decode_bytes) {
             auto inline_result = decode_http_content(codings, raw,
                 {.max_decoded_bytes_ = inline_request_decode_bytes, .resource_ = options.resource_});
@@ -560,12 +560,10 @@ std::optional<std::string_view> context_request::negotiate(
 }
 
 task<std::string_view> context_request::text(operation_options operation) const {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_text(*context_, std::move(operation)));
 }
 
 task<std::span<const std::byte>> context_request::bytes(operation_options operation) const {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(context_->operation_scope_, read_request_bytes(*context_, std::move(operation)));
 }
 
@@ -592,13 +590,11 @@ std::optional<std::string_view> context_request::signed_cookie(
 }
 
 task<std::pmr::vector<multipart_part>> context_request::multipart(operation_options operation) const {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
 }
 
 task<void> context_request::discard_body(operation_options operation) const {
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(context_->operation_scope_, discard_request_body(*context_, std::move(operation)));
 }
 

@@ -308,7 +308,7 @@ blocking_pool_stats blocking_pool::stats() const noexcept {
     };
 }
 
-blocking_submit_status blocking_pool::submit(move_only_function<void()> task_value) {
+blocking_submit_result blocking_pool::submit(move_only_function<void()> task_value) {
     if (!task_value) {
         throw std::invalid_argument("blocking pool requires a callable task");
     }
@@ -319,11 +319,13 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
         std::lock_guard lock(owner.mutex_);
         if (owner.stopping_) {
             ++owner.discarded_;
-            return blocking_submit_status::pool_stopped;
+            return detail::worker_delivery_access::reject<blocking_submit_result>(
+                blocking_submit_status::pool_stopped, std::move(task_value));
         }
         if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
             ++owner.rejected_;
-            return blocking_submit_status::queue_full;
+            return detail::worker_delivery_access::reject<blocking_submit_result>(
+                blocking_submit_status::queue_full, std::move(task_value));
         }
         node = owner.free_head_;
         owner.free_head_ = node->next_;
@@ -345,7 +347,10 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
         }
     }
     if (stopped) {
-        node->task_ = nullptr;
+        // Stopping never recycles nodes, so the reserved node stays exclusive
+        // until its callable has been handed back.
+        auto rejected = detail::worker_delivery_access::reject<blocking_submit_result>(
+            blocking_submit_status::pool_stopped, std::move(node->task_));
         bool notify = false;
         {
             std::lock_guard lock(owner.mutex_);
@@ -354,10 +359,10 @@ blocking_submit_status blocking_pool::submit(move_only_function<void()> task_val
         if (notify) {
             owner.condition_.notify_all();
         }
-        return blocking_submit_status::pool_stopped;
+        return rejected;
     }
     owner.condition_.notify_one();
-    return blocking_submit_status::accepted;
+    return detail::worker_delivery_access::accept<blocking_submit_result>();
 }
 
 void blocking_pool::stop() noexcept {

@@ -121,7 +121,7 @@ void redis_connection::ensure_reader() {
     reply_bytes_ = 0;
 }
 
-task<void> redis_connection::write_request(const operation_timeout& timeout, redis_request_content content) {
+task<void> redis_connection::write_request(const operation_deadline& timeout, redis_request_content content) {
     struct request_buffer_release final {
         std::pmr::string& buffer_;
         redis_request_content content_;
@@ -142,7 +142,7 @@ task<void> redis_connection::write_request(const operation_timeout& timeout, red
     }
 }
 
-task<redis_value> redis_connection::read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource,
+task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::pmr::memory_resource* resource,
     std::chrono::steady_clock::time_point* input_time) {
     if (!connected_) {
         throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
@@ -218,7 +218,7 @@ task<redis_value> redis_connection::read_reply(const operation_timeout& timeout,
     }
 }
 
-task<void> redis_connection::connect(const operation_timeout* operation_timeout_value,
+task<void> redis_connection::connect(const operation_deadline* operation_timeout_value,
     std::optional<timeout_duration> command_timeout) {
     if (connected_) {
         // A peer that closed the idle connection or sent unsolicited bytes
@@ -231,7 +231,7 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
     }
     const auto deadline_value = operation_timeout_value != nullptr
                                     ? operation_timeout_value->constrained_by(config_.connect_timeout_)
-                                    : operation_timeout(config_.connect_timeout_);
+                                    : operation_deadline(config_.connect_timeout_);
     try {
         // An expired deadline of the retired connection must not abort this one.
         transport_.reset_abort();
@@ -249,7 +249,7 @@ task<void> redis_connection::connect(const operation_timeout* operation_timeout_
     }
 }
 
-task<void> redis_connection::authenticate(const operation_timeout& connect_timeout,
+task<void> redis_connection::authenticate(const operation_deadline& connect_timeout,
     std::optional<timeout_duration> command_timeout) {
     const auto deadline_value = connect_timeout.constrained_by(command_timeout);
     // An ACL user must authenticate by name even without a password (a
@@ -279,7 +279,7 @@ task<void> redis_connection::authenticate(const operation_timeout& connect_timeo
 }
 
 task<redis_value> redis_connection::exchange_control_command(
-    std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content) {
+    std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content) {
     write_buffer_.clear();
     append_resp_command(write_buffer_, args);
     co_await write_request(deadline, content);

@@ -24,7 +24,7 @@ namespace {
     if (options.compression_.has_value()) {
         if (const auto* selection = policy.selection()) {
             return apply_response_compression(*selection, request.known_method(), response, *options.compression_,
-                *options.codecs_, worker.has_blocking_pool());
+                *options.codecs_, worker.blocking_pool() != nullptr);
         }
     }
     return {http_response_compression_status::not_applicable, false};

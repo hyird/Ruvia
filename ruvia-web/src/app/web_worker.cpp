@@ -89,8 +89,14 @@ web_worker_stats web_worker_handle::stats() const noexcept {
 
 web_worker_post_result web_worker_handle::post_task(
     move_only_function<task<void>(web_worker_context&)> task_value) const {
-    return dispatch_ ? dispatch_->post(std::move(task_value))
-                     : web_worker_post_result::reject(post_status::worker_stopping, std::move(task_value));
+    if (dispatch_) {
+        return dispatch_->post(std::move(task_value));
+    }
+    // A handle without a worker refuses with worker_stopping and returns the task.
+    return worker_handle().post_payload(std::move(task_value),
+        [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
+            std::terminate();  // An empty handle never admits.
+        });
 }
 
 }  // namespace ruvia
@@ -147,15 +153,15 @@ web_worker_post_result web_worker_dispatch::post(job_type job) {
     // for an accepted post and destroys an unrun job on abandonment.
     outstanding_.fetch_add(1, std::memory_order_acq_rel);
     abandon_reservation_type reservation(this);
-    const auto status = worker_.post_factory([&job, &reservation]() mutable -> move_only_function<void()> {
-        return [job = std::move(job), reservation = std::move(reservation)]() mutable {
+    auto result = worker_.post_payload(std::move(job), [&reservation](job_type&& admitted) -> move_only_function<void()> {
+        return [job = std::move(admitted), reservation = std::move(reservation)]() mutable {
             reservation.release()->start(std::move(job));
         };
     });
-    switch (status) {
+    switch (result.status()) {
         case post_status::accepted:
             accepted_.fetch_add(1, std::memory_order_relaxed);
-            return web_worker_post_result::accept();
+            break;
         case post_status::queue_full:
             queue_full_.fetch_add(1, std::memory_order_relaxed);
             break;
@@ -163,7 +169,7 @@ web_worker_post_result web_worker_dispatch::post(job_type job) {
             worker_stopping_.fetch_add(1, std::memory_order_relaxed);
             break;
     }
-    return web_worker_post_result::reject(status, std::move(job));
+    return result;
 }
 
 web_worker_stats web_worker_dispatch::stats() const noexcept {

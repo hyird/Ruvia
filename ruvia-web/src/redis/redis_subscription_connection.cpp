@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/redis/redis_handle.h"
 
@@ -91,7 +91,7 @@ void redis_subscription_connection::abort(client_abort_reason reason) noexcept {
 task<void> redis_subscription_connection::send(redis_owned_command command) {
     auto lease = claim_operation_lane(write_active_, "redis subscription command is already in progress");
     throw_if_closed();
-    const operation_timeout operation_timeout_value(options_.timeout_);
+    const operation_deadline operation_timeout_value(options_.timeout_);
     try {
         // An idle probe's PING may hold the transport's write lane; it ends
         // within one interval or with the connection.
@@ -135,7 +135,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
         // An already-stopped token: nothing was read, the subscription stays open.
         throw redis_error(redis_error::code_type::cancelled, "redis subscription read cancelled");
     }
-    const operation_timeout timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
+    const operation_deadline timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
     std::exception_ptr failure;
     task_scope ping_writes(owner_.worker_, {.resource_ = process_resource()});
     begin_idle_probe(ping_writes, timeout_value);
@@ -200,7 +200,7 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
     }
 }
 
-void redis_subscription_connection::begin_idle_probe(task_scope& ping_writes, const operation_timeout& read_timeout) noexcept {
+void redis_subscription_connection::begin_idle_probe(task_scope& ping_writes, const operation_deadline& read_timeout) noexcept {
     const auto& interval = owner_.config_.subscription_ping_interval_;
     if (!interval.has_value()) {
         return;
@@ -210,7 +210,7 @@ void redis_subscription_connection::begin_idle_probe(task_scope& ping_writes, co
     // Only a waiting read observes input, so the idle clock starts with it.
     read_started_ = clock_type::now();
     probe_started_.reset();
-    arm_idle_probe(worker_timer_saturating_deadline(read_started_, interval->value()));
+    arm_idle_probe(saturating_deadline(read_started_, interval->value()));
 }
 
 void redis_subscription_connection::end_idle_probe() noexcept {
@@ -248,7 +248,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
     if (closed_ || ping_writes_ == nullptr) {
         return;
     }
-    const auto interval = worker_timer_saturating_duration_cast(owner_.config_.subscription_ping_interval_->value());
+    const auto interval = saturating_duration_cast(owner_.config_.subscription_ping_interval_->value());
     const auto now = clock_type::now();
     const auto idle_since = std::max(last_input_, read_started_);
     if (probe_started_.has_value() && *probe_started_ <= idle_since) {
@@ -256,7 +256,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         probe_started_.reset();
     }
     if (probe_started_.has_value()) {
-        const auto probe_deadline = worker_timer_saturating_deadline(*probe_started_, interval);
+        const auto probe_deadline = saturating_deadline(*probe_started_, interval);
         if (now < probe_deadline) {
             arm_idle_probe(probe_deadline);
             return;
@@ -264,7 +264,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         abort(client_abort_reason::timeout);
         return;
     }
-    const auto idle_deadline = worker_timer_saturating_deadline(idle_since, interval);
+    const auto idle_deadline = saturating_deadline(idle_since, interval);
     if (now < idle_deadline) {
         arm_idle_probe(idle_deadline);
         return;
@@ -285,7 +285,7 @@ void redis_subscription_connection::idle_probe_expired() noexcept {
         }
     }
     if (!closed_) {
-        arm_idle_probe(worker_timer_saturating_deadline(now, interval));
+        arm_idle_probe(saturating_deadline(now, interval));
     }
 }
 
@@ -293,7 +293,7 @@ void redis_subscription_connection::cancel_read(void* connection) noexcept {
     static_cast<redis_subscription_connection*>(connection)->abort(client_abort_reason::cancelled);
 }
 
-task<void> redis_subscription_connection::write_ping(operation_timeout timeout) {
+task<void> redis_subscription_connection::write_ping(operation_deadline timeout) {
     try {
         connection_.write_buffer().assign(redis_ping_request);
         ++pending_pings_;
@@ -420,7 +420,6 @@ task<void> redis_subscription::punsubscribe(std::span<const std::string_view> pa
 
 task<std::optional<redis_pubsub_event>> redis_subscription::read(operation_options operation) & {
     registration_.require_active();
-    validate_operation_options(operation);
     return make_scoped_operation(registration_.scope(), connection_->read(std::move(operation)));
 }
 

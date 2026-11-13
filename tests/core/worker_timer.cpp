@@ -69,24 +69,24 @@ bool timer_duration_conversions_preserve_integer_ticks_and_saturate() {
     using namespace std::chrono;
     for (const nanoseconds value : {nanoseconds(9'000'000'000'000'000'001LL),
              nanoseconds(-9'000'000'000'000'000'001LL), nanoseconds(1), nanoseconds(-1)}) {
-        if (ruvia::worker_timer_saturating_duration_cast(value) != duration_cast<steady_clock::duration>(value)) {
+        if (ruvia::saturating_duration_cast(value) != duration_cast<steady_clock::duration>(value)) {
             return false;
         }
     }
     const milliseconds coarse(9'000'000'000'001LL);
     using picoseconds_type = duration<std::int64_t, std::pico>;
     const picoseconds_type fine(9'223'000'000'000'001'000LL);
-    if (ruvia::worker_timer_saturating_duration_cast(coarse) != duration_cast<steady_clock::duration>(coarse) ||
-        ruvia::worker_timer_saturating_duration_cast(fine) != duration_cast<steady_clock::duration>(fine) ||
-        ruvia::worker_timer_saturating_duration_cast(seconds::max()) != steady_clock::duration::max() ||
-        ruvia::worker_timer_saturating_duration_cast(seconds::min()) != steady_clock::duration::min() ||
-        ruvia::worker_timer_saturating_duration_cast(duration<std::uint64_t, std::nano>((std::numeric_limits<std::uint64_t>::max)())) != steady_clock::duration::max()) {
+    if (ruvia::saturating_duration_cast(coarse) != duration_cast<steady_clock::duration>(coarse) ||
+        ruvia::saturating_duration_cast(fine) != duration_cast<steady_clock::duration>(fine) ||
+        ruvia::saturating_duration_cast(seconds::max()) != steady_clock::duration::max() ||
+        ruvia::saturating_duration_cast(seconds::min()) != steady_clock::duration::min() ||
+        ruvia::saturating_duration_cast(duration<std::uint64_t, std::nano>((std::numeric_limits<std::uint64_t>::max)())) != steady_clock::duration::max()) {
         return false;
     }
-    return ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(9'000'000'000'000'000'001LL))) == milliseconds(9'000'000'000'001LL) &&
-           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(milliseconds(1))) == milliseconds(1) &&
-           ruvia::worker_timer_ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(1))) == milliseconds(1) &&
-           ruvia::worker_timer_ceil_milliseconds(steady_clock::duration::min()) == milliseconds::zero();
+    return ruvia::ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(9'000'000'000'000'000'001LL))) == milliseconds(9'000'000'000'001LL) &&
+           ruvia::ceil_milliseconds(duration_cast<steady_clock::duration>(milliseconds(1))) == milliseconds(1) &&
+           ruvia::ceil_milliseconds(duration_cast<steady_clock::duration>(nanoseconds(1))) == milliseconds(1) &&
+           ruvia::ceil_milliseconds(steady_clock::duration::min()) == milliseconds::zero();
 }
 
 bool timer_immediate_shutdown_works() {
@@ -462,7 +462,8 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
         co_return;
     }
 
-    // A timed acquire keeps waiting without a timer and ends with the pool.
+    // A free slot is still leased; a saturated timed acquire reports the
+    // shutdown like every other timed primitive.
     ruvia::pool_lease_scheduler pool(1, worker_value);
     const auto held = co_await pool.acquire();
     if (!held.has_value()) {
@@ -472,10 +473,10 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
     {
         ruvia::task_scope scope(worker_value);
         scope.spawn(acquire_after_timer_stop(pool, waiting_result));
-        static_cast<void>(pool.close());
         co_await scope.join();
     }
-    success = waiting_result.has_value() && waiting_result->status() == ruvia::worker_wait_status::closed;
+    pool.release(held.value());
+    success = waiting_result.has_value() && waiting_result->status() == ruvia::worker_wait_status::worker_stopping;
 }
 
 bool timed_primitives_report_timer_stop() {
@@ -844,11 +845,11 @@ TEST(Ruvia, timer_fractional_duration_conversion_preserves_rounding_and_bounds) 
              {9'000'000'000'000'000'003LL, 5'400'000'000'000'000'002LL},
              {-9'000'000'000'000'000'003LL, -5'400'000'000'000'000'001LL}}) {
         SCOPED_TRACE(input);
-        EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(input)).count(), expected);
+        EXPECT_EQ(ruvia::saturating_duration_cast(signed_type(input)).count(), expected);
     }
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type(10'000'000'000'000'000'002ULL)).count(), 6'000'000'000'000'000'002LL);
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type::max()), target_type::max());
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::min()).count(), -5'534'023'222'112'865'484LL);
+    EXPECT_EQ(ruvia::saturating_duration_cast(unsigned_type(10'000'000'000'000'000'002ULL)).count(), 6'000'000'000'000'000'002LL);
+    EXPECT_EQ(ruvia::saturating_duration_cast(unsigned_type::max()), target_type::max());
+    EXPECT_EQ(ruvia::saturating_duration_cast(signed_type::min()).count(), -5'534'023'222'112'865'484LL);
 }
 
 TEST(Ruvia, timer_fractional_duration_conversion_avoids_intermediate_overflow) {
@@ -856,11 +857,11 @@ TEST(Ruvia, timer_fractional_duration_conversion_avoids_intermediate_overflow) {
     using period_type = std::ratio_multiply<target_type::period, std::ratio<9'000'000'001LL, 9'000'000'000LL>>;
     using signed_type = std::chrono::duration<std::int64_t, period_type>;
     using unsigned_type = std::chrono::duration<std::uint64_t, period_type>;
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(8'999'999'999LL)).count(), 9'000'000'000LL);
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type(-8'999'999'999LL)).count(), -8'999'999'999LL);
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::max()), target_type::max());
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(signed_type::min()), target_type::min());
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(unsigned_type::max()), target_type::max());
+    EXPECT_EQ(ruvia::saturating_duration_cast(signed_type(8'999'999'999LL)).count(), 9'000'000'000LL);
+    EXPECT_EQ(ruvia::saturating_duration_cast(signed_type(-8'999'999'999LL)).count(), -8'999'999'999LL);
+    EXPECT_EQ(ruvia::saturating_duration_cast(signed_type::max()), target_type::max());
+    EXPECT_EQ(ruvia::saturating_duration_cast(signed_type::min()), target_type::min());
+    EXPECT_EQ(ruvia::saturating_duration_cast(unsigned_type::max()), target_type::max());
 }
 
 TEST(Ruvia, timer_floating_duration_underflow_keeps_positive_minimum_tick) {
@@ -869,12 +870,12 @@ TEST(Ruvia, timer_floating_duration_underflow_keeps_positive_minimum_tick) {
     using fine_type = std::chrono::duration<long double, std::ratio_divide<target_type::period, std::kilo>>;
     const auto tiny = (std::numeric_limits<long double>::denorm_min)();
     ASSERT_GT(tiny, 0.0L);
-    EXPECT_EQ(ruvia::worker_timer_ceil_milliseconds(input_type(tiny)), std::chrono::milliseconds(1));
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type(tiny)), std::chrono::milliseconds(1));
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast(fine_type(tiny)), target_type(1));
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type(-tiny)), std::chrono::milliseconds::zero());
-    EXPECT_EQ(ruvia::worker_timer_ceil_milliseconds(input_type(-tiny)), std::chrono::milliseconds::zero());
-    EXPECT_EQ(ruvia::worker_timer_saturating_duration_cast<std::chrono::milliseconds>(input_type::zero()), std::chrono::milliseconds::zero());
+    EXPECT_EQ(ruvia::ceil_milliseconds(input_type(tiny)), std::chrono::milliseconds(1));
+    EXPECT_EQ(ruvia::saturating_duration_cast<std::chrono::milliseconds>(input_type(tiny)), std::chrono::milliseconds(1));
+    EXPECT_EQ(ruvia::saturating_duration_cast(fine_type(tiny)), target_type(1));
+    EXPECT_EQ(ruvia::saturating_duration_cast<std::chrono::milliseconds>(input_type(-tiny)), std::chrono::milliseconds::zero());
+    EXPECT_EQ(ruvia::ceil_milliseconds(input_type(-tiny)), std::chrono::milliseconds::zero());
+    EXPECT_EQ(ruvia::saturating_duration_cast<std::chrono::milliseconds>(input_type::zero()), std::chrono::milliseconds::zero());
 }
 
 TEST(Ruvia, TimerImmediateShutdownWorks) {

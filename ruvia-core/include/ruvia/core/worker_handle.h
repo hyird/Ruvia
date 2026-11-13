@@ -1,11 +1,13 @@
 #pragma once
 
 #include <chrono>
+#include <concepts>
 #include <coroutine>
 #include <cstdint>
 #include <memory>
 #include <stdexcept>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include <asio/io_context.hpp>
@@ -129,9 +131,10 @@ public:
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] bool is_current() const noexcept;
     [[nodiscard]] worker_id_type id() const noexcept;
-    // Whether this worker's event loop was given a blocking pool; run_blocking()
-    // on a worker without one reports blocking_status::unavailable.
-    [[nodiscard]] bool has_blocking_pool() const noexcept;
+    // The blocking pool this worker's event loop borrows, or null; run_blocking()
+    // on a worker without one reports blocking_status::unavailable. The pool's
+    // owner keeps it alive for at least the worker's lifetime.
+    [[nodiscard]] ruvia::blocking_pool* blocking_pool() const noexcept;
 
     // Native I/O integration, not bounded business admission. The executor
     // borrows the runtime's io_context: finish its operations before the
@@ -159,6 +162,23 @@ public:
     // and clears this handle. accepted does not guarantee execution: detaching
     // the runtime abandons an admitted callback and releases its owned inputs.
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory) const;
+
+    // post_factory() for a typed payload: `wrap` turns the payload into the
+    // posted callable only after admission, and a refusal returns the
+    // untouched payload in the result. A handle without a worker refuses with
+    // worker_stopping.
+    template <typename payload_type, typename wrap_type>
+        requires std::invocable<wrap_type&, payload_type&&> &&
+                 std::convertible_to<std::invoke_result_t<wrap_type&, payload_type&&>, move_only_function<void()>>
+    [[nodiscard]] worker_delivery_result<payload_type, post_status, post_status::accepted> post_payload(
+        payload_type payload, wrap_type wrap) const {
+        using result_type = worker_delivery_result<payload_type, post_status, post_status::accepted>;
+        const auto status = post_factory([&]() -> move_only_function<void()> { return wrap(std::move(payload)); });
+        if (status != post_status::accepted) {
+            return detail::worker_delivery_access::reject<result_type>(status, std::move(payload));
+        }
+        return detail::worker_delivery_access::accept<result_type>();
+    }
 
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
@@ -188,7 +208,9 @@ public:
     void defer_resume(std::coroutine_handle<> continuation) const noexcept;
 
     // The completion lane of an operation this worker already admitted:
-    // cancellation, cleanup, or result delivery. Unlike post() a full queue
+    // cancellation, cleanup, or result delivery. It takes no retirement
+    // protection of its own; loop-level cleanup that belongs to no admitted
+    // operation uses event_loop::defer_cleanup() instead. Unlike post() a full queue
     // never refuses it; on the worker's own thread it runs in a later turn,
     // never inline. Returns false, destroying `completion` on the caller's
     // thread, once the worker's execution context has been detached (or on a
@@ -241,8 +263,8 @@ struct worker_handle_access {
     static void wait_for_reservations(const worker_handle& worker) noexcept;
     [[nodiscard]] static bool timers_stopping(const worker_handle& worker) noexcept;
     static void enable_external_runner(const worker_handle& worker) noexcept;
-    // The pool the worker's event loop borrows, or null.
-    [[nodiscard]] static ruvia::blocking_pool* blocking_pool(const worker_handle& worker) noexcept;
+    // The worker whose event loop runs on the calling thread; empty elsewhere.
+    [[nodiscard]] static worker_handle current() noexcept;
 };
 
 }  // namespace detail

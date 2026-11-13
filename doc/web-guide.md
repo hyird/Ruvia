@@ -823,10 +823,10 @@ auto sub = co_await c.dispatch({
 ```cpp
 std::pmr::string input_copy(c.req().query("data").value_or(""), ruvia::process_resource());
 auto result = co_await c.run_blocking(
-    std::chrono::milliseconds(500),
     [owned = std::move(input_copy)]() {
         return compute_expensive_digest(owned);
-    });
+    },
+    {.timeout_ = std::chrono::milliseconds(500)});
 
 if (!result.completed()) {
     co_return c.error({
@@ -837,6 +837,8 @@ if (!result.completed()) {
 }
 auto digest = std::move(result).take_value();
 ```
+
+签名为 `run_blocking(fn, operation_options = {})`（`request_stream` 与 `web_worker_context` 相同）：`timeout_` 只限定等待，不中断已开始的调用；`stop_token_` 与 `c.stop_token()` 组合，二者任一触发即以 `cancelled` 结束等待。
 
 ---
 

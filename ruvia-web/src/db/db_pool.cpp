@@ -204,9 +204,9 @@ void db_pool<driver_type>::slot_policy::throw_acquire_failure(const db_pool& poo
         case worker_wait_status::cancelled:
             throw db_error(db_error::code_type::cancelled, pool.config_.driver_, "database operation cancelled");
         case worker_wait_status::closed:
+        case worker_wait_status::worker_stopping:
             throw pool.closing_error();
         case worker_wait_status::value:
-        case worker_wait_status::worker_stopping:
             break;
     }
     std::terminate();
@@ -279,7 +279,7 @@ db_error db_pool<driver_type>::closing_error() const {
 
 template <typename driver_type>
 task<void> db_pool<driver_type>::connect() {
-    const operation_timeout timeout(std::nullopt);
+    const operation_deadline timeout(std::nullopt);
     for (std::size_t index = 0; index < slots_.size(); ++index) {
         co_await open_slot(index, timeout);
     }
@@ -299,7 +299,7 @@ void db_pool<driver_type>::release_slot(std::size_t index) noexcept {
     auto& released = slot(index);
     // Every path that ends a stream has freed or discarded its result by now.
     released.lease_timer_.cancel();
-    released.lease_timeout_ = operation_timeout(std::nullopt);
+    released.lease_timeout_ = operation_deadline();
     released.lease_busy_ = false;
     released.stream_result_ = nullptr;
     // A drained command can still leave a transaction open or autocommit off,
@@ -317,7 +317,7 @@ template <typename driver_type>
 void db_pool<driver_type>::start_lease(std::size_t index) {
     auto& leased = slot(index);
     leased.lease_busy_ = true;
-    leased.lease_timeout_ = operation_timeout(config_.transaction_timeout_);
+    leased.lease_timeout_ = operation_deadline(config_.transaction_timeout_);
     if (const auto deadline = leased.lease_timeout_.deadline(); deadline.has_value()) {
         // A stopping worker schedules nothing; its shutdown closes the pool,
         // and every operation stays bounded by the lease deadline meanwhile.
@@ -353,8 +353,8 @@ void db_pool<driver_type>::leave_lease_operation(std::size_t index) {
 }
 
 template <typename driver_type>
-operation_timeout db_pool<driver_type>::lease_operation_timeout(
-    std::size_t index, const operation_timeout& timeout) const noexcept {
+operation_deadline db_pool<driver_type>::lease_operation_timeout(
+    std::size_t index, const operation_deadline& timeout) const noexcept {
     const auto& lease = slots_[index]->lease_timeout_;
     const auto lease_deadline = lease.deadline();
     const auto own_deadline = timeout.deadline();
@@ -466,7 +466,7 @@ void db_pool<driver_type>::close_slot(std::size_t index) noexcept {
 }
 
 template <typename driver_type>
-task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation_timeout& timeout) {
+task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation_deadline& timeout) {
     if (!config_.reconnect_ && !slot(index).connected_ && !leases_.closing()) {
         throw db_error(db_error::code_type::io_error, driver_type::driver,
             std::pmr::string(driver_type::name, process_resource()).append(" session ended, and this pool does not reconnect"));
@@ -475,7 +475,7 @@ task<void> db_pool<driver_type>::connect_slot(std::size_t index, const operation
 }
 
 template <typename driver_type>
-task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_timeout& timeout) {
+task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_deadline& timeout) {
     if (leases_.closing()) {
         throw closing_error();
     }
@@ -484,7 +484,7 @@ task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_ti
         co_return;
     }
     leases_.throw_if_aborted(index);
-    const operation_timeout deadline_value = timeout.constrained_by(config_.connect_timeout_);
+    const operation_deadline deadline_value = timeout.constrained_by(config_.connect_timeout_);
     try {
         co_await driver_type::connect(*this, index, deadline_value);
         slot.connected_ = true;
@@ -501,7 +501,7 @@ task<void> db_pool<driver_type>::open_slot(std::size_t index, const operation_ti
 // because the timer may have fired while this coroutine was suspended.
 template <typename driver_type>
 task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
-    std::size_t index, const operation_timeout& deadline_value) {
+    std::size_t index, const operation_deadline& deadline_value) {
     const auto resolve_timed_out = [] {
         return db_error(db_error::code_type::timeout, driver_type::driver,
             std::pmr::string(driver_type::name, process_resource()).append(" host resolve timed out"));
@@ -547,13 +547,13 @@ task<db_resolved_addresses_type> db_pool<driver_type>::resolve_host(
 template <typename driver_type>
 db_pool<driver_type>::slot_wait::slot_wait(db_pool& pool, std::size_t index, db_deadline_kind kind,
     db_slot_socket::native_socket_type native, db_socket_readiness wanted,
-    std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_timeout& operation_deadline) noexcept
+    std::optional<std::chrono::steady_clock::time_point> wait_deadline, const operation_deadline& operation_deadline_value) noexcept
     : pool_(pool),
       index_(index),
       kind_(kind),
       native_(native),
       wait_deadline_(wait_deadline),
-      operation_deadline_(operation_deadline),
+      operation_deadline_(operation_deadline_value),
       socket_wait_(pool.slots_[index]->wait_socket_.wait(wanted)) {}
 
 template <typename driver_type>
@@ -649,7 +649,7 @@ db_socket_wait_result db_pool<driver_type>::slot_wait::await_resume() {
 // Callers must also close and release the lease if creating this task fails.
 template <typename driver_type>
 task<void> db_pool<driver_type>::retire_failed_transaction_slot(std::size_t index,
-    std::pmr::memory_resource* resource, const operation_timeout& timeout, const std::exception_ptr& failure) {
+    std::pmr::memory_resource* resource, const operation_deadline& timeout, const std::exception_ptr& failure) {
     if (slot(index).connected_ && db_slot_reusable_after(failure)) {
         try {
             co_await execute_control(index, "ROLLBACK", resource, timeout);
@@ -670,7 +670,7 @@ task<result_type> db_pool<driver_type>::run_on_transaction_slot(std::size_t inde
     std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,
     statement_hook_type<result_type> statement) {
     require_slot_index(index);
-    const auto timeout = lease_operation_timeout(index, operation_timeout(options.timeout_));
+    const auto timeout = lease_operation_timeout(index, operation_deadline(options.timeout_));
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
@@ -728,7 +728,7 @@ task<db_exec_result> db_pool<driver_type>::execute_on_transaction_slot(std::size
 
 template <typename driver_type>
 task<void> db_pool<driver_type>::execute_control(std::size_t index, std::string_view sql,
-    std::pmr::memory_resource* resource, const operation_timeout& timeout) {
+    std::pmr::memory_resource* resource, const operation_deadline& timeout) {
     leases_.throw_if_aborted(index);
     if (!slot(index).connected_) {
         co_await connect_slot(index, timeout);
@@ -745,7 +745,7 @@ template <typename driver_type>
 task<db_transaction> db_pool<driver_type>::begin_transaction(std::pmr::memory_resource* resource,
     operation_options operation_options_value, db_transaction_options transaction_options) {
     const auto plan = make_db_transaction_start_plan(driver_type::driver, transaction_options);
-    const operation_timeout timeout(operation_options_value.timeout_);
+    const operation_deadline timeout(operation_options_value.timeout_);
     const auto index = co_await lease_acquire(*this, timeout, operation_options_value.stop_token_);
     typename leases_type::cancellation_guard cancellation(leases_, index, operation_options_value.stop_token_);
     try {
@@ -775,7 +775,7 @@ template <typename driver_type>
 task<void> db_pool<driver_type>::finish_transaction(std::size_t index, std::string_view command,
     std::pmr::memory_resource* resource, const operation_options& options) {
     require_slot_index(index);
-    const auto timeout = lease_operation_timeout(index, operation_timeout(options.timeout_));
+    const auto timeout = lease_operation_timeout(index, operation_deadline(options.timeout_));
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::exception_ptr failure;
     try {
@@ -840,7 +840,7 @@ void db_pool<driver_type>::fail_stream(
 template <typename driver_type>
 task<db_stream_result> db_pool<driver_type>::stream(std::pmr::string sql, std::pmr::vector<db_value> params,
     std::pmr::memory_resource* resource, operation_options options) {
-    const operation_timeout timeout(options.timeout_);
+    const operation_deadline timeout(options.timeout_);
     const auto index = co_await lease_acquire(*this, timeout, options.stop_token_);
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     bool released = false;
@@ -880,7 +880,7 @@ task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t in
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
     std::pmr::memory_resource* resource, const operation_options& options) {
     require_slot_index(index);
-    const auto timeout = lease_operation_timeout(index, operation_timeout(options.timeout_));
+    const auto timeout = lease_operation_timeout(index, operation_deadline(options.timeout_));
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     std::optional<db_stream_step> step;
     try {
@@ -908,7 +908,7 @@ task<std::optional<db_row>> db_pool<driver_type>::read_stream_row(std::size_t in
 template <typename driver_type>
 task<void> db_pool<driver_type>::close_stream(std::size_t index, const operation_options& options) {
     require_slot_index(index);
-    const auto timeout = lease_operation_timeout(index, operation_timeout(options.timeout_));
+    const auto timeout = lease_operation_timeout(index, operation_deadline(options.timeout_));
     typename leases_type::cancellation_guard cancellation(leases_, index, options.stop_token_);
     try {
         enter_lease_operation(index);

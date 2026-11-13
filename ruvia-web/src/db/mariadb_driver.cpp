@@ -98,10 +98,10 @@ struct mysql_wait_deadline final {
 };
 
 [[nodiscard]] mysql_wait_deadline select_mysql_wait_deadline(
-    std::optional<std::chrono::steady_clock::time_point> operation_deadline,
+    std::optional<std::chrono::steady_clock::time_point> operation_deadline_value,
     std::optional<std::chrono::steady_clock::time_point> driver_deadline) noexcept {
-    if (operation_deadline && (!driver_deadline || *operation_deadline <= *driver_deadline)) {
-        return {*operation_deadline, mysql_wait_deadline_source::operation};
+    if (operation_deadline_value && (!driver_deadline || *operation_deadline_value <= *driver_deadline)) {
+        return {*operation_deadline_value, mysql_wait_deadline_source::operation};
     }
     if (driver_deadline) {
         return {*driver_deadline, mysql_wait_deadline_source::driver};
@@ -221,21 +221,21 @@ struct mysql_wait final {
 }
 
 [[nodiscard]] mysql_wait wait_for_mysql(
-    mariadb_pool& pool, std::size_t index, int status, const operation_timeout& deadline_value) {
+    mariadb_pool& pool, std::size_t index, int status, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
-    const auto operation_deadline = deadline_value.deadline();
-    if (operation_deadline && *operation_deadline <= std::chrono::steady_clock::now()) {
+    const auto operation_deadline_value = deadline_value.deadline();
+    if (operation_deadline_value && *operation_deadline_value <= std::chrono::steady_clock::now()) {
         throw pool.timed_out();
     }
     std::optional<std::chrono::steady_clock::time_point> driver_deadline;
     if ((status & MYSQL_WAIT_TIMEOUT) != 0) {
         const auto milliseconds = mysql_get_timeout_value_ms(&connection);
-        driver_deadline = worker_timer_deadline_after(std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds));
+        driver_deadline = deadline_after(std::chrono::milliseconds(milliseconds == 0 ? 1 : milliseconds));
     }
     const auto wanted = mysql_status_readiness(status);
 
     if (wanted == db_socket_readiness::none) {
-        const auto selected_deadline = select_mysql_wait_deadline(operation_deadline, driver_deadline);
+        const auto selected_deadline = select_mysql_wait_deadline(operation_deadline_value, driver_deadline);
         if (!selected_deadline.deadline_) {
             throw db_error(
                 db_error::code_type::io_error, db_driver::mariadb, "MariaDB requested an unsupported empty wait");
@@ -260,7 +260,7 @@ struct mysql_wait final {
 }
 
 task<int> exec_mysql_query(
-    mariadb_pool& pool, std::size_t index, std::string_view sql, const operation_timeout& deadline_value) {
+    mariadb_pool& pool, std::size_t index, std::string_view sql, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     int query_result = 0;
     int status = mysql_real_query_start(&query_result, &connection, sql.data(), static_cast<unsigned long>(sql.size()));
@@ -273,13 +273,13 @@ task<int> exec_mysql_query(
 // The session's client character set, read for a string parameter whose
 // escape depends on it (mariadb_escape_needs_charset()).
 task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
-    mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value);
+    mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value);
 
 // Nothing else runs on the connection, so the session is current for an
 // interpolation that depends on it.
 task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::string_view sql,
     const mariadb_statement_classification& classification, std::span<const db_value> params,
-    std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     if (classification.names_session_tracking_) {
@@ -306,7 +306,7 @@ task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::strin
     }
 }
 
-task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     MYSQL_RES* result_value = nullptr;
     int status = mysql_store_result_start(&result_value, &connection);
@@ -318,7 +318,7 @@ task<MYSQL_RES*> store_mysql_result(mariadb_pool& pool, std::size_t index, const
 }
 
 task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
-    mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
+    mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     if (co_await exec_mysql_query(pool, index, mariadb_charset_query, deadline_value) != 0) {
         throw mysql_statement_error(pool, index, "reading the MariaDB session character set");
     }
@@ -335,7 +335,7 @@ task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
 // Only status results may follow; a further row set is read and dropped so
 // the connection is idle when the statement is refused. Returns whether there
 // was one.
-task<bool> finish_mysql_results(mariadb_pool& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<bool> finish_mysql_results(mariadb_pool& pool, std::size_t index, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     bool extra_row_set = false;
     while (mysql_more_results(&connection) != 0) {
@@ -929,7 +929,7 @@ bool mariadb_pipeline_io::reusable(state_type& state, std::size_t index) noexcep
 
 template class db_pipeline_state<mariadb_pipeline_io>;
 
-task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const operation_timeout& deadline_value) {
+task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const operation_deadline& deadline_value) {
     const auto& config = pool.config();
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
@@ -1087,7 +1087,7 @@ namespace {
 template <typename result_type>
 task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::string_view sql,
     const mariadb_statement_classification& classification, std::span<const db_value> params,
-    std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     co_await run_mysql_statement(pool, index, sql, classification, params, resource, deadline_value);
     auto& connection = *pool.slot(index).connection_;
@@ -1128,7 +1128,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
 // decides what follows.
 template <typename result_type>
 task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     auto& slot = pool.slot(index);
     auto& statements = slot.session_.statements_;
@@ -1177,17 +1177,17 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
 }  // namespace
 
 task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     return run_mysql_cached<db_rows>(pool, index, sql, params, resource, deadline_value);
 }
 
 task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     return run_mysql_cached<db_exec_result>(pool, index, sql, params, resource, deadline_value);
 }
 
 task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     co_await run_mysql_statement(
         pool, index, sql, classify_mariadb_statement(sql), params, resource, deadline_value);
     auto& connection = *pool.slot(index).connection_;
@@ -1219,7 +1219,7 @@ namespace {
 // that may follow it; a further row set fails the stream as for any statement.
 // `result_value` is null once freed.
 task<void> finish_mysql_stream(
-    mariadb_pool& pool, std::size_t index, void*& result_value, const operation_timeout& deadline_value) {
+    mariadb_pool& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     // The result-set terminator carries the final server status:
     // https://mariadb.com/docs/server/reference/clientserver-protocol/4-server-response-packets/eof_packet
@@ -1253,7 +1253,7 @@ task<void> finish_mysql_stream(
 
 task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void*& result_value,
     std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-    std::pmr::memory_resource* resource, const operation_timeout& deadline_value) {
+    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     MYSQL_ROW row = nullptr;
     int status = mysql_fetch_row_start(&row, raw_result);
@@ -1279,7 +1279,7 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
 }
 
 task<void> mariadb_driver::close_stream(
-    pool_type& pool, std::size_t index, void*& result_value, const operation_timeout& deadline_value) {
+    pool_type& pool, std::size_t index, void*& result_value, const operation_deadline& deadline_value) {
     return finish_mysql_stream(pool, index, result_value, deadline_value);
 }
 

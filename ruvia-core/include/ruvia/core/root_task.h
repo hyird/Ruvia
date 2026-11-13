@@ -12,9 +12,9 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
 
@@ -224,18 +224,11 @@ public:
         require_state().completion().wait();
     }
 
-    // Bounded wait(): returns whether the task completed in time. The timeout
-    // must be positive (as for operation_options); a deadline that has passed
-    // only reports the current state.
-    [[nodiscard]] bool wait_for(timeout_duration timeout) const {
-        if (timeout.value() <= std::chrono::milliseconds::zero()) {
-            throw std::invalid_argument("root task wait timeout must be greater than zero");
-        }
-        return wait_until(worker_timer_deadline_after(timeout.value()));
-    }
-
-    [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline) const {
-        return require_state().completion().wait_until(deadline);
+    // Bounded wait(): returns whether the task completed in time. A relative
+    // bound starts now; an absolute deadline that has passed only reports the
+    // current state.
+    [[nodiscard]] bool wait_for(operation_timeout timeout) const {
+        return require_state().completion().wait_until(timeout.deadline_from(std::chrono::steady_clock::now()));
     }
 
     // Consumes the result, so only an rvalue extracts it:

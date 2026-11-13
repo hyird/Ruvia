@@ -19,8 +19,10 @@
 
 #include <asio/steady_timer.hpp>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/timer.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_signal.h"
 
@@ -966,6 +968,90 @@ TEST(Ruvia, worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
         EXPECT_TRUE(other_joined.get_future().get() == nullptr);
         joiner.join();
     }
+}
+
+ruvia::task<int> sleep_then_finish(ruvia::worker_handle worker_value, std::atomic_bool& finished) {
+    // Worker shutdown cuts the sleep short; the root still finishes normally.
+    static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::seconds(30)));
+    finished = true;
+    co_return 11;
+}
+
+TEST(Ruvia, WorkerRuntimeLoopGatesStopAdmissionOnItsRoots) {
+    ruvia::worker_runtime runtime;
+    std::atomic_bool root_finished{false};
+    std::atomic_bool admitted_after_root{false};
+    std::atomic_bool admission_ran{false};
+    runtime.configure({
+        .startup_ = [&] { runtime.mark_ready(); },
+        .stop_admission_ =
+            [&] {
+                admitted_after_root = root_finished.load();
+                admission_ran = true;
+                runtime.finalize();
+            },
+    });
+    const auto loop = runtime.loop();
+    EXPECT_TRUE(loop.valid());
+    EXPECT_EQ(loop.handle().id(), runtime.handle().id());
+    EXPECT_EQ(runtime.loop().handle().id(), loop.handle().id());
+    ASSERT_TRUE(runtime.start());
+    ASSERT_TRUE(runtime.wait_until_ready());
+    auto root = loop.start(sleep_then_finish(loop.handle(), root_finished));
+    runtime.request_stop();
+    runtime.join();
+    EXPECT_TRUE(admission_ran);
+    EXPECT_TRUE(admitted_after_root);
+    EXPECT_EQ(std::move(root).get(), 11);
+    EXPECT_FALSE(loop.valid());
+    EXPECT_EQ(runtime.take_failure(), nullptr);
+}
+
+TEST(Ruvia, WorkerRuntimeLoopReportsFailuresToItsRuntime) {
+    ruvia::worker_runtime runtime;
+    runtime.configure({.startup_ = [&] { runtime.mark_ready(); }});
+    const auto loop = runtime.loop();
+    ASSERT_TRUE(runtime.start());
+    ASSERT_TRUE(runtime.wait_until_ready());
+    loop.report_failure(std::make_exception_ptr(std::runtime_error("loop failure")));
+    runtime.join();
+    EXPECT_NE(runtime.take_failure(), nullptr);
+    // A stopped runtime refuses new roots through its loop.
+    auto refused = loop.try_start([]() -> ruvia::task<void> { co_return; }());
+    EXPECT_EQ(refused.status(), ruvia::post_status::worker_stopping);
+    EXPECT_NE(refused.rejected(), nullptr);
+}
+
+TEST(Ruvia, WorkerHandlePostPayloadReturnsRefusedPayload) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
+    const auto worker_value = loops.loop(0).handle();
+    std::promise<int> ran;
+    auto accepted = worker_value.post_payload(std::make_unique<int>(3),
+        [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
+            return [value = std::move(value), &ran] { ran.set_value(*value); };
+        });
+    EXPECT_TRUE(accepted.accepted());
+    EXPECT_EQ(accepted.rejected(), nullptr);
+    bool wrapped_refused = false;
+    auto refused = worker_value.post_payload(std::make_unique<int>(4),
+        [&wrapped_refused](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> {
+            wrapped_refused = true;
+            return [] {};
+        });
+    EXPECT_EQ(refused.status(), ruvia::post_status::queue_full);
+    EXPECT_FALSE(wrapped_refused);
+    ASSERT_NE(refused.rejected(), nullptr);
+    EXPECT_EQ(**refused.rejected(), 4);
+    auto unbound = ruvia::worker_handle{}.post_payload(std::make_unique<int>(5),
+        [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> { return [] {}; });
+    EXPECT_EQ(unbound.status(), ruvia::post_status::worker_stopping);
+    EXPECT_EQ(*std::move(unbound).take_rejected(), 5);
+    loops.start();
+    auto future = ran.get_future();
+    ASSERT_EQ(future.wait_for(std::chrono::seconds(10)), std::future_status::ready);
+    EXPECT_EQ(future.get(), 3);
+    loops.stop();
+    loops.join();
 }
 
 }  // namespace worker_runtime_test

@@ -1,14 +1,13 @@
 #pragma once
 
-#include <chrono>
 #include <type_traits>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
@@ -52,24 +51,27 @@ public:
     }
 
     // Runs on the blocking pool of this worker's event loop; without one the
-    // result reports blocking_status::unavailable.
+    // result reports blocking_status::unavailable. A supplied stop token is
+    // combined with this worker's cancellation token for the wait.
     template <typename callable_type>
-    [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(callable_type callable) const {
-        return ruvia::run_blocking(worker_, {.stop_token_ = stop_token_}, std::move(callable));
-    }
-
-    // The timeout rounds up to whole milliseconds; a non-positive one throws
-    // std::invalid_argument before submitting the callable.
-    template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
-        std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {
-        return ruvia::run_blocking(worker_,
-            {.timeout_ = worker_timer_ceil_milliseconds(timeout),
-                .stop_token_ = stop_token_},
-            std::move(callable));
+        callable_type callable, operation_options options) const {
+        if (!options.stop_token_.has_state()) {
+            options.stop_token_ = stop_token_;
+            return ruvia::run_blocking(worker_, std::move(options), std::move(callable));
+        }
+        return run_blocking_combined(worker_, stop_token_, std::move(options), std::move(callable));
     }
 
 private:
+    template <typename callable_type>
+    [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(
+        worker_handle worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
+        const stop_group stop_owner(worker_token, options.stop_token_);
+        options.stop_token_ = stop_owner.token();
+        co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(options), std::move(callable));
+    }
+
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;
 
     const worker_handle& worker_;

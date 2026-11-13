@@ -267,7 +267,7 @@ void http_client_pool::update_dns(std::span<const http_client_endpoint_address> 
 }
 
 task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view host, std::uint16_t port,
-    client_host_resolver& resolver, const operation_timeout& timeout) {
+    client_host_resolver& resolver, const operation_deadline& timeout) {
     const bool primary = host == config_.dial_host_ && port == config_.dial_port_;
     if (primary && (dns_addresses_.literal_ || !dns_addresses_.addresses_.empty())) {
         validate_addresses(dns_addresses_);
@@ -311,7 +311,7 @@ task<void> http_client_pool::refresh_dns(operation_options options) {
     } lease{*this};
     client_host_resolver resolver(worker_);
     stop_group cancellation(dns_stop_.token(), options.stop_token_);
-    const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{config_.connect_timeout_});
+    const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : std::optional{config_.connect_timeout_});
     const auto revision = dns_revision_;
     auto pending = resolver.resolve(config_.dial_host_, config_.dial_port_, timeout, cancellation.token());
     client_resolve_result result;
@@ -335,7 +335,7 @@ void http_client_pool::schedule_dns_refresh() {
     if (!config_.dns_refresh_interval_ || closing_ || background_joined_) {
         return;
     }
-    (void)worker_.schedule_timer(dns_refresh_timer_, worker_timer_deadline_after(config_.dns_refresh_interval_->value()),
+    (void)worker_.schedule_timer(dns_refresh_timer_, deadline_after(config_.dns_refresh_interval_->value()),
         [this](worker_timer_outcome outcome) noexcept {
             if (outcome != worker_timer_outcome::expired || closing_) {
                 return;
@@ -418,7 +418,7 @@ task<void> http_client_pool::refresh_live_routes() {
         } slot{*worker_limits_};
         ++dns_refreshes_;
         client_host_resolver resolver(worker_);
-        const operation_timeout timeout(config_.connect_timeout_);
+        const operation_deadline timeout(config_.connect_timeout_);
         const auto revision = dns_revision_;
         auto pending = resolver.resolve(host, port, timeout, dns_stop_.token());
         client_resolve_result result;
@@ -967,7 +967,7 @@ void http_client_pool::throw_if_admission_ended(const stop_token& stop, const ht
     }
 }
 
-task<void> http_client_pool::wait_for_admission(const operation_timeout& acquire_timeout) {
+task<void> http_client_pool::wait_for_admission(const operation_deadline& acquire_timeout) {
     // A connection available at once is taken even past the bound; only
     // waiting is bounded.
     if (acquire_timeout.expired()) {
@@ -998,7 +998,7 @@ client_alpn http_client_pool::tcp_offer(const http_client_request_storage& reque
 }
 
 task<http_client_connection*> http_client_pool::acquire_tcp_connection(const http_client_request_storage& request,
-    const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& state_value,
+    const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state_value,
     request_admission& admission) {
     const auto& route = request.route();
     const auto offer = tcp_offer(request);
@@ -1089,7 +1089,7 @@ void http_client_pool::release_tcp_connection(http_client_connection& connection
 }
 
 task<void> http_client_pool::execute_tcp_request(const http_client_request_storage& request,
-    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
     http_client_response_state& state_value, request_admission& admission) {
     auto* const connection_value = co_await acquire_tcp_connection(request, acquire_timeout, stop, state_value, admission);
     struct connection_use final {
@@ -1126,7 +1126,7 @@ task<void> http_client_pool::execute_request_into(
         }
     } route_binding_value{*state_value};
     state_value->route_ = &request.route();
-    const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
+    const operation_deadline timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
     const std::array stop_tokens{request.host_stop(), options.stop_token_, dns_stop_.token()};
     stop_group cancellation(stop_tokens);
     options.stop_token_ = cancellation.token();
@@ -1158,8 +1158,8 @@ task<void> http_client_pool::execute_request_into(
 }
 
 task<void> http_client_pool::execute_tcp(http_client_connection& connection_value,
-    const http_client_request_storage& request, const operation_timeout& timeout,
-    const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
+    const http_client_request_storage& request, const operation_deadline& timeout,
+    const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value) {
     std::optional<std::uint64_t> connected_http1_generation;
 #ifdef RUVIA_ENABLE_HTTP2
     // A cancelled HTTP/1 producer still owns its SSL stream until its
@@ -1198,8 +1198,8 @@ task<void> http_client_pool::execute_tcp(http_client_connection& connection_valu
 }
 
 task<bool> http_client_pool::execute_http1(http_client_connection& connection_value,
-    const http_client_request_storage& request, const operation_timeout& timeout,
-    const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
+    const http_client_request_storage& request, const operation_deadline& timeout,
+    const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
     std::optional<std::uint64_t> connected_http1_generation) {
     // A negotiated HTTP/1 connection can have several operations that already
     // hold outer HTTP/2-capacity slots. Waiting for this connection's single
@@ -1230,7 +1230,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
         }
     } operation{*this, connection_value, must_buffer};
     const auto acquired =
-        co_await connection_value.http1_scheduler_.acquire(acquire_timeout, stop_token_value);
+        co_await connection_value.http1_scheduler_.acquire({.timeout_ = acquire_timeout.timeout(), .stop_token_ = stop_token_value});
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
     }
@@ -1556,7 +1556,7 @@ void http_client_pool::release_http3_connection(http3_client_connection& connect
 }
 
 task<bool> http_client_pool::execute_http3(const http_client_request_storage& request,
-    const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+    const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
     http_client_response_state& state, request_admission& admission) {
     require_open();
     const auto& route = request.route();
@@ -1727,7 +1727,7 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
-    const auto timeout = operation_timeout(config_.connect_timeout_).constrained_by(options.timeout_);
+    const auto timeout = operation_deadline(config_.connect_timeout_).constrained_by(options.timeout_);
     stop_group cancellation(host_stop, options.stop_token_);
     options.stop_token_ = cancellation.token();
     if (options.stop_token_.stop_requested()) {

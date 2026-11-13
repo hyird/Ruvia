@@ -9,13 +9,14 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/worker_cancellation.h"
 
 #include "client/client_lifecycle.h"
 #include "client/client_tcp_transport.h"
 #include "client/client_tls.h"
+#include "util/config_validation.h"
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
 
@@ -29,9 +30,12 @@ namespace {
     }
     validate_client_tls_config(config.tls_);
     validate_client_tcp_config(config.tcp_);
-    validate_operation_options({.timeout_ = config.connect_timeout_});
-    validate_operation_options({.timeout_ = config.read_timeout_});
-    validate_operation_options({.timeout_ = config.write_timeout_});
+    for (const auto& timeout : {config.connect_timeout_, config.read_timeout_, config.write_timeout_}) {
+        if (timeout.has_value()) {
+            // Each configured bound becomes an operation_deadline, which rejects non-positive values.
+            static_cast<void>(operation_timeout(*timeout));
+        }
+    }
     return std::pmr::string(config.host_, process_resource());
 }
 
@@ -109,7 +113,7 @@ public:
 
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options) {
         auto lease = claim_operation_lane(read_active_, "TCP client read already in progress");
-        operation_timeout timeout(override_operation_options({.timeout_ = read_timeout_}, options).timeout_);
+        operation_deadline timeout(override_operation_options({.timeout_ = read_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, read_id_);
         cancellation.arm(options.stop_token_);
         if (transport_.abort_reason() != client_abort_reason::none) {
@@ -131,7 +135,7 @@ public:
 
     [[nodiscard]] task<void> write(std::pmr::string bytes, operation_options options) {
         auto lease = claim_operation_lane(write_active_, "TCP client write already in progress");
-        operation_timeout timeout(override_operation_options({.timeout_ = write_timeout_}, options).timeout_);
+        operation_deadline timeout(override_operation_options({.timeout_ = write_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, write_id_);
         cancellation.arm(options.stop_token_);
         const auto result = co_await transport_.write(bytes, timeout);
@@ -160,7 +164,7 @@ public:
 
 private:
     [[nodiscard]] task<void> connect_transport(operation_options options) {
-        operation_timeout timeout(override_operation_options({.timeout_ = connect_timeout_}, options).timeout_);
+        operation_deadline timeout(override_operation_options({.timeout_ = connect_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, connect_id_);
         cancellation.arm(options.stop_token_);
         const auto result = co_await transport_.connect(timeout);
@@ -200,7 +204,6 @@ public:
         lifecycle_.bind_stop();
     }
     [[nodiscard]] task<void> connect(operation_options options) {
-        validate_operation_options(options);
         return connect_owned(shared_from_this(), std::move(options));
     }
     [[nodiscard]] std::string_view alpn() {
@@ -209,12 +212,10 @@ public:
     }
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options options) {
         lifecycle_.require_ready();
-        validate_operation_options(options);
         return make_scoped_operation(lifecycle_.operation_scope(), read_owned(shared_from_this(), std::move(options)));
     }
     [[nodiscard]] task<void> write(std::pmr::string bytes, operation_options options) {
         lifecycle_.require_ready();
-        validate_operation_options(options);
         return make_scoped_operation(lifecycle_.operation_scope(), write_owned(shared_from_this(), std::move(bytes), std::move(options)));
     }
     void request_close() noexcept {

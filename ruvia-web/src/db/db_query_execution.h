@@ -12,7 +12,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
@@ -134,9 +134,9 @@ template <bool with_count>
     std::pmr::vector<db_value> params, operation_options& options);
 
 [[nodiscard]] inline operation_options db_remaining_options(
-    const operation_options& base, const operation_timeout& timeout) {
+    const operation_options& base, const operation_deadline& timeout) {
     auto result_value = base;
-    result_value.timeout_ = timeout.remaining();
+    result_value.timeout_ = timeout.timeout();
     return result_value;
 }
 

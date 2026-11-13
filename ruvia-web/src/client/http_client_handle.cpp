@@ -193,7 +193,7 @@ void detail::http_client_response_state::rethrow_response_failure() const {
     }
 }
 
-task<void> detail::http_client_response_state::dispatch_informational(const operation_timeout& timeout) {
+task<void> detail::http_client_response_state::dispatch_informational(const operation_deadline& timeout) {
     while (informational_delivered_ < informational_.size()) {
         const auto index = informational_delivered_++;
         auto callback = informational_callback_;
@@ -407,14 +407,12 @@ bool http_client_response_body::complete() const {
 
 task<std::optional<std::span<const std::byte>>> http_client_response_body::read(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         state_value.body_operation_scope_, state_value.consume_body<std::span<const std::byte>>(std::move(operation)));
 }
 
 task<std::optional<std::string_view>> http_client_response_body::text(operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         state_value.body_operation_scope_, state_value.consume_body<std::string_view>(std::move(operation)));
 }
@@ -480,7 +478,6 @@ template task<void> detail::http_client_response_state::consume_body<void>(opera
 
 task<http_client_response_bytes> http_client_response_body::read_all(std::size_t max_bytes, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         state_value.body_operation_scope_, state_value.read_all(max_bytes, std::move(operation)));
 }
@@ -544,7 +541,6 @@ task<http_client_response_bytes> detail::http_client_response_state::read_all(st
 
 task<void> http_client_response_body::pipe_to(response_stream_writer& output, operation_options operation) & {
     auto& state_value = require_response_body_state(state_);
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         state_value.body_operation_scope_, state_value.consume_body<void>(std::move(operation), &output));
 }
@@ -595,7 +591,6 @@ void http_client_handle::expire_capability(void* target) noexcept {
 }
 
 http_client_handle http_client_handle::with_options(operation_options options) const {
-    validate_operation_options(options);
     registration_.require_active();
     http_client_handle copy(*this);
     copy.options_ = override_operation_options(options_, std::move(options));
@@ -605,7 +600,6 @@ http_client_handle http_client_handle::with_options(operation_options options) c
 task<http_client_response> http_client_handle::dispatch(
     const http_client_request_view& view, const http_client_request_options& request_options) const {
     registration_.require_active();
-    validate_operation_options(options_);
     detail::http_client_request_storage request(view.method_.view(), view.target_.view(), view.headers_, resource_);
     request.options_ = request_options;
     request.pool_owner_ = pool_owner_;

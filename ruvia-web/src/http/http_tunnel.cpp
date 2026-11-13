@@ -16,7 +16,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -398,7 +398,6 @@ void http_tunnel::require_unadapted() const {
 task<std::optional<std::pmr::string>> http_tunnel::read(operation_options operation) & {
     require_active();
     require_unadapted();
-    validate_operation_options(operation);
     return read_raw(std::move(operation));
 }
 task<std::optional<std::pmr::string>> http_tunnel::read_raw(operation_options operation) {
@@ -418,7 +417,6 @@ task<bool> http_tunnel::write_datagram_raw(std::string_view bytes, operation_opt
 task<void> http_tunnel::write(std::string_view bytes_value, operation_options operation) & {
     require_active();
     require_unadapted();
-    validate_operation_options(operation);
     if (send_ended_) {
         throw std::logic_error("HTTP tunnel send direction has ended");
     }
@@ -430,7 +428,6 @@ task<void> http_tunnel::write(std::span<const std::byte> bytes_value, operation_
 task<void> http_tunnel::write_owned(std::pmr::string&& bytes_value, operation_options operation) {
     require_active();
     require_unadapted();
-    validate_operation_options(operation);
     return write_raw(std::move(bytes_value), std::move(operation));
 }
 task<void> http_tunnel::write_raw(std::pmr::string&& bytes_value, operation_options operation) {
@@ -444,7 +441,6 @@ task<void> http_tunnel::write_raw(std::pmr::string&& bytes_value, operation_opti
 }
 task<void> http_tunnel::finish(operation_options operation) & {
     require_active();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         operations_, finish_tunnel(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
@@ -554,7 +550,6 @@ task<std::optional<http_capsule>> http_capsule_stream::read(operation_options op
         throw std::logic_error("capsule stream is empty");
     }
     state_->require();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         state_->read_scope_, read_owned(detail::capsule_state_pin(*state_), std::move(operation)));
 }
@@ -597,7 +592,6 @@ task<void> http_capsule_stream::write(std::uint64_t type, std::string_view paylo
         throw std::logic_error("capsule stream is empty");
     }
     state_->require();
-    validate_operation_options(operation);
     if (state_->send_ended_) {
         throw std::logic_error("capsule sending direction is closed");
     }
@@ -648,7 +642,6 @@ task<void> http_capsule_stream::finish(operation_options operation) & {
         throw std::logic_error("capsule stream is empty");
     }
     state_->require();
-    validate_operation_options(operation);
     const auto finish_value = +[](detail::capsule_state_pin pin, operation_options finish_operation) -> task<void> {
         auto& state_value = pin.state();
         state_value.throw_if_stopped_before_start(finish_operation, "capsule finish");
@@ -689,7 +682,6 @@ task<std::optional<http_datagram>> http_datagram_stream::read(operation_options 
         throw std::logic_error("HTTP Datagram stream is empty");
     }
     stream_.state_->require();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
         stream_.state_->read_scope_, read_owned(detail::capsule_state_pin(*stream_.state_), false, std::move(operation)));
 }
@@ -777,7 +769,6 @@ task<void> http_datagram_stream::send_payload(std::string_view payload_value, bo
     }
     auto& state_value = *stream_.state_;
     state_value.require();
-    validate_operation_options(operation);
     if (state_value.send_ended_) {
         throw std::logic_error("HTTP Datagram sending direction is closed");
     }
@@ -803,7 +794,6 @@ task<std::optional<http_datagram>> http_udp_tunnel::read(operation_options opera
         throw std::logic_error("UDP tunnel is empty");
     }
     state_value->require();
-    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(state_value->read_scope_,
         http_datagram_stream::read_owned(detail::capsule_state_pin(*state_value), true, std::move(operation)));
 }

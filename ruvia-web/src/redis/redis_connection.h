@@ -14,7 +14,7 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/redis/redis_types.h"
@@ -72,7 +72,7 @@ public:
     // sent unsolicited bytes would desynchronize the next reply, so it is
     // replaced. The optional operation deadline bounds establishment together
     // with connect_timeout; AUTH and SELECT replies also honor command_timeout.
-    task<void> connect(const operation_timeout* operation_timeout_value,
+    task<void> connect(const operation_deadline* operation_timeout_value,
         std::optional<timeout_duration> command_timeout);
     // Serialized request storage: append RESP commands, then write_request().
     [[nodiscard]] std::pmr::string& write_buffer() noexcept {
@@ -81,13 +81,13 @@ public:
     // Sends and then releases the serialized request, wiping it first when it
     // carries a credential, whether or not the write succeeded.
     task<void> write_request(
-        const operation_timeout& timeout, redis_request_content content = redis_request_content::ordinary);
+        const operation_deadline& timeout, redis_request_content content = redis_request_content::ordinary);
     // Reads one complete reply, allocating its nodes from `resource`. Throws
     // redis_error(io_error) when the connection is or becomes closed. A
     // non-null `input_time` receives the time of every socket read that
     // delivered bytes, so a subscription's idle clock restarts on partial
     // replies too.
-    task<redis_value> read_reply(const operation_timeout& timeout, std::pmr::memory_resource* resource,
+    task<redis_value> read_reply(const operation_deadline& timeout, std::pmr::memory_resource* resource,
         std::chrono::steady_clock::time_point* input_time = nullptr);
 
     void close() noexcept;
@@ -99,11 +99,11 @@ public:
 
 private:
     void ensure_reader();
-    task<void> authenticate(const operation_timeout& connect_timeout,
+    task<void> authenticate(const operation_deadline& connect_timeout,
         std::optional<timeout_duration> command_timeout);
     // One connection-setup command (AUTH, SELECT) and its reply.
     task<redis_value> exchange_control_command(
-        std::span<const std::string_view> args, operation_timeout deadline, redis_request_content content);
+        std::span<const std::string_view> args, operation_deadline deadline, redis_request_content content);
 
     const redis_config_storage& config_;
     client_tcp_transport transport_;

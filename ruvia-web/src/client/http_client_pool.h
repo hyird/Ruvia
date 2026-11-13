@@ -13,7 +13,7 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
@@ -83,7 +83,7 @@ public:
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
     [[nodiscard]] std::uint64_t next_connection_id() noexcept;
     [[nodiscard]] task<client_resolve_result> resolve_addresses(std::string_view host, std::uint16_t port,
-        client_host_resolver& resolver, const operation_timeout& timeout);
+        client_host_resolver& resolver, const operation_deadline& timeout);
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() {
         return advertisements_.next();
     }
@@ -218,15 +218,15 @@ private:
     // within max_open_, or waits within the acquisition bound. The returned
     // connection counts this request among its users_.
     [[nodiscard]] task<http_client_connection*> acquire_tcp_connection(const http_client_request_storage& request,
-        const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& state,
+        const operation_deadline& acquire_timeout, stop_token stop, http_client_response_state& state,
         request_admission& admission);
     void release_tcp_connection(http_client_connection& connection) noexcept;
     [[nodiscard]] task<void> execute_tcp_request(const http_client_request_storage& request,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop,
         http_client_response_state& state, request_admission& admission);
     // One wait for admission_changed(), the acquisition deadline or a stop;
     // the caller re-checks every condition. Throws timeout once the bound expired.
-    [[nodiscard]] task<void> wait_for_admission(const operation_timeout& acquire_timeout);
+    [[nodiscard]] task<void> wait_for_admission(const operation_deadline& acquire_timeout);
     // The TCP connection key's offer for the request's versions: TLS ALPN, or
     // over plaintext http2 for prior-knowledge h2c and http11 otherwise.
     [[nodiscard]] client_alpn tcp_offer(const http_client_request_storage& request) const noexcept;
@@ -241,15 +241,15 @@ private:
     void reclaim_connections() noexcept;
     [[nodiscard]] http_client_connection* find_connection(const http_client_response_state& state) noexcept;
     [[nodiscard]] task<void> execute_tcp(http_client_connection& connection, const http_client_request_storage& request,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop_token_value,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout, stop_token stop_token_value,
         http_client_response_state& state_value);
     // Runs the request as an HTTP/1 exchange on `connection`, reconnecting it
     // when needed. False, with nothing sent, when the connection speaks HTTP/2.
     // `connected_http1_generation` names a connection this request has just
     // negotiated, which is not idle-probed.
     [[nodiscard]] task<bool> execute_http1(http_client_connection& connection,
-        const http_client_request_storage& request, const operation_timeout& timeout,
-        const operation_timeout& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
+        const http_client_request_storage& request, const operation_deadline& timeout,
+        const operation_deadline& acquire_timeout, stop_token stop_token_value, http_client_response_state& state_value,
         std::optional<std::uint64_t> connected_http1_generation);
     // Spawns the request driver for `state_value`, which the caller's response owns.
     void spawn_request(http_client_request_storage request, operation_options options,
@@ -272,7 +272,7 @@ private:
     [[nodiscard]] alternative_service* find_alternative_service(
         const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
-        const operation_timeout& timeout, const operation_timeout& acquire_timeout,
+        const operation_deadline& timeout, const operation_deadline& acquire_timeout,
         stop_token stop, http_client_response_state& state, request_admission& admission);
     [[nodiscard]] http3_client_connection* find_http3_connection(const http_client_response_state& state) noexcept;
     void release_http3_connection(http3_client_connection& connection) noexcept;

@@ -3,7 +3,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/context.h"
 
@@ -38,7 +38,6 @@ task<void> context::inform(const http_interim_response_head& response, operation
     if (services().interim_output() == nullptr) {
         throw std::logic_error("this dispatch has no transport response output");
     }
-    validate_operation_options(operation);
     return services().interim_output()->inform(response, std::move(operation), *this);
 }
 }  // namespace ruvia

@@ -122,7 +122,6 @@ task<void> http_client_tunnel::write(std::span<const std::byte> bytes_value, ope
 }
 task<void> http_client_tunnel::write(std::string_view bytes_value, operation_options operation) & {
     require_output(response_.state_, false);
-    validate_operation_options(operation);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
@@ -132,7 +131,6 @@ task<void> http_client_tunnel::write(std::string_view bytes_value, operation_opt
 }
 task<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_value, operation_options operation) {
     require_output(response_.state_, false);
-    validate_operation_options(operation);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
@@ -142,7 +140,6 @@ task<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_value, opera
 }
 task<void> http_client_tunnel::finish(operation_options operation) & {
     require_output(response_.state_, true);
-    validate_operation_options(operation);
     auto& state_value = *response_.state_;
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
         detail::finish_client_output<tunnel_output_policy>(&state_value, http_client_response(&state_value), std::move(operation)));

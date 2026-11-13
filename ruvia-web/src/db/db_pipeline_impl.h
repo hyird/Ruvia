@@ -210,7 +210,7 @@ db_pipeline_event db_pipeline_state<io_type>::place(member_type& member) {
 // Parked statements go first, so an arrival only places itself when nobody
 // is parked.
 template <typename io_type>
-db_pipeline_event db_pipeline_state<io_type>::admit(member_type& member, const operation_timeout& admission_deadline) {
+db_pipeline_event db_pipeline_state<io_type>::admit(member_type& member, const operation_deadline& admission_deadline) {
     if (pool_.closing()) {
         throw pool_.closing_error();
     }
@@ -245,7 +245,7 @@ void db_pipeline_state<io_type>::admitted(db_pipeline_event event) const {
 }
 
 template <typename io_type>
-void db_pipeline_state<io_type>::park(member_type& member, const operation_timeout& admission_deadline) {
+void db_pipeline_state<io_type>::park(member_type& member, const operation_deadline& admission_deadline) {
     if (const auto deadline_value = admission_deadline.deadline()) {
         if (*deadline_value <= std::chrono::steady_clock::now()) {
             pool_type::slot_policy::throw_acquire_failure(pool_, worker_wait_status::timed_out);
@@ -819,7 +819,7 @@ public:
             }
             io_deadline_.reset();
             if (const auto io_timeout = db_io_timeout(pool_.config(), wanted)) {
-                io_deadline_ = worker_timer_saturating_deadline(
+                io_deadline_ = saturating_deadline(
                     *group.stretch_start_, io_timeout->value());
             }
             auto until = pool_.state().earliest_deadline(slot);
@@ -860,7 +860,7 @@ private:
 
     pool_type& pool_;
     member_type& member_;
-    const operation_timeout unbounded_{std::nullopt};
+    const operation_deadline unbounded_{std::nullopt};
     std::optional<clock_type::time_point> io_deadline_{};
 };
 
@@ -878,7 +878,7 @@ task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& 
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     scoped_request_io_timer timer(io_metrics, request_io_kind::db);
     auto statement = io_type::prepare(sql, std::span<const db_value>(params));
-    const operation_timeout timeout(options.timeout_);
+    const operation_deadline timeout(options.timeout_);
     auto& pipeline = pool.state();
     auto output = db_result_access::make_result(resource);
     member_type member(pipeline, returns_rows ? &output : nullptr, resource, options.stop_token_);

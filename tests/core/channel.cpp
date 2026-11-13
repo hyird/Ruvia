@@ -20,6 +20,7 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
 
 #include "failing_memory_resource.h"
@@ -539,8 +540,9 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         co_return;
     }
     const auto passed_deadline =
-        co_await active_receiver.receive(ruvia::operation_timeout(std::chrono::steady_clock::time_point{}));
-    const auto deadline = co_await active_receiver.receive(ruvia::operation_timeout(std::chrono::milliseconds(1)));
+        co_await active_receiver.receive({.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
+    const auto deadline = co_await active_receiver.receive(
+        {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::now() + std::chrono::milliseconds(1))});
     if (passed_deadline.status() != ruvia::worker_wait_status::timed_out ||
         deadline.status() != ruvia::worker_wait_status::timed_out) {
         co_return;
@@ -717,6 +719,82 @@ bool test_send_reservation_does_not_block_other_producers() {
     return first_sent && second_sent && concurrent && ordered;
 }
 
+ruvia::task<void> verify_send_wait_admission(ruvia::worker_handle worker_value, bool& success) {
+    auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+    if (!(co_await sender.send_wait(1)).accepted() || sender.send(9).status() != ruvia::channel_send_status::full) {
+        co_return;
+    }
+    // Waiting senders take released slots in FIFO order.
+    auto second = ruvia::channel_send_status::full;
+    auto third = ruvia::channel_send_status::full;
+    ruvia::task_scope scope(worker_value);
+    scope.spawn([](ruvia::channel_sender<int> s, ruvia::channel_send_status& out) -> ruvia::task<void> {
+        out = (co_await s.send_wait(2)).status();
+    }(sender, second));
+    scope.spawn([](ruvia::channel_sender<int> s, ruvia::channel_send_status& out) -> ruvia::task<void> {
+        out = (co_await s.send_wait(3)).status();
+    }(sender, third));
+    int values[3]{};
+    for (auto& value : values) {
+        auto received = co_await receiver.receive({.timeout_ = std::chrono::seconds(30)});
+        if (!received.has_value()) {
+            co_return;
+        }
+        value = received.value();
+    }
+    co_await scope.join();
+    success = values[0] == 1 && values[1] == 2 && values[2] == 3 && second == ruvia::channel_send_status::sent &&
+              third == ruvia::channel_send_status::sent;
+}
+
+ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_handle worker_value, bool& success) {
+    using value_type = std::unique_ptr<int>;
+    using ruvia::channel_send_status;
+    const auto returned = [](ruvia::channel_send_result<value_type>& result, channel_send_status status, int expected) {
+        if (result.status() != status || result.rejected() == nullptr) {
+            return false;
+        }
+        const auto value = std::move(result).take_rejected();
+        return value != nullptr && *value == expected;
+    };
+    auto [sender, receiver] = ruvia::make_channel<value_type>(worker_value, {.capacity_ = 1});
+    if (!sender.send(std::make_unique<int>(0)).accepted()) {
+        co_return;
+    }
+    auto timed = co_await sender.send_wait(std::make_unique<int>(1), {.timeout_ = std::chrono::milliseconds(5)});
+    auto passed = co_await sender.send_wait(std::make_unique<int>(2),
+        {.timeout_ = ruvia::operation_timeout(std::chrono::steady_clock::time_point{})});
+    ruvia::stop_source stopped;
+    stopped.request_stop();
+    auto already_cancelled = co_await sender.send_wait(std::make_unique<int>(3), {.stop_token_ = stopped.token()});
+    ruvia::stop_source later;
+    static_cast<void>(worker_value.post([&later] { later.request_stop(); }));
+    auto cancelled = co_await sender.send_wait(std::make_unique<int>(4), {.stop_token_ = later.token()});
+    const ruvia::channel_sender<value_type> unbound_sender;
+    auto unbound = co_await unbound_sender.send_wait(std::make_unique<int>(5));
+    static_cast<void>(worker_value.post([&sender] { sender.close(); }));
+    auto closed = co_await sender.send_wait(std::make_unique<int>(6));
+    // The buffered value still drains after closure.
+    auto drained = co_await receiver.receive();
+    success = returned(timed, channel_send_status::timed_out, 1) && returned(passed, channel_send_status::timed_out, 2) &&
+              returned(already_cancelled, channel_send_status::cancelled, 3) &&
+              returned(cancelled, channel_send_status::cancelled, 4) &&
+              returned(unbound, channel_send_status::closed, 5) && returned(closed, channel_send_status::closed, 6) &&
+              drained.has_value() && *drained.value() == 0;
+}
+
+ruvia::task<void> verify_send_wait_observes_worker_stop(ruvia::event_loop_attachment& attachment,
+    ruvia::worker_handle worker_value, bool& success) {
+    auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+    if (!sender.send(0).accepted()) {
+        co_return;
+    }
+    static_cast<void>(worker_value.post([&attachment] { attachment.stop(); }));
+    auto stopping = co_await sender.send_wait(7);
+    success = stopping.status() == ruvia::channel_send_status::worker_stopping && stopping.rejected() != nullptr &&
+              *stopping.rejected() == 7;
+}
+
 }  // namespace ruvia::test::channel_tests
 
 TEST(Ruvia, ChannelLifecycle) {
@@ -877,4 +955,63 @@ TEST(Ruvia, ChannelReentrantPayloadMovesAndDestruction) {
 
 TEST(Ruvia, ChannelSendReservationDoesNotBlockOtherProducers) {
     EXPECT_TRUE(ruvia::test::channel_tests::test_send_reservation_does_not_block_other_producers());
+}
+
+TEST(Ruvia, ChannelSendWaitWaitsForSpaceAndReturnsUndeliveredValues) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 16});
+    const auto worker_value = attachment.loop().handle();
+    {
+        // Off a worker thread, awaiting is rejected before anything is queued.
+        auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
+        auto operation = sender.send_wait(1);
+        EXPECT_THROW(static_cast<void>(operation.await_ready()), std::logic_error);
+    }
+    bool admission = false;
+    bool undelivered = false;
+    ruvia::test::run_worker_tasks(attachment,
+        ruvia::test::channel_tests::verify_send_wait_admission(worker_value, admission),
+        ruvia::test::channel_tests::verify_send_wait_returns_undelivered_values(worker_value, undelivered));
+    EXPECT_TRUE(admission);
+    EXPECT_TRUE(undelivered);
+}
+
+TEST(Ruvia, ChannelSendWaitObservesWorkerStop) {
+    asio::io_context io_context;
+    auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 16});
+    const auto worker_value = attachment.loop().handle();
+    bool success = false;
+    ruvia::test::run_worker_tasks(
+        attachment, ruvia::test::channel_tests::verify_send_wait_observes_worker_stop(attachment, worker_value, success));
+    EXPECT_TRUE(success);
+}
+
+TEST(Ruvia, ChannelSendWaitResumesOnTheAwaitingWorker) {
+    ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 16});
+    const auto receiving = loops.loop(0);
+    const auto sending = loops.loop(1);
+    auto [sender, receiver] = ruvia::make_channel<int>(receiving.handle(), {.capacity_ = 1});
+    loops.start();
+    auto produced = sending.start([](ruvia::channel_sender<int> s, ruvia::worker_handle self) -> ruvia::task<bool> {
+        bool on_sender = true;
+        bool delivered = true;
+        for (int value = 1; value <= 3; ++value) {
+            delivered = delivered && (co_await s.send_wait(value)).accepted();
+            on_sender = on_sender && self.is_current();
+        }
+        const bool resumed_on_sender = delivered && on_sender;
+        co_return resumed_on_sender;
+    }(sender, sending.handle()));
+    auto consumed = receiving.start([](ruvia::channel_receiver<int>& r) -> ruvia::task<int> {
+        int sum = 0;
+        for (int i = 0; i < 3; ++i) {
+            auto received = co_await r.receive({.timeout_ = std::chrono::seconds(30)});
+            sum += received.has_value() ? received.value() : 100;
+        }
+        co_return sum;
+    }(receiver));
+    EXPECT_TRUE(std::move(produced).get());
+    EXPECT_EQ(std::move(consumed).get(), 6);
+    loops.stop();
+    loops.join();
 }

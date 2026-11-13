@@ -16,7 +16,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/web/db/db.h"
@@ -357,7 +357,7 @@ public:
     [[nodiscard]] static task<db_migration_report> run(event_loop loop, db_config_storage config,
         std::pmr::vector<db_migration> migrations, db_migrator_options_storage options,
         std::pmr::memory_resource* resource, operation_options operation) {
-        if (!loop.is_current()) {
+        if (!loop.handle().is_current()) {
             throw std::logic_error("database migration must run on its bound event loop");
         }
         auto* resolved = pmr_resource_or_default(resource);
@@ -590,7 +590,6 @@ task<db_migration_report> db_migrator::migrate(
         throw std::logic_error("database migrator has been moved from");
     }
     detail::validate_migration_list(migrations, storage_->config_.driver_);
-    validate_operation_options(operation);
     auto* resource = storage_->resource_;
     return detail::db_migration_runner::run(storage_->loop_, detail::db_config_storage(storage_->config_, resource),
         std::pmr::vector<db_migration>(migrations.begin(), migrations.end(), resource),

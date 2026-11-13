@@ -14,7 +14,7 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -91,7 +91,7 @@ public:
         const db_query& query, const db_statement& statement, db_driver driver);
     // Serves the step from the cache, or runs `database` and stores its rows.
     [[nodiscard]] task<db_rows> wrap(std::optional<std::chrono::milliseconds> duration, std::pmr::string key,
-        db_cache_query database, operation_options options, operation_timeout deadline);
+        db_cache_query database, operation_options options, operation_deadline deadline);
     // `io_metrics` is the request's counter block, or null outside a request.
     [[nodiscard]] task<void> remove(
         std::span<const std::string_view> ids, request_io_metrics* io_metrics, operation_options options);
@@ -118,7 +118,7 @@ private:
 
     void require_open() const;
     task<db_rows> query(std::pmr::string key, std::chrono::milliseconds duration, db_cache_query database,
-        operation_options options, operation_timeout deadline);
+        operation_options options, operation_deadline deadline);
     // Ends the fill if it is still the one listed for its key. Later misses
     // of that key no longer join it.
     void unlist_fill(const fill& ended) noexcept;

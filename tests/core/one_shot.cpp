@@ -670,8 +670,7 @@ TEST(Ruvia, WorkerDeliveryFailedExtractionRetainsRejectedPayload) {
     payload_state state;
     state.reenter_ = [] {};
     {
-        auto result = ruvia::one_shot_complete_result<payload>::reject(
-            ruvia::one_shot_complete_status::receiver_closed, payload(state));
+        auto result = ruvia::one_shot_completion<payload>{}.complete(payload(state));
         state.throw_on_move_ = true;
         EXPECT_THROW(static_cast<void>(std::move(result).take_rejected()), std::runtime_error);
         state.throw_on_move_ = false;
@@ -711,8 +710,7 @@ TEST(Ruvia, WorkerDeliveryExtractionDuringUnwindCommitsOnlyOnSuccess) {
         payload_state state;
         state.reenter_ = [] {};
         {
-            auto result = result_type::reject(
-                ruvia::one_shot_complete_status::receiver_closed, payload(state));
+            auto result = ruvia::one_shot_completion<payload>{}.complete(payload(state));
             state.throw_on_move_ = fail_move;
             bool succeeded = false;
             bool failed = false;
@@ -744,8 +742,7 @@ TEST(Ruvia, WorkerDeliveryRejectedAccessBypassesPayloadAddressOperator) {
         non_addressable* operator&() = delete;
         const non_addressable* operator&() const = delete;
     };
-    auto result = ruvia::one_shot_complete_result<non_addressable>::reject(
-        ruvia::one_shot_complete_status::receiver_closed, non_addressable{17});
+    auto result = ruvia::one_shot_completion<non_addressable>{}.complete(non_addressable{17});
     const auto& constant = result;
     ASSERT_NE(result.rejected(), nullptr);
     ASSERT_NE(constant.rejected(), nullptr);

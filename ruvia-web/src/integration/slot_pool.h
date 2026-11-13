@@ -11,7 +11,7 @@
 #include <utility>
 
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
@@ -104,10 +104,10 @@ public:
 
     // The common free-slot path completes directly in the caller's frame.
     // Saturated pools use the same scheduler, timeout and cancellation path.
-    [[nodiscard]] acquire_awaiter acquire(const operation_timeout& timeout,
+    [[nodiscard]] acquire_awaiter acquire(const operation_deadline& timeout,
         std::optional<timeout_duration> acquire_timeout, stop_token stop_token_value) {
-        return acquire_awaiter(
-            owner_, scheduler_.acquire(timeout.constrained_by(acquire_timeout), std::move(stop_token_value)));
+        return acquire_awaiter(owner_, scheduler_.acquire({.timeout_ = timeout.constrained_by(acquire_timeout).timeout(),
+                                           .stop_token_ = std::move(stop_token_value)}));
     }
 
     // Leases a free slot without waiting; nullopt while every slot is leased
@@ -296,7 +296,7 @@ private:
     struct slot_state final {
         std::uint64_t cancellation_id_{0};
         pool_slot_abort_reason abort_reason_{pool_slot_abort_reason::none};
-        operation_deadline<deadline_kind_type> deadline_;
+        deadline_lifecycle<deadline_kind_type> deadline_;
         worker_timer_registration deadline_timer_;
     };
 

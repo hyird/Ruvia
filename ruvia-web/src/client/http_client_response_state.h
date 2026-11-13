@@ -17,7 +17,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_cancellation.h"
@@ -185,7 +185,7 @@ struct http_client_stream_timer final {
         timer_at_.reset();
     }
 
-    [[nodiscard]] std::optional<time_point> earliest_deadline(const operation_timeout& timeout) const noexcept {
+    [[nodiscard]] std::optional<time_point> earliest_deadline(const operation_deadline& timeout) const noexcept {
         auto deadline = timeout.deadline();
         for (const auto bound : {read_deadline_, write_deadline_}) {
             if (bound && (!deadline || *bound < *deadline)) {
@@ -195,14 +195,14 @@ struct http_client_stream_timer final {
         return deadline;
     }
 
-    [[nodiscard]] bool expired(const operation_timeout& timeout,
+    [[nodiscard]] bool expired(const operation_deadline& timeout,
         time_point now = std::chrono::steady_clock::now()) const noexcept {
         return timeout.expired() || (read_deadline_ && *read_deadline_ <= now) ||
                (write_deadline_ && *write_deadline_ <= now);
     }
 
     template <typename callback_type>
-    void schedule(const worker_handle& worker, const operation_timeout& timeout, callback_type&& on_expired) {
+    void schedule(const worker_handle& worker, const operation_deadline& timeout, callback_type&& on_expired) {
         const auto deadline = earliest_deadline(timeout);
         if (!deadline || (timer_at_ && *timer_at_ <= *deadline)) {
             return;
@@ -222,7 +222,7 @@ struct http_client_stream_timer final {
     template <typename timeout_source_type, typename expired_type, typename error_type>
     void schedule_with_retry(const worker_handle& worker, const timeout_source_type& timeout_source,
         expired_type on_expired, error_type on_error) {
-        const auto current_timeout = [&timeout_source]() noexcept -> const operation_timeout& {
+        const auto current_timeout = [&timeout_source]() noexcept -> const operation_deadline& {
             if constexpr (std::is_pointer_v<timeout_source_type>) {
                 return *timeout_source;
             } else {
@@ -263,7 +263,7 @@ template <typename wake_fn_type, typename stop_predicate_type, typename release_
     worker_timer_registration continue_timer;
     if (request.upload() != nullptr && !request.upload()->content_released_) {
         (void)worker.schedule_timer(continue_timer,
-            worker_timer_deadline_after(request.upload()->config_.continue_timeout_.value()),
+            deadline_after(request.upload()->config_.continue_timeout_.value()),
             [&upload, policy = request.upload()](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired && !upload.stopped_) {
                     policy->content_released_ = true;
@@ -346,7 +346,7 @@ public:
     [[noreturn]] void rethrow_downstream_failure(const operation_steps& steps) const;
     void discard_response_body() noexcept;
     void discard_failed_encoded_response() noexcept;
-    [[nodiscard]] task<void> dispatch_informational(const operation_timeout& timeout);
+    [[nodiscard]] task<void> dispatch_informational(const operation_deadline& timeout);
     void request_informational_stop() noexcept {
         informational_stop_requested_ = informational_stop_requested_ || informational_active_;
         if (informational_abort_) {

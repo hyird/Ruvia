@@ -13,7 +13,6 @@
 
 #include "ruvia/core/detail/suspend_race_state.h"
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -40,14 +39,25 @@ class worker_single_wait_awaiter;
 template <typename t_type, typename state_type>
 class worker_wait_slot;
 
+// A shared owner that links itself into its worker's shutdown registry
+// through a worker_shutdown_registration data member named
+// shutdown_registration_ (see make_worker_wait_state()).
+template <typename state_type>
+concept worker_shutdown_registered =
+    worker_shutdown_observer<state_type> &&
+    std::same_as<decltype(state_type::shutdown_registration_), worker_shutdown_registration>;
+
 // The domain state contract: the bound worker, the lock guarding the slot,
-// and the slot itself. Every slot member is called with that lock held.
+// the slot itself, and the shutdown registration that routes the worker's
+// stopping notification to the slot. Every slot member is called with that
+// lock held.
 template <typename state_type, typename t_type>
-concept worker_wait_state = requires(state_type& state, const state_type& const_state) {
-    { const_state.worker() } -> std::same_as<const worker_handle&>;
-    state.lock_state();
-    { state.wait_slot() } -> std::same_as<worker_wait_slot<t_type, state_type>&>;
-};
+concept worker_wait_state =
+    worker_shutdown_registered<state_type> && requires(state_type& state, const state_type& const_state) {
+        { const_state.worker() } -> std::same_as<const worker_handle&>;
+        state.lock_state();
+        { state.wait_slot() } -> std::same_as<worker_wait_slot<t_type, state_type>&>;
+    };
 
 // The single pending-waiter attachment of a domain state. The state owns it by
 // value next to its domain fields and guards it with its own lock; every
@@ -144,9 +154,8 @@ private:
 // without an outer-owner pointer, allocation, virtual dispatch, or type erasure.
 // state_type must satisfy worker_wait_state<state_type, t_type>.
 //
-// A relative timeout must be positive (validate_operation_options) and starts
-// when the wait starts; an operation_timeout deadline that has already passed
-// completes the wait as timed_out without suspending. Once the worker's timer
+// A relative timeout starts when the wait starts; an absolute deadline that has
+// already passed completes the wait as timed_out without suspending. Once the worker's timer
 // queue stops, a timed wait completes as worker_stopping.
 //
 // The awaiter is cold until start(): nothing publishes its address before
@@ -154,19 +163,10 @@ private:
 template <typename t_type, typename state_type>
 class worker_single_wait_awaiter final {
 public:
-    worker_single_wait_awaiter(std::shared_ptr<state_type> state_value, operation_options options)
+    worker_single_wait_awaiter(std::shared_ptr<state_type> state_value, operation_options options) noexcept
         : state_(std::move(state_value)),
           timeout_(options.timeout_),
           stop_token_(std::move(options.stop_token_)) {
-        static_assert(worker_wait_state<state_type, t_type>);
-        validate_operation_options({.timeout_ = timeout_});
-    }
-
-    worker_single_wait_awaiter(
-        std::shared_ptr<state_type> state_value, const operation_timeout& deadline, stop_token stop_token_value) noexcept
-        : state_(std::move(state_value)),
-          deadline_(deadline.deadline()),
-          stop_token_(std::move(stop_token_value)) {
         static_assert(worker_wait_state<state_type, t_type>);
     }
 
@@ -194,7 +194,7 @@ public:
         }
         started_ = true;
         if (timeout_.has_value()) {
-            deadline_ = worker_timer_deadline_after(timeout_->value());
+            deadline_ = timeout_->deadline_from(std::chrono::steady_clock::now());
         }
     }
 
@@ -346,7 +346,7 @@ private:
     }
 
     std::shared_ptr<state_type> state_;
-    std::optional<timeout_duration> timeout_;
+    std::optional<operation_timeout> timeout_;
     std::optional<std::chrono::steady_clock::time_point> deadline_;
     stop_token stop_token_;
     bool started_{false};
@@ -358,14 +358,16 @@ private:
     stop_registration stop_registration_;
 };
 
-namespace detail {
-
-// Allocates a worker-bound domain state from resource and registers its
-// shutdown observer, so the worker's stopping notification reaches every
-// state whose endpoints are still alive. A stopping worker throws
-// std::runtime_error.
+// Allocates a worker-bound domain state from resource and links its
+// shutdown_registration_ into the worker's shutdown registry, so the worker's
+// stopping notification reaches every state whose endpoints are still alive.
+// The state's constructor receives args and must bind the worker that
+// worker() returns. A stopping worker throws std::runtime_error.
 template <typename state_type, typename... arg_types>
-[[nodiscard]] std::shared_ptr<state_type> make_worker_bound_state(
+    requires worker_shutdown_registered<state_type> && requires(const state_type& state) {
+        { state.worker() } -> std::same_as<const worker_handle&>;
+    }
+[[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(
     std::pmr::memory_resource* resource, arg_types&&... args) {
     auto state_value = std::allocate_shared<state_type>(
         std::pmr::polymorphic_allocator<state_type>(resource), std::forward<arg_types>(args)...);
@@ -375,7 +377,5 @@ template <typename state_type, typename... arg_types>
     }
     return state_value;
 }
-
-}  // namespace detail
 
 }  // namespace ruvia

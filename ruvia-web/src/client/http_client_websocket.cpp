@@ -7,7 +7,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/operation_timeout.h"
+#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_request_target.h"
@@ -287,7 +287,7 @@ public:
         operation_guard operation(*state, operation_lane::write, std::move(options));
         worker_timer_registration close_timer;
         if (const auto bound = state->lifecycle_.close_handshake_timeout_) {
-            (void)state->worker_.schedule_timer(close_timer, worker_timer_deadline_after(bound->value()),
+            (void)state->worker_.schedule_timer(close_timer, deadline_after(bound->value()),
                 [state = state.get()](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         state->abort(http_client_error::code_type::timeout);
@@ -371,7 +371,7 @@ private:
             if (effective.stop_token_.stop_requested()) {
                 throw http_client_error(http_client_error::code_type::cancelled, "WebSocket operation cancelled");
             }
-            const auto timeout = operation_timeout(effective.timeout_);
+            const auto timeout = operation_deadline(effective.timeout_);
             if (const auto deadline = timeout.deadline()) {
                 (void)state.worker_.schedule_timer(timer_, *deadline, [&state, lane](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
@@ -471,7 +471,7 @@ private:
         }
         const auto delay = websocket_heartbeat_delay(lifecycle_, liveness_,
             write_lane_.write_in_progress(), last_active_ms_, steady_now_ms());
-        (void)worker_.schedule_timer(heartbeat_timer_, worker_timer_deadline_after(delay),
+        (void)worker_.schedule_timer(heartbeat_timer_, deadline_after(delay),
             [this](worker_timer_outcome outcome) noexcept {
                 if (outcome != worker_timer_outcome::expired) {
                     return;
@@ -573,7 +573,7 @@ private:
                     worker_timer_registration close_timer;
                     if (event->close() && lifecycle_.close_handshake_timeout_) {
                         (void)worker_.schedule_timer(close_timer,
-                            worker_timer_deadline_after(lifecycle_.close_handshake_timeout_->value()),
+                            deadline_after(lifecycle_.close_handshake_timeout_->value()),
                             [this](worker_timer_outcome outcome) noexcept {
                                 if (outcome == worker_timer_outcome::expired) {
                                     abort(http_client_error::code_type::timeout);
@@ -606,7 +606,7 @@ private:
             }
             worker_timer_registration read_timer;
             if (read_timeout_) {
-                (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(read_timeout_->value()),
+                (void)worker_.schedule_timer(read_timer, deadline_after(read_timeout_->value()),
                     [this](worker_timer_outcome outcome) noexcept {
                         if (outcome == worker_timer_outcome::expired) {
                             abort(http_client_error::code_type::timeout);
@@ -652,7 +652,7 @@ private:
         bool expired = false;
         worker_timer_registration timer;
         if (const auto timeout = lifecycle_.close_handshake_timeout_) {
-            (void)worker_.schedule_timer(timer, worker_timer_deadline_after(timeout->value()),
+            (void)worker_.schedule_timer(timer, deadline_after(timeout->value()),
                 [this, &expired](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         expired = true;
@@ -665,7 +665,7 @@ private:
             for (;;) {
                 worker_timer_registration read_timer;
                 if (!lifecycle_.close_handshake_timeout_ && read_timeout_) {
-                    (void)worker_.schedule_timer(read_timer, worker_timer_deadline_after(read_timeout_->value()),
+                    (void)worker_.schedule_timer(read_timer, deadline_after(read_timeout_->value()),
                         [this](worker_timer_outcome outcome) noexcept {
                             if (outcome == worker_timer_outcome::expired) {
                                 abort(http_client_error::code_type::timeout);
@@ -796,7 +796,6 @@ void require_data_lane(const detail::http_client_websocket_state& state, websock
 task<void> http_client_websocket::write(websocket_opcode opcode, std::string_view payload,
     websocket_send_options options, operation_options operation, detail::websocket_write_extent extent) {
     auto& state = require_websocket(state_);
-    validate_operation_options(operation);
     require_data_lane(state, opcode, extent);
     return detail::http_client_websocket_state::write(
         state_, opcode, std::pmr::string(payload, state.resource()), options, std::move(operation), extent);
@@ -855,7 +854,6 @@ task<void> http_client_websocket_message_writer::submit(std::string_view chunk, 
         throw std::logic_error("WebSocket message writer is finished");
     }
     state_->require_current();
-    validate_operation_options(operation);
     return detail::http_client_websocket_state::write(state_, opcode_, std::pmr::string(chunk, state_->resource()),
         options_, std::move(operation),
         final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
@@ -863,7 +861,6 @@ task<void> http_client_websocket_message_writer::submit(std::string_view chunk, 
 task<void> http_client_websocket::write_owned(websocket_opcode opcode, std::pmr::string&& payload,
     websocket_send_options options, operation_options operation) {
     auto& state = require_websocket(state_);
-    validate_operation_options(operation);
     require_data_lane(state, opcode, detail::websocket_write_extent::message);
     return detail::http_client_websocket_state::write(state_, opcode, detail::rebind_owned_storage(payload, state.resource()),
         options, std::move(operation), detail::websocket_write_extent::message);
@@ -888,12 +885,10 @@ task<void> http_client_websocket::pong(std::string_view payload, operation_optio
 }
 task<std::optional<websocket_message>> http_client_websocket::read(operation_options operation) & {
     (void)require_websocket(state_);
-    validate_operation_options(operation);
     return detail::http_client_websocket_state::read(state_, std::move(operation));
 }
 task<void> http_client_websocket::close(websocket_close_options options, operation_options operation) & {
     auto& state = require_websocket(state_);
-    validate_operation_options(operation);
     return detail::http_client_websocket_state::close(
         state_, options.code_, std::pmr::string(options.reason_.view(), state.resource()), std::move(operation));
 }
@@ -1046,7 +1041,7 @@ task<http_client_websocket> http_client_websocket_request::connect_owned(http_cl
     worker_timer_registration opening_timer;
     const auto connect_timeout = request.request_options_.timeouts_.connect_.resolve(pool.config().connect_timeout_);
     if (connect_timeout) {
-        (void)pool.worker().schedule_timer(opening_timer, worker_timer_deadline_after(connect_timeout->value()),
+        (void)pool.worker().schedule_timer(opening_timer, deadline_after(connect_timeout->value()),
             [&opening_stop, &opening_expired](worker_timer_outcome outcome) noexcept {
                 if (outcome == worker_timer_outcome::expired) {
                     opening_expired = true;

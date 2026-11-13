@@ -626,6 +626,6 @@ TEST(Ruvia, group_cold_shutdown_joins_connection_callbacks_after_facade_destruct
     EXPECT_EQ(opens.load(), 1U);
     EXPECT_EQ(closes.load(), 1U);
     EXPECT_EQ(destroyed.load(), 1U);
-    EXPECT_TRUE(runtime.handles_[0].accepting());
-    EXPECT_TRUE(runtime.handles_[1].accepting());
+    EXPECT_TRUE(runtime.handles_[0].handle().accepting());
+    EXPECT_TRUE(runtime.handles_[1].handle().accepting());
 }

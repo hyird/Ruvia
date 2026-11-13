@@ -183,15 +183,23 @@ struct attached_context final {
     move_only_function<void(std::exception_ptr)> failure_;
 };
 
+// A standalone worker_runtime that exposes its loop through
+// worker_runtime::loop(); the runtime outlives every handle to the loop.
+struct borrowed_runtime final {
+    worker_runtime* runtime_;
+};
+
 // One loop's runtime and retirement. A pool loop owns a worker_runtime; an
-// attached loop owns the same worker stop chain over a caller-owned context.
+// attached loop owns the same worker stop chain over a caller-owned context;
+// a borrowed loop gates the stop admission of a standalone worker_runtime.
 // Both stop through stop(): it seals the retirement gate on the stopping
 // thread and requests the worker stop chain, whose owner-thread stop control
 // re-enters stop(); the drained gate finalizes the chain on the owner.
 struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
-    using context_ownership_type = std::variant<worker_runtime, attached_context>;
+    using context_ownership_type = std::variant<worker_runtime, attached_context, borrowed_runtime>;
 
     event_loop_state(std::size_t queue_capacity, blocking_pool* pool);
+    explicit event_loop_state(worker_runtime& runtime);
     event_loop_state(asio::io_context& external_context, std::size_t queue_capacity, blocking_pool* pool,
         move_only_function<void(std::exception_ptr)> failure);
 

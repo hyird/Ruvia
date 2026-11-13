@@ -117,7 +117,6 @@ redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, reque
 }
 
 redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, operation_options options) {
-    validate_operation_options(options);
     return redis_handle(*this, process_resource(), scope, std::move(options));
 }
 
