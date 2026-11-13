@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <map>
 #include <mutex>
 #include <optional>
 #include <semaphore>
@@ -18,10 +19,15 @@
 #include <utility>
 #include <vector>
 
+#include <asio/buffer.hpp>
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/read.hpp>
 #include <asio/socket_base.hpp>
+#include <asio/ssl/context.hpp>
+#include <asio/ssl/stream.hpp>
 #include <asio/write.hpp>
+#include <openssl/ssl.h>
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/http/http2_connection.h"
@@ -29,6 +35,7 @@
 #include "ruvia/web/context.h"
 
 #include "http_server_fixture.h"
+
 namespace http2_goaway_test {
 using namespace std::chrono_literals;
 
@@ -488,4 +495,361 @@ TEST(Ruvia, http2_readiness_is_bounded_by_header_completion_timeout) {
     run.socket().close();
     run.app().stop();
     run.join();
+}
+
+// A connection whose max_requests_per_connection_ is reached starts its
+// graceful GOAWAY drain on the request head that reached the limit. The first
+// GOAWAY advertises 2^31-1 (RFC 9113 section 6.8), so that head is served like
+// any accepted stream even when it is a CONNECT tunnel or an RFC 8441 WebSocket
+// handshake.
+
+namespace http2_request_limit_test {
+using namespace std::chrono_literals;
+
+std::binary_semaphore& started() {
+    static std::binary_semaphore value{0};
+    return value;
+}
+
+class limit_routes final {
+public:
+    RUVIA_ROUTES_BEGIN(limit_routes)
+    RUVIA_CONNECT("target.test:443", tunnel);
+    RUVIA_GET_WS("/socket", socket);
+    RUVIA_ROUTES_END
+
+    // Both long-lived handlers run until the client closes the connection.
+    ruvia::task<void> tunnel(ruvia::context& context_value) {
+        auto& tunnel_value = context_value.tunnel();
+        while (co_await tunnel_value.read()) {
+        }
+    }
+    ruvia::task<void> socket(ruvia::context& context_value) {
+        auto& socket_value = context_value.websocket();
+        while (co_await socket_value.read()) {
+        }
+    }
+};
+
+using ruvia::test::append_frame;
+using ruvia::test::read_frame;
+std::uint32_t limit_uint32(std::string_view bytes) {
+    if (bytes.size() < 4) {
+        throw std::runtime_error("truncated HTTP/2 frame");
+    }
+    std::uint32_t value = 0;
+    for (unsigned i = 0; i != 4; ++i) {
+        value = (value << 8) | static_cast<unsigned char>(bytes[i]);
+    }
+    return value;
+}
+
+// The server's answer to stream 1: the decoded :status of its first HEADERS
+// frame, or "RST_STREAM:<code>" when the stream was reset first. GOAWAY frames
+// seen on the way record their last stream id.
+struct stream_outcome final {
+    std::string answer_{};
+    std::optional<std::uint32_t> goaway_last_stream_id_;
+};
+stream_outcome first_outcome(asio::ip::tcp::socket& socket, ruvia::hpack_decoder& decoder) {
+    stream_outcome outcome;
+    for (;;) {
+        const auto value = read_frame(socket);
+        if (value.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway)) {
+            outcome.goaway_last_stream_id_ = limit_uint32(value.payload_) & 0x7fffffffU;
+            continue;
+        }
+        if (value.header_.stream_id_ != 1) {
+            continue;
+        }
+        if (value.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
+            outcome.answer_ = "RST_STREAM:" + std::string(std::to_string(limit_uint32(value.payload_)));
+            return outcome;
+        }
+        if (value.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
+            const auto decoded = decoder.decode(value.payload_, [&](std::string_view name, std::string_view field) {
+                if (name == ":status") {
+                    outcome.answer_ = field;
+                }
+                return true;
+            });
+            if (decoded.has_value()) {
+                throw std::runtime_error("invalid HPACK response block");
+            }
+            return outcome;
+        }
+    }
+}
+
+enum class upgrade_kind : std::uint8_t {
+    connect_tunnel,
+    websocket,
+};
+stream_outcome open_upgrade(const asio::ip::tcp::endpoint& endpoint, upgrade_kind kind) {
+    asio::io_context io;
+    ruvia::hpack_decoder decoder;
+    asio::ip::tcp::socket socket(io);
+    socket.connect(endpoint);
+    std::string wire(ruvia::http2_client_preface);
+    append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    std::string block;
+    ruvia::hpack_encoder::encode_header(block, ":method", "CONNECT");
+    if (kind == upgrade_kind::websocket) {
+        ruvia::hpack_encoder::encode_header(block, ":protocol", "websocket");
+        ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
+        ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
+        ruvia::hpack_encoder::encode_header(block, ":path", "/socket");
+        ruvia::hpack_encoder::encode_header(block, "sec-websocket-version", "13");
+    } else {
+        ruvia::hpack_encoder::encode_header(block, ":authority", "target.test:443");
+    }
+    append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
+    asio::write(socket, asio::buffer(wire));
+    auto outcome = first_outcome(socket, decoder);
+    // Closing the transport ends the established tunnel or socket.
+    socket.close();
+    return outcome;
+}
+}  // namespace http2_request_limit_test
+
+TEST(Ruvia, http2_upgrade_on_the_request_that_reaches_the_connection_limit_is_served) {
+    using namespace http2_request_limit_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    using namespace std::chrono_literals;
+    auto& app = ruvia::app();
+    app.on_start([] { started().release(); });
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    app.server({.worker_count_ = 1, .connection_scan_interval_ = 5ms, .max_requests_per_connection_ = 1});
+    app.listen({.address_ = "127.0.0.1", .http_ = endpoint.port()});
+    ruvia::test::app_run thread(app);
+    if (!started().try_acquire_for(3s)) {
+        app.stop();
+        thread.join();
+        throw std::runtime_error("HTTP/2 request limit app did not start");
+    }
+    std::optional<stream_outcome> tunnel;
+    std::optional<stream_outcome> websocket;
+    std::exception_ptr client_failure;
+    try {
+        tunnel = open_upgrade(endpoint, upgrade_kind::connect_tunnel);
+        websocket = open_upgrade(endpoint, upgrade_kind::websocket);
+    } catch (...) {
+        client_failure = std::current_exception();
+    }
+    app.stop();
+    thread.join();
+    if (client_failure) {
+        std::rethrow_exception(client_failure);
+    }
+    // The limit was reached by this very request: the drain's first GOAWAY
+    // (2^31-1) precedes its response, and the upgrade still completes on it.
+    EXPECT_EQ(tunnel->answer_, std::string("200"));
+    EXPECT_TRUE(tunnel->goaway_last_stream_id_.has_value());
+    EXPECT_EQ(tunnel->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
+    EXPECT_EQ(websocket->answer_, std::string("200"));
+    EXPECT_TRUE(websocket->goaway_last_stream_id_.has_value());
+    EXPECT_EQ(websocket->goaway_last_stream_id_.value_or(0), 0x7fffffffU);
+}
+
+namespace http2_frame_observation_test {
+using namespace std::chrono_literals;
+
+class observer_controller final {
+public:
+    RUVIA_ROUTES_BEGIN(observer_controller)
+    RUVIA_GET("/fingerprint", fingerprint);
+    RUVIA_ROUTES_END
+    ruvia::task<ruvia::http_response> fingerprint(ruvia::context& context) {
+        co_return context.text(std::to_string(context.conn().connection_id()));
+    }
+};
+
+struct frame_observation final {
+    std::vector<ruvia::http2_frame_metadata> frames_;
+    std::vector<std::string> pseudo_names_;
+    std::vector<std::uint64_t> first_frames_;
+    std::size_t begins_{0};
+    std::size_t ends_{0};
+};
+
+class observation_log final {
+public:
+    void frame(const ruvia::http2_frame_record& record) {
+        std::lock_guard lock(mutex_);
+        connections_[record.connection_id()].frames_.push_back(record.metadata());
+    }
+    void header(const ruvia::http2_headers_record& record) {
+        std::lock_guard lock(mutex_);
+        auto& result = connections_[record.connection_id()];
+        const auto& metadata = record.metadata();
+        if (metadata.phase_ == ruvia::http2_header_observation_phase::begin) {
+            ++result.begins_;
+        } else if (metadata.phase_ == ruvia::http2_header_observation_phase::end) {
+            ++result.ends_;
+        } else if (metadata.name_.starts_with(':')) {
+            result.pseudo_names_.emplace_back(metadata.name_);
+            result.first_frames_.push_back(metadata.first_frame_observation_sequence_);
+        }
+    }
+    frame_observation get(std::uint64_t id) const {
+        std::lock_guard lock(mutex_);
+        return connections_.at(id);
+    }
+
+private:
+    mutable std::mutex mutex_;
+    std::map<std::uint64_t, frame_observation> connections_;
+};
+
+void setting(std::string& payload, std::uint16_t id, std::uint32_t value) {
+    const std::array<char, 6> bytes{static_cast<char>(id >> 8), static_cast<char>(id),
+        static_cast<char>(value >> 24), static_cast<char>(value >> 16),
+        static_cast<char>(value >> 8), static_cast<char>(value)};
+    payload.append(bytes.data(), bytes.size());
+}
+
+std::string opening(bool reverse, bool empty_initial) {
+    std::string wire(ruvia::http2_client_preface);
+    if (empty_initial) {
+        ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
+    }
+    std::string payload;
+    setting(payload, 3, 17);
+    setting(payload, 0xfafa, 101);
+    setting(payload, 3, 29);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, payload);
+    // Exclusive dependency zero, weight 256: a standalone PRIORITY on idle 3.
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::priority, 0, 3,
+        std::string_view("\x80\0\0\0\xff", 5));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
+        std::string_view("\0\x70\0\x01", 4));
+    std::string block;
+    const std::array names = reverse
+                                 ? std::array{":path", ":authority", ":scheme", ":method"}
+                                 : std::array{":method", ":scheme", ":authority", ":path"};
+    for (const std::string_view name : names) {
+        const auto value = name == ":method" ? "GET" : name == ":scheme"  ? "https"
+                                                   : name == ":authority" ? "localhost"
+                                                                          : "/fingerprint";
+        ruvia::hpack_encoder::encode_header(block, name, value);
+    }
+    // PADDED | PRIORITY | END_STREAM, followed by two CONTINUATION frames.
+    payload.assign(1, '\x02');
+    payload.append("\0\0\0\x03\x29", 5);
+    payload.append(block.data(), 1);
+    payload.append(2, '\0');
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x29, 1, payload);
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0, 1,
+        std::string_view(block).substr(1, 2));
+    ruvia::test::append_frame(wire, ruvia::http2_frame_type::continuation, 0x4, 1,
+        std::string_view(block).substr(3));
+    return wire;
+}
+
+std::uint64_t exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
+    bool reverse, bool empty_initial, std::size_t fragment) {
+    asio::ssl::context tls(asio::ssl::context::tls_client);
+    tls.set_verify_mode(asio::ssl::verify_none);
+    asio::ssl::stream<asio::ip::tcp::socket> stream(io, tls);
+    static constexpr unsigned char alpn[]{2, 'h', '2'};
+    if (SSL_set_alpn_protos(stream.native_handle(), alpn, sizeof(alpn)) != 0 ||
+        SSL_set_tlsext_host_name(stream.native_handle(), "localhost") != 1) {
+        throw std::runtime_error("cannot configure TLS h2 test client");
+    }
+    stream.next_layer().connect(endpoint);
+    stream.handshake(asio::ssl::stream_base::client);
+    const unsigned char* selected = nullptr;
+    unsigned selected_size = 0;
+    SSL_get0_alpn_selected(stream.native_handle(), &selected, &selected_size);
+    if (std::string_view(reinterpret_cast<const char*>(selected), selected_size) != "h2") {
+        throw std::runtime_error("TLS client did not negotiate h2");
+    }
+    const auto wire = opening(reverse, empty_initial);
+    for (std::size_t cursor = 0; cursor < wire.size(); cursor += fragment) {
+        asio::write(stream, asio::buffer(std::string_view(wire).substr(cursor, fragment)));
+    }
+    std::string body;
+    const auto deadline = std::chrono::steady_clock::now() + 10s;
+    for (;;) {
+        const auto frame = ruvia::test::read_frame(stream, deadline);
+        if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data) &&
+            frame.header_.stream_id_ == 1) {
+            body.append(frame.payload_);
+            if ((frame.header_.flags_ & 1) != 0) {
+                return std::stoull(body);
+            }
+        }
+    }
+}
+}  // namespace http2_frame_observation_test
+
+TEST(Ruvia, http2_typed_observers_fingerprint_tls_frames_independently_of_record_boundaries) {
+    using namespace http2_frame_observation_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation reservation(io);
+    const auto endpoint = reservation.endpoint();
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    std::binary_semaphore started{0};
+    observation_log observations;
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 2})
+        .listen({.address_ = "127.0.0.1", .https_ = endpoint.port(), .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = identity.private_key_file()}}})
+        .on_start([&] { started.release(); })
+        .on_http2_frame([&](const ruvia::http2_frame_record& record) noexcept { observations.frame(record); })
+        .on_http2_headers([&](const ruvia::http2_headers_record& record) noexcept { observations.header(record); });
+    {
+        ruvia::test::app_run running(app);
+        ASSERT_TRUE(started.try_acquire_for(10s));
+        EXPECT_THROW(app.on_http2_frame(nullptr), std::logic_error);
+        EXPECT_THROW(app.on_http2_headers(nullptr), std::logic_error);
+        for (const bool reverse : {false, true}) {
+            for (const bool empty_initial : {false, true}) {
+                for (const auto fragment : {std::size_t{1}, std::size_t{7}, std::size_t{4096}}) {
+                    const auto id = exchange(io, endpoint, reverse, empty_initial, fragment);
+                    const auto observed = observations.get(id);
+                    ASSERT_EQ(observed.frames_.size(), empty_initial ? 7u : 6u);
+                    for (std::size_t i = 0; i < observed.frames_.size(); ++i) {
+                        EXPECT_EQ(observed.frames_[i].observation_sequence_, i);
+                    }
+                    const auto offset = empty_initial ? 1u : 0u;
+                    if (empty_initial) {
+                        EXPECT_EQ(observed.frames_[0].settings().size(), 0u);
+                    }
+                    const auto& settings = observed.frames_[offset];
+                    ASSERT_EQ(settings.settings().size(), 3u);
+                    EXPECT_TRUE(settings.settings_complete_);
+                    EXPECT_EQ(settings.settings()[0].value_, 17u);
+                    EXPECT_EQ(static_cast<std::uint16_t>(settings.settings()[1].id_), 0xfafa);
+                    EXPECT_EQ(settings.settings()[1].value_, 101u);
+                    EXPECT_EQ(settings.settings()[2].value_, 29u);
+                    ASSERT_TRUE(observed.frames_[offset + 1].priority_);
+                    EXPECT_EQ(observed.frames_[offset + 1].priority_->weight_, 256u);
+                    EXPECT_TRUE(observed.frames_[offset + 1].priority_->exclusive_);
+                    ASSERT_TRUE(observed.frames_[offset + 2].window_increment_);
+                    EXPECT_EQ(*observed.frames_[offset + 2].window_increment_, 7340033u);
+                    ASSERT_TRUE(observed.frames_[offset + 3].priority_);
+                    EXPECT_EQ(observed.frames_[offset + 3].priority_->stream_dependency_, 3u);
+                    EXPECT_EQ(observed.frames_[offset + 3].priority_->weight_, 42u);
+                    EXPECT_TRUE(observed.frames_[offset + 4].type_ == ruvia::http2_frame_type::continuation);
+                    EXPECT_TRUE(observed.frames_[offset + 5].type_ == ruvia::http2_frame_type::continuation);
+                    const std::vector<std::string> expected = reverse
+                                                                  ? std::vector<std::string>{":path", ":authority", ":scheme", ":method"}
+                                                                  : std::vector<std::string>{":method", ":scheme", ":authority", ":path"};
+                    EXPECT_EQ(observed.pseudo_names_, expected);
+                    ASSERT_EQ(observed.first_frames_.size(), 4u);
+                    for (const auto sequence : observed.first_frames_) {
+                        EXPECT_EQ(sequence, offset + 3u);
+                    }
+                    EXPECT_EQ(observed.begins_, 1u);
+                    EXPECT_EQ(observed.ends_, 1u);
+                }
+            }
+        }
+        app.stop();
+        running.join();
+    }
+    app.on_http2_frame(nullptr).on_http2_headers(nullptr);
 }

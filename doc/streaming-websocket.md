@@ -132,7 +132,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ```cpp
 #include <string>
-#include "ruvia/core/worker_ref.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/web/context.h"
 
 ruvia::task<void> stream_subscription(

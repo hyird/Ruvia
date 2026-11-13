@@ -50,7 +50,7 @@
 #include <asio/ssl/context.hpp>
 #include <asio/ssl/stream.hpp>
 
-#include "ruvia/core/worker_ref.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http_client.h"
 
 #ifdef RUVIA_ENABLE_REDIS

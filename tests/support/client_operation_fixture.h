@@ -13,7 +13,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 // Per-operation timeouts and stop tokens of the public outbound client, driven

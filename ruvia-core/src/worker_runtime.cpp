@@ -30,7 +30,6 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_ref.h"
 #if defined(_WIN32)
 #include <windows.h>
 #endif
@@ -47,8 +46,8 @@
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_ref.h"
 #ifdef _WIN32
 #include <array>
 #include <charconv>

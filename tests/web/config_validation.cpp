@@ -85,7 +85,6 @@ RUVIA_MODEL(testing_facade_report, RUVIA_REQUIRED_FIELD(path, ruvia::string),
 #include <openssl/x509.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_request.h"

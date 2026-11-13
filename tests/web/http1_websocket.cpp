@@ -32,7 +32,6 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
@@ -48,6 +47,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/model.h"
 
+#include "client_operation_fixture.h"
 #include "content_decoding_fixture.h"
 
 namespace http1_websocket_test {
@@ -1729,6 +1729,7 @@ using udp_tunnel_test::udp_observation;
 
 TEST(Ruvia, http1_udp_tunnel_capsules_echo_preserve_siblings_and_owned_lifetime) {
     using namespace udp_tunnel_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
     auto& io = ruvia::test::new_test_io_context();
     const auto& observation = udp_observation;
     observation->eof_ = false;
@@ -5012,6 +5013,7 @@ TEST(Ruvia, http2_file_response_end_waits_for_exhausted_stream_window) {
 
 TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
     using namespace http2_file_flow_control_test;
+    ruvia::test::reset_app_callbacks(ruvia::app());
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
@@ -6164,3 +6166,46 @@ TEST(Ruvia, http2_client_refused_request_preserves_possible_delivery) {
 }
 
 #endif
+
+namespace client_operation_interruption_test {
+
+void exercise(const std::string& url, ruvia::http_client_versions versions) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    const auto worker = attachment.loop().worker();
+    std::exception_ptr failure;
+    auto run = [&]() -> ruvia::task<void> {
+        ruvia::http_client owner(attachment.loop(), {.base_url_ = url, .versions_ = versions});
+        try {
+            co_await ruvia::test::client_operations::exercise(owner.client(), worker);
+        } catch (...) {
+            failure = std::current_exception();
+        }
+        co_await owner.shutdown();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
+}  // namespace client_operation_interruption_test
+
+TEST(Ruvia, http_client_operations_end_one_wait_or_abort_their_stream_over_http1_and_http2) {
+    ruvia::test::reset_app_callbacks(ruvia::app());
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    const std::string url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
+    std::vector<ruvia::http_client_versions> protocols({ruvia::http_client_versions{.http2_ = false}});
+#ifdef RUVIA_ENABLE_HTTP2
+    protocols.push_back(ruvia::http_client_versions{.http1_ = false});
+#endif
+    for (const auto versions : protocols) {
+        SCOPED_TRACE(versions.http1_ ? "HTTP/1.1" : "HTTP/2");
+        client_operation_interruption_test::exercise(url, versions);
+        server.finish();
+    }
+}

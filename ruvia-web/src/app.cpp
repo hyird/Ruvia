@@ -20,7 +20,6 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"

@@ -352,6 +352,33 @@ private:
 namespace ruvia::test {
 
 // Startup hooks remain caller-owned: application retains them across runs.
+
+inline void reset_app_callbacks(application& app_value) {
+    app_value.on_start(nullptr)
+        .on_stop(nullptr)
+        .on_error(nullptr)
+        .on_not_found(nullptr)
+        .on_access(nullptr)
+        .on_connection_failure(nullptr)
+        .on_tls_client_hello(nullptr)
+        .on_http2_input(nullptr)
+#ifdef RUVIA_ENABLE_HTTP2
+        .on_http2_frame(nullptr)
+        .on_http2_headers(nullptr)
+#endif
+#ifdef RUVIA_ENABLE_HTTP3
+        .on_http3_frame(nullptr)
+        .on_http3_field(nullptr)
+#endif
+        .on_connection_admission(nullptr)
+        .on_connection_open(nullptr)
+        .on_connection_close(nullptr)
+        .on_connection(nullptr)
+        .on_request_stream(nullptr)
+        .trusted_proxies({})
+        .blocking_pool(blocking_pool_options{});
+}
+
 class app_run final {
 public:
     explicit app_run(application& app)
