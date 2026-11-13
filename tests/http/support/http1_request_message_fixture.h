@@ -42,7 +42,7 @@ struct http1_request_message final {
         return message;
     }
     const auto header_bytes = head->header_bytes();
-    if (const auto* known_length = message.state_.body_plan_.known_length()) {
+    if (const auto* known_length = message.state_.body_plan().known_length()) {
         if (buffer.size() - header_bytes < known_length->content_length()) {
             return message;
         }
@@ -50,7 +50,7 @@ struct http1_request_message final {
         message.message_bytes_ = header_bytes + known_length->content_length();
         return message;
     }
-    if (message.state_.body_plan_.chunked() == nullptr) {
+    if (message.state_.body_plan().chunked() == nullptr) {
         message.message_bytes_ = header_bytes;
         return message;
     }

@@ -633,7 +633,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     // reuse even if the handler never reads it: completion consumes it
     // without I/O.
     const auto unread_body_consumption =
-        buffered_request_body_bytes(d.parsed_.body_plan_, body_and_pipeline, body_limit_value)
+        buffered_request_body_bytes(d.parsed_.body_plan(), body_and_pipeline, body_limit_value)
             ? http1_request_body_consumption::complete
             : http1_request_body_consumption::incomplete;
     const auto stream_plan = http1_plan_response_stream(d.parsed_, close_policy, unread_body_consumption);
@@ -655,7 +655,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     const auto request_stop_token = request_stop.token();
     d.base_route_services_.bind_stop_token(request_stop_token);
     response_sink_type response_sink(d.stream_, *d.options_.codecs_, response_head, d.scanner_entry_,
-        d.base_route_services_.worker(), d.parsed_.request_, d.cors_,
+        d.base_route_services_.worker(), d.parsed_.request(), d.cors_,
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
         body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
@@ -672,7 +672,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
             response_sink.retire_peer_monitor();
         }
         response_sink.arm_peer_monitor();
-        dispatched.emplace(co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request_,
+        dispatched.emplace(co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request(),
             resolved, d.request_memory_, d.base_route_services_,
             [&response_sink] { return response_sink.peer_aborted(); }));
     } catch (...) {
@@ -738,7 +738,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
     if (auto* route_response = result_value.route_response()) {
         d.response_ = std::move(*route_response).take_response();
         d.scanner_entry_.touch();
-        co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
+        co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan(),
             d.request_sequence_, body_reader_value.consumption(), request_bytes.size(), pipeline_stash,
             [&body_reader_value, &response_sink](std::pmr::string& stash) {
                 return body_reader_value.take_pipeline(stash, response_sink.monitored_pipeline());

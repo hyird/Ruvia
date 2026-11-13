@@ -3479,8 +3479,8 @@ TEST(Ruvia, http_client_finishes_upload_after_an_early_persistent_response_befor
             ruvia::http1_server_request_parse_state parsed;
             parsed.parse_head(next_request);
             EXPECT_TRUE(parsed.head_ready());
-            EXPECT_EQ(parsed.request_.method(), "GET");
-            EXPECT_EQ(parsed.request_.target(), "/next");
+            EXPECT_EQ(parsed.request().method(), "GET");
+            EXPECT_EQ(parsed.request().target(), "/next");
         }
     }
 }

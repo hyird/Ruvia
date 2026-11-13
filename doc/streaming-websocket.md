@@ -114,6 +114,8 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 `sse_writer` 是可复制句柄，操作借用其响应流；`operation` 语义同 `response_stream_writer`。
 
+出站客户端读取 `text/event-stream` 响应时，把 `response.stream().read()` 读到的分块交给 `ruvia::sse_parser`（`"ruvia/http/sse.h"`）解析事件；其契约见 [SSE 解析](core-and-http.md#3-消息模型内容压缩编解码multipart-与-sse)。
+
 #### 客户端断开即取消请求
 
 流式响应路由（处理器返回 `ruvia::task<void>`）中，客户端关闭连接会停止 `c.stop_token()`，与 Go `net/http` 的后台读取、Pingora `read_body_or_idle` 及 nginx 默认 `proxy_ignore_client_abort off` 一致。该 token 已由 `db()`、`redis()`（含 Pub/Sub 订阅）、`run_blocking()` 与 `sse.sleep()` / `stream.sleep()` 自动绑定，空闲 SSE 等待订阅消息时也能及时结束，无需显式启用。

@@ -22,7 +22,7 @@ using ruvia::test::parse_http1_request_message;
 [[nodiscard]] bool offers_upgrade(std::string_view wire) {
     const auto parsed = parse_http1_request_message(wire);
     EXPECT_TRUE(parsed.complete()) << wire;
-    return parsed.complete() && ruvia::http1_request_offers_upgrade(parsed.state_.request_);
+    return parsed.complete() && ruvia::http1_request_offers_upgrade(parsed.state_.request());
 }
 
 [[nodiscard]] std::size_t field_count(const ruvia::http_response& response, std::string_view name) {
@@ -39,7 +39,7 @@ using ruvia::test::parse_http1_request_message;
     const auto parsed = parse_http1_request_message(request_wire);
     EXPECT_TRUE(parsed.complete()) << request_wire;
     try {
-        const auto plan = ruvia::prepare_http1_upgrade_response_head(response, parsed.state_.request_);
+        const auto plan = ruvia::prepare_http1_upgrade_response_head(response, parsed.state_.request());
         EXPECT_TRUE(plan.close_delimited_stream() != nullptr);
         ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>(response.memory_resource())};
         ruvia::append_http1_response_head(response, head, plan);

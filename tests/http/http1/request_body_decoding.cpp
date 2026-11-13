@@ -56,7 +56,7 @@ TEST(Ruvia, http1_parse_message_classifies_cleartext_request_line_failures) {
 
 TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto none_message = parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    const auto& none = none_message.state_.body_plan_;
+    const auto& none = none_message.state_.body_plan();
     EXPECT_TRUE(none.without_body() != nullptr);
     EXPECT_TRUE(none.known_length() == nullptr);
     EXPECT_TRUE(none.chunked() == nullptr);
@@ -65,7 +65,7 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
     const auto empty_length_message = parse_http1_request_message(
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\nContent-Length: 0\r\n\r\n");
-    const auto& empty_length = empty_length_message.state_.body_plan_;
+    const auto& empty_length = empty_length_message.state_.body_plan();
     const auto* known_length = empty_length.known_length();
     EXPECT_TRUE(known_length != nullptr);
     EXPECT_TRUE(empty_length.without_body() == nullptr);
@@ -83,7 +83,7 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
         "POST / HTTP/1.1\r\nHost: x\r\n"
         "Expect: 100-continue\r\n"
         "Transfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n");
-    const auto& compressed_chunked = compressed_chunked_message.state_.body_plan_;
+    const auto& compressed_chunked = compressed_chunked_message.state_.body_plan();
     const auto* chunked_body = compressed_chunked.chunked();
     EXPECT_TRUE(chunked_body != nullptr);
     EXPECT_TRUE(compressed_chunked.without_body() == nullptr);

@@ -199,10 +199,8 @@ public:
         try {
             co_await state->write_lane_.wait_for_idle(false, [&] { state->check(); });
             write_guard lane(*state);
-            const auto submitted = extent == websocket_write_extent::message
-                                       ? state->protocol_.submit_frame(opcode, payload, options.compress_)
-                                       : state->protocol_.submit_fragment(opcode, payload,
-                                             extent == websocket_write_extent::final_fragment, options.compress_);
+            const auto submitted = state->protocol_.submit_frame(opcode, payload,
+                {.final_ = extent != websocket_write_extent::fragment, .compress_ = options.compress_});
             std::pmr::string(payload.get_allocator()).swap(payload);
             switch (submitted) {
                 case websocket_frame_submit_status::accepted:

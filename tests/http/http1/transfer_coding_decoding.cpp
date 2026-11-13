@@ -342,7 +342,7 @@ TEST(Ruvia, transfer_coded_chunked_request_plan_drives_decode_order) {
                                          wire_body;
     const auto parsed_value = parse_http1_request_message(raw_request);
     EXPECT_TRUE(parsed_value.complete());
-    const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
+    const auto* chunked_body = parsed_value.state_.body_plan().chunked();
     EXPECT_TRUE(chunked_body != nullptr);
     if (chunked_body == nullptr) {
         return;
@@ -383,7 +383,7 @@ TEST(Ruvia, transfer_coded_chunked_request_accepts_empty_coded_body) {
                                          std::pmr::string(wire_body);
     const auto parsed_value = parse_http1_request_message(raw_request);
     EXPECT_TRUE(parsed_value.complete());
-    const auto* chunked_body = parsed_value.state_.body_plan_.chunked();
+    const auto* chunked_body = parsed_value.state_.body_plan().chunked();
     EXPECT_TRUE(chunked_body != nullptr);
     if (chunked_body == nullptr) {
         return;

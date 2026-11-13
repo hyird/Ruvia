@@ -330,6 +330,13 @@ public:
     // valid peer GOAWAY does this itself: its sender opens no further streams.
     // No-op once the drain is final or after a connection error.
     void finish_drain();
+    // Immediate shutdown (RFC 9113 section 6.8): queues GOAWAY(error) naming
+    // the last peer stream processed, discards every later inbound frame and
+    // makes connection_error() report `error`, even no_error. Streams still
+    // open get no further protocol progress; the owner closes the transport
+    // after flushing the output. Ends a graceful drain too. No-op after a
+    // connection error, whose code is kept.
+    void terminate(http2_error_code error);
     // True from begin_drain(), finish_drain() or a valid peer GOAWAY on.
     [[nodiscard]] bool draining() const noexcept;
     // True once the final GOAWAY is queued; no later peer stream will be admitted,
@@ -360,11 +367,7 @@ private:
 // Validate the final head with validate_extended_connect_websocket_client_response().
 [[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header> headers = {},
-    http_request_field_source source = http_request_field_source::generated);
-[[nodiscard]] std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
-    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header_view> headers,
+    std::string_view authority, std::string_view target, borrowed_http_headers headers = {},
     http_request_field_source source = http_request_field_source::generated);
 
 }  // namespace ruvia

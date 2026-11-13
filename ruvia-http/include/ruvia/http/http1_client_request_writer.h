@@ -18,6 +18,19 @@
 
 namespace ruvia {
 
+// Request-target form of a non-CONNECT request line (RFC 9112 section 3.2).
+// CONNECT always uses authority-form through prepare_connect().
+enum class http1_request_target_form : std::uint8_t {
+    // origin-form, or asterisk-form for OPTIONS *: the request goes to the
+    // origin server itself (section 3.2.1).
+    origin,
+    // absolute-form, for a request through a forward proxy (section 3.2.2):
+    // the origin's scheme and authority precede the origin-form target, and
+    // the generated Host carries the same authority (section 3.2). OPTIONS *
+    // becomes the authority with an empty path (section 3.2.4).
+    absolute,
+};
+
 // One immutable wire policy for request preparation. Expect is writer-owned so
 // the emitted field and the resulting content gate cannot disagree. How long an
 // I/O runtime waits before releasing a continue-gated body remains runtime
@@ -26,6 +39,7 @@ struct http1_client_request_wire_policy final {
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
     http_client_request_expectation expectation_{http_client_request_expectation::none};
     http_request_field_source field_source_{http_request_field_source::generated};
+    http1_request_target_form target_form_{http1_request_target_form::origin};
 };
 
 namespace detail {
@@ -176,6 +190,8 @@ enum class http1_client_request_prepare_error : std::uint8_t {
     header_too_large,
     invalid_close_policy,
     invalid_expectation,
+    // An unknown target form, or absolute-form on the CONNECT entries.
+    invalid_target_form,
 };
 
 [[nodiscard]] std::string_view http1_client_request_prepare_error_message(
@@ -232,7 +248,7 @@ private:
     http1_client_exchange_state exchange_state_;
 };
 
-// HTTP/1.1 direct-origin request writer. Ordinary requests are allocation-free;
+// HTTP/1.1 request writer for a direct origin or, in absolute-form, a forward proxy. Ordinary requests are allocation-free;
 // an Upgrade request owns only its offered protocol value for later 101
 // validation. It validates the complete request before touching the caller's
 // buffer, generates Host and exact Content-Length, and returns separate

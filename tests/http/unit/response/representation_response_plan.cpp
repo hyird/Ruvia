@@ -320,7 +320,7 @@ TEST(Ruvia, representation_response_plan_ignores_repeated_date_conditions) {
                 parsed.parse_head(wire, 0, std::pmr::get_default_resource());
                 EXPECT_TRUE(parsed.head_ready() != nullptr);
                 if (parsed.head_ready() != nullptr) {
-                    const auto plan = ruvia::plan_http_representation_response(parsed.request_, representation);
+                    const auto plan = ruvia::plan_http_representation_response(parsed.request(), representation);
                     EXPECT_TRUE(plan.full() != nullptr);
                     EXPECT_EQ(plan.status(), ruvia::http_status::ok);
                 }

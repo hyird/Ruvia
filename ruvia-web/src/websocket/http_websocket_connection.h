@@ -303,14 +303,11 @@ private:
         borrowed_frame_guard_type(server_websocket_connection& connection, websocket_opcode opcode,
             std::string_view payload, bool compress, websocket_write_extent extent)
             : connection_(&connection) {
+            const websocket_frame_options options{
+                .final_ = extent != websocket_write_extent::fragment, .compress_ = compress};
             const auto submit = [&](bool borrow) {
-                if (extent == websocket_write_extent::message) {
-                    return borrow ? connection.protocol_.submit_borrowed_frame(opcode, payload, compress)
-                                  : connection.protocol_.submit_frame(opcode, payload, compress);
-                }
-                const bool final = extent == websocket_write_extent::final_fragment;
-                return borrow ? connection.protocol_.submit_borrowed_fragment(opcode, payload, final, compress)
-                              : connection.protocol_.submit_fragment(opcode, payload, final, compress);
+                return borrow ? connection.protocol_.submit_frame(opcode, websocket_borrowed_payload(payload), options)
+                              : connection.protocol_.submit_frame(opcode, payload, options);
             };
             const auto status = [&] {
                 if constexpr (native_stream) {

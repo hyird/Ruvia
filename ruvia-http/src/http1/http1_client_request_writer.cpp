@@ -101,6 +101,9 @@ struct request_head_write_plan final {
     std::string_view host_;
     std::string_view port_;
     std::string_view method_;
+    // "http://" or "https://" ahead of the authority for absolute-form;
+    // empty for origin-form.
+    std::string_view absolute_scheme_;
     std::string_view target_;
     std::span<const http_header_view> headers_;
     std::string_view content_length_;
@@ -117,6 +120,10 @@ struct request_head_write_plan final {
     if (plan.connect_) {
         append_authority(sink, plan.host_, plan.port_);
     } else {
+        if (!plan.absolute_scheme_.empty()) {
+            sink.append(plan.absolute_scheme_);
+            append_authority(sink, plan.host_, plan.port_);
+        }
         sink.append(plan.target_);
     }
     sink.append(http11_request_line_suffix);
@@ -188,21 +195,31 @@ struct request_head_write_plan final {
 }
 
 // Every request line, CONNECT included, rejects these wire policies first.
+// CONNECT is always authority-form (RFC 9112 section 3.2.3).
 [[nodiscard]] std::optional<http1_client_request_prepare_error> validate_wire_policy(
-    http1_client_request_wire_policy policy) noexcept {
+    http1_client_request_wire_policy policy, bool connect) noexcept {
     if (!is_valid_http1_close_policy(policy.close_policy_)) {
         return http1_client_request_prepare_error::invalid_close_policy;
     }
     if (!is_valid_http_client_request_expectation(policy.expectation_)) {
         return http1_client_request_prepare_error::invalid_expectation;
     }
-    return std::nullopt;
+    switch (policy.target_form_) {
+        case http1_request_target_form::origin:
+            return std::nullopt;
+        case http1_request_target_form::absolute:
+            if (!connect) {
+                return std::nullopt;
+            }
+            break;
+    }
+    return http1_client_request_prepare_error::invalid_target_form;
 }
 
 [[nodiscard]] std::optional<http1_client_request_prepare_error> validate_non_connect_request_line(
     std::string_view method, std::string_view target, http1_client_request_wire_policy policy,
     http_known_method& known_method) noexcept {
-    if (const auto error = validate_wire_policy(policy)) {
+    if (const auto error = validate_wire_policy(policy, false)) {
         return error;
     }
     if (!is_valid_http_method_token(method)) {
@@ -291,7 +308,17 @@ struct request_head_write_plan final {
     const auto content_length_value = explicit_content && !chunked
                                           ? http_format_unsigned(content_length_buffer, *length)
                                           : std::string_view{};
-    const std::size_t target_bytes = connect ? authority_bytes : target.size();
+    // absolute-form names the origin as the generated Host does, so the two
+    // authorities agree (RFC 9112 section 3.2); OPTIONS * keeps only the
+    // authority, with an empty path (section 3.2.4).
+    const auto absolute_scheme = connect || policy.target_form_ != http1_request_target_form::absolute
+                                     ? std::string_view{}
+                                 : origin.scheme() == http_scheme::https ? std::string_view{"https://"}
+                                                                         : std::string_view{"http://"};
+    const auto emitted_target = !absolute_scheme.empty() && target == "*" ? std::string_view{} : target;
+    const std::size_t target_bytes =
+        connect ? authority_bytes
+                : (absolute_scheme.empty() ? 0 : absolute_scheme.size() + authority_bytes) + emitted_target.size();
     // The caller's fields are already charged; add the request line and the
     // generated fields to the same section budget.
     auto head_budget = header_facts.section_;
@@ -343,7 +370,7 @@ struct request_head_write_plan final {
     auto exchange_state = detail::http1_client_request_prepare_result_access::exchange_state(
         known_method, effective_close_policy, content_state,
         std::move(offered_upgrade_protocols));
-    const request_head_write_plan write_plan{origin.host(), port_value, method, target, headers, content_length_value,
+    const request_head_write_plan write_plan{origin.host(), port_value, method, absolute_scheme, emitted_target, headers, content_length_value,
         connect, explicit_content, expect_continue, generate_connection_close};
     const auto output = head_buffer.first(head_bytes);
     // Descriptors and every borrowed string are consumed before the output is
@@ -374,7 +401,7 @@ struct request_head_write_plan final {
 [[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(
     const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer,
     http1_client_request_wire_policy policy, std::pmr::memory_resource* resource) {
-    if (const auto error = validate_wire_policy(policy)) {
+    if (const auto error = validate_wire_policy(policy, true)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     if (tunnel_origin == nullptr || tunnel_origin->port() == 0) {
@@ -430,6 +457,8 @@ std::string_view http1_client_request_prepare_error_message(
             return "invalid HTTP/1 client close policy";
         case http1_client_request_prepare_error::invalid_expectation:
             return "invalid HTTP/1 client request expectation";
+        case http1_client_request_prepare_error::invalid_target_form:
+            return "invalid HTTP/1 client request target form";
     }
     return "invalid HTTP/1 client request";
 }

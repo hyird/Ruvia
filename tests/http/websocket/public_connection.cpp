@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/http/http_io_buffer.h"
@@ -150,7 +151,7 @@ TEST(Ruvia, ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
         for (int round = 0; round < 256; ++round) {
             const std::pmr::string payload_value = round % 4 == 0 ? noise : std::pmr::string(8192, 'x');
             const bool compress = round % 4 != 2;
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value, compress) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value, {.compress_ = compress}) == websocket_frame_submit_status::accepted);
             const auto wire = drain(sender);
             if (!compress || round % 4 == 0) {
                 EXPECT_TRUE((static_cast<unsigned char>(wire[0]) & 0x40U) == 0);
@@ -430,7 +431,7 @@ TEST(Ruvia, ws_public_server_protocol_controls_permessage_deflate_per_frame) {
                                              .deflater_ = {.compression_level_ = 6}});
     const std::pmr::string payload_value(200, 'x');
 
-    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, payload_value, false) ==
+    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, payload_value, {.compress_ = false}) ==
                 websocket_frame_submit_status::accepted);
     auto output = protocol.output_plan().bytes();
     EXPECT_TRUE(!output.empty());
@@ -643,6 +644,62 @@ TEST(Ruvia, ws_public_client_waits_for_server_eof_after_initiating_close) {
     EXPECT_TRUE(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
     connection.commit_transport_end();
     EXPECT_TRUE(connection.liveness_mode() == websocket_liveness_mode::inactive);
+}
+
+// A borrowed payload is a distinct parameter form: it never binds an owning
+// temporary, and a plain string never borrows implicitly.
+static_assert(!std::is_constructible_v<websocket_borrowed_payload, std::string>);
+static_assert(!std::is_constructible_v<websocket_borrowed_payload, std::pmr::string>);
+static_assert(std::is_constructible_v<websocket_borrowed_payload, const std::pmr::string&>);
+static_assert(!std::is_convertible_v<std::string_view, websocket_borrowed_payload>);
+
+// RFC 6455 section 5.4: one entry sends whole messages and fragments; a frame
+// is the final fragment of its message.
+TEST(Ruvia, ws_public_submit_frame_sends_fragments_and_whole_messages) {
+    http_io_buffer input;
+    websocket_connection sender(input);
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::text, "ab", {.final_ = false}), websocket_frame_submit_status::accepted);
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, "x"), websocket_frame_submit_status::message_in_progress);
+    // Control frames are never fragmented (section 5.5) and may interleave.
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::ping, "p", {.final_ = false}), websocket_frame_submit_status::invalid_opcode);
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::ping, "p"), websocket_frame_submit_status::accepted);
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::text, "\xC3", {.final_ = false}), websocket_frame_submit_status::accepted);
+    const std::pmr::string tail(
+        "\xA9"
+        "cd");
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::text, websocket_borrowed_payload(tail)), websocket_frame_submit_status::accepted);
+    EXPECT_EQ(sender.output_plan().borrowed_bytes(), tail);
+    // The next frame copies the borrowed payload ahead of itself.
+    EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, "z"), websocket_frame_submit_status::accepted);
+    EXPECT_TRUE(sender.output_plan().borrowed_bytes().empty());
+    const std::string_view expected(
+        "\x01\x02"
+        "ab"
+        "\x89\x01"
+        "p"
+        "\x00\x01"
+        "\xC3"
+        "\x80\x03"
+        "\xA9"
+        "cd"
+        "\x82\x01"
+        "z",
+        18);
+    const auto wire = drain(sender);
+    EXPECT_EQ(std::string_view(wire), expected);
+
+    mask_source source;
+    http_io_buffer client_input;
+    auto receiver = client(client_input, source);
+    client_input.append(wire);
+    const auto ping = receiver.next_event();
+    EXPECT_TRUE(ping && ping->ping() && ping->ping()->payload() == "p");
+    const auto text = receiver.next_event();
+    EXPECT_TRUE(text && text->message() && text->message()->payload() ==
+                                               "ab\xC3\xA9"
+                                               "cd");
+    const auto binary = receiver.next_event();
+    EXPECT_TRUE(binary && binary->message() && binary->message()->payload() == "z");
 }
 
 TEST(Ruvia, ws_public_fragmented_messages_reuse_reassembly_scratch) {
@@ -1430,8 +1487,8 @@ TEST(Ruvia, ws_output_retries_growth_and_aliased_submission_after_partial_write)
             const std::pmr::string first(128 * 1024, 'a');
             const std::pmr::string second(64 * 1024, 'b');
             const std::pmr::string large(512 * 1024, 'c');
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, first, false) == websocket_frame_submit_status::accepted);
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, second, false) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, first, {.compress_ = false}) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, second, {.compress_ = false}) == websocket_frame_submit_status::accepted);
             const std::pmr::string initial(sender.output_plan().bytes());
             const auto consumed = initial.size() - 32 * 1024;
             std::pmr::string wire = initial.substr(0, consumed);
@@ -1443,7 +1500,7 @@ TEST(Ruvia, ws_output_retries_growth_and_aliased_submission_after_partial_write)
             memory.reject_ = true;
             bool growth_rejected = false;
             try {
-                (void)sender.submit_frame(websocket_opcode::binary, large, false);
+                (void)sender.submit_frame(websocket_opcode::binary, large, {.compress_ = false});
             } catch (const std::bad_alloc&) {
                 growth_rejected = true;
             }
@@ -1457,16 +1514,16 @@ TEST(Ruvia, ws_output_retries_growth_and_aliased_submission_after_partial_write)
             memory.reject_ = true;
             bool alias_rejected = false;
             try {
-                (void)sender.submit_borrowed_frame(websocket_opcode::binary, alias, false);
+                (void)sender.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(alias), {.compress_ = false});
             } catch (const std::bad_alloc&) {
                 alias_rejected = true;
             }
             memory.reject_ = false;
             EXPECT_TRUE(alias_rejected);
             EXPECT_EQ(alias, alias_value);
-            EXPECT_TRUE(sender.submit_borrowed_frame(websocket_opcode::binary, alias, false) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(alias), {.compress_ = false}) == websocket_frame_submit_status::accepted);
             EXPECT_TRUE(sender.output_plan().borrowed_bytes().empty());
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, large, false) == websocket_frame_submit_status::accepted);
+            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, large, {.compress_ = false}) == websocket_frame_submit_status::accepted);
             wire.append(drain(sender));
 
             websocket_connection receiver({.message_limit_ = protocol_byte_limit::unlimited(),
@@ -1491,7 +1548,7 @@ TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited()});
     const std::pmr::string payload_value(300, 'b');
-    EXPECT_TRUE(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(payload_value)) == websocket_frame_submit_status::accepted);
     auto plan = protocol.output_plan();
     EXPECT_EQ(plan.bytes().size(), std::size_t{4});
     EXPECT_TRUE(plan.borrowed_bytes().data() == payload_value.data());
@@ -1510,7 +1567,7 @@ TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
     // Output queued behind a borrowed payload copies it first, so the wire
     // keeps submission order and no longer depends on the caller's bytes.
     std::pmr::string message_value("hello");
-    EXPECT_TRUE(protocol.submit_borrowed_frame(websocket_opcode::text, message_value) == websocket_frame_submit_status::accepted);
+    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, websocket_borrowed_payload(message_value)) == websocket_frame_submit_status::accepted);
     mask_source mask;
     http_io_buffer peer_input;
     auto peer = client(peer_input, mask);
@@ -1541,11 +1598,11 @@ TEST(Ruvia, ws_server_borrowed_frame_owns_compressed_output) {
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                              .compression_ = websocket_compression{.enabled_ = true}});
     const std::pmr::string payload_value(4096, 'x');
-    EXPECT_TRUE(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
+    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(payload_value)) == websocket_frame_submit_status::accepted);
     const auto plan = protocol.output_plan();
     EXPECT_TRUE(plan.borrowed_bytes().empty());
     EXPECT_TRUE(!plan.bytes().empty() && (static_cast<unsigned char>(plan.bytes()[0]) & 0x40U) != 0);
-    EXPECT_TRUE(protocol.submit_borrowed_frame(websocket_opcode::binary, payload_value, false) == websocket_frame_submit_status::accepted);
+    EXPECT_TRUE(protocol.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(payload_value), {.compress_ = false}) == websocket_frame_submit_status::accepted);
     EXPECT_TRUE(protocol.output_plan().borrowed_bytes().data() == payload_value.data());
 }
 
@@ -1626,10 +1683,10 @@ TEST(Ruvia, ws_receive_ceiling_is_early_directional_and_only_tightens) {
         const auto effective = (std::min)(receive_limit, std::size_t{1024});
         websocket_connection receiver({.message_limit_ = protocol_byte_limit::limited(1024),
             .receive_message_limit_ = protocol_byte_limit::limited(receive_limit)});
-        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1024, 'r'), false),
+        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1024, 'r'), {.compress_ = false}),
             websocket_frame_submit_status::accepted);
         (void)drain(receiver);
-        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1025, 'r'), false),
+        EXPECT_EQ(receiver.submit_frame(websocket_opcode::binary, std::string(1025, 'r'), {.compress_ = false}),
             websocket_frame_submit_status::message_too_large);
         // 仅发送帧头，无正文：在分配或等待完整消息前拒绝声明的超限长度。
         std::string header("\x82\xfe", 2);

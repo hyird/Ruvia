@@ -513,6 +513,77 @@ TEST(Ruvia, http1_client_request_writer_rejects_invalid_wire_policy) {
     }
 }
 
+// RFC 9112 section 3.2.2: a request through a forward proxy names its origin
+// in absolute-form, and the generated Host carries the same authority
+// (section 3.2). OPTIONS * keeps only the authority (section 3.2.4).
+TEST(Ruvia, http1_client_request_writer_emits_absolute_form_for_a_forward_proxy) {
+    const http1_client_request_wire_policy absolute{.target_form_ = ruvia::http1_request_target_form::absolute};
+    const auto head_of = [](const auto& fixture_value) {
+        const auto* prepared = std::get_if<prepared_http1_client_request>(&fixture_value.result_);
+        return prepared != nullptr ? std::string(prepared->head()) : std::string("<failed>");
+    };
+
+    http_client_request_view request;
+    request.target_ = "/items?q=1";
+    const prepared_fixture default_port(http_origin_view::http({.host_ = "example.test"}), request, absolute);
+    EXPECT_EQ(head_of(default_port), "GET http://example.test/items?q=1 HTTP/1.1\r\nHost: example.test\r\n\r\n");
+    const prepared_fixture origin_form(http_origin_view::http({.host_ = "example.test"}), request);
+    EXPECT_EQ(head_of(origin_form), "GET /items?q=1 HTTP/1.1\r\nHost: example.test\r\n\r\n");
+
+    const prepared_fixture explicit_port(
+        http_origin_view::https({.host_ = "[::1]", .port_ = 8443}), request, absolute);
+    const auto explicit_head = head_of(explicit_port);
+    EXPECT_EQ(explicit_head, "GET https://[::1]:8443/items?q=1 HTTP/1.1\r\nHost: [::1]:8443\r\n\r\n");
+    // The proxy reads the same authority from the target and Host.
+    const auto received = ruvia::test::parse_http1_request_message(explicit_head);
+    ASSERT_TRUE(received.complete());
+    EXPECT_EQ(received.state_.request().target_form(), ruvia::http_request_target_form::absolute);
+    EXPECT_EQ(received.state_.request().authority(), "[::1]:8443");
+    EXPECT_EQ(received.state_.request().path(), "/items");
+
+    http_client_request_view options;
+    options.method_ = "OPTIONS";
+    options.target_ = "*";
+    const prepared_fixture asterisk(http_origin_view::http({.host_ = "example.test", .port_ = 8001}), options, absolute);
+    EXPECT_EQ(head_of(asterisk), "OPTIONS http://example.test:8001 HTTP/1.1\r\nHost: example.test:8001\r\n\r\n");
+
+    std::array<char, 512> buffer{};
+    const auto streaming = http1_client_request_writer().prepare_streaming(
+        http_origin_view::https({.host_ = "example.test"}),
+        ruvia::http1_client_request_head_view{.method_ = "POST", .target_ = "/upload", .content_length_ = 3}, buffer,
+        absolute);
+    const auto* streamed = std::get_if<prepared_http1_client_request>(&streaming);
+    ASSERT_TRUE(streamed != nullptr);
+    EXPECT_EQ(streamed->head(),
+        "POST https://example.test/upload HTTP/1.1\r\nHost: example.test\r\nContent-Length: 3\r\n\r\n");
+
+    // The head budget counts the scheme and authority of the target.
+    std::array<char, 40> small{};
+    const auto too_small = http1_client_request_writer().prepare(
+        http_origin_view::http({.host_ = "example.test"}), request, small, absolute);
+    const auto* required = std::get_if<http1_client_request_buffer_too_small>(&too_small);
+    ASSERT_TRUE(required != nullptr);
+    EXPECT_EQ(required->required_head_bytes(), head_of(default_port).size());
+}
+
+TEST(Ruvia, http1_client_request_writer_rejects_invalid_target_forms) {
+    EXPECT_EQ(prepare_error(http_client_request_view{},
+                  http1_client_request_wire_policy{.target_form_ = static_cast<ruvia::http1_request_target_form>(0xFF)}),
+        http1_client_request_prepare_error::invalid_target_form);
+    // CONNECT is authority-form only (RFC 9112 section 3.2.3).
+    const http1_client_request_wire_policy absolute{.target_form_ = ruvia::http1_request_target_form::absolute};
+    std::array<char, 512> buffer{};
+    const auto by_origin = http1_client_request_writer().prepare_connect(
+        http_origin_view::https({.host_ = "example.test"}), std::span<const ruvia::http_header_view>{}, buffer, absolute);
+    const auto by_authority = http1_client_request_writer().prepare_connect(
+        "example.test:443", std::span<const ruvia::http_header_view>{}, buffer, absolute);
+    for (const auto* result_value : {&by_origin, &by_authority}) {
+        const auto* failure = std::get_if<http1_client_request_prepare_error>(result_value);
+        ASSERT_TRUE(failure != nullptr);
+        EXPECT_EQ(*failure, http1_client_request_prepare_error::invalid_target_form);
+    }
+}
+
 TEST(Ruvia, http1_client_request_writer_enforces_method_content_semantics) {
     http_client_request_view trace;
     trace.method_ = "TRACE";
@@ -1034,7 +1105,7 @@ TEST(Ruvia, http1_client_forwards_received_application_fields_without_regenerati
         ruvia::http1_server_request_parse_state incoming;
         incoming.parse_head(wire);
         EXPECT_TRUE(incoming.head_ready() != nullptr);
-        const auto received = incoming.request_.header(field.name());
+        const auto received = incoming.request().header(field.name());
         EXPECT_TRUE(received == std::optional<std::string_view>{field.value()});
         if (!received) {
             continue;
@@ -1055,8 +1126,8 @@ TEST(Ruvia, http1_client_forwards_received_application_fields_without_regenerati
             ruvia::http1_server_request_parse_state upstream;
             upstream.parse_head(prepared->head());
             EXPECT_TRUE(upstream.head_ready() != nullptr);
-            EXPECT_TRUE(upstream.request_.header(field.name()) == received);
-            EXPECT_TRUE(upstream.request_.header("Host") ==
+            EXPECT_TRUE(upstream.request().header(field.name()) == received);
+            EXPECT_TRUE(upstream.request().header("Host") ==
                         std::optional<std::string_view>{entry < 2 ? "example.test" : "example.test:443"});
         }
     }
@@ -1109,7 +1180,7 @@ TEST(Ruvia, http1_client_forwarded_upgrade_empty_members_preserve_protocol_trans
     ruvia::http1_server_request_parse_state incoming;
     incoming.parse_head(wire);
     EXPECT_TRUE(incoming.head_ready() != nullptr);
-    const auto upgrade = incoming.request_.header("Upgrade");
+    const auto upgrade = incoming.request().header("Upgrade");
     EXPECT_TRUE(upgrade == std::optional<std::string_view>{", websocket,,"});
     if (!upgrade) {
         return;
@@ -1163,8 +1234,8 @@ TEST(Ruvia, http1_connect_udp_forwarding_keeps_protocol_owned_fields) {
         ruvia::http1_server_request_parse_state upstream;
         upstream.parse_head(prepared->head());
         EXPECT_TRUE(upstream.head_ready() != nullptr);
-        EXPECT_TRUE(upstream.request_.header("Origin") == std::optional<std::string_view>{fields[1].value()});
-        EXPECT_TRUE(upstream.request_.header("Upgrade") == std::optional<std::string_view>{"connect-udp"});
+        EXPECT_TRUE(upstream.request().header("Origin") == std::optional<std::string_view>{fields[1].value()});
+        EXPECT_TRUE(upstream.request().header("Upgrade") == std::optional<std::string_view>{"connect-udp"});
     }
     for (const auto& forbidden : std::array{
              ruvia::http_header_view{"Content-Type", "invalid"},
@@ -1239,6 +1310,6 @@ TEST(Ruvia, http1_client_forwards_options_content_without_inventing_media_type) 
         const auto upstream = ruvia::test::parse_http1_request_message(wire);
         EXPECT_TRUE(upstream.complete());
         EXPECT_EQ(upstream.body_, incoming.body_);
-        EXPECT_TRUE(!upstream.state_.request_.header("Content-Type"));
+        EXPECT_TRUE(!upstream.state_.request().header("Content-Type"));
     }
 }

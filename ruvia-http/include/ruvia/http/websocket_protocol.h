@@ -199,8 +199,8 @@ enum class websocket_frame_submit_status : std::uint8_t {
     message_too_large,
     invalid_text_payload,
     control_frame_too_large,
-    // A fragmented data message is still open; only control frames and its
-    // own fragments may be submitted until its final fragment.
+    // A fragmented data message is still open; only control frames and frames
+    // of its own opcode may be submitted until its final fragment.
     message_in_progress
 };
 enum class websocket_close_submit_status : std::uint8_t {
@@ -250,7 +250,8 @@ using websocket_mask_key_generator_type = bool (*)(void*, websocket_mask_key_typ
 
 // The pending transport output: bytes() followed by borrowed_bytes(), written in
 // that order. borrowed_bytes() is a payload the driver submitted by reference
-// (websocket_connection::submit_borrowed_frame); it is empty otherwise.
+// (websocket_connection::submit_frame with a websocket_borrowed_payload); it is
+// empty otherwise.
 class websocket_output_plan final {
 public:
     [[nodiscard]] constexpr std::string_view bytes() const noexcept {

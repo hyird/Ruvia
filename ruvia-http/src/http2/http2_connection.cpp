@@ -1002,6 +1002,13 @@ void http2_connection::finish_drain_round_trip() {
     (void)local_connection_state_.finish_round_trip_drain(last_peer_stream_id_);
 }
 
+void http2_connection::terminate(http2_error_code error) {
+    // The same terminal path as a detected connection error: GOAWAY(error)
+    // names the last peer stream nghttp2 processed (RFC 9113 section 6.8).
+    fail_connection(error);
+    flush_session();
+}
+
 http2_submit_status http2_connection::submit_ping() {
     if (local_connection_state_.fatal_failure() != nullptr) {
         return http2_submit_status::closed;

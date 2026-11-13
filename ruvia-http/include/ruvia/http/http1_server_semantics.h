@@ -65,12 +65,12 @@ private:
 [[nodiscard]] inline http1_response_stream_plan http1_plan_response_stream(
     const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy,
     http1_request_body_consumption consumption) noexcept {
-    const auto framing = parsed_value.request_.protocol_version() == http_protocol_version::http11
+    const auto framing = parsed_value.request().protocol_version() == http_protocol_version::http11
                              ? http_response_stream_framing::http1_chunked
                              : http_response_stream_framing::http1_close_delimited;
     return http1_response_stream_plan(framing,
-        apply_request_body_consumption(parsed_value.connection_plan_, consumption), close_policy,
-        parsed_value.request_.known_method());
+        apply_request_body_consumption(parsed_value.connection_plan(), consumption), close_policy,
+        parsed_value.request().known_method());
 }
 
 enum class http1_connection_close_field_policy : std::uint8_t { close_only,

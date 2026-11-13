@@ -2066,13 +2066,10 @@ void http3_connection::set_max_client_streams_bidi(std::uint64_t max_streams) no
     }
 }
 
-namespace {
-
-template <class header_type>
-http3_status submit_websocket_extended_connect(http3_connection& connection, std::int64_t stream_id,
+http3_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id,
     const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
-    std::string_view target, std::span<const header_type> headers, http_request_field_source source) {
-    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers);
+    std::string_view target, borrowed_http_headers headers, http_request_field_source source) {
+    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers.view());
     return connection.submit_request_head(stream_id, http3_extended_connect_request_head_view{
                                                          .protocol_ = "websocket",
                                                          .scheme_ = scheme,
@@ -2081,20 +2078,6 @@ http3_status submit_websocket_extended_connect(http3_connection& connection, std
                                                          .headers_ = staged_headers.view(),
                                                          .field_source_ = source,
                                                      });
-}
-
-}  // namespace
-
-http3_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id,
-    const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
-    std::string_view target, std::span<const http_header> headers, http_request_field_source source) {
-    return submit_websocket_extended_connect(connection, stream_id, negotiation, scheme, authority, target, headers, source);
-}
-
-http3_status submit_http3_websocket_client_request(http3_connection& connection, std::int64_t stream_id,
-    const websocket_client_negotiation& negotiation, std::string_view scheme, std::string_view authority,
-    std::string_view target, std::span<const http_header_view> headers, http_request_field_source source) {
-    return submit_websocket_extended_connect(connection, stream_id, negotiation, scheme, authority, target, headers, source);
 }
 
 }  // namespace ruvia

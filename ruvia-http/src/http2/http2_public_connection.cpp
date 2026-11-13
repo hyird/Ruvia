@@ -571,6 +571,10 @@ void http2_connection::begin_drain() {
 void http2_connection::finish_drain() {
     impl_->connection_.finish_drain();
 }
+
+void http2_connection::terminate(http2_error_code error) {
+    impl_->connection_.terminate(error);
+}
 bool http2_connection::draining() const noexcept {
     return impl_->connection_.draining();
 }
@@ -581,15 +585,10 @@ std::optional<http2_error_code> http2_connection::connection_error() const noexc
     return impl_->connection_.connection_error();
 }
 
-namespace {
-
-// The one RFC 8441 request builder behind both submit_http2_websocket_client_request()
-// overloads (owning and borrowed application headers).
-template <class header_type>
-std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_extended_connect(
+std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
     http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const header_type> headers, http_request_field_source source) {
-    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers);
+    std::string_view authority, std::string_view target, borrowed_http_headers headers, http_request_field_source source) {
+    const auto staged_headers = detail::stage_websocket_extended_connect_fields(negotiation, headers.view());
     return connection.submit_request_head(http2_extended_connect_request_head_view{
         .protocol_ = "websocket",
         .scheme_ = scheme,
@@ -598,20 +597,6 @@ std::variant<std::uint32_t, http2_request_head_submit_error> submit_websocket_ex
         .headers_ = staged_headers.view(),
         .field_source_ = source,
     });
-}
-
-}  // namespace
-
-std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
-    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header> headers, http_request_field_source source) {
-    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers, source);
-}
-
-std::variant<std::uint32_t, http2_request_head_submit_error> submit_http2_websocket_client_request(
-    http2_connection& connection, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header_view> headers, http_request_field_source source) {
-    return submit_websocket_extended_connect(connection, negotiation, scheme, authority, target, headers, source);
 }
 
 }  // namespace ruvia

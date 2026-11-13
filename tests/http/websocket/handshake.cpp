@@ -25,12 +25,12 @@ using ruvia::test::parse_http1_request_message;
 
 http_request parse_request(std::string_view raw_request) {
     auto parsed_value = parse_http1_request_message(raw_request);
-    return std::move(parsed_value.state_.request_);
+    return std::move(parsed_value.state_).take_request();
 }
 
 [[nodiscard]] auto validate_request(std::string_view raw_request) {
     const auto parsed_value = parse_http1_request_message(raw_request);
-    return validate_websocket_handshake(parsed_value.state_.request_, parsed_value.state_.body_plan_);
+    return validate_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan());
 }
 
 [[nodiscard]] bool accepts_request(std::string_view raw_request) {
@@ -200,7 +200,7 @@ TEST(Ruvia, ws_required_subprotocol_rejects_offers_without_a_supported_entry) {
     constexpr std::array<std::string_view, 2> supported{"chat.v2", "chat.v1"};
     const auto validate = [&](std::string_view raw_request, bool required) {
         const auto parsed_value = parse_http1_request_message(raw_request);
-        return validate_websocket_handshake(parsed_value.state_.request_, parsed_value.state_.body_plan_,
+        return validate_websocket_handshake(parsed_value.state_.request(), parsed_value.state_.body_plan(),
             {.supported_subprotocols_ = std::span<const std::string_view>(supported),
                 .require_subprotocol_ = required});
     };

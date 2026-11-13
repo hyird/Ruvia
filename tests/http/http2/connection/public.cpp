@@ -1689,7 +1689,88 @@ void append_open_get_request(std::pmr::string& wire, std::pmr::memory_resource* 
     return {};
 }
 
+struct goaway_frame final {
+    std::uint32_t last_stream_id_;
+    std::uint32_t error_code_;
+};
+
+[[nodiscard]] std::uint32_t read_u32(std::string_view bytes) {
+    std::uint32_t value = 0;
+    for (const auto byte : bytes.substr(0, 4)) {
+        value = (value << 8) | static_cast<unsigned char>(byte);
+    }
+    return value;
+}
+
+// Every GOAWAY in whole frames.
+[[nodiscard]] std::vector<goaway_frame> goaway_frames(std::string_view frames) {
+    std::vector<goaway_frame> found;
+    while (frames.size() >= ruvia::http2_frame_header_bytes) {
+        const auto header = ruvia::parse_http2_frame_header(std::span<const char>(frames.data(), frames.size()));
+        if (!header || frames.size() < ruvia::http2_frame_header_bytes + header->length_) {
+            break;
+        }
+        const auto payload = frames.substr(ruvia::http2_frame_header_bytes, header->length_);
+        if (header->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) && payload.size() >= 8) {
+            found.push_back({read_u32(payload) & 0x7FFF'FFFFU, read_u32(payload.substr(4))});
+        }
+        frames.remove_prefix(ruvia::http2_frame_header_bytes + header->length_);
+    }
+    return found;
+}
+
 }  // namespace
+
+// RFC 9113 section 6.8: an owner-initiated immediate shutdown sends one GOAWAY
+// with its error code and the last peer stream processed, then ignores input.
+TEST(Ruvia, http2_public_terminate_sends_goaway_with_error_code) {
+    std::pmr::unsynchronized_pool_resource resource;
+    {
+        auto server = started_server(&resource);
+        std::pmr::string wire(&resource);
+        append_open_get_request(wire, &resource, 1);
+        append_open_get_request(wire, &resource, 3);
+        ASSERT_EQ(server.feed(wire), ruvia::http2_feed_result::accepted);
+        while (auto event = server.next_event()) {
+            if (auto* request = event->request_head()) {
+                EXPECT_EQ(server.release(std::move(*request)), ruvia::http2_server_request_release_status::released);
+            }
+        }
+        EXPECT_FALSE(server.connection_error().has_value());
+
+        server.terminate(ruvia::http2_error_code::enhance_your_calm);
+        const auto goaways = goaway_frames(ruvia::test::drain_output(server));
+        ASSERT_EQ(goaways.size(), std::size_t{1});
+        EXPECT_EQ(goaways.front().last_stream_id_, 3U);
+        EXPECT_EQ(goaways.front().error_code_, static_cast<std::uint32_t>(ruvia::http2_error_code::enhance_your_calm));
+        EXPECT_EQ(server.connection_error(), ruvia::http2_error_code::enhance_your_calm);
+
+        // The first termination is kept; later input is refused.
+        server.terminate(ruvia::http2_error_code::protocol_error);
+        EXPECT_TRUE(goaway_frames(ruvia::test::drain_output(server)).empty());
+        EXPECT_EQ(server.connection_error(), ruvia::http2_error_code::enhance_your_calm);
+        wire.clear();
+        append_open_get_request(wire, &resource, 5);
+        EXPECT_EQ(server.feed(wire), ruvia::http2_feed_result::protocol_failure);
+        EXPECT_EQ(server.submit_ping(), ruvia::http2_submit_status::closed);
+    }
+    {
+        // NO_ERROR also ends the connection at once, unlike a graceful drain.
+        auto client = ruvia::http2_connection::client({.resource_ = &resource});
+        (void)ruvia::test::drain_output(client);
+        client.begin_drain();
+        (void)ruvia::test::drain_output(client);
+        client.terminate(ruvia::http2_error_code::no_error);
+        const auto goaways = goaway_frames(ruvia::test::drain_output(client));
+        ASSERT_EQ(goaways.size(), std::size_t{1});
+        EXPECT_EQ(goaways.front().last_stream_id_, 0U);
+        EXPECT_EQ(goaways.front().error_code_, 0U);
+        EXPECT_EQ(client.connection_error(), ruvia::http2_error_code::no_error);
+        const auto submitted = client.submit_request_head(ruvia::http2_regular_request_head_view{
+            .method_ = "GET", .scheme_ = "https", .authority_ = "example.test", .target_ = "/"});
+        EXPECT_FALSE(std::holds_alternative<std::uint32_t>(submitted));
+    }
+}
 
 TEST(Ruvia, http2_public_peer_induced_stream_errors_end_in_enhance_your_calm) {
     // Each round opens a fresh stream and provokes a stream error with a trailer

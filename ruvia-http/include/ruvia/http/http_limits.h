@@ -12,5 +12,7 @@ inline constexpr std::size_t max_http_header_bytes = std::size_t{64} * 1024;
 inline constexpr std::size_t max_http_header_fields = 256;
 inline constexpr std::size_t default_max_buffered_body_bytes = std::size_t{16} * 1024 * 1024;
 inline constexpr std::size_t default_max_websocket_message_bytes = std::size_t{16} * 1024 * 1024;
+// Bytes one SSE event may buffer while sse_parser assembles it.
+inline constexpr std::size_t default_max_sse_event_bytes = std::size_t{16} * 1024 * 1024;
 
 }  // namespace ruvia

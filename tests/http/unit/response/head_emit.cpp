@@ -558,7 +558,7 @@ TEST(Ruvia, http1_buffered_response_plan_owns_request_version_and_length) {
     const auto emit_for = [&](std::string_view request) {
         http_response response(std::pmr::new_delete_resource());
         response.body("hello");
-        const auto connection_plan = parse_http1_request_message(request).state_.connection_plan_;
+        const auto connection_plan = parse_http1_request_message(request).state_.take_connection_plan();
         if (connection_plan.protocol_version() == ruvia::http_protocol_version::http10) {
             response.header("Connection", "keep-alive");
         }

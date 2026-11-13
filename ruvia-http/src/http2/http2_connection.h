@@ -906,6 +906,7 @@ public:
     }
     void begin_drain();
     void finish_drain();
+    void terminate(http2_error_code error);
     [[nodiscard]] bool draining() const noexcept {
         return local_connection_state_.graceful_drain() != nullptr;
     }

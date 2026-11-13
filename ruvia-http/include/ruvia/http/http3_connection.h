@@ -654,11 +654,7 @@ private:
 // validate_extended_connect_websocket_client_response().
 [[nodiscard]] http3_status submit_http3_websocket_client_request(http3_connection& connection,
     std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header> headers = {},
-    http_request_field_source source = http_request_field_source::generated);
-[[nodiscard]] http3_status submit_http3_websocket_client_request(http3_connection& connection,
-    std::int64_t stream_id, const websocket_client_negotiation& negotiation, std::string_view scheme,
-    std::string_view authority, std::string_view target, std::span<const http_header_view> headers,
+    std::string_view authority, std::string_view target, borrowed_http_headers headers = {},
     http_request_field_source source = http_request_field_source::generated);
 
 }  // namespace ruvia

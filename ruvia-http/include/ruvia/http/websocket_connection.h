@@ -7,6 +7,7 @@
 #include <optional>
 #include <string_view>
 
+#include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
@@ -19,6 +20,29 @@ namespace ruvia {
 enum class websocket_feed_status : std::uint8_t { accepted,
     inactive,
     backpressured };
+
+struct websocket_frame_options final {
+    // False sends a non-final fragment of a text or binary message.
+    bool final_{true};
+    // Selects permessage-deflate, when negotiated, for a message's first frame.
+    bool compress_{true};
+};
+
+// A frame payload websocket_connection::submit_frame() queues by reference
+// instead of copying. Construction rejects temporary owning strings, whose
+// bytes would expire before the transport writes them.
+class websocket_borrowed_payload final {
+public:
+    explicit constexpr websocket_borrowed_payload(borrowed_text bytes) noexcept
+        : bytes_(bytes) {}
+
+    [[nodiscard]] constexpr std::string_view bytes() const noexcept {
+        return bytes_.view();
+    }
+
+private:
+    borrowed_text bytes_;
+};
 
 struct websocket_connection_options final {
     // The resource must outlive the connection, including its address-stable
@@ -99,37 +123,34 @@ public:
     // consume_output() acknowledged. Both saturate.
     [[nodiscard]] std::uint64_t bytes_received() const noexcept;
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
-    // A failed submission preserves queued output and discards any unsent
-    // compression history. It can be retried unless resetting the codec also
-    // failed, in which case liveness_mode() reports inactive.
+    // One frame of a text or binary message, or a Ping or Pong. A data frame is
+    // a fragment of its message (RFC 6455 section 5.4): a final frame that
+    // continues no open message is a whole message; with final_ false the
+    // first frame opens the message with `opcode`, and with RSV1 when
+    // compress_ selects permessage-deflate; later frames of the same opcode
+    // are its continuation frames, and the final one ends it. Ping, Pong and
+    // Close may be submitted between fragments; a data frame of the other
+    // opcode reports message_in_progress until the final fragment, and a
+    // non-final control frame reports invalid_opcode (section 5.5). A whole
+    // message stays uncompressed when deflate does not shrink it; a
+    // fragmented compressed message continues one DEFLATE stream across its
+    // fragments, each ending at a sync flush (RFC 7692 section 7.2.1), and its
+    // first frame fixes compression for all of them. Text is validated across
+    // fragment boundaries and the message limit covers the whole message. A
+    // rejected frame leaves an open message open. A failed submission
+    // preserves queued output and discards any unsent compression history. It
+    // can be retried unless resetting the codec also failed, in which case
+    // liveness_mode() reports inactive.
+    // This form copies the payload into the connection's output before returning.
     [[nodiscard]] websocket_frame_submit_status submit_frame(
-        websocket_opcode opcode, std::string_view payload, bool compress = true);
-    // submit_frame() without copying an uncompressed, unmasked payload:
-    // output_plan() exposes it as borrowed_bytes() after the frame header.
-    [[nodiscard]] websocket_frame_submit_status submit_borrowed_frame(
-        websocket_opcode opcode, std::string_view payload, bool compress = true);
-    template <detail::http_temporary_owning_char_string payload_type>
-    websocket_frame_submit_status submit_borrowed_frame(
-        websocket_opcode opcode, payload_type&& payload, bool compress = true) = delete;
-    // One fragment of a data message sent as several frames (RFC 6455
-    // section 5.4). The first fragment opens the message with `opcode`, and
-    // with RSV1 when `compress` selects permessage-deflate; later fragments are
-    // continuation frames of the same opcode, and `final` ends the message.
-    // Ping, Pong and Close may be submitted between fragments; another data
-    // message reports message_in_progress until the final fragment. A
-    // compressed message continues one DEFLATE stream across its fragments,
-    // each ending at a sync flush (RFC 7692 section 7.2.1). Text is validated
-    // across fragment boundaries and the message limit covers the whole
-    // message. A rejected fragment leaves the message open.
-    [[nodiscard]] websocket_frame_submit_status submit_fragment(
-        websocket_opcode opcode, std::string_view payload, bool final, bool compress = true);
-    // submit_fragment() that borrows an uncompressed, unmasked payload like
-    // submit_borrowed_frame().
-    [[nodiscard]] websocket_frame_submit_status submit_borrowed_fragment(
-        websocket_opcode opcode, std::string_view payload, bool final, bool compress = true);
-    template <detail::http_temporary_owning_char_string payload_type>
-    websocket_frame_submit_status submit_borrowed_fragment(
-        websocket_opcode opcode, payload_type&& payload, bool final, bool compress = true) = delete;
+        websocket_opcode opcode, std::string_view payload, websocket_frame_options options = {});
+    // The same submission queuing an uncompressed, unmasked payload by
+    // reference: output_plan() exposes it as borrowed_bytes() after the frame
+    // header. Its bytes must stay alive and unchanged until consume_output()
+    // has acknowledged them, abort(), or destruction. A masked (client) or
+    // compressed frame, or a payload overlapping the pending output, is copied.
+    [[nodiscard]] websocket_frame_submit_status submit_frame(
+        websocket_opcode opcode, websocket_borrowed_payload payload, websocket_frame_options options = {});
     [[nodiscard]] websocket_close_submit_status submit_close(
         websocket_close_code code, std::string_view reason);
 

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <utility>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
@@ -93,6 +94,18 @@ void apply_parsed_request_target(http_request& request, const request_target_vie
 
 http1_server_request_parse_state::http1_server_request_parse_state() noexcept
     : request_(http_request_access::make()) {}
+
+http_request http1_server_request_parse_state::take_request() && noexcept {
+    return std::exchange(request_, http_request_access::make());
+}
+
+http1_request_body_plan http1_server_request_parse_state::take_body_plan() && noexcept {
+    return std::exchange(body_plan_, http1_request_body_plan(http_request_expectations{}));
+}
+
+http1_request_connection_plan http1_server_request_parse_state::take_connection_plan() && noexcept {
+    return std::exchange(connection_plan_, http1_request_connection_plan::http11_close());
+}
 
 void http1_server_request_parse_state::parse_head(std::string_view buffer,
     std::size_t header_search_offset, std::pmr::memory_resource* resource) {

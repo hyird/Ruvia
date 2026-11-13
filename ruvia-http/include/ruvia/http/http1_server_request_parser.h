@@ -107,11 +107,34 @@ public:
     }
     [[nodiscard]] const http1_server_request_parse_failure* failure() const&& = delete;
 
+    // The request, body plan and connection plan parse_head() derived from
+    // its last input. A failure keeps the accepted request version and a
+    // connection plan that requires close; an incomplete head keeps an empty
+    // request.
+    [[nodiscard]] const http_request& request() const& noexcept RUVIA_LIFETIMEBOUND {
+        return request_;
+    }
+    const http_request& request() const&& = delete;
+    [[nodiscard]] const http1_request_body_plan& body_plan() const& noexcept RUVIA_LIFETIMEBOUND {
+        return body_plan_;
+    }
+    const http1_request_body_plan& body_plan() const&& = delete;
+    [[nodiscard]] const http1_request_connection_plan& connection_plan() const& noexcept RUVIA_LIFETIMEBOUND {
+        return connection_plan_;
+    }
+    const http1_request_connection_plan& connection_plan() const&& = delete;
+
+    // Each extraction moves one result out and leaves the default value
+    // behind; the state then serves only parse_head() or destruction. Taking
+    // the request releases its descriptor storage.
+    [[nodiscard]] http_request take_request() && noexcept;
+    [[nodiscard]] http1_request_body_plan take_body_plan() && noexcept;
+    [[nodiscard]] http1_request_connection_plan take_connection_plan() && noexcept;
+
+private:
     http_request request_;
     http1_request_body_plan body_plan_{http1_request_body_plan(http_request_expectations{})};
     http1_request_connection_plan connection_plan_{http1_request_connection_plan::http11_close()};
-
-private:
     // The compact request owns its descriptor block across parse attempts.
     // Only this small progress value changes, so scan/head/error metadata
     // exists solely in the alternative where it is meaningful.

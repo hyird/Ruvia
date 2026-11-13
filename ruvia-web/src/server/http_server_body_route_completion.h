@@ -62,7 +62,7 @@ template <typename stream_type>
         auto* resource = &d.inbound_buffer_pool_;
         // Every HTTP/1 request's services carry its session's interim lane.
         state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
-            body_and_pipeline, d.parsed_.body_plan_, body_limit_value, d.scanner_entry_,
+            body_and_pipeline, d.parsed_.body_plan(), body_limit_value, d.scanner_entry_,
             *d.base_route_services_.interim_output(), d.base_route_services_.worker());
         return nullptr;
     } catch (...) {
@@ -83,9 +83,9 @@ inline task<http1_session_request_completion> complete_failed_http_route(
     request_memory& request_memory_value, const context_services& exception_services,
     http_response& response) {
     response = co_await routes_value.handle_exception(
-        parsed_value.request_, request_memory_value, exception, exception_services);
+        parsed_value.request(), request_memory_value, exception, exception_services);
     scanner_entry.touch();
-    co_return close_with_framework_response(response, parsed_value.connection_plan_);
+    co_return close_with_framework_response(response, parsed_value.connection_plan());
 }
 
 // `request_bytes` is the connection's buffered input at dispatch, from the
@@ -142,8 +142,8 @@ template <typename stream_type>
     std::string_view request_bytes, http1_request_sequence& request_sequence,
     protocol_byte_limit body_limit = protocol_byte_limit::unlimited()) {
     const auto body_bytes = buffered_request_body_bytes(
-        parsed_value.body_plan_, http_body_and_pipeline(request_head, request_bytes), body_limit);
-    const auto connection_plan = apply_request_body_consumption(parsed_value.connection_plan_,
+        parsed_value.body_plan(), http_body_and_pipeline(request_head, request_bytes), body_limit);
+    const auto connection_plan = apply_request_body_consumption(parsed_value.connection_plan(),
         body_bytes ? http1_request_body_consumption::complete : http1_request_body_consumption::incomplete);
     return finalize_buffered_route_response(
         response, connection_plan, request_sequence, request_head.header_bytes() + body_bytes.value_or(0));

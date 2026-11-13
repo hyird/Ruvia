@@ -54,8 +54,8 @@ TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_
                 auto result_value = parse_http1_request_message("GET / HTTP/1.1\r\nHost: second\r\n\r\n", &resource);
                 EXPECT_TRUE(result_value.complete());
                 auto moved = std::move(result_value);
-                EXPECT_EQ(moved.state_.request_.header("Host").value(), std::string_view("second"));
-                EXPECT_EQ(retained.state_.request_.header("X-Data").value(), std::string_view("saved"));
+                EXPECT_EQ(moved.state_.request().header("Host").value(), std::string_view("second"));
+                EXPECT_EQ(retained.state_.request().header("X-Data").value(), std::string_view("saved"));
             }
             EXPECT_EQ(resource.live_bytes(), baseline);
             {
@@ -73,7 +73,7 @@ TEST(Ruvia, request_header_blocks_reclaim_repeated_parses_and_preserve_retained_
         }
         EXPECT_TRUE(failed);
         EXPECT_EQ(resource.live_bytes(), baseline);
-        EXPECT_EQ(retained.state_.request_.path(), std::string_view("/saved"));
+        EXPECT_EQ(retained.state_.request().path(), std::string_view("/saved"));
     }
     EXPECT_EQ(resource.live_bytes(), std::size_t{0});
 }

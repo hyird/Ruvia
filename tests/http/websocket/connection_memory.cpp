@@ -188,7 +188,7 @@ TEST(Ruvia, ws_connection_buffers_keep_bounded_storage_after_a_large_message) {
     server_endpoint server({.compression_ = compression, .shared_deflate_ = &codecs});
     client_endpoint peer(compression);
     const auto exchange = [&](const std::pmr::string& inbound, bool compress_inbound, const std::pmr::string& outbound) {
-        EXPECT_TRUE(peer.protocol_.submit_frame(websocket_opcode::binary, inbound, compress_inbound) == websocket_frame_submit_status::accepted);
+        EXPECT_TRUE(peer.protocol_.submit_frame(websocket_opcode::binary, inbound, {.compress_ = compress_inbound}) == websocket_frame_submit_status::accepted);
         EXPECT_TRUE(receive(server.input_, server.protocol_, drain(peer.protocol_)) == inbound);
         EXPECT_TRUE(server.protocol_.submit_frame(websocket_opcode::binary, outbound) == websocket_frame_submit_status::accepted);
         const auto wire = drain(server.protocol_);

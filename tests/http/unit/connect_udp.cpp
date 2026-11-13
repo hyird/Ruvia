@@ -439,7 +439,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         "Upgrade: connect-udp\r\n\r\n";
     h10_parser.parse_head(raw_h10, 0, std::pmr::get_default_resource());
     EXPECT_TRUE(h10_parser.head_ready() != nullptr);
-    EXPECT_TRUE(!ruvia::is_http_connect_udp_upgrade_request(h10_parser.request_));
+    EXPECT_TRUE(!ruvia::is_http_connect_udp_upgrade_request(h10_parser.request()));
 
     // RFC 9113 8.2.2: TE: trailers is allowed on HTTP/2 requests, while other TE
     // values and TE on responses are forbidden.

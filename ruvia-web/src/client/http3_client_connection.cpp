@@ -497,7 +497,7 @@ public:
         if (request.is_tunnel()) {
             if (const auto* websocket = request.websocket()) {
                 require_accepted(submit_http3_websocket_client_request(connection, item.id_, websocket->negotiation_,
-                    "https", request.tunnel_authority(), request.target(), headers.view(), request.options_.field_source_));
+                    "https", request.tunnel_authority(), request.target(), headers, request.options_.field_source_));
             } else if (request.tunnel_protocol().empty()) {
                 const http3_connect_request_head_view head{
                     .authority_ = request.tunnel_authority(),

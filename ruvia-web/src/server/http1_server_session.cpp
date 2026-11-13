@@ -157,12 +157,12 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
         // The reader's buffers are inbound memory: they count against the
         // connection's and the worker's inbound budgets.
         body_reader.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(&d.inbound_buffer_pool_),
-            body_and_pipeline, d.parsed_.body_plan_, body_limit, d.scanner_entry_,
+            body_and_pipeline, d.parsed_.body_plan(), body_limit, d.scanner_entry_,
             *d.base_route_services_.interim_output(), d.base_route_services_.worker());
         auto services = d.base_route_services_;
         services.bind_streaming_request_body(body_reader->facade());
         services.bind_request_trailers(body_reader->reader().trailers());
-        co_await d.routes_.dispatch_buffered_response(d.parsed_.request_, route_resolution_value,
+        co_await d.routes_.dispatch_buffered_response(d.parsed_.request(), route_resolution_value,
             d.request_memory_, document_root_binding::none(), services,
             static_file_selection_mode::identity_only, d.response_);
     } catch (...) {
@@ -179,7 +179,7 @@ task<http1_session_request_completion> dispatch_http_stream_body_route(http1_rou
             d.routes_, d.request_memory_, exception_services, d.response_);
     }
 
-    co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan_,
+    co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan(),
         d.request_sequence_, request_bytes.size(), pipeline_stash, body_reader->reader());
 }
 
@@ -207,7 +207,7 @@ struct http1_tunnel_upgrade_commit final {
     // An HTTP/1.1 Upgrade (a request stream's accept_tunnel()) becomes the
     // 101 head; CONNECT and CONNECT-UDP keep their own heads.
     [[nodiscard]] task<transport_type> operator()(context& context_value, http_response& head_response) const {
-        const auto& request = dispatch_.parsed_.request_;
+        const auto& request = dispatch_.parsed_.request();
         const auto plan = !udp_ && request.known_method() != http_known_method::connect
                               ? prepare_http1_upgrade_response_head(head_response, request)
                               : prepare_http1_tunnel_response_head_plan(head_response, request.protocol_version(), udp_);
@@ -215,7 +215,7 @@ struct http1_tunnel_upgrade_commit final {
         append_http1_response_head(head_response, head, plan);
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_http1_upgrade_response_head(dispatch_.stream_,
-                dispatch_.parsed_.body_plan_.expectations(), head_response.status(), head.view(),
+                dispatch_.parsed_.body_plan().expectations(), head_response.status(), head.view(),
                 dispatch_.scanner_entry_);
             ec) {
             throw inbound_transport_error(ec, "CONNECT head write");
@@ -235,17 +235,17 @@ struct http1_tunnel_upgrade_commit final {
 
     [[nodiscard]] task<websocket_upgrade_attempt<transport_type>> accept_websocket(
         context& context_value, const websocket_route_endpoint& endpoint, std::span<const http_header_view> headers) const {
-        const auto validation = validate_websocket_handshake(dispatch_.parsed_.request_,
-            dispatch_.parsed_.body_plan_, endpoint.handshake_validation());
+        const auto validation = validate_websocket_handshake(dispatch_.parsed_.request(),
+            dispatch_.parsed_.body_plan(), endpoint.handshake_validation());
         if (const auto* failure = validation.failure()) {
             co_return reject_request_stream_websocket(context_value, *failure);
         }
-        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
+        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request(),
             {.supported_subprotocols_ = endpoint.subprotocols(), .response_headers_ = headers, .deflate_ = endpoint.deflate()},
             process_resource());
         context_access::commit_upgrade(context_value);
         if (const auto error = co_await write_websocket_handshake(dispatch_.stream_, handshake,
-                dispatch_.parsed_.body_plan_.expectations(), *process_resource(), dispatch_.scanner_entry_)) {
+                dispatch_.parsed_.body_plan().expectations(), *process_resource(), dispatch_.scanner_entry_)) {
             throw inbound_transport_error(error, "WebSocket handshake write");
         }
         tail_.record_access(dispatch_.options_.access_log_, http_status::switching_protocols);
@@ -258,12 +258,12 @@ template <typename stream_type>
 [[nodiscard]] task<std::optional<http1_session_request_completion>> dispatch_http_tunnel_route(
     http1_route_dispatch<stream_type> d, http_response_tail& tail, const resolved_route& resolved, bool udp,
     std::string_view pending) {
-    if (d.parsed_.body_plan_.requires_consumption()) {
+    if (d.parsed_.body_plan().requires_consumption()) {
         // A generated rejection does not inherit the negotiated coding promise.
         tail.disable_response_coding();
-        d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
+        d.response_ = co_await d.routes_.handle_error(d.parsed_.request(), d.request_memory_,
             http_error_info({.status_ = http_status::bad_request, .message_ = "CONNECT route does not accept HTTP request content"}), d.base_route_services_);
-        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
+        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan());
     }
     // The pending bytes remain owned by the HTTP input budget until acceptance
     // hands them to the tunnel. A refusal uses the ordinary framed sink; its
@@ -281,7 +281,7 @@ template <typename stream_type>
     const auto refusal_plan = http1_plan_response_stream(d.parsed_, http1_close_policy::close_after_response,
         http1_request_body_consumption::complete);
     response_stream_sink<stream_type> refusal_sink(d.stream_, *d.options_.codecs_, refusal_head, d.scanner_entry_,
-        d.base_route_services_.worker(), d.parsed_.request_, d.cors_, refusal_plan, refusal_plan, body_state.body(),
+        d.base_route_services_.worker(), d.parsed_.request(), d.cors_, refusal_plan, refusal_plan, body_state.body(),
         d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
         d.inbound_buffer_pool_, peer_stop, d.request_pipelined_);
     auto refusal_writer = make_response_stream_writer(refusal_sink, *process_resource());
@@ -305,7 +305,7 @@ template <typename stream_type>
     };
     try {
         buffered = co_await execute_tunnel_upgrade_session<http_socket_tunnel_transport<stream_type>>(
-            d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+            d.routes_, d.parsed_.request(), resolved, d.request_memory_, d.base_route_services_,
             d.options_, d.scanner_entry_, d.inbound_buffer_pool_, udp, pending,
             commit, commit_websocket);
     } catch (...) {
@@ -334,7 +334,7 @@ template <typename stream_type>
     }
     if (buffered) {
         d.response_ = std::move(*buffered);
-        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
+        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan());
     }
     co_return std::nullopt;
 }
@@ -352,14 +352,14 @@ struct http1_websocket_upgrade_commit final {
 
     [[nodiscard]] task<websocket_upgrade_commit<stream_type>> operator()(
         context& context_value, std::span<const http_header_view> response_headers_value) const {
-        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request_,
+        const auto handshake = make_websocket_server_handshake(dispatch_.parsed_.request(),
             {.supported_subprotocols_ = websocket_endpoint_.subprotocols(),
                 .response_headers_ = response_headers_value,
                 .deflate_ = websocket_endpoint_.deflate()},
             process_resource());
         context_access::commit_upgrade(context_value);
         if (const auto ec = co_await write_websocket_handshake(dispatch_.stream_, handshake,
-                dispatch_.parsed_.body_plan_.expectations(), *process_resource(), dispatch_.scanner_entry_);
+                dispatch_.parsed_.body_plan().expectations(), *process_resource(), dispatch_.scanner_entry_);
             ec) {
             throw inbound_transport_error(ec, "WebSocket handshake write");
         }
@@ -375,18 +375,18 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
     std::string_view pending_frames) {
     const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
     const auto handshake_validation = validate_websocket_handshake(
-        d.parsed_.request_, d.parsed_.body_plan_, websocket_endpoint.handshake_validation());
+        d.parsed_.request(), d.parsed_.body_plan(), websocket_endpoint.handshake_validation());
     if (const auto* failure = handshake_validation.failure()) {
         // A generated rejection does not inherit the negotiated coding promise.
         tail.disable_response_coding();
-        d.response_ = co_await d.routes_.handle_error(d.parsed_.request_, d.request_memory_,
+        d.response_ = co_await d.routes_.handle_error(d.parsed_.request(), d.request_memory_,
             copy_http_protocol_error_info(d.request_memory_.resource(), failure->protocol_error()),
             d.base_route_services_);
         failure->apply_required_response_headers(d.response_);
-        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan_);
+        co_return close_with_framework_response(d.response_, d.parsed_.connection_plan());
     }
     auto buffered = co_await execute_websocket_upgrade_session<stream_type>(
-        d.routes_, d.parsed_.request_, resolved, d.request_memory_, d.base_route_services_,
+        d.routes_, d.parsed_.request(), resolved, d.request_memory_, d.base_route_services_,
         d.options_, d.scanner_entry_, d.inbound_buffer_pool_, pending_frames,
         http1_websocket_upgrade_commit<stream_type>{
             .dispatch_ = d,
@@ -395,7 +395,7 @@ task<std::optional<http1_session_request_completion>> dispatch_http_websocket_ro
         });
     if (buffered) {
         d.response_ = std::move(*buffered);
-        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan_);
+        co_return finalize_closing_route_response(d.response_, d.parsed_.connection_plan());
     }
     co_return std::nullopt;
 }
@@ -467,7 +467,7 @@ inline http_response make_auto_https_redirect_response(
 // themselves.
 [[nodiscard]] inline bool http1_request_follows_held_output(
     const http1_server_request_parse_state& parsed_value, const route_resolution& resolution) noexcept {
-    if (parsed_value.body_plan_.requires_consumption()) {
+    if (parsed_value.body_plan().requires_consumption()) {
         return false;
     }
     const auto* resolved = resolution.resolved();
@@ -703,11 +703,11 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         // Work-set storage outlives this arena. Release its descriptor block
         // on every exit (including exceptions/cancellation) before the arena dies.
         struct request_header_lifetime final {
-            http_request& request_;
+            http1_server_request_parse_state& parsed_;
             ~request_header_lifetime() {
-                request_.reset();
+                (void)std::move(parsed_).take_request();
             }
-        } header_lifetime{parsed_value.request_};
+        } header_lifetime{parsed_value};
         http_response response(request_memory_value.resource());
         // Holds the next pipelined request when a body reader over-read it into
         // its own buffer, which dies with the route, until the read buffer is
@@ -715,7 +715,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
         // it; a suffix still in the read buffer is compacted in place instead.
         std::pmr::string pipeline_stash(request_memory_value.resource());
         http1_interim_response_sink interim_sink(
-            stream, parsed_value.request_, process_resource(), response_output, scanner_entry);
+            stream, parsed_value.request(), process_resource(), response_output, scanner_entry);
         base_route_services.bind_interim_output(interim_sink.output());
         std::optional<http_request_admission> admission;
         std::optional<http1_session_request_completion> request_completion;
@@ -762,8 +762,8 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             if (ready_head != nullptr) {
                 route_resolution_value = base_route_services.request_stream()
                                              ? resolve_request_stream_route(http1_request_stream_tunnel(
-                                                   parsed_value.request_, parsed_value.body_plan_.requires_consumption()))
-                                             : routes_value.resolve(parsed_value.request_);
+                                                   parsed_value.request(), parsed_value.body_plan().requires_consumption()))
+                                             : routes_value.resolve(parsed_value.request());
             }
             // Held-back pipelined responses leave before anything that could
             // make the peer wait for them or reach the stream ahead of them:
@@ -785,20 +785,20 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // deadman switch for hung handlers.
                 scanner_entry.set_phase(connection_scanner::phase::idle);
                 const auto expectation_plan =
-                    parsed_value.body_plan_.expectation_plan(http_unsupported_expectation_policy::reject);
+                    parsed_value.body_plan().expectation_plan(http_unsupported_expectation_policy::reject);
                 request_body_state initial_body;
-                if (const auto* known = parsed_value.body_plan_.known_length()) {
+                if (const auto* known = parsed_value.body_plan().known_length()) {
                     initial_body.framing_ = request_body_framing::known_length;
                     initial_body.content_length_ = known->content_length();
-                } else if (parsed_value.body_plan_.chunked() != nullptr) {
+                } else if (parsed_value.body_plan().chunked() != nullptr) {
                     initial_body.framing_ = request_body_framing::chunked;
                 }
                 base_route_services.bind_body_state(initial_body);
                 admission.emplace(admit_http_request(
                     {
-                        .request_ = parsed_value.request_,
+                        .request_ = parsed_value.request(),
                         .resolution_ = route_resolution_value,
-                        .coding_ = http_response_coding_selection_for(parsed_value.request_),
+                        .coding_ = http_response_coding_selection_for(parsed_value.request()),
                         .resource_ = request_memory_value.resource(),
                         .expectation_ = &expectation_plan,
                         .start_ = request_start,
@@ -810,20 +810,20 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                         request_rejection = *admission->rejection();
                         break;
                     }
-                    if (auto_https_redirect_authority(parsed_value.request_).empty()) {
+                    if (auto_https_redirect_authority(parsed_value.request()).empty()) {
                         request_rejection = http_request_rejection::error(http_error_info(
                             {.status_ = ruvia::http_status::bad_request, .message_ = "missing Host header"}));
                         break;
                     }
                     response = make_auto_https_redirect_response(
-                        parsed_value.request_, request_memory_value, redirect->https_port_);
+                        parsed_value.request(), request_memory_value, redirect->https_port_);
                     if (http_response_needs_not_acceptable(
-                            admission->tail().coding_policy(), parsed_value.request_, response)) {
+                            admission->tail().coding_policy(), parsed_value.request(), response)) {
                         request_rejection =
                             http_request_rejection::error(http_error_info(http_not_acceptable_coding_error()));
                         break;
                     }
-                    request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan_));
+                    request_completion.emplace(close_with_framework_response(response, parsed_value.connection_plan()));
                     scanner_entry.touch();
                     break;
                 }
@@ -832,7 +832,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     break;
                 }
                 if (const auto body_failure =
-                        content_length_limit_failure(parsed_value.body_plan_, admission->body_limit())) {
+                        content_length_limit_failure(parsed_value.body_plan(), admission->body_limit())) {
                     request_rejection = http_request_rejection::error(copy_http_protocol_error_info(
                         request_memory_value.resource(), http_request_body_protocol_error(*body_failure)));
                     break;
@@ -840,7 +840,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
 
                 const auto* resolved = admission->resolved();
                 if (resolved == nullptr) {
-                    co_await routes_value.dispatch_buffered_response(parsed_value.request_,
+                    co_await routes_value.dispatch_buffered_response(parsed_value.request(),
                         route_resolution_value, request_memory_value, options_.document_root_.binding(),
                         admission->services(), admission->static_file_mode(), response);
                     // An unresolved request never reads its body, whether the
@@ -909,7 +909,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 // dedicated coroutine here would cost one frame allocation
                 // per request.
                 {
-                    const bool has_body = parsed_value.body_plan_.requires_consumption();
+                    const bool has_body = parsed_value.body_plan().requires_consumption();
                     http_lazy_buffered_body_route_state<stream_type> body_state;
                     if (has_body) {
                         const auto body_and_pipeline = http_body_and_pipeline(*request_head, buffer_view);
@@ -937,16 +937,16 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                     const auto& route_services =
                         body_route_services ? *body_route_services : admission->services();
                     (void)co_await routes_value.dispatch_resolved_route(
-                        parsed_value.request_, request_memory_value, *resolved, route_services, nullptr, response);
+                        parsed_value.request(), request_memory_value, *resolved, route_services, nullptr, response);
 
                     if (has_body) {
                         request_completion.emplace(complete_successful_http_body_route(scanner_entry,
-                            response, parsed_value.connection_plan_, request_sequence,
+                            response, parsed_value.connection_plan(), request_sequence,
                             buffer_view.size(), pipeline_stash, body_state.body().reader()));
                     } else {
                         scanner_entry.touch();
                         request_completion.emplace(finalize_buffered_route_response(
-                            response, parsed_value.connection_plan_, request_sequence, request_head->header_bytes()));
+                            response, parsed_value.connection_plan(), request_sequence, request_head->header_bytes()));
                     }
                     break;
                 }
@@ -1018,7 +1018,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
             if (admission) {
                 admission->tail().disable_response_coding();
             }
-            response = co_await respond_http_request_rejection(routes_value, parsed_value.request_,
+            response = co_await respond_http_request_rejection(routes_value, parsed_value.request(),
                 request_memory_value, *request_rejection,
                 admission ? admission->services() : base_route_services);
             const auto* rejected_head = parsed_value.head_ready();
@@ -1026,7 +1026,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 request_rejection->rate_limit() != nullptr && rejected_head != nullptr
                     ? finalize_unread_body_response(response, parsed_value, *rejected_head,
                           read_buffer.pending(), request_sequence, admission->body_limit())
-                    : close_with_framework_response(response, parsed_value.connection_plan_));
+                    : close_with_framework_response(response, parsed_value.connection_plan()));
         }
 
         if (!request_completion) {
@@ -1037,7 +1037,7 @@ task<std::variant<http1_serve_handoff, http_connection_close>> worker_connection
                 std::make_exception_ptr(rejected->exception()), parsed_value, routes_value,
                 request_memory_value, admission->services(), response));
         }
-        http_response_tail fallback_tail(parsed_value.request_,
+        http_response_tail fallback_tail(parsed_value.request(),
             http_response_coding_policy::disabled(), remote_address, remote_address, request_start);
         auto& tail = admission ? admission->tail() : fallback_tail;
         auto connection_plan = request_completion->connection_plan();

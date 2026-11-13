@@ -83,7 +83,7 @@ namespace {
     if (!parsed.head_ready()) {
         throw std::runtime_error("invalid WebSocket handshake request");
     }
-    auto handshake = ruvia::make_websocket_server_handshake(parsed.request_, {}, &resource);
+    auto handshake = ruvia::make_websocket_server_handshake(parsed.request(), {}, &resource);
     std::pmr::string response{ruvia::process_resource()};
     handshake.for_each_response_part([&response](std::string_view part) {
         response.append(part);
@@ -533,7 +533,7 @@ TEST(Ruvia, websocket_client_handshake_sends_heads_beyond_the_retained_buffer) {
         co_await asio::async_read_until(socket, asio::dynamic_buffer(request), "\r\n\r\n", asio::use_awaitable);
         ruvia::http1_server_request_parse_state parsed;
         parsed.parse_head(request);
-        received_large_header = parsed.head_ready() && parsed.request_.header("x-large") == large_value;
+        received_large_header = parsed.head_ready() && parsed.request().header("x-large") == large_value;
         const auto response = make_server_handshake_response(request);
         co_await asio::async_write(socket, asio::buffer(response), asio::use_awaitable);
         std::array<char, 1024> input{};
@@ -637,7 +637,7 @@ TEST(Ruvia, websocket_client_handshake_sends_the_default_user_agent_unless_heade
         parsed.parse_head(request);
         EXPECT_TRUE(parsed.head_ready());
         std::size_t user_agents = 0;
-        for (const auto& field : parsed.request_.headers()) {
+        for (const auto& field : parsed.request().headers()) {
             if (ruvia::http_ascii_equals_ignore_case(field.name(), "user-agent")) {
                 ++user_agents;
                 EXPECT_EQ(field.value(), test_case.expected_);
