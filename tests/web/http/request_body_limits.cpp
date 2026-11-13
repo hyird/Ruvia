@@ -49,6 +49,9 @@ struct body_lane_observation final {
     std::atomic<bool> truncated_reread_rejected_{};
     std::atomic<bool> truncated_reread_yielded_{};
     std::atomic<unsigned> multipart_reader_parts_{};
+    std::atomic<bool> multipart_rejected_{};
+    std::atomic<bool> multipart_prestopped_{};
+    std::atomic<bool> multipart_waiting_{};
 };
 
 const auto body_lane_observed = std::make_shared<body_lane_observation>();
@@ -62,6 +65,7 @@ class body_lane_routes final {
     RUVIA_POST("/server-lazy-body-read", read, ruvia::stream_body);
     RUVIA_POST("/server-lazy-multipart-read", read_multipart, ruvia::stream_body);
     RUVIA_POST("/server-multipart-reader", read_multipart_reader, ruvia::stream_body);
+    RUVIA_POST("/server-multipart-interrupted", read_interrupted_multipart, ruvia::stream_body);
     RUVIA_POST("/server-truncated-body-reread", reread_truncated, ruvia::stream_body);
     RUVIA_POST("/server-small-chunk-body", read_small_chunks, ruvia::stream_body);
     RUVIA_GET("/server-small-chunk-next", small_chunk_next);
@@ -77,6 +81,46 @@ class body_lane_routes final {
         while (auto part = co_await reader.read()) {
             observed.multipart_reader_parts_.fetch_add(1);
             body.append(part->body());
+        }
+        co_return context_value.text(std::move(body));
+    }
+
+    // A read that times out or was stopped before it started leaves the parser
+    // where it was; the next read resumes the same part.
+    ruvia::task<ruvia::http_response> read_interrupted_multipart(ruvia::context& context_value) {
+        auto& observed = *context_value.worker_state<std::shared_ptr<body_lane_observation>>();
+        ruvia::multipart_reader reader(context_value.req().body_reader(),
+            {.boundary_ = ruvia::test::make_multipart_boundary("cut"), .resource_ = ruvia::process_resource()});
+        try {
+            (void)reader.read({.timeout_ = std::chrono::milliseconds(0)});
+        } catch (const std::invalid_argument&) {
+            observed.multipart_rejected_ = true;
+        }
+        ruvia::stop_source stopped;
+        stopped.request_stop();
+        try {
+            (void)co_await reader.read({.stop_token_ = stopped.token()});
+        } catch (const std::system_error& error) {
+            observed.multipart_prestopped_ = error.code() == std::errc::operation_canceled;
+        }
+        std::pmr::string body(context_value.allocator<char>());
+        for (;;) {
+            ruvia::operation_options operation;
+            if (!observed.multipart_waiting_) {
+                operation.timeout_ = std::chrono::milliseconds(100);
+            }
+            try {
+                auto part = co_await reader.read(operation);
+                if (!part) {
+                    break;
+                }
+                body.append(part->body());
+            } catch (const std::system_error& error) {
+                if (error.code() != std::errc::timed_out || observed.multipart_waiting_) {
+                    throw;
+                }
+                observed.multipart_waiting_ = true;
+            }
         }
         co_return context_value.text(std::move(body));
     }
@@ -444,6 +488,41 @@ TEST(Ruvia, multipart_request_cold_reads_preserve_parser_state_after_started_ove
     exercise_lazy_body_reads("/server-lazy-multipart-read", body, "field:value");
     EXPECT_TRUE(body_lane_observed->multipart_eof_);
     EXPECT_TRUE(body_lane_observed->multipart_overlap_rejected_);
+}
+
+TEST(Ruvia, multipart_read_interrupted_by_its_operation_resumes_parsing) {
+    body_lane_observed->multipart_rejected_ = false;
+    body_lane_observed->multipart_prestopped_ = false;
+    body_lane_observed->multipart_waiting_ = false;
+    constexpr std::string_view first = "--cut\r\nContent-Disposition: form-data; name=field\r\n\r\nval";
+    constexpr std::string_view rest = "ue\r\n--cut--\r\n";
+    auto& io = ruvia::test::new_test_io_context();
+    ruvia::test::http_server_fixture server(io);
+    std::string request =
+        "POST /server-multipart-interrupted HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n"
+        "Content-Length: " +
+        std::to_string(first.size() + rest.size()) + "\r\n\r\n";
+    request.append(first);
+    std::string response;
+    {
+        asio::ip::tcp::socket client(io);
+        client.connect(server.endpoint());
+        asio::write(client, asio::buffer(request));
+        ruvia::test::wait_until([] { return body_lane_observed->multipart_waiting_.load(); }, std::chrono::seconds(5));
+        asio::write(client, asio::buffer(rest));
+        std::array<char, 1024> buffer;
+        asio::error_code error;
+        while (!error) {
+            const auto count = client.read_some(asio::buffer(buffer), error);
+            response.append(buffer.data(), count);
+        }
+    }
+    server.finish();
+    EXPECT_TRUE(body_lane_observed->multipart_rejected_);
+    EXPECT_TRUE(body_lane_observed->multipart_prestopped_);
+    EXPECT_TRUE(body_lane_observed->multipart_waiting_);
+    EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
+    EXPECT_TRUE(response.ends_with("\r\n\r\nvalue"));
 }
 
 TEST(Ruvia, streamed_request_body_stays_failed_after_truncated_read) {

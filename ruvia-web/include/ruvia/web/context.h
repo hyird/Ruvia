@@ -582,8 +582,12 @@ public:
     // Output is linear when started. Unstarted operations may coexist and do not
     // block the final response; starting one after the final head commits throws.
     // A failed write throws std::system_error, which is not routed through
-    // on_error: the connection ends.
-    [[nodiscard]] task<void> inform(const http_interim_response_head& response);
+    // on_error: the connection ends. A timeout or stop in `operation` resets
+    // the request (HTTP/2, HTTP/3: the stream; HTTP/1: the connection) and
+    // throws std::system_error (timed_out or operation_canceled); a stop
+    // requested before the operation starts sends nothing.
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response, operation_options operation = {}) &;
+    task<void> inform(const http_interim_response_head&, operation_options = {}) && = delete;
 
     // Queues a promised request on this HTTP/2 connection. False means the
     // peer disabled push or its stream capacity cannot admit the promise.

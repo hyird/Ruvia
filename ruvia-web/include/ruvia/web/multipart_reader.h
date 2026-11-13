@@ -5,6 +5,7 @@
 #include <string_view>
 #include <variant>
 
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/multipart_parser.h"
@@ -35,8 +36,10 @@ public:
     /// Returns one typed chunk of the current multipart part. All returned views
     /// remain valid only until the next read operation starts, parent body-reader
     /// expiry, or this reader's destruction. Unstarted read operations may coexist.
-    [[nodiscard]] task<std::optional<multipart_stream_part>> read() &;
-    task<std::optional<multipart_stream_part>> read() && = delete;
+    /// `operation` bounds every body read this call makes, as body_reader::read()
+    /// does one: a timeout or stop ends only this call and parsing resumes on the next.
+    [[nodiscard]] task<std::optional<multipart_stream_part>> read(operation_options operation = {}) &;
+    task<std::optional<multipart_stream_part>> read(operation_options = {}) && = delete;
 
 private:
     struct receiving_state_type final {
@@ -80,7 +83,7 @@ private:
     ::ruvia::operation_scope operation_scope_;
     scoped_capability_registration registration_;
 
-    [[nodiscard]] task<std::optional<multipart_stream_part>> read_task();
+    [[nodiscard]] task<std::optional<multipart_stream_part>> read_task(operation_options operation);
 };
 
 }  // namespace ruvia

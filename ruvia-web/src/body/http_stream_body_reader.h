@@ -19,7 +19,6 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_request_body_plan.h"
@@ -32,6 +31,7 @@
 #include "body/http_body_buffer.h"
 #include "context/http_interim_response_output.h"
 #include "server/connection_scanner.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -173,11 +173,6 @@ public:
                 allocator.resource(), body_limit_value);
         }
     }
-    ~stream_body_reader() {
-        if (cancellation_target_) {
-            cancellation_target_->detach(*this);
-        }
-    }
 
     stream_body_reader(const stream_body_reader&) = delete;
     stream_body_reader& operator=(const stream_body_reader&) = delete;
@@ -251,49 +246,25 @@ public:
         completion_observer_ = observer;
     }
 
-    // Cancellation abandons HTTP/1 input, not output. A later response can be
-    // sent, but incomplete framing must never re-enter the keep-alive loop.
-    void cancel_operation_by_id(std::uint64_t id) noexcept {
-        if (id != 0 && id == read_operation_id_) {
-            read_cancelled_ = true;
-            read_cancellation_.emit(asio::cancellation_type::terminal);
-        }
-    }
-
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token token = {}) {
+    // An interrupted read keeps the reader active: the bytes already buffered
+    // and the decoder state wait for the next read. Until then the body clock
+    // is paused, and a response that leaves the body incomplete closes the
+    // connection after it.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) {
         require_not_failed();
-        std::optional<worker_cancellation_registration<cancellation_target_type>> cancellation;
-        if (token.stoppable()) {
-            if (!cancellation_target_) {
-                cancellation_target_ = make_worker_cancellation_target(*this, worker_);
-            }
-            cancellation.emplace(cancellation_target_, read_operation_id_);
-            cancellation->arm(token);
-        }
+        operation_interrupt interrupt(
+            interrupts_, worker_, operation, &read_cancellation_, &wake_read, "request body read");
+        read_interrupt_ = &interrupt;
         try {
-            require_not_cancelled();
-            if (body_plan_.chunked() != nullptr) {
-                if (continue_pending_) {
-                    co_await send_continue();
-                }
-                co_return co_await read_transfer_decoded_chunked();
-            }
-            const auto* known_length = body_plan_.known_length();
-            if (known_length == nullptr) {
-                co_return std::nullopt;
-            }
-            if (exceeds_limit(known_length->content_length())) {
-                throw_request_body_too_large();
-            }
-
-            if (continue_pending_) {
-                co_await send_continue();
-            }
-            co_return co_await read_known_length(known_length->content_length());
+            auto chunk = co_await read_next();
+            read_interrupt_ = nullptr;
+            co_return chunk;
         } catch (...) {
-            state_ = state_type::failed;
-            if (read_cancelled_) {
+            read_interrupt_ = nullptr;
+            if (interrupt.interrupted()) {
                 scanner_entry_.set_phase(connection_scanner::phase::idle);
+            } else {
+                state_ = state_type::failed;
             }
             throw;
         }
@@ -354,17 +325,38 @@ private:
         finished,
         failed };
 
-    using cancellation_target_type = worker_cancellation_target<stream_body_reader>;
+    static void wake_read(void* raw) noexcept {
+        static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
+    }
 
-    void require_not_cancelled() const {
-        if (read_cancelled_) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled));
+    void throw_if_read_interrupted() const {
+        if (read_interrupt_ != nullptr) {
+            read_interrupt_->throw_if_interrupted();
         }
+    }
+
+    task<std::optional<std::span<const std::byte>>> read_next() {
+        if (body_plan_.chunked() != nullptr) {
+            if (continue_pending_) {
+                co_await send_continue();
+            }
+            co_return co_await read_transfer_decoded_chunked();
+        }
+        const auto* known_length = body_plan_.known_length();
+        if (known_length == nullptr) {
+            co_return std::nullopt;
+        }
+        if (exceeds_limit(known_length->content_length())) {
+            throw_request_body_too_large();
+        }
+        if (continue_pending_) {
+            co_await send_continue();
+        }
+        co_return co_await read_known_length(known_length->content_length());
     }
 
     task<void> send_continue() {
         co_await interim_output_.send_continue();
-        require_not_cancelled();
         continue_pending_ = false;
     }
 
@@ -447,16 +439,18 @@ private:
             read_space = read_space.first(std::min(writable, read_space.size()));
         }
 
+        throw_if_read_interrupted();
         scanner_entry_.set_phase(connection_scanner::phase::reading_payload);
-        require_not_cancelled();
         auto read_completion =
             co_await ruvia::async_asio<std::size_t>([this, read_space](auto handler) mutable {
                 stream_.async_read_some(asio::buffer(read_space),
                     asio::bind_cancellation_slot(read_cancellation_.slot(), std::move(handler)));
             });
-        require_not_cancelled();
         const auto ec = read_completion.error_code();
         const auto bytes_read = read_completion.result();
+        if (ec == asio::error::operation_aborted) {
+            throw_if_read_interrupted();
+        }
         if (ec || bytes_read == 0) {
             throw_incomplete_request_body();
         }
@@ -702,10 +696,9 @@ private:
     connection_scanner::entry& scanner_entry_;
     http_interim_response_output& interim_output_;
     const worker_handle& worker_;
-    std::shared_ptr<cancellation_target_type> cancellation_target_;
     asio::cancellation_signal read_cancellation_;
-    std::uint64_t read_operation_id_{};
-    bool read_cancelled_{};
+    // The running read's interrupt; null between reads.
+    const operation_interrupt* read_interrupt_{};
     // Offset of the first unconsumed byte in the active source: the borrowed
     // initial view while it is set, buffer_ otherwise. Consumed buffer_ bytes are
     // dropped only when read_more() needs room for socket input.
@@ -716,6 +709,7 @@ private:
     bool continue_pending_{false};
     void* completion_target_{};
     completion_observer_type completion_observer_{};
+    operation_interrupt_source interrupts_;
 };
 
 template <typename stream_type>

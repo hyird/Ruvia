@@ -195,8 +195,8 @@ std::optional<std::string_view> request_stream::trailer(std::string_view name) c
     return context_.req().trailer(name);
 }
 
-task<void> request_stream::inform(const http_interim_response_head& response) {
-    return context_.inform(response);
+task<void> request_stream::inform(const http_interim_response_head& response, operation_options operation) & {
+    return context_.inform(response, std::move(operation));
 }
 
 bool request_stream::early_data() const noexcept {

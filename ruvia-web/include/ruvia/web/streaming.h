@@ -11,6 +11,7 @@
 #include <type_traits>
 #include <utility>
 
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -33,17 +34,18 @@ struct stream_body final {
 };
 namespace detail {
 struct streaming_access;
-}
+class operation_interrupt_source;
+}  // namespace detail
 
 class body_reader final {
 private:
     friend struct detail::streaming_access;
     friend class multipart_reader;
 
-    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(stop_token)>;
+    using read_type = detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)>;
 
     body_reader(void* target, read_type::invoke_type read) noexcept
-        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(stop_token)>(target, read)) {}
+        : read_(detail::callback_access::make<task<std::optional<std::span<const std::byte>>>(operation_options)>(target, read)) {}
 
 public:
     body_reader(const body_reader&) = delete;
@@ -57,18 +59,18 @@ public:
     /// safely share the borrowed buffer. Unstarted operations may coexist.
     /// HTTP/1 enters the interim-write operation only while a 100 Continue is
     /// pending; later reads do not repeat that operation.
-    /// stop 取消本次等待并抛 system_error(operation_canceled)，不返回 EOF。
-    /// HTTP/2、HTTP/3 可继续读取；HTTP/1 放弃正文并在响应后关闭连接。
-    /// 取消不取消响应方向；token 在创建冷任务时拥有化。
-    /// 不延长服务器已有正文超时；启动的任务仍须等待完成，取消后再释放宿主。
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token stop = {}) &;
-    task<std::optional<std::span<const std::byte>>> read(stop_token = {}) && = delete;
+    /// `operation` 的超时或停止只结束本次等待，抛 system_error（timed_out /
+    /// operation_canceled），不返回 EOF；已缓冲正文保留，可继续读取。
+    /// 不取消响应方向，不放宽服务器已有正文超时；非正超时抛 invalid_argument。
+    /// 启动的任务仍须等待完成后再释放宿主。
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
 
     /// Reads the next chunk as characters without charset conversion or UTF-8
     /// validation. Chunk boundaries may split encoded characters. Shares read()'s
-    /// lifetime and linear operation contract.
-    [[nodiscard]] task<std::optional<std::string_view>> text(stop_token stop = {}) &;
-    task<std::optional<std::string_view>> text(stop_token = {}) && = delete;
+    /// lifetime, linear operation and `operation` contract.
+    [[nodiscard]] task<std::optional<std::string_view>> text(operation_options operation = {}) &;
+    task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
 
 private:
     void bind_worker(const worker_handle& worker_value) noexcept {
@@ -95,36 +97,41 @@ public:
     /// HEAD、304 返回 completed，属于正常完成，不设置 aborted 或取消 token。
     /// commit/write/writeln/end 共用线性输出通道，并发启动抛 logic_error。
     /// 重复 commit 抛 logic_error；提交前失败仍可由框架替换为缓冲错误响应。
-    [[nodiscard]] task<stream_commit_result> commit() &;
-    task<stream_commit_result> commit() && = delete;
+    /// 输出操作的 `operation` 超时或停止中止本请求流（HTTP/2、HTTP/3 重置流，
+    /// HTTP/1 关闭连接；已写出部分无法撤回）并抛 system_error（timed_out /
+    /// operation_canceled）；启动前已停止则不发出任何字节。非正超时抛
+    /// invalid_argument；服务器写超时继续生效。
+    [[nodiscard]] task<stream_commit_result> commit(operation_options operation = {}) &;
+    task<stream_commit_result> commit(operation_options = {}) && = delete;
 
     /// 只在 commit 返回 body 后写正文；提交前、完成后调用均抛 logic_error。
     /// string_view 在调用返回前复制到 owner-worker PMR，临时正文可安全跨挂起。
     /// 输出缓冲及写超时作用域保留至传输操作完成。
-    task<void> write(std::span<const std::byte> chunk) &;
-    task<void> write(std::span<const std::byte>) && = delete;
-    task<void> write(std::string_view chunk) &;
-    task<void> write(std::string_view) && = delete;
+    [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> write(std::string_view chunk, operation_options operation = {}) &;
+    task<void> write(std::string_view, operation_options = {}) && = delete;
 
     /// Takes ownership of an already-allocated chunk and transfers it into the
     /// output lane, rebinding it to owner storage when needed before returning.
     /// Compatible allocators transfer the
     /// existing allocation; incompatible allocators copy it before returning.
     template <std::same_as<std::pmr::string> string_type>
-    task<void> write(string_type&& chunk) & {
-        return write_owned(std::move(chunk));
+    [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
+        return write_owned(std::move(chunk), std::move(operation));
     }
     template <std::same_as<std::pmr::string> string_type>
-    task<void> write(string_type&&) && = delete;
+    task<void> write(string_type&&, operation_options = {}) && = delete;
 
-    task<void> writeln(std::string_view chunk) &;
-    task<void> writeln(std::string_view) && = delete;
+    [[nodiscard]] task<void> writeln(std::string_view chunk, operation_options operation = {}) &;
+    task<void> writeln(std::string_view, operation_options = {}) && = delete;
 
     /// 仅在正文阶段挂起生产者；正常超时返回 elapsed，context::stop_token()
-    /// 取消（含客户端断开）返回 stop_requested。提交前或响应完成后调用抛 logic_error。
-    /// HTTP/2 对端终止仍作为传输错误报告。
-    task<timer_sleep_result> sleep(timeout_duration duration) &;
-    task<timer_sleep_result> sleep(timeout_duration) && = delete;
+    /// 或 `stop` 取消（含客户端断开）返回 stop_requested，与 sleep_for 相同：
+    /// duration 是睡眠目标而非操作时限，故不接受 operation_options。
+    /// 提交前或响应完成后调用抛 logic_error；HTTP/2 对端终止仍作为传输错误报告。
+    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &;
+    task<timer_sleep_result> sleep(timeout_duration, stop_token = {}) && = delete;
 
     /// 仅报告已观察到的真实失败或取消；正常完成不等于 aborted。
     /// 观察写失败与读侧终止（HTTP/1 请求体完整消费后的 FIN/RST，HTTP/2 流终止）。
@@ -141,8 +148,8 @@ public:
     /// Trailer 会被省略，禁止 Trailer 的状态在未发送头之前拒绝非空部分。
     /// 已正常完成后空 end() 幂等，非空 Trailer 抛 logic_error；生产正文仍必须
     /// 先显式 commit() 并检查结果，不能用 end() 隐藏无正文阶段。
-    task<void> end(std::span<const http_header_view> trailers = {}) &;
-    task<void> end(std::span<const http_header_view> = {}) && = delete;
+    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
+    task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
 
 private:
     friend struct detail::streaming_access;
@@ -156,10 +163,13 @@ private:
     using committed_type = bool (*)(void*) noexcept;
     using aborted_type = bool (*)(void*) noexcept;
 
-    response_stream_writer(std::pmr::memory_resource& resource, void* target, commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
+    // `interrupts` is the sink's; it routes stop requests to output operations.
+    response_stream_writer(std::pmr::memory_resource& resource, void* target, detail::operation_interrupt_source& interrupts,
+        commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
         release_context_type release_context, committed_type committed, aborted_type aborted) noexcept
         : resource_(&resource),
           target_(target),
+          interrupts_(&interrupts),
           commit_(commit),
           write_(write),
           end_(end),
@@ -170,19 +180,23 @@ private:
           aborted_(aborted) {}
 
     void bind_worker(const worker_handle& worker_value) noexcept {
+        worker_ = &worker_value;
         operation_scope_.bind_worker(worker_value);
     }
 
     // The context's stop token travels with the binding so sleep() observes
     // worker shutdown, the client leaving, and explicit subrequest cancellation.
+    // An interrupted output operation resets the request through the context.
     void bind_context(context& context_value, stop_token stop_token_value) {
         stop_token_ = std::move(stop_token_value);
         bind_context_(target_, &context_value);
+        context_ = &context_value;
     }
 
     void release_context() noexcept {
         operation_scope_.close();
         release_context_(target_);
+        context_ = nullptr;
     }
 
     void require_active() const {
@@ -190,11 +204,13 @@ private:
             throw std::logic_error("response stream lifetime has expired");
         }
     }
+    void require_output() const;
 
-    task<void> write_owned(std::pmr::string&& chunk);
+    task<void> write_owned(std::pmr::string&& chunk, operation_options operation);
 
     std::pmr::memory_resource* resource_;
     void* target_;
+    detail::operation_interrupt_source* interrupts_;
     commit_type commit_;
     write_type write_;
     end_type end_;
@@ -204,12 +220,16 @@ private:
     committed_type committed_;
     aborted_type aborted_;
     stop_token stop_token_;
+    const worker_handle* worker_{nullptr};
+    context* context_{nullptr};
     bool output_active_{false};
     ::ruvia::operation_scope operation_scope_;
 
     friend class sse_writer;
 };
 
+// A copyable handle to the context's response stream; operations borrow that
+// stream, not this handle.
 class sse_writer final {
 public:
     sse_writer(const sse_writer& other) noexcept;
@@ -218,10 +238,10 @@ public:
     sse_writer& operator=(sse_writer&&) = delete;
 
     /// 与 response_stream_writer 相同；completed 时停止事件生产，不伪造取消。
-    [[nodiscard]] task<stream_commit_result> commit();
-    task<void> write(const sse_message& message);
+    [[nodiscard]] task<stream_commit_result> commit(operation_options operation = {});
+    [[nodiscard]] task<void> write(const sse_message& message, operation_options operation = {});
 
-    task<timer_sleep_result> sleep(timeout_duration duration);
+    [[nodiscard]] task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {});
 
     [[nodiscard]] bool aborted() const noexcept {
         return writer_ == nullptr || writer_->aborted();
@@ -230,7 +250,7 @@ public:
         return writer().committed();
     }
 
-    task<void> end(std::span<const http_header_view> trailers = {});
+    [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {});
 
 private:
     friend class context;

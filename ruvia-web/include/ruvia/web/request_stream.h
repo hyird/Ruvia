@@ -128,7 +128,9 @@ public:
     [[nodiscard]] std::optional<std::string_view> trailer(std::string_view name) const noexcept;
 
     // Sends a bodyless 1xx before the final head; copies fields before return.
-    [[nodiscard]] task<void> inform(const http_interim_response_head& response);
+    // `operation` follows context::inform().
+    [[nodiscard]] task<void> inform(const http_interim_response_head& response, operation_options operation = {}) &;
+    task<void> inform(const http_interim_response_head&, operation_options = {}) && = delete;
     [[nodiscard]] bool early_data() const noexcept;
     [[nodiscard]] bool push(http_push_request_view request);
     void advertise_origins(std::span<const std::string_view> origins);

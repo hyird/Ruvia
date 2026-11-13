@@ -414,12 +414,13 @@ ruvia::app()
 | `stop_token()` | 应用停机时请求停止 |
 | `worker()` | 所属核心 `worker_handle`；可组合 `sleep_for`、`task_scope` 与 `run_blocking`，不会切换连接线程 |
 | `connection_state()` | 连接打开回调返回的附加对象，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
-| `co_await read()` | 下一段至多 4 KiB 的入站字节；视图有效到下一次 `read()` 开始；对端结束发送方向（TCP FIN、TLS `close_notify`，或 TLS 对端未发 `close_notify` 直接关闭 TCP）后返回 `std::nullopt`，此后重复返回 |
-| `co_await write(bytes)` | 发送字节；调用时即复制输入 |
-| `co_await finish()` | 半关闭发送方向：TCP `shutdown(send)`，TLS 发送 `close_notify`；之后仍可读取，再写抛 `std::logic_error`，重复调用无操作 |
+| `co_await read(operation = {})` | 下一段至多 4 KiB 的入站字节；视图有效到下一次 `read()` 开始；对端结束发送方向（TCP FIN、TLS `close_notify`，或 TLS 对端未发 `close_notify` 直接关闭 TCP）后返回 `std::nullopt`，此后重复返回 |
+| `co_await write(bytes, operation = {})` | 发送字节；调用时即复制输入 |
+| `co_await finish(operation = {})` | 半关闭发送方向：TCP `shutdown(send)`，TLS 发送 `close_notify`；之后仍可读取，再写抛 `std::logic_error`，重复调用无操作 |
 | `abort()` | 立即关闭连接，仍在运行的操作失败 |
 
 - **生命周期**：对象由服务器拥有、不可复制或移动，只在处理器任务运行期间、在该连接所属 worker 线程上有效；任务结束后不得继续访问对象。一个读操作与一个输出操作（`write` / `finish`）可并发运行，同方向重叠抛 `std::logic_error`。
+- **逐次操作**：`operation`（`operation_options`）的超时或停止使 `read()` 只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`），不丢输入、可继续读；使 `write()` / `finish()` 中止连接并抛同样的异常，令牌启动前已停止则不发出字节。服务器超时继续生效；非正超时抛 `std::invalid_argument`。
 - **操作回收**：`server_connection` 与 `http_tunnel` 只用读写通道租约判定在途操作；处理器退出时先中止仍活跃的 I/O，再等待回收。未启动的冷任务直接失效，随后 `co_await` 抛 `std::logic_error`。
 - **结束**：处理器任务正常返回且无在途操作时，服务器先结束仍打开的发送方向（TLS `close_notify`），再关闭 socket；任务抛出异常则立即断开，并经 `on_connection_failure()` 上报、计入 `connection_failures_`。对端复位、关闭及服务器取消的 I/O（超时、`stop()`、`abort()`）均不计故障；应用自行抛出的异常不按传输取消过滤。
 - **服务器限制**：连接占用一个 `max_connections_per_worker_` 名额且不会为接纳新连接而被淘汰；读缓冲计入入站内存双预算（超限 `read()` 抛 `std::bad_alloc`）；`idle_timeout_` 在无读写完成时关闭连接，`write_timeout_` 在写入停滞时关闭连接；`stop()` 立即关闭全部连接并请求 `stop_token()`，`run()` 等待处理器任务退出后返回。连接被关闭后，在途与后续操作抛 `std::system_error`。
@@ -465,7 +466,7 @@ ruvia::app()
 | `body()` | 流式请求正文（`body_reader`），首次读取时发送待发的 `100 Continue`；隧道请求抛 `std::logic_error`（首部之后的字节属于隧道） |
 | `body_state()` | 初始正文分帧快照：`framing_`、可选 `content_length_` 与 `initial_end_stream_`；不必先读一次正文 |
 | `trailers()` / `trailer(name)` | 正文读至 EOF 后读取请求尾部字段，与初始首部分开保存 |
-| `co_await inform(head)` | 最终响应提交前发送合法 1xx（如 `103 Early Hints`），字段在调用返回前拥有化 |
+| `co_await inform(head, operation = {})` | 最终响应提交前发送合法 1xx（如 `103 Early Hints`），字段在调用返回前拥有化；`operation` 同 `context::inform()` |
 | `early_data()` | 实际请求是否来自 HTTP/3 0-RTT；可据此返回 `425` 或转发 `Early-Data: 1` |
 | `push(request)` | 按对端设置与容量提交 HTTP/2 推送承诺 |
 | `advertise_origins(origins)` / `advertise_alternative_service(value)` | 复用连接的 ORIGIN / ALTSVC 输出能力及协议限制 |

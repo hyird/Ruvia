@@ -7,6 +7,8 @@
 #include <string>
 #include <string_view>
 
+#include <asio/cancellation_signal.hpp>
+
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
@@ -16,6 +18,7 @@
 #include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
 #include "server/inbound_transport_error.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -32,6 +35,7 @@ public:
         const server_connection_fields& fields)
         : transport_(stream, tls_output, &entry),
           entry_(entry),
+          worker_(worker_value),
           read_buffer_(&inbound),
           facade_(fields, stop_token_value, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk) {}
     server_connection_session(const server_connection_session&) = delete;
@@ -59,37 +63,49 @@ public:
     [[nodiscard]] task<void> finish() {
         if (!facade_.send_ended_) {
             facade_.send_ended_ = true;
-            co_await end_send();
+            co_await end_send({});
         }
     }
 
 private:
-    [[nodiscard]] task<void> end_send() {
-        if (const auto error = co_await transport_.write_bytes({}, http_stream_end::end)) {
+    static void wake_read(void* raw) noexcept {
+        static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
+    }
+    [[nodiscard]] task<void> end_send(operation_options operation) {
+        operation_interrupt interrupt(interrupts_, worker_, operation, this, &abort_thunk, "server connection finish");
+        const auto error = co_await transport_.write_bytes({}, http_stream_end::end);
+        interrupt.throw_if_interrupted();
+        if (error) {
             throw inbound_transport_error(error, "server connection finish");
         }
     }
-    static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw) {
+    static task<std::optional<std::span<const std::byte>>> read_thunk(void* raw, operation_options operation) {
         auto& owner = *static_cast<server_connection_session*>(raw);
+        operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, &owner.read_cancellation_,
+            &wake_read, "server connection read");
         if (owner.receive_ended_) {
             co_return std::nullopt;
         }
         owner.read_buffer_.clear();
-        if (!(co_await owner.transport_.read_more(owner.read_buffer_))) {
+        if (!(co_await owner.transport_.read_more(
+                owner.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); }, owner.read_cancellation_.slot()))) {
             owner.receive_ended_ = true;
             co_return std::nullopt;
         }
         owner.entry_.touch();
         co_return std::as_bytes(std::span(owner.read_buffer_.data(), owner.read_buffer_.size()));
     }
-    static task<void> write_thunk(void* raw, std::string_view bytes) {
+    static task<void> write_thunk(void* raw, std::string_view bytes, operation_options operation) {
         auto& owner = *static_cast<server_connection_session*>(raw);
-        if (const auto error = co_await owner.transport_.write_bytes(bytes, http_stream_end::keep_open)) {
+        operation_interrupt interrupt(owner.interrupts_, owner.worker_, operation, raw, &abort_thunk, "server connection write");
+        const auto error = co_await owner.transport_.write_bytes(bytes, http_stream_end::keep_open);
+        interrupt.throw_if_interrupted();
+        if (error) {
             throw inbound_transport_error(error, "server connection write");
         }
     }
-    static task<void> finish_thunk(void* raw) {
-        return static_cast<server_connection_session*>(raw)->end_send();
+    static task<void> finish_thunk(void* raw, operation_options operation) {
+        return static_cast<server_connection_session*>(raw)->end_send(std::move(operation));
     }
     static void abort_thunk(void* raw) noexcept {
         static_cast<server_connection_session*>(raw)->abort();
@@ -97,9 +113,12 @@ private:
 
     http_socket_tunnel_transport<stream_type> transport_;
     connection_scanner::entry& entry_;
+    const worker_handle& worker_;
     std::pmr::string read_buffer_;
+    asio::cancellation_signal read_cancellation_;
     bool receive_ended_{false};
     bool aborted_{false};
+    operation_interrupt_source interrupts_;
     server_connection facade_;
 };
 

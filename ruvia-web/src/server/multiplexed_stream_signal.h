@@ -47,6 +47,7 @@
 #include "server/inbound_transport_error.h"
 #include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia {
 class context;
@@ -402,6 +403,12 @@ public:
         return state_.aborted() || (!state_.ended() && (derived().stream_aborted() || signal_.terminated()));
     }
 
+    // Routes the stop requests of the writer's output operations.
+    [[nodiscard]] operation_interrupt_source& output_interrupts() & noexcept RUVIA_LIFETIMEBOUND {
+        return output_interrupts_;
+    }
+    operation_interrupt_source& output_interrupts() && = delete;
+
     task<stream_commit_result> commit() {
         if (state_.committed()) {
             throw std::logic_error("response stream is already committed");
@@ -546,6 +553,7 @@ protected:
     http_known_method request_method_{http_known_method::unknown};
     const cors_options* cors_;
     http_streaming_response_compression compression_;
+    operation_interrupt_source output_interrupts_;
 
 private:
     [[nodiscard]] derived_type& derived() noexcept {
@@ -595,39 +603,17 @@ private:
 template <typename derived_type>
 class multiplexed_request_body_reader_base {
 public:
-    ~multiplexed_request_body_reader_base() {
-        if (cancellation_target_) {
-            cancellation_target_->detach(*this);
-        }
-    }
-
-    void cancel_operation_by_id(std::uint64_t id) noexcept {
-        if (id == read_id_) {
-            signal_.wake();
-        }
-    }
-
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(stop_token stop = {}) {
-        using target_type = worker_cancellation_target<multiplexed_request_body_reader_base>;
-        std::optional<worker_cancellation_registration<target_type>> cancellation;
-        if (stop.stoppable()) {
-            if (!cancellation_target_) {
-                cancellation_target_ = make_worker_cancellation_target(*this, signal_.worker());
-            }
-            cancellation.emplace(cancellation_target_, read_id_);
-            cancellation->arm(stop);
-        }
-        if (stop.stop_requested()) {
-            throw std::system_error(std::make_error_code(std::errc::operation_canceled), "request body read cancelled");
-        }
+    // An interrupted read leaves queued chunks and flow-control credit for the
+    // next read.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) {
+        operation_interrupt interrupt(interrupts_, signal_.worker(), operation, &signal_, &wake_signal,
+            "request body read");
         throw_if_body_failed();
         if (auto* continue_output = std::exchange(continue_output_, nullptr)) {
             co_await continue_output->send_continue();
         }
         for (;;) {
-            if (stop.stop_requested()) {
-                throw std::system_error(std::make_error_code(std::errc::operation_canceled), "request body read cancelled");
-            }
+            interrupt.throw_if_interrupted();
             throw_if_body_failed();
             if (signal_.terminated()) {
                 throw inbound_transport_error(signal_.terminal_error(), derived_type::terminated_error_message);
@@ -643,9 +629,6 @@ public:
             if (derived().body_ended()) {
                 co_return std::nullopt;
             }
-            if (signal_.terminated()) {
-                throw inbound_transport_error(signal_.terminal_error(), derived_type::terminated_error_message);
-            }
             co_await signal_.wait();
         }
     }
@@ -658,10 +641,12 @@ protected:
 
     multiplexed_stream_signal& signal_;
     http_interim_response_output* continue_output_;
-    std::shared_ptr<worker_cancellation_target<multiplexed_request_body_reader_base>> cancellation_target_;
-    std::uint64_t read_id_{};
+    operation_interrupt_source interrupts_;
 
 private:
+    static void wake_signal(void* raw) noexcept {
+        static_cast<multiplexed_stream_signal*>(raw)->wake();
+    }
     [[nodiscard]] derived_type& derived() noexcept {
         return static_cast<derived_type&>(*this);
     }
@@ -690,17 +675,7 @@ public:
     // consumed stays queued for the next read_more().
     template <typename buffer_type, typename check_type>
     [[nodiscard]] task<bool> read_more(buffer_type& buffer, check_type check, asio::cancellation_slot slot) {
-        struct slot_assignment final {
-            asio::cancellation_slot slot_;
-            ~slot_assignment() {
-                if (slot_.is_connected()) {
-                    slot_.clear();
-                }
-            }
-        } assignment{slot};
-        if (slot.is_connected()) {
-            slot.assign([&signal = signal_](asio::cancellation_type) noexcept { signal.wake(); });
-        }
+        const wake_assignment assignment(signal_, slot);
         for (;;) {
             derived().require_live();
             if (derived().consume_tunnel_chunk(buffer)) {
@@ -718,6 +693,27 @@ public:
 protected:
     explicit multiplexed_tunnel_transport_base(multiplexed_stream_signal& signal) noexcept
         : signal_(signal) {}
+
+    // While assigned, a cancellation emitted on the slot wakes this stream's waits.
+    class wake_assignment final {
+    public:
+        wake_assignment(multiplexed_stream_signal& signal, asio::cancellation_slot slot)
+            : slot_(slot) {
+            if (slot_.is_connected()) {
+                slot_.assign([&signal](asio::cancellation_type) noexcept { signal.wake(); });
+            }
+        }
+        ~wake_assignment() {
+            if (slot_.is_connected()) {
+                slot_.clear();
+            }
+        }
+        wake_assignment(const wake_assignment&) = delete;
+        wake_assignment& operator=(const wake_assignment&) = delete;
+
+    private:
+        asio::cancellation_slot slot_;
+    };
 
     multiplexed_stream_signal& signal_;
 

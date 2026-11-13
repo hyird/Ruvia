@@ -53,6 +53,7 @@
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -273,6 +274,12 @@ public:
     [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept {
         return connection_plan_;
     }
+
+    // Routes the stop requests of the writer's output operations.
+    [[nodiscard]] operation_interrupt_source& output_interrupts() & noexcept RUVIA_LIFETIMEBOUND {
+        return output_interrupts_;
+    }
+    operation_interrupt_source& output_interrupts() && = delete;
 
     // Read-side termination detection, like Go net/http's background read:
     // it starts once the request body is complete, at dispatch or when the
@@ -602,6 +609,7 @@ private:
     bool request_pipelined_;
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
     bool peer_monitor_retired_{false};
+    operation_interrupt_source output_interrupts_;
 };
 
 // `request_bytes` is the connection's buffered input at dispatch, from the

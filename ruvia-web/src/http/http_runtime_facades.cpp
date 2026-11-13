@@ -1,6 +1,11 @@
 #include <array>
+#include <chrono>
 #include <memory_resource>
+#include <optional>
+#include <span>
 #include <stdexcept>
+#include <system_error>
+#include <type_traits>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -15,33 +20,45 @@
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/websocket.h"
 
+#include "context/context_access.h"
 #include "context/context_capabilities.h"
 #include "http/inline_http_header_views.h"
+#include "util/operation_interrupt.h"
 #include "util/operation_lane_lease.h"
 #include "util/pmr_owned_storage.h"
 
 namespace {
 
-ruvia::task<ruvia::stream_commit_result> commit_stream(void* target,
-    ruvia::task<ruvia::stream_commit_result> (*commit)(void*), bool& output_active) {
-    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
-    co_return co_await commit(target);
-}
+constexpr const char* response_stream_lane_in_progress = "response stream output operation is already in progress";
 
-ruvia::task<void> write_transferred_chunk(void* target,
-    ruvia::task<void> (*write)(void*, std::string_view), std::pmr::string chunk,
-    bool& output_active) {
-    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
-    co_await write(target, chunk);
-}
+// What an output operation of a response stream borrows from its writer.
+struct response_stream_output final {
+    void* target_;
+    bool& active_;
+    ruvia::detail::operation_interrupt_source& interrupts_;
+    const ruvia::worker_handle& worker_;
+    ruvia::context* context_;
+};
 
-ruvia::task<void> end_owned(void* target,
-    ruvia::task<void> (*end)(void*, std::span<const ruvia::http_header_view>),
-    std::pmr::vector<ruvia::http_header> fields,
-    bool& output_active) {
-    auto lease = ruvia::detail::claim_operation_lane(output_active, "response stream output operation is already in progress");
-    const ruvia::detail::inline_http_header_views views(fields, fields.get_allocator().resource());
-    co_await end(target, views.view());
+template <typename operation_type>
+auto run_response_stream_output(response_stream_output output, ruvia::operation_options operation,
+    const char* operation_name, operation_type start) -> decltype(start()) {
+    auto lease = ruvia::detail::claim_operation_lane(output.active_, response_stream_lane_in_progress);
+    ruvia::detail::operation_interrupt interrupt(
+        output.interrupts_, output.worker_, operation, output.context_, &ruvia::detail::context_access::reset_interrupted_request, operation_name);
+    try {
+        if constexpr (std::is_void_v<typename decltype(start())::value_type>) {
+            co_await start();
+            interrupt.throw_if_interrupted();
+        } else {
+            auto result = co_await start();
+            interrupt.throw_if_interrupted();
+            co_return result;
+        }
+    } catch (...) {
+        interrupt.throw_if_interrupted();
+        throw;
+    }
 }
 
 ruvia::task<std::optional<ruvia::websocket_message>> read_websocket(void* target,
@@ -158,9 +175,10 @@ namespace {
 
 template <typename view_type>
 task<std::optional<view_type>> read_body(
-    detail::callback_ref<task<std::optional<std::span<const std::byte>>>(stop_token)> read, bool& read_active, stop_token stop) {
+    detail::callback_ref<task<std::optional<std::span<const std::byte>>>(operation_options)> read, bool& read_active,
+    operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active, "request body read is already in progress");
-    const auto chunk = co_await read(std::move(stop));
+    const auto chunk = co_await read(std::move(operation));
     if (!chunk) {
         co_return std::nullopt;
     }
@@ -171,74 +189,111 @@ task<std::optional<view_type>> read_body(
     }
 }
 
+task<void> write_transferred_chunk(response_stream_output output, task<void> (*write)(void*, std::string_view),
+    std::pmr::string chunk, operation_options operation) {
+    co_await run_response_stream_output(output, std::move(operation), "response stream write",
+        [&] { return write(output.target_, chunk); });
+}
+
+task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std::span<const http_header_view>),
+    std::pmr::vector<http_header> fields, operation_options operation) {
+    const detail::inline_http_header_views views(fields, fields.get_allocator().resource());
+    co_await run_response_stream_output(output, std::move(operation), "response stream end",
+        [&] { return end(output.target_, views.view()); });
+}
+
+task<timer_sleep_result> sleep_stopped_by_either(void* target,
+    task<timer_sleep_result> (*sleep)(void*, std::chrono::milliseconds, const stop_token&),
+    std::chrono::milliseconds duration, stop_token context_stop, stop_token stop) {
+    const stop_group either(context_stop, stop);
+    co_return co_await sleep(target, duration, either.token());
+}
+
 }  // namespace
 
-task<std::optional<std::span<const std::byte>>> body_reader::read(stop_token stop) & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_, std::move(stop)));
+task<std::optional<std::span<const std::byte>>> body_reader::read(operation_options operation) & {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::span<const std::byte>>(read_, read_active_, std::move(operation)));
 }
 
-task<std::optional<std::string_view>> body_reader::text(stop_token stop) & {
-    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_, std::move(stop)));
+task<std::optional<std::string_view>> body_reader::text(operation_options operation) & {
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(operation_scope_, read_body<std::string_view>(read_, read_active_, std::move(operation)));
 }
 
-task<stream_commit_result> response_stream_writer::commit() & {
+void response_stream_writer::require_output() const {
     require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_, commit_stream(target_, commit_, output_active_));
+    if (worker_ == nullptr || context_ == nullptr) {
+        throw std::logic_error("response stream is not bound to a request");
+    }
 }
 
-task<stream_commit_result> sse_writer::commit() {
-    return writer().commit();
+task<stream_commit_result> response_stream_writer::commit(operation_options operation) & {
+    validate_operation_options(operation);
+    require_output();
+    return ::ruvia::make_scoped_operation(operation_scope_,
+        run_response_stream_output({target_, output_active_, *interrupts_, *worker_, context_}, std::move(operation), "response stream commit",
+            [target = target_, commit = commit_] { return commit(target); }));
 }
 
-task<void> response_stream_writer::write(std::span<const std::byte> chunk) & {
-    return write(as_chars(chunk));
+task<stream_commit_result> sse_writer::commit(operation_options operation) {
+    return writer().commit(std::move(operation));
 }
 
-task<void> response_stream_writer::write(std::string_view chunk) & {
+task<void> response_stream_writer::write(std::span<const std::byte> chunk, operation_options operation) & {
+    return write(as_chars(chunk), std::move(operation));
+}
+
+task<void> response_stream_writer::write(std::string_view chunk, operation_options operation) & {
     require_active();
     std::pmr::string owned(chunk, resource_);
-    return write_owned(std::move(owned));
+    return write_owned(std::move(owned), std::move(operation));
 }
 
-task<void> response_stream_writer::write_owned(std::pmr::string&& chunk) {
-    require_active();
+task<void> response_stream_writer::write_owned(std::pmr::string&& chunk, operation_options operation) {
+    validate_operation_options(operation);
+    require_output();
     auto owned = detail::rebind_owned_storage(chunk, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_transferred_chunk(target_, write_, std::move(owned), output_active_));
+        write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(owned), std::move(operation)));
 }
 
-task<void> response_stream_writer::writeln(std::string_view chunk) & {
+task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
     require_active();
     std::pmr::string owned(resource_);
     owned.reserve(chunk.size() + 1U);
     owned.append(chunk);
     owned.push_back('\n');
-    return write_owned(std::move(owned));
+    return write_owned(std::move(owned), std::move(operation));
 }
 
-task<timer_sleep_result> response_stream_writer::sleep(
-    timeout_duration duration) & {
+task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration, stop_token stop) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration.value(), stop_token_));
+    if (!stop.stoppable()) {
+        return ::ruvia::make_scoped_operation(operation_scope_, sleep_(target_, duration.value(), stop_token_));
+    }
+    return ::ruvia::make_scoped_operation(
+        operation_scope_, sleep_stopped_by_either(target_, sleep_, duration.value(), stop_token_, std::move(stop)));
 }
 
-task<void> response_stream_writer::end(std::span<const http_header_view> trailers) & {
-    require_active();
+task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
+    validate_operation_options(operation);
+    require_output();
     std::pmr::vector<http_header> owned_trailers_value(resource_);
     owned_trailers_value.reserve(trailers.size());
     for (const auto& header : trailers) {
         owned_trailers_value.emplace_back(header.name(), header.value(), resource_);
     }
     return ::ruvia::make_scoped_operation(
-        operation_scope_, end_owned(target_, end_, std::move(owned_trailers_value), output_active_));
+        operation_scope_, end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
 }
 
-task<timer_sleep_result> sse_writer::sleep(timeout_duration duration) {
-    return writer().sleep(duration);
+task<timer_sleep_result> sse_writer::sleep(timeout_duration duration, stop_token stop) {
+    return writer().sleep(duration, std::move(stop));
 }
 
-task<void> sse_writer::end(std::span<const http_header_view> trailers) {
-    return writer().end(trailers);
+task<void> sse_writer::end(std::span<const http_header_view> trailers, operation_options operation) {
+    return writer().end(trailers, std::move(operation));
 }
 
 task<std::optional<websocket_message>> websocket::read(operation_options operation) & {
@@ -451,15 +506,16 @@ task<void> websocket_message_writer::submit(std::string_view chunk, bool final, 
         final ? detail::websocket_write_extent::final_fragment : detail::websocket_write_extent::fragment);
 }
 
-task<void> sse_writer::write(const sse_message& message) {
+task<void> sse_writer::write(const sse_message& message, operation_options operation) {
     auto& stream_writer = writer();
     auto frame = format_sse_message(message, {.resource_ = stream_writer.resource_});
-    return stream_writer.write(std::move(frame));
+    return stream_writer.write(std::move(frame), std::move(operation));
 }
 
-task<std::optional<multipart_stream_part>> multipart_reader::read() & {
+task<std::optional<multipart_stream_part>> multipart_reader::read(operation_options operation) & {
     registration_.require_active();
-    return ::ruvia::make_scoped_operation(operation_scope_, read_task());
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(operation_scope_, read_task(std::move(operation)));
 }
 
 body_reader& multipart_reader::get_body_reader() const {
@@ -474,7 +530,7 @@ void multipart_reader::expire_capability(void* target) noexcept {
     reader_value.state_.emplace<expired_state_type>();
 }
 
-task<std::optional<multipart_stream_part>> multipart_reader::read_task() {
+task<std::optional<multipart_stream_part>> multipart_reader::read_task(operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active_, "multipart body read is already in progress");
     if (std::holds_alternative<finished_state_type>(state_)) {
         co_return std::nullopt;
@@ -486,33 +542,46 @@ task<std::optional<multipart_stream_part>> multipart_reader::read_task() {
         throw std::logic_error("multipart body lifetime has expired");
     }
 
+    if (operation.stop_token_.stop_requested()) {
+        detail::operation_interrupt::throw_cause(detail::operation_interrupt_cause::cancelled, "multipart body read");
+    }
+    const detail::operation_steps steps(std::move(operation));
     read_guard_type read_guard_value(*this);
-    for (;;) {
-        auto result_value = std::get<receiving_state_type>(state_).parser_.poll();
-        if (const auto* part = result_value.part()) {
-            read_guard_value.commit();
-            co_return *part;
-        }
-        if (result_value.done() != nullptr) {
-            while (co_await get_body_reader().read()) {
+    try {
+        for (;;) {
+            auto result_value = std::get<receiving_state_type>(state_).parser_.poll();
+            if (const auto* part = result_value.part()) {
+                read_guard_value.commit();
+                co_return *part;
             }
-            state_.emplace<finished_state_type>();
-            read_guard_value.commit();
-            co_return std::nullopt;
-        }
-        if (result_value.need_input() != nullptr) {
-            auto chunk = co_await get_body_reader().read();
-            if (!chunk) {
-                std::get<receiving_state_type>(state_).parser_.finish_input();
-            } else {
-                std::get<receiving_state_type>(state_).parser_.feed(as_chars(*chunk));
+            if (result_value.done() != nullptr) {
+                while (co_await get_body_reader().read(steps.next("multipart body read"))) {
+                }
+                state_.emplace<finished_state_type>();
+                read_guard_value.commit();
+                co_return std::nullopt;
             }
-            continue;
+            if (result_value.need_input() != nullptr) {
+                auto chunk = co_await get_body_reader().read(steps.next("multipart body read"));
+                if (!chunk) {
+                    std::get<receiving_state_type>(state_).parser_.finish_input();
+                } else {
+                    std::get<receiving_state_type>(state_).parser_.feed(as_chars(*chunk));
+                }
+                continue;
+            }
+            if (const auto* failure = result_value.failure()) {
+                throw failure->protocol_error();
+            }
+            throw std::logic_error("unexpected multipart poll result");
         }
-        if (const auto* failure = result_value.failure()) {
-            throw failure->protocol_error();
+    } catch (const std::system_error& error) {
+        // An interrupted body read fed the parser nothing; parsing resumes on
+        // the next read.
+        if (steps.interrupted(error)) {
+            read_guard_value.commit();
         }
-        throw std::logic_error("unexpected multipart poll result");
+        throw;
     }
 }
 

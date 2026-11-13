@@ -10,6 +10,7 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_timeout.h"
 
 #include "http/tls_tunnel_output.h"
 #include "server/inbound_buffer_resource.h"
@@ -24,26 +25,27 @@ namespace {
 
 constexpr const char* connection_lane_in_progress = "server connection operation already in progress on this direction";
 
-task<std::optional<std::span<const std::byte>>> read_connection(
-    void* target, task<std::optional<std::span<const std::byte>>> (*read)(void*), bool& read_active) {
+task<std::optional<std::span<const std::byte>>> read_connection(void* target,
+    task<std::optional<std::span<const std::byte>>> (*read)(void*, operation_options), bool& read_active,
+    operation_options operation) {
     auto lease = detail::claim_operation_lane(read_active, connection_lane_in_progress);
-    co_return co_await read(target);
+    co_return co_await read(target, std::move(operation));
 }
 
-task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view), std::pmr::string bytes,
-    bool& write_active, const bool& send_ended) {
+task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view, operation_options),
+    std::pmr::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (send_ended) {
         throw std::logic_error("server connection send direction has ended");
     }
-    co_await write(target, bytes);
+    co_await write(target, bytes, std::move(operation));
 }
 
-task<void> finish_connection(
-    void* target, task<void> (*finish_value)(void*), bool& send_ended, bool& write_active) {
+task<void> finish_connection(void* target, task<void> (*finish_value)(void*, operation_options), bool& send_ended,
+    bool& write_active, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (!send_ended) {
-        co_await finish_value(target);
+        co_await finish_value(target, std::move(operation));
         send_ended = true;
     }
 }
@@ -80,24 +82,28 @@ void server_connection::require_active() const {
     }
 }
 
-task<std::optional<std::span<const std::byte>>> server_connection::read() & {
+task<std::optional<std::span<const std::byte>>> server_connection::read(operation_options operation) & {
     require_active();
-    return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_));
+    validate_operation_options(operation);
+    return ::ruvia::make_scoped_operation(operations_, read_connection(target_, read_, read_active_, std::move(operation)));
 }
 
-task<void> server_connection::write(std::span<const std::byte> bytes) & {
+task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
     require_active();
+    validate_operation_options(operation);
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
     return ::ruvia::make_scoped_operation(operations_,
-        write_connection(target_, write_, std::pmr::string(as_chars(bytes), process_resource()), write_active_, send_ended_));
+        write_connection(target_, write_, std::pmr::string(as_chars(bytes), process_resource()), write_active_,
+            send_ended_, std::move(operation)));
 }
 
-task<void> server_connection::finish() & {
+task<void> server_connection::finish(operation_options operation) & {
     require_active();
+    validate_operation_options(operation);
     return ::ruvia::make_scoped_operation(
-        operations_, finish_connection(target_, finish_, send_ended_, write_active_));
+        operations_, finish_connection(target_, finish_, send_ended_, write_active_, std::move(operation)));
 }
 
 void server_connection::abort() noexcept {

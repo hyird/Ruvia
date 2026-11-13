@@ -17,6 +17,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 #include <vector>
 
@@ -723,4 +724,207 @@ TEST(Ruvia, connection_dispatch_configuration_is_validated) {
         .tls_ = tls};
     routes_protocols.tls_.alpn_ = {"h2"};
     EXPECT_THROW(app.listen(routes_protocols), std::invalid_argument);
+}
+
+// Each operation's operation_options bound only that wait. A read that times
+// out or is stopped (from another thread) loses no input and reading
+// continues; a stop requested before a write or finish starts sends nothing;
+// a write that times out or is stopped aborts the connection. Non-positive
+// timeouts are rejected before an operation exists.
+TEST(Ruvia, raw_connection_operation_options_bound_each_wait) {
+    struct observations final {
+        std::atomic<unsigned> rejected_{0};
+        std::atomic<unsigned> read_timeouts_{0};
+        std::atomic<unsigned> read_cancellations_{0};
+        std::atomic<unsigned> prestopped_outputs_{0};
+        std::atomic<unsigned> write_timeouts_{0};
+        std::atomic<unsigned> write_cancellations_{0};
+        std::atomic<unsigned> aborted_after_write_{0};
+        std::atomic<unsigned> handled_{0};
+    };
+    const auto results = std::make_shared<observations>();
+    ruvia::test::tls_identity identity("localhost", "DNS:localhost,IP:127.0.0.1");
+    asio::io_context io;
+    ruvia::test::tcp_port_reservation plain_reservation(io);
+    ruvia::test::tcp_port_reservation tls_reservation(io);
+    const auto plain_endpoint = plain_reservation.endpoint();
+    const auto tls_endpoint = tls_reservation.endpoint();
+    auto listener = connection_listener(plain_endpoint);
+    listener.https_ = tls_endpoint.port();
+    listener.tls_.identity_ = {.certificate_chain_file_ = identity.ca_file_,
+        .private_key_file_ = identity.private_key_file()};
+    const auto read_text = [](ruvia::server_connection& connection, std::size_t size) -> ruvia::task<std::string> {
+        std::string received;
+        while (received.size() < size) {
+            const auto chunk = co_await connection.read();
+            if (!chunk) {
+                break;
+            }
+            received.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+        }
+        co_return received;
+    };
+    auto& app = ruvia::app();
+    app.server({.worker_count_ = 1})
+        .listen(listener)
+        .on_start(nullptr)
+        .on_start([] { started().release(); })
+        .on_connection([results, read_text](ruvia::server_connection& connection) -> ruvia::task<void> {
+            const auto command = co_await read_text(connection, 1);
+            if (command == "r") {
+                try {
+                    (void)connection.read({.timeout_ = 0ms});
+                } catch (const std::invalid_argument&) {
+                    ++results->rejected_;
+                }
+                try {
+                    (void)connection.write(bytes_of("x"), {.timeout_ = -1ms});
+                } catch (const std::invalid_argument&) {
+                    ++results->rejected_;
+                }
+                try {
+                    (void)connection.finish({.timeout_ = 0ms});
+                } catch (const std::invalid_argument&) {
+                    ++results->rejected_;
+                }
+                try {
+                    (void)co_await connection.read({.timeout_ = 50ms});
+                } catch (const std::system_error& error) {
+                    if (error.code() == std::errc::timed_out) {
+                        ++results->read_timeouts_;
+                    }
+                }
+                co_await connection.write(bytes_of("1"));
+                EXPECT_EQ(co_await read_text(connection, 3), "abc");
+                ruvia::stop_source stop;
+                std::thread canceller([&stop] {
+                    std::this_thread::sleep_for(50ms);
+                    stop.request_stop();
+                });
+                try {
+                    (void)co_await connection.read({.stop_token_ = stop.token()});
+                } catch (const std::system_error& error) {
+                    if (error.code() == std::errc::operation_canceled) {
+                        ++results->read_cancellations_;
+                    }
+                }
+                canceller.join();
+                co_await connection.write(bytes_of("2"));
+                EXPECT_EQ(co_await read_text(connection, 3), "def");
+                try {
+                    co_await connection.write(bytes_of("must-not-be-sent"), {.stop_token_ = stop.token()});
+                } catch (const std::system_error& error) {
+                    if (error.code() == std::errc::operation_canceled) {
+                        ++results->prestopped_outputs_;
+                    }
+                }
+                try {
+                    co_await connection.finish({.stop_token_ = stop.token()});
+                } catch (const std::system_error& error) {
+                    if (error.code() == std::errc::operation_canceled) {
+                        ++results->prestopped_outputs_;
+                    }
+                }
+                co_await connection.write(bytes_of("3"));
+                co_await connection.finish();
+                ++results->handled_;
+                co_return;
+            }
+            // The peer reads nothing, so the write stalls once the socket
+            // buffers fill.
+            const std::string payload(64 * 1024 * 1024, 'x');
+            ruvia::stop_source stop;
+            std::optional<std::thread> canceller;
+            ruvia::operation_options operation{.timeout_ = 200ms};
+            if (command == "c") {
+                operation = {.stop_token_ = stop.token()};
+                canceller.emplace([&stop] {
+                    std::this_thread::sleep_for(200ms);
+                    stop.request_stop();
+                });
+            }
+            try {
+                co_await connection.write(bytes_of(payload), operation);
+            } catch (const std::system_error& error) {
+                if (error.code() == std::errc::timed_out) {
+                    ++results->write_timeouts_;
+                } else if (error.code() == std::errc::operation_canceled) {
+                    ++results->write_cancellations_;
+                }
+            }
+            if (canceller) {
+                canceller->join();
+            }
+            try {
+                co_await connection.write(bytes_of("after"));
+            } catch (const std::system_error&) {
+                ++results->aborted_after_write_;
+            }
+            ++results->handled_;
+        });
+    ruvia::test::app_run runner(app);
+    ASSERT_TRUE(started().try_acquire_for(10s));
+    const auto read_exactly = [](auto& stream, std::size_t size) {
+        std::string received(size, '\0');
+        asio::read(stream, asio::buffer(received));
+        return received;
+    };
+    const auto drain = [](auto& stream) {
+        std::string received;
+        std::array<char, 64 * 1024> bytes;
+        asio::error_code error;
+        while (!error) {
+            const auto count = stream.read_some(asio::buffer(bytes), error);
+            received.append(bytes.data(), count);
+        }
+        return received;
+    };
+    const auto read_session = [&](auto& stream) {
+        asio::write(stream, asio::buffer(std::string_view("r")));
+        EXPECT_EQ(read_exactly(stream, 1), "1");
+        asio::write(stream, asio::buffer(std::string_view("abc")));
+        EXPECT_EQ(read_exactly(stream, 1), "2");
+        asio::write(stream, asio::buffer(std::string_view("def")));
+        EXPECT_EQ(drain(stream), "3");
+    };
+    const auto stalled_session = [&](auto& stream, char command, unsigned handled) {
+        asio::write(stream, asio::buffer(&command, 1));
+        ruvia::test::wait_until([&] { return results->handled_.load() == handled; }, 10s);
+        (void)drain(stream);
+    };
+    unsigned handled = 0;
+    for (const bool tls : {false, true}) {
+        const auto open = [&](auto&& session) {
+            if (tls) {
+                asio::ssl::context client(asio::ssl::context::tls_client);
+                client.set_verify_mode(asio::ssl::verify_none);
+                asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
+                stream.next_layer().connect(tls_endpoint);
+                stream.handshake(asio::ssl::stream_base::client);
+                session(stream);
+            } else {
+                asio::ip::tcp::socket socket(io);
+                socket.connect(plain_endpoint);
+                session(socket);
+            }
+        };
+        open([&](auto& stream) { read_session(stream); });
+        ++handled;
+        for (const char command : {'w', 'c'}) {
+            ++handled;
+            open([&](auto& stream) { stalled_session(stream, command, handled); });
+        }
+        ruvia::test::wait_until([&] { return results->handled_.load() == handled; }, 10s);
+    }
+    ruvia::test::wait_until([&app] { return app.http_stats().active_connections_ == 0; }, 10s);
+    EXPECT_EQ(app.http_stats().connection_failures_, 0U);
+    app.stop();
+    runner.join();
+    EXPECT_EQ(results->rejected_.load(), 6U);
+    EXPECT_EQ(results->read_timeouts_.load(), 2U);
+    EXPECT_EQ(results->read_cancellations_.load(), 2U);
+    EXPECT_EQ(results->prestopped_outputs_.load(), 4U);
+    EXPECT_EQ(results->write_timeouts_.load(), 2U);
+    EXPECT_EQ(results->write_cancellations_.load(), 2U);
+    EXPECT_EQ(results->aborted_after_write_.load(), 4U);
 }

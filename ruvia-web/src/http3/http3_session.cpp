@@ -222,7 +222,11 @@ public:
           session_(session),
           stream_(stream) {}
 
-    [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram() {
+    // Like read_more(): a cancellation emitted on `slot` wakes the wait and
+    // `check` runs before every wait; unread input stays queued.
+    template <typename check_type>
+    [[nodiscard]] task<std::optional<http_tunnel_input>> read_datagram(check_type check, asio::cancellation_slot slot) {
+        const wake_assignment assignment(signal_, slot);
         for (;;) {
             require_live();
             // Reliable input is not starved by a native datagram flood.
@@ -238,6 +242,7 @@ public:
             if (stream_.request_ended()) {
                 co_return std::nullopt;
             }
+            check();
             co_await signal_.wait();
         }
     }

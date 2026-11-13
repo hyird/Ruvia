@@ -19,6 +19,17 @@ class context_websocket_binding;
 class context_tunnel_binding;
 
 struct context_access final {
+    // An interrupted output operation cannot withdraw what it wrote, so it
+    // resets the request: the HTTP/2 or HTTP/3 stream, or the HTTP/1 connection.
+    static void reset_interrupted_request(void* raw_context) noexcept {
+        auto& request_services = static_cast<context*>(raw_context)->services();
+        try {
+            request_services.reset_request(std::nullopt);
+        } catch (...) {
+            request_services.abort_connection();
+        }
+    }
+
     [[nodiscard]] static request_memory& memory(context& value) noexcept {
         return value.memory_;
     }

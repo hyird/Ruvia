@@ -6,6 +6,7 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -98,26 +99,33 @@ public:
     // The next bytes the peer sent, at most 4 KiB; std::nullopt once the peer
     // ended its send direction (TCP FIN or TLS close_notify, or TCP closed
     // without close_notify). The view stays valid until the next read starts.
-    // Reading past the inbound buffer budget throws std::bad_alloc.
-    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read() &;
-    task<std::optional<std::span<const std::byte>>> read() && = delete;
-    // Copies `bytes` before returning, then sends them once awaited.
-    [[nodiscard]] task<void> write(std::span<const std::byte> bytes) &;
-    task<void> write(std::span<const std::byte>) && = delete;
+    // Reading past the inbound buffer budget throws std::bad_alloc. A timeout
+    // or stop in `operation` ends only this read with std::system_error
+    // (timed_out or operation_canceled); no input is lost and reading may
+    // continue. A non-positive timeout throws std::invalid_argument.
+    [[nodiscard]] task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &;
+    task<std::optional<std::span<const std::byte>>> read(operation_options = {}) && = delete;
+    // Copies `bytes` before returning, then sends them once awaited. A timeout
+    // or stop in `operation` of write() or finish() aborts the connection (a
+    // partial write cannot be withdrawn) and throws std::system_error
+    // (timed_out or operation_canceled); a stop requested before the operation
+    // starts sends nothing. The server's write_timeout_ still applies.
+    [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
+    task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
     // Ends the send direction: TCP shuts down its send side, TLS sends
     // close_notify. Reading remains available until the peer ends its own.
     // Writing afterwards throws std::logic_error; finishing again does nothing.
-    [[nodiscard]] task<void> finish() &;
-    task<void> finish() && = delete;
+    [[nodiscard]] task<void> finish(operation_options operation = {}) &;
+    task<void> finish(operation_options = {}) && = delete;
     // Closes the connection at once, failing operations still running.
     void abort() noexcept;
 
 private:
     template <typename stream_type>
     friend class detail::server_connection_session;
-    using read_type = task<std::optional<std::span<const std::byte>>> (*)(void*);
-    using write_type = task<void> (*)(void*, std::string_view);
-    using finish_type = task<void> (*)(void*);
+    using read_type = task<std::optional<std::span<const std::byte>>> (*)(void*, operation_options);
+    using write_type = task<void> (*)(void*, std::string_view, operation_options);
+    using finish_type = task<void> (*)(void*, operation_options);
     using abort_type = void (*)(void*) noexcept;
 
     server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value,

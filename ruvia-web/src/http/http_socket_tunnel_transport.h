@@ -44,11 +44,19 @@ public:
     // that clears and reuses one string reads without allocating after its
     // first read.
     [[nodiscard]] task<bool> read_more(std::pmr::string& bytes_value) {
+        return read_more(bytes_value, []() noexcept {}, asio::cancellation_slot{});
+    }
+
+    // A cancellation emitted on `slot` ends only this transport read and
+    // appends nothing, after which `check` may throw to abandon it.
+    template <typename check_type>
+    [[nodiscard]] task<bool> read_more(std::pmr::string& bytes_value, check_type check, asio::cancellation_slot slot) {
         constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();
         bytes_value.resize(old_size + read_bytes);
         const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
-            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes), std::move(handler));
+            stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes),
+                asio::bind_cancellation_slot(slot, std::move(handler)));
         });
         bytes_value.resize(old_size + result_value.result());
         // A TLS peer that closed TCP without close_notify ends the tunnel byte
@@ -57,6 +65,9 @@ public:
             co_return false;
         }
         if (result_value.error_code()) {
+            if (result_value.error_code() == asio::error::operation_aborted) {
+                check();
+            }
             throw inbound_transport_error(result_value.error_code(), "HTTP tunnel read");
         }
         co_return result_value.result() != 0;

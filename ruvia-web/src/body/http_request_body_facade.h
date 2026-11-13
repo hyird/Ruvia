@@ -4,6 +4,7 @@
 #include <span>
 #include <utility>
 
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/streaming.h"
 
@@ -13,8 +14,8 @@
 namespace ruvia::detail {
 
 template <typename reader_type>
-[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target, stop_token stop) {
-    return static_cast<reader_type*>(target)->read(std::move(stop));
+[[nodiscard]] task<std::optional<std::span<const std::byte>>> body_reader_read_thunk(void* target, operation_options operation) {
+    return static_cast<reader_type*>(target)->read(std::move(operation));
 }
 
 template <typename reader_type>

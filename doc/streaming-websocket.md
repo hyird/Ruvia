@@ -21,21 +21,22 @@
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<std::optional<std::span<const std::byte>>> read(stop_token token = {}) &` | 读取下一个请求体字节块；返回 `std::nullopt` 表示已到达请求体末尾（EOF） |
-| `task<std::optional<std::string_view>> text(stop_token token = {}) &` | 读取下一个请求体字符视图块；返回 `std::nullopt` 表示 EOF |
+| `task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) &` | 读取下一个请求体字节块；返回 `std::nullopt` 表示已到达请求体末尾（EOF） |
+| `task<std::optional<std::string_view>> text(operation_options operation = {}) &` | 读取下一个请求体字符视图块；返回 `std::nullopt` 表示 EOF |
 
 > **生命周期约束**：每次 `read()` 或 `text()` 返回的视图仅在下一次调用 `read()` / `text()` 启动前有效；同一 `body_reader` 上同一时刻只能有一个运行中的读取操作。
 
 > **HTTP/1 读取终态**：主动读到 EOF 表示分帧与传输解码均已完成，重复读取仍返回 EOF。读取失败后再读抛 `std::logic_error`；自动消费已缓冲字节也不能使失败的正文恢复完整状态或连接复用。
 
-- **取消当前读取**：令牌停止使本次等待抛 `std::system_error(std::errc::operation_canceled)`，不替代宿主取消，也不自动提交响应或重置流。
-- **协议边界**：HTTP/2、HTTP/3 可重新读取，其他流和响应方向不受影响；HTTP/1 取消后正文进入失败终态，但仍可发送响应，随后不复用该连接。
+- **逐次读取中断**：`operation` 的超时或停止只结束本次等待，抛 `std::system_error`（`timed_out` / `operation_canceled`），不返回 EOF；不替代宿主取消，也不自动提交响应或重置流。
+- **继续读取**：HTTP/1、HTTP/2、HTTP/3 均保留已缓冲正文、解码状态与读通道，下次读取从中断处继续；其他流和响应方向不受影响。HTTP/1 提交响应时正文仍未读完则响应后不复用连接。
+- **时限叠加**：服务器正文超时继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
 
 #### `ruvia::multipart_reader`（通过 `c.req().multipart_reader()` 获取）
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<std::optional<multipart_stream_part>> read() &` | 流式读取 `multipart/form-data` 的下一个分片块，返回 `std::nullopt` 表示全部解析完成 |
+| `task<std::optional<multipart_stream_part>> read(operation_options operation = {}) &` | 流式读取 `multipart/form-data` 的下一个分片块，返回 `std::nullopt` 表示全部解析完成；`operation` 约束本次调用内的全部正文读取，中断语义同 `body_reader::read()`，下次调用继续解析 |
 
 `multipart_stream_part` 提供：
 - `name()`、`filename()`、`has_filename()`、`content_type()`、`body()`（当前块内容视图）
@@ -62,14 +63,18 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `task<stream_commit_result> commit() &` | 显式提交头和 session；返回 `body` 才可生产正文，返回 `completed` 必须停止生产（HEAD、304 等正常无正文完成） |
-| `task<void> write(std::span<const std::byte> chunk) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；要求显式提交，提交前或完成后写入抛 `std::logic_error` |
-| `task<void> write(std::string_view chunk) &` | 写入一段字符串视图 |
-| `task<void> write(std::pmr::string&& chunk) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
-| `task<void> writeln(std::string_view chunk) &` | 写入文本并追加 `\n` |
-| `task<timer_sleep_result> sleep(timeout_duration duration) &` | 仅在正文阶段等待；`c.stop_token()` 取消（含客户端断开）或停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常 |
+| `task<stream_commit_result> commit(operation_options operation = {}) &` | 显式提交头和 session；返回 `body` 才可生产正文，返回 `completed` 必须停止生产（HEAD、304 等正常无正文完成） |
+| `task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；要求显式提交，提交前或完成后写入抛 `std::logic_error` |
+| `task<void> write(std::string_view chunk, operation_options operation = {}) &` | 写入一段字符串视图 |
+| `task<void> write(std::pmr::string&& chunk, operation_options operation = {}) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
+| `task<void> writeln(std::string_view chunk, operation_options operation = {}) &` | 写入文本并追加 `\n` |
+| `task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &` | 仅在正文阶段等待；`c.stop_token()` 或 `stop` 取消（含客户端断开）及停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常。与 `sleep_for` 相同，时长是睡眠目标而非操作时限，故只接受停止令牌 |
 | `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止（写失败、客户端断开），正常完成（含 HEAD、304）为 `false` |
-| `task<void> end(std::span<const http_header_view> trailers = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
+| `task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &` | 正常结束流式响应，可选附带响应 Trailer 字段 |
+
+- **输出中断**：`commit()`、`write()`、`writeln()`、`end()` 的 `operation` 超时或停止中止本请求（HTTP/2、HTTP/3 以 `CANCEL` / `H3_REQUEST_CANCELLED` 重置流，HTTP/1 关闭连接；已写出部分无法撤回），抛 `std::system_error`（`timed_out` / `operation_canceled`）。
+- **启动前停止**：令牌在操作启动前已停止时直接抛 `operation_canceled`，不发出任何字节、不中止请求。
+- **时限叠加**：服务器 `write_timeout_` 继续生效，逐次超时只收紧；非正超时抛 `std::invalid_argument`。
 
 HTTP/2 服务端写循环直接等待 Worker 信号；没有输出时不创建额外的等待协程。
 
@@ -101,11 +106,13 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 | `ruvia::sse_writer` 方法 | 说明 |
 | --- | --- |
-| `task<stream_commit_result> commit()` | 与普通流相同：先检查 `body` / `completed`，再启动订阅或事件生产 |
-| `task<void> write(const sse_message& message)` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
-| `task<timer_sleep_result> sleep(timeout_duration duration)` | 挂起等待指定时长；输入契约见 [Core 超时文档](core-and-http.md) |
+| `task<stream_commit_result> commit(operation_options operation = {})` | 与普通流相同：先检查 `body` / `completed`，再启动订阅或事件生产 |
+| `task<void> write(const sse_message& message, operation_options operation = {})` | 格式化并发送一条 SSE 事件（自动处理多行 `data:` 切分与 UTF-8 校验） |
+| `task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {})` | 挂起等待指定时长；输入契约见 [Core 超时文档](core-and-http.md) |
 | `bool aborted() const noexcept` | 只报告真实失败，正常 HEAD 完成不是取消 |
-| `task<void> end(std::span<const http_header_view> trailers = {})` | 结束 SSE 流 |
+| `task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {})` | 结束 SSE 流 |
+
+`sse_writer` 是可复制句柄，操作借用其响应流；`operation` 语义同 `response_stream_writer`。
 
 #### 客户端断开即取消请求
 
@@ -158,7 +165,7 @@ ruvia::task<void> stream_subscription(
 
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
-| `co_await c.inform(const http_interim_response_head& response)` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`）；提交后启动（包括先前创建的冷操作）抛 `std::logic_error` |
+| `co_await c.inform(const http_interim_response_head& response, operation_options operation = {})` | 在最终响应头提交前发送 `1xx` 临时响应（如 `103 Early Hints`：`http_interim_response_head(http_status::early_hints, headers)`）；提交后启动（包括先前创建的冷操作）抛 `std::logic_error`；`operation` 中断按输出操作处理（重置请求，启动前停止不发出字节） |
 | `c.draft().priority(http_priority_fields{.urgency_ = 2, .incremental_ = true})` | 设置当前响应优先级（HTTP/2 与 HTTP/3 同时更新流调度器优先级）；跨替换策略用 `c.policy().priority(...)`，客户端请求优先级（含 `PRIORITY_UPDATE` 帧动态更新）用 `c.req().priority()` |
 | `bool c.push(http_push_request_view request)` | （HTTP/2）向开启了 Server Push 的客户端推送关联资源，同步返回 `bool` 表示是否被接纳；`method_`、`scheme_`、`authority_`、`path_` 使用 `borrowed_text`，`headers_` 使用 `borrowed_http_headers`，拒绝临时拥有型字符串与临时首部容器；对端禁用推送，或已打开的推送流（不含仅预留的推送）已达到对端 `SETTINGS_MAX_CONCURRENT_STREAMS`（包括其为 0）时返回 `false`，不发送 `PUSH_PROMISE`；已预留的推送在提交响应头时仍无并发额度则以 `RST_STREAM(CANCEL)` 取消，不视为连接失败 |
 | `void c.advertise_origins(std::span<const std::string_view> origins)` | （HTTP/2、HTTP/3，需 TLS）在连接或控制流上排入 RFC 8336 / RFC 9412 `ORIGIN` 帧，通告当前连接可合并服务的权威源集合 |
@@ -347,10 +354,14 @@ HTTP/3 CONNECT-UDP 在双方协商 `SETTINGS_H3_DATAGRAM` 及 QUIC DATAGRAM 后�
 
 | 类名 | 核心方法 |
 | --- | --- |
-| `ruvia::http_tunnel` | `read()`（返回 `std::optional<std::pmr::string>`）、`write(bytes)`、`finish()`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
-| `ruvia::http_capsule_stream` | `read()`（返回 `std::optional<http_capsule>`）、`write(type, payload)`、`finish()`、`abort()` |
-| `ruvia::http_datagram_stream` | `read()`（返回 `std::optional<http_datagram>`）、`send(payload)`、`finish()`、`abort()` |
-| `ruvia::http_udp_tunnel` | `read()`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload)`、`finish()`、`abort()` |
+| `ruvia::http_tunnel` | `read(operation = {})`（返回 `std::optional<std::pmr::string>`）、`write(bytes, operation = {})`、`finish(operation = {})`、`abort()`、`udp(config = {})`、`datagrams(config = {})`、`capsules(config = {})` |
+| `ruvia::http_capsule_stream` | `read(operation = {})`（返回 `std::optional<http_capsule>`）、`write(type, payload, operation = {})`、`finish(operation = {})`、`abort()` |
+| `ruvia::http_datagram_stream` | `read(operation = {})`（返回 `std::optional<http_datagram>`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
+| `ruvia::http_udp_tunnel` | `read(operation = {})`（返回 `std::optional<http_datagram>`，自动剥离/封装 `context_id = 0`）、`send(payload, operation = {})`、`finish(operation = {})`、`abort()` |
+
+- **逐次读取中断**：`read()` 的 `operation`（`operation_options`）超时或停止只结束本次读取，抛 `std::system_error`（`timed_out` / `operation_canceled`）；未消费输入与半个 Capsule 保留，可继续读取。
+- **逐次输出中断**：`write()`、`send()`、`finish()` 的超时或停止中止隧道（部分写出无法撤回）并抛同样的异常；令牌在启动前已停止则不发出任何字节、不中止隧道。
+- **时限叠加**：一次 Capsule / Datagram 调用内的多次传输读写共用该调用的截止期；服务器写超时与隧道排空时限继续生效；非正超时抛 `std::invalid_argument`。
 
 - **操作生命周期**：Capsule、Datagram 与 UDP 门面共享同一对读写通道租约，同方向拒绝重叠。销毁门面前必须等待已启动操作结束；未启动冷任务随门面销毁失效。
 - **输入与结果所有权**：切换输入或关闭时，先清除借用视图，再释放缓冲并重置输入游标。已交付的 `http_capsule` / `http_datagram` 独立拥有负载，不受后续读取、门面析构或客户端停机影响，但必须在所属 worker 上释放。

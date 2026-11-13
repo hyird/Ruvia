@@ -37,7 +37,9 @@ private:
     ruvia::task<ruvia::http_response> upload_raw(ruvia::context& c) {
         std::size_t bytes_value = 0;
         auto& reader_value = c.req().body_reader();
-        while (auto chunk = co_await reader_value.read()) {
+        // Each read waits at most 30 s for the next chunk; a timeout throws
+        // std::system_error(std::errc::timed_out) and keeps the body readable.
+        while (auto chunk = co_await reader_value.read({.timeout_ = std::chrono::seconds(30)})) {
             bytes_value += chunk->size();
         }
 

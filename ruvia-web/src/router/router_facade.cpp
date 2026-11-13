@@ -34,6 +34,7 @@
 #include "ratelimit/rate_limit_decision.h"
 #include "ratelimit/rate_limiter.h"
 #include "router/router_impl.h"
+#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 namespace {
@@ -48,7 +49,7 @@ public:
           limit_(limit),
           bytes_(resource) {}
 
-    task<std::optional<std::span<const std::byte>>> read(stop_token token = {}) {
+    task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) {
         if (failure_) {
             std::rethrow_exception(failure_);
         }
@@ -57,8 +58,9 @@ public:
         if (source_ == nullptr) {
             co_return std::nullopt;
         }
+        const operation_steps steps(operation);
         try {
-            auto chunk = co_await source_->read(std::move(token));
+            auto chunk = co_await source_->read(std::move(operation));
             if (chunk && limit_) {
                 if (chunk->size() > *limit_ - consumed_) {
                     throw http_request_body_protocol_error(http_request_body_failure::too_large);
@@ -67,8 +69,8 @@ public:
             }
             co_return chunk;
         } catch (const std::system_error& error) {
-            // A cancelled multiplexed read leaves the underlying stream usable.
-            if (error.code() != std::errc::operation_canceled) {
+            // An interrupted read leaves the underlying stream readable.
+            if (!steps.interrupted(error)) {
                 failure_ = std::current_exception();
             }
             throw;
