@@ -6,10 +6,10 @@
 #include <string_view>
 #include <utility>
 
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/error.h"
@@ -32,8 +32,8 @@ namespace detail {
 class router_state;
 }
 
-using router_handler = detail::callback<task<http_response>(context&)>;
-using router_stream_handler = detail::callback<task<void>(context&)>;
+using router_handler = move_only_function<task<http_response>(context&)>;
+using router_stream_handler = move_only_function<task<void>(context&)>;
 
 // An explicitly owned, worker-local route engine, independent of application
 // and controller discovery. Configure and freeze on its owner worker, then

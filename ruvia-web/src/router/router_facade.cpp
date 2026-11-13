@@ -533,25 +533,25 @@ router& router::add_scoped_middleware(std::string_view prefix, detail::owned_mid
 
 router& router::on_error(http_error_handler handler) & {
     state_->require_editable();
-    state_->configuration_.on_error(std::move(handler));
+    state_->configuration_.on_error(detail::own_callback(std::move(handler)));
     return *this;
 }
 
 router& router::on_not_found(http_not_found_handler handler) & {
     state_->require_editable();
-    state_->configuration_.on_not_found(std::move(handler));
+    state_->configuration_.on_not_found(detail::own_callback(std::move(handler)));
     return *this;
 }
 
 router& router::on_error(scoped_error_handler_options options) & {
     state_->require_editable();
-    state_->configuration_.on_error(std::move(options));
+    state_->configuration_.on_error(options.prefix_, detail::own_callback(std::move(options.handler_)));
     return *this;
 }
 
 router& router::on_not_found(scoped_not_found_handler_options options) & {
     state_->require_editable();
-    state_->configuration_.on_not_found(std::move(options));
+    state_->configuration_.on_not_found(options.prefix_, detail::own_callback(std::move(options.handler_)));
     return *this;
 }
 

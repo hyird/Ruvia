@@ -50,8 +50,8 @@ inline constexpr bool move_only_function_borrow_safe_input =
 
 }  // namespace detail
 
-template <typename result_type, typename... args_type>
-class move_only_function<result_type(args_type...)> final {
+template <typename result_type, bool is_noexcept, typename... args_type>
+class move_only_function<result_type(args_type...) noexcept(is_noexcept)> final {
 public:
     move_only_function() noexcept = default;
     move_only_function(std::nullptr_t) noexcept {}
@@ -61,7 +61,8 @@ public:
     // 完成；目标负责被引用对象的寿命。值签名仍允许正常隐式结果转换。
     template <typename fn_type>
         requires(!std::same_as<std::remove_cvref_t<fn_type>, move_only_function>) &&
-                detail::move_only_function_target<result_type, fn_type, args_type...>
+                detail::move_only_function_target<result_type, fn_type, args_type...> &&
+                (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...>)
     move_only_function(fn_type&& fn) {
         using stored_type = std::decay_t<fn_type>;
         if constexpr (std::is_pointer_v<std::remove_reference_t<fn_type>> || std::is_member_pointer_v<std::remove_reference_t<fn_type>>) {
@@ -122,8 +123,10 @@ public:
 
     // The value-parameter signature is part of the erased callable contract;
     // forwarding it preserves value and reference argument behavior.
+    // Constness applies to the wrapper, not its target. Concurrent invocation
+    // requires the target to synchronize its own mutable state.
     // NOLINTNEXTLINE(performance-unnecessary-value-param)
-    result_type operator()(args_type... args) {
+    result_type operator()(args_type... args) const noexcept(is_noexcept) {
         if (operations_ == nullptr) {
             std::terminate();
         }
@@ -136,13 +139,13 @@ private:
     // MSVC reports C4268 when such an object is zero-filled by a compiler
     // generated default constructor. Aggregate initialization is unaffected.
     struct operations final {
-        result_type (*invoke_)(void*, args_type&&...) = nullptr;
+        result_type (*invoke_)(void*, args_type&&...) noexcept(is_noexcept) = nullptr;
         void (*destroy_)(void*) noexcept = nullptr;
         void (*move_)(void*, void*) noexcept = nullptr;
     };
 
     template <typename stored_type>
-    static result_type invoke(void* object, args_type&&... args) {
+    static result_type invoke(void* object, args_type&&... args) noexcept(is_noexcept) {
         return std::invoke(*static_cast<stored_type*>(object), std::forward<args_type>(args)...);
     }
 

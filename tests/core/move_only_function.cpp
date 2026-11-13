@@ -4,6 +4,7 @@
 
 #include <array>
 #include <memory>
+#include <type_traits>
 #include <utility>
 
 namespace ruvia::test::move_only_function_tests {
@@ -244,4 +245,19 @@ TEST(Ruvia, null_assignment_preserves_reentrant_replacement_lifetime) {
         destination = nullptr;
         EXPECT_FALSE(replacement_alive);
     }
+}
+
+TEST(Ruvia, noexcept_function_preserves_mutable_target_through_const_owner) {
+    using callback = ruvia::move_only_function<int() noexcept>;
+    const auto throwing = [] { return 0; };
+    static_assert(!std::is_constructible_v<callback, decltype(throwing)>);
+    static_assert(std::is_nothrow_invocable_r_v<int, const callback&>);
+
+    callback source([count = std::make_unique<int>(4)]() mutable noexcept {
+        return ++*count;
+    });
+    const callback destination(std::move(source));
+    EXPECT_FALSE(source);
+    EXPECT_EQ(destination(), 5);
+    EXPECT_EQ(destination(), 6);
 }

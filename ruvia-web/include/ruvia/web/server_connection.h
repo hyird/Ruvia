@@ -6,13 +6,13 @@
 #include <span>
 #include <string_view>
 
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/callback.h"
 
 namespace ruvia {
 
@@ -164,6 +164,6 @@ using connection_callback_ref = callback_ref<task<void>(server_connection&)>;
 // on_connection_failure unless it is a peer reset or close, or I/O the
 // server cancelled (timeouts, stop()).
 // 空函数指针与目标析构重入的契约同 access_log_callback。
-using connection_callback = detail::callback<task<void>(server_connection&)>;
+using connection_callback = move_only_function<task<void>(server_connection&)>;
 
 }  // namespace ruvia

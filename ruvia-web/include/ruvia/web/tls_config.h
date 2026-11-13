@@ -14,9 +14,9 @@
 #include <asio/ip/address.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/web/detail/callback.h"
 
 namespace ruvia {
 
@@ -66,8 +66,7 @@ struct tls_certificate_selection final {
 // nullopt rejects the handshake. Exceptions and IDs absent from the snapshot
 // also fail closed, including on resumed handshakes. Calls may run concurrently
 // on different workers; the callable must synchronize its own mutable state.
-using tls_certificate_selector =
-    detail::callback<std::optional<tls_certificate_id>(const tls_certificate_selection&)>;
+using tls_certificate_selector = move_only_function<std::optional<tls_certificate_id>(const tls_certificate_selection&)>;
 
 namespace detail {
 struct tls_certificate_store_access;

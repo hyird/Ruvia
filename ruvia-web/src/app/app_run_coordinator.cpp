@@ -38,7 +38,7 @@ void add_shutdown_signals(asio::signal_set& signals) {
 void invoke_stop_hooks(detail::app_state& state_value) noexcept {
     for (auto& hook : state_value.on_stop_hooks_) {
         try {
-            hook();
+            (*hook)();
         } catch (...) {
             ruvia::report_unhandled_failure("app stop hook", std::current_exception());
         }
@@ -367,7 +367,7 @@ private:
             if (stop_requested()) {
                 return;
             }
-            hook();
+            (*hook)();
         }
     }
 

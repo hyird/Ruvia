@@ -13,6 +13,7 @@
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/web/app.h"
+#include "ruvia/web/detail/app/app_configuration.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_config_storage.h"
@@ -135,25 +136,25 @@ struct app_state final {
     ~app_state();
 
     std::pmr::vector<http_server_listener_definition> listeners_{process_resource()};
-    access_log_callback access_log_callback_;
-    connection_failure_callback connection_failure_callback_;
-    tls_client_hello_callback tls_client_hello_callback_;
-    http2_input_callback http2_input_callback_;
+    callback_registration<access_log_callback> access_log_callback_;
+    callback_registration<connection_failure_callback> connection_failure_callback_;
+    callback_registration<tls_client_hello_callback> tls_client_hello_callback_;
+    callback_registration<http2_input_callback> http2_input_callback_;
 #if defined(RUVIA_ENABLE_HTTP2)
-    http2_frame_callback http2_frame_callback_;
-    http2_headers_callback http2_headers_callback_;
+    callback_registration<http2_frame_callback> http2_frame_callback_;
+    callback_registration<http2_headers_callback> http2_headers_callback_;
 #endif
-    connection_admission_callback connection_admission_callback_;
-    connection_open_callback connection_open_callback_;
-    connection_close_callback connection_close_callback_;
-    connection_callback connection_callback_;
-    request_stream_callback request_stream_callback_;
+    callback_registration<connection_admission_callback> connection_admission_callback_;
+    callback_registration<connection_open_callback> connection_open_callback_;
+    callback_registration<connection_close_callback> connection_close_callback_;
+    callback_registration<connection_callback> connection_callback_;
+    callback_registration<request_stream_callback> request_stream_callback_;
     http_server_options options_{};
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_;
     std::optional<blocking_pool_options> blocking_pool_{std::in_place};
-    std::pmr::vector<app_hook> on_start_hooks_{process_resource()};
-    std::pmr::vector<app_hook> on_stop_hooks_{process_resource()};
+    std::pmr::vector<callback_registration<app_hook>> on_start_hooks_{process_resource()};
+    std::pmr::vector<callback_registration<app_hook>> on_stop_hooks_{process_resource()};
 #ifdef RUVIA_ENABLE_DATABASE
     std::pmr::vector<db_definition> databases_{process_resource()};
 #endif

@@ -264,13 +264,13 @@ test_app& test_app::trusted_proxies(std::nullptr_t) {
 
 test_app& test_app::on_error(http_error_handler handler) {
     impl_->require_configurable();
-    impl_->configuration_.on_error(std::move(handler));
+    impl_->configuration_.on_error(detail::own_callback(std::move(handler)));
     return *this;
 }
 
 test_app& test_app::on_not_found(http_not_found_handler handler) {
     impl_->require_configurable();
-    impl_->configuration_.on_not_found(std::move(handler));
+    impl_->configuration_.on_not_found(detail::own_callback(std::move(handler)));
     return *this;
 }
 
@@ -289,13 +289,13 @@ test_app& test_app::on_not_found(std::nullptr_t) {
 
 test_app& test_app::on_error(scoped_error_handler_options options) {
     impl_->require_configurable();
-    impl_->configuration_.on_error(std::move(options));
+    impl_->configuration_.on_error(options.prefix_, detail::own_callback(std::move(options.handler_)));
     return *this;
 }
 
 test_app& test_app::on_not_found(scoped_not_found_handler_options options) {
     impl_->require_configurable();
-    impl_->configuration_.on_not_found(std::move(options));
+    impl_->configuration_.on_not_found(options.prefix_, detail::own_callback(std::move(options.handler_)));
     return *this;
 }
 

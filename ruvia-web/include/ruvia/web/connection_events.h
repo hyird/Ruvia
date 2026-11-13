@@ -6,8 +6,9 @@
 
 #include <asio/ip/address.hpp>
 
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/web/detail/callback.h"
+#include "ruvia/web/detail/callback_ref.h"
 
 namespace ruvia {
 
@@ -78,8 +79,8 @@ using connection_close_callback_ref = callback_ref<void(const connection_event&,
 // Close runs after ID retirement, outside locks, before the server releases its
 // state reference. Admission and close must not throw. If open throws, close
 // still runs once with empty state, and the failure reaches the failure sink.
-using connection_admission_callback = detail::callback<bool(const connection_event&) noexcept>;
-using connection_open_callback = detail::callback<std::shared_ptr<void>(const connection_event&)>;
-using connection_close_callback = detail::callback<void(const connection_event&, const std::shared_ptr<void>&) noexcept>;
+using connection_admission_callback = move_only_function<bool(const connection_event&) noexcept>;
+using connection_open_callback = move_only_function<std::shared_ptr<void>(const connection_event&)>;
+using connection_close_callback = move_only_function<void(const connection_event&, const std::shared_ptr<void>&) noexcept>;
 
 }  // namespace ruvia

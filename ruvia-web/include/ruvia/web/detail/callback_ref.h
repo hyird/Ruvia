@@ -5,10 +5,9 @@
 #include <type_traits>
 #include <utility>
 
-namespace ruvia::detail {
+#include "ruvia/core/move_only_function.h"
 
-template <typename result_type, bool is_noexcept, typename... args_types>
-class callback_owner;
+namespace ruvia::detail {
 
 // Trivial request/runtime view. Never allocates or extends the callable's
 // lifetime. Signature policy changes invocation, not storage or binding logic.
@@ -33,8 +32,6 @@ public:
 
 private:
     friend struct callback_access;
-    template <typename, bool, typename...>
-    friend class callback_owner;
 
     constexpr callback_ref_view(void* target, invoke_type invoke) noexcept
         : target_(target),
@@ -44,9 +41,10 @@ private:
         requires(std::is_invocable_r_v<result_type, callable_type&, args_types...> &&
                  (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, callable_type&, args_types...>))
     [[nodiscard]] static constexpr callback_ref_view bind(callable_type& callable) noexcept {
-        return callback_ref_view(std::addressof(callable), [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
-            return (*static_cast<callable_type*>(target))(std::forward<args_types>(args)...);
-        });
+        return callback_ref_view(const_cast<void*>(static_cast<const void*>(std::addressof(callable))),
+            [](void* target, args_types... args) noexcept(is_noexcept) -> result_type {
+                return (*static_cast<callable_type*>(target))(std::forward<args_types>(args)...);
+            });
     }
 
     template <typename... invocation_args>
@@ -58,8 +56,7 @@ private:
     invoke_type invoke_{nullptr};
 };
 
-// Signature decomposition is the only specialization boundary. Both callback
-// families use the same implementation with the appropriate noexcept policy.
+// Signature decomposition selects the borrowed view's noexcept policy.
 template <typename signature_type>
 struct callback_signature;
 
@@ -85,9 +82,15 @@ struct callback_access final {
         return callback_ref<signature_type>(target, invoke);
     }
 
-    template <typename owner_type>
-    [[nodiscard]] static constexpr auto ref(const owner_type& owner_value) noexcept {
-        return owner_value.callback_ref_view();
+    template <typename signature_type>
+    [[nodiscard]] static callback_ref<signature_type> ref(const move_only_function<signature_type>& owner_value) noexcept {
+        return owner_value ? callback_ref<signature_type>::bind(owner_value) : callback_ref<signature_type>{};
+    }
+
+    template <typename callback_type, typename deleter_type>
+    [[nodiscard]] static auto ref(const std::unique_ptr<callback_type, deleter_type>& owner_value) noexcept {
+        using ref_type = decltype(ref(*owner_value));
+        return owner_value ? ref(*owner_value) : ref_type{};
     }
 
     template <typename signature_type, typename callable_type>

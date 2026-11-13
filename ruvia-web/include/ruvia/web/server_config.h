@@ -16,6 +16,7 @@
 
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/memory/request_memory.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_known_method.h"
@@ -23,7 +24,6 @@
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/port_number.h"
-#include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/static_files.h"
@@ -491,9 +491,8 @@ using access_log_callback_ref = callback_ref<void(const access_log_record&) noex
 
 // application-owned access-log listener. Request dispatch receives only an internal,
 // allocation-free callback_ref and never participates in this owner's lifetime.
-// 空函数指针构造空回调。清空、替换或析构时，目标析构前 owner 已为空；
-// 目标析构仅支持再次清空同一 owner，不得在其中向该 owner 安装新目标。
-using access_log_callback = detail::callback<void(const access_log_record&) noexcept>;
+// 空函数指针构造空回调；未配置时不得调用。所有权与退役语义同 move_only_function。
+using access_log_callback = move_only_function<void(const access_log_record&) noexcept>;
 
 // One connection lost to an exception that escaped its session: a handler bug
 // past the response's point of no return, an error handler that itself failed,
@@ -572,7 +571,7 @@ using connection_failure_callback_ref = callback_ref<void(const connection_failu
 // left to go, so the requirement is enforced at compile time rather than
 // swallowed at runtime.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
-using connection_failure_callback = detail::callback<void(const connection_failure_record&) noexcept>;
+using connection_failure_callback = move_only_function<void(const connection_failure_record&) noexcept>;
 
 // A self-contained startup/shutdown callback, invoked on the application::run() caller.
 // on_start runs after worker initialization, before TCP admission. on_stop
@@ -582,8 +581,5 @@ using connection_failure_callback = detail::callback<void(const connection_failu
 // outlive the registered hook. Invoking an empty hook is a programming error
 // and throws std::logic_error.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
-using app_hook = detail::callback<void()>;
-
-static_assert(sizeof(app_hook) == 4 * sizeof(void*));
-
+using app_hook = move_only_function<void()>;
 }  // namespace ruvia

@@ -11,6 +11,7 @@
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -20,7 +21,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/callback.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/streaming.h"
 #include "ruvia/web/websocket.h"
@@ -272,6 +272,6 @@ private:
 // same target concurrently, so it must be thread-safe. The request ends when
 // the returned task completes.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
-using request_stream_callback = detail::callback<task<void>(request_stream&)>;
+using request_stream_callback = move_only_function<task<void>(request_stream&)>;
 
 }  // namespace ruvia

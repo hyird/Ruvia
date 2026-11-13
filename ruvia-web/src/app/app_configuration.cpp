@@ -57,7 +57,7 @@ void app_configuration::add_worker_state(worker_state_definition&& definition) {
 
 // A second app-wide registration throws like a duplicate scoped prefix rather
 // than silently replacing the first by call order.
-void app_configuration::on_error(http_error_handler&& handler) {
+void app_configuration::on_error(callback_registration<http_error_handler>&& handler) {
     if (!handler) {
         throw std::invalid_argument("error handler must not be null");
     }
@@ -67,15 +67,15 @@ void app_configuration::on_error(http_error_handler&& handler) {
     error_handler_ = std::move(handler);
 }
 
-http_error_handler app_configuration::on_error(std::nullptr_t) noexcept {
+callback_registration<http_error_handler> app_configuration::on_error(std::nullptr_t) noexcept {
     return std::exchange(error_handler_, nullptr);
 }
 
-void app_configuration::on_error(scoped_error_handler_options&& options) {
-    append_prefix_handler(prefix_error_handlers_, options.prefix_.view(), std::move(options.handler_));
+void app_configuration::on_error(borrowed_text prefix, callback_registration<http_error_handler>&& handler) {
+    append_prefix_handler(prefix_error_handlers_, prefix.view(), std::move(handler));
 }
 
-void app_configuration::on_not_found(http_not_found_handler&& handler) {
+void app_configuration::on_not_found(callback_registration<http_not_found_handler>&& handler) {
     if (!handler) {
         throw std::invalid_argument("not found handler must not be null");
     }
@@ -85,12 +85,12 @@ void app_configuration::on_not_found(http_not_found_handler&& handler) {
     not_found_handler_ = std::move(handler);
 }
 
-http_not_found_handler app_configuration::on_not_found(std::nullptr_t) noexcept {
+callback_registration<http_not_found_handler> app_configuration::on_not_found(std::nullptr_t) noexcept {
     return std::exchange(not_found_handler_, nullptr);
 }
 
-void app_configuration::on_not_found(scoped_not_found_handler_options&& options) {
-    append_prefix_handler(prefix_not_found_handlers_, options.prefix_.view(), std::move(options.handler_));
+void app_configuration::on_not_found(borrowed_text prefix, callback_registration<http_not_found_handler>&& handler) {
+    append_prefix_handler(prefix_not_found_handlers_, prefix.view(), std::move(handler));
 }
 
 void app_configuration::apply(router& routes_value) const {

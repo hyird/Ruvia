@@ -59,12 +59,12 @@ void detail::router::set_not_found_handler(http_not_found_handler_ref handler) n
 }
 
 void detail::router::set_prefix_error_handlers(
-    std::span<const std::pair<std::pmr::string, http_error_handler>> handlers) {
+    std::span<const std::pair<std::pmr::string, callback_registration<http_error_handler>>> handlers) {
     replace_prefix_handlers(plan_->prefix_error_handlers_, handlers);
 }
 
 void detail::router::set_prefix_not_found_handlers(
-    std::span<const std::pair<std::pmr::string, http_not_found_handler>> handlers) {
+    std::span<const std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> handlers) {
     replace_prefix_handlers(plan_->prefix_not_found_handlers_, handlers);
 }
 

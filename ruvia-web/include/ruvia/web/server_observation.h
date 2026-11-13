@@ -8,8 +8,8 @@
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_observation.h"
 #endif
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/callback.h"
 
 namespace ruvia {
 
@@ -162,11 +162,11 @@ using http2_headers_callback_ref = callback_ref<void(const http2_headers_record&
 // owns the connection; workers call the same target concurrently, so it must
 // be thread-safe. Connections only borrow an allocation-free callback_ref.
 // 空函数指针与目标析构重入的契约同 access_log_callback。
-using tls_client_hello_callback = detail::callback<void(const tls_client_hello_record&) noexcept>;
-using http2_input_callback = detail::callback<void(const http2_input_record&) noexcept>;
+using tls_client_hello_callback = move_only_function<void(const tls_client_hello_record&) noexcept>;
+using http2_input_callback = move_only_function<void(const http2_input_record&) noexcept>;
 #if defined(RUVIA_ENABLE_HTTP2)
-using http2_frame_callback = detail::callback<void(const http2_frame_record&) noexcept>;
-using http2_headers_callback = detail::callback<void(const http2_headers_record&) noexcept>;
+using http2_frame_callback = move_only_function<void(const http2_frame_record&) noexcept>;
+using http2_headers_callback = move_only_function<void(const http2_headers_record&) noexcept>;
 #endif
 
 }  // namespace ruvia

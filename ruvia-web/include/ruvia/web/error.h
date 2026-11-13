@@ -15,11 +15,11 @@
 #include <vector>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/web/detail/callback.h"
 #include "ruvia/web/detail/callback_ref.h"
 
 namespace ruvia {
@@ -254,13 +254,12 @@ using http_not_found_handler_ref = callback_ref<task<http_response>(context&)>;
 // the logger, config, or metrics sink the handler needs. A self-contained
 // callable is owned by the handler value; references captured by that callable
 // must still outlive the registered handler.
-// 空函数指针构造空处理器。清空、替换或析构时，目标析构前 owner 已为空；
-// 目标析构仅支持再次清空同一 owner，不得在其中向该 owner 安装新目标。
-using http_error_handler = detail::callback<task<http_response>(context&, http_error_info)>;
+// 空函数指针构造空处理器；未配置时不得调用。所有权与退役语义同 move_only_function。
+using http_error_handler = move_only_function<task<http_response>(context&, http_error_info)>;
 
 // Answers a request that matched no route.
 // 空函数指针与目标析构重入的契约同 http_error_handler。
-using http_not_found_handler = detail::callback<task<http_response>(context&)>;
+using http_not_found_handler = move_only_function<task<http_response>(context&)>;
 
 struct scoped_error_handler_options final {
     borrowed_text prefix_{};
@@ -272,6 +271,4 @@ struct scoped_not_found_handler_options final {
     http_not_found_handler handler_{nullptr};
 };
 
-static_assert(sizeof(http_error_handler) == 4 * sizeof(void*));
-static_assert(sizeof(http_not_found_handler) == 4 * sizeof(void*));
 }  // namespace ruvia

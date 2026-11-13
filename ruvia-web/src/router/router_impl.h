@@ -9,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 #include "ruvia/web/error.h"
 
@@ -42,8 +43,8 @@ public:
     void set_not_found_handler(http_not_found_handler_ref handler) noexcept;
     // Copies normalized, de-duplicated prefixes into the plan, deepest first.
     // Callback views borrow their app_configuration owners until the plan retires.
-    void set_prefix_error_handlers(std::span<const std::pair<std::pmr::string, http_error_handler>> handlers);
-    void set_prefix_not_found_handlers(std::span<const std::pair<std::pmr::string, http_not_found_handler>> handlers);
+    void set_prefix_error_handlers(std::span<const std::pair<std::pmr::string, callback_registration<http_error_handler>>> handlers);
+    void set_prefix_not_found_handlers(std::span<const std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> handlers);
     // Application-wide middleware, prepended to every route's chain. Each
     // descriptor becomes exactly one instance per worker, serving all routes.
     void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);

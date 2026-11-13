@@ -1,5 +1,6 @@
 #pragma once
 
+#include <memory>
 #include <memory_resource>
 #include <span>
 #include <string>
@@ -8,6 +9,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -17,6 +19,20 @@
 namespace ruvia::detail {
 
 class router;
+
+template <typename callback_type>
+using callback_registration = std::unique_ptr<callback_type, pmr_object_deleter<callback_type>>;
+
+// Pin configured callables before entering the application lock: publication
+// only swaps owning pointers, and router views borrow an address-stable owner.
+template <typename signature_type>
+[[nodiscard]] callback_registration<move_only_function<signature_type>> own_callback(
+    move_only_function<signature_type>&& callback) {
+    if (!callback) {
+        return {};
+    }
+    return make_pmr_object<move_only_function<signature_type>>(process_resource(), std::move(callback));
+}
 
 template <middleware middleware_type, typename... args_types>
 [[nodiscard]] owned_middleware_descriptor make_scoped_app_middleware(
@@ -52,13 +68,13 @@ public:
 
     void add_middleware(owned_middleware_descriptor&& descriptor);
     void add_worker_state(worker_state_definition&& definition);
-    void on_error(http_error_handler&& handler);
-    void on_error(scoped_error_handler_options&& options);
+    void on_error(callback_registration<http_error_handler>&& handler);
+    void on_error(borrowed_text prefix, callback_registration<http_error_handler>&& handler);
     // Returns the cleared handler so the caller destroys it after releasing its lock.
-    [[nodiscard]] http_error_handler on_error(std::nullptr_t) noexcept;
-    void on_not_found(http_not_found_handler&& handler);
-    void on_not_found(scoped_not_found_handler_options&& options);
-    [[nodiscard]] http_not_found_handler on_not_found(std::nullptr_t) noexcept;
+    [[nodiscard]] callback_registration<http_error_handler> on_error(std::nullptr_t) noexcept;
+    void on_not_found(callback_registration<http_not_found_handler>&& handler);
+    void on_not_found(borrowed_text prefix, callback_registration<http_not_found_handler>&& handler);
+    [[nodiscard]] callback_registration<http_not_found_handler> on_not_found(std::nullptr_t) noexcept;
 
     [[nodiscard]] std::span<const worker_state_definition> worker_states() const noexcept {
         return worker_states_;
@@ -67,10 +83,10 @@ public:
     void apply(router& routes) const;
 
 private:
-    http_error_handler error_handler_{nullptr};
-    http_not_found_handler not_found_handler_{nullptr};
-    std::pmr::vector<std::pair<std::pmr::string, http_error_handler>> prefix_error_handlers_;
-    std::pmr::vector<std::pair<std::pmr::string, http_not_found_handler>> prefix_not_found_handlers_;
+    callback_registration<http_error_handler> error_handler_;
+    callback_registration<http_not_found_handler> not_found_handler_;
+    std::pmr::vector<std::pair<std::pmr::string, callback_registration<http_error_handler>>> prefix_error_handlers_;
+    std::pmr::vector<std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> prefix_not_found_handlers_;
     std::pmr::vector<owned_middleware_descriptor> middlewares_;
     std::pmr::vector<worker_state_definition> worker_states_;
 };

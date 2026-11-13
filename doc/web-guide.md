@@ -67,9 +67,9 @@ int main() {
 | `std::pmr::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄；结果绑定 `process_resource()` |
 | `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
 
-应用回调（`app_hook`、访问/故障日志与连接观察回调、错误/404 处理器）独占目标；空函数指针与 `nullptr` 一样构造空回调。清空、替换或析构时先将 owner 置空，再析构目标，因此目标的资源释放可以再次清空同一 owner。目标析构中的重入仅支持清空，不得向该 owner 安装新目标。
+应用公开回调统一使用 `move_only_function`，签名中的 `noexcept` 在构造期受编译器约束；所有权与退役规则见 [core 可调用包装器](core-and-http.md)。
 
-`application::on_access()`、`on_connection_failure()`、`on_tls_client_hello()`、`on_http2_input()`、`on_connection()` 与 `on_request_stream()` 替换或清空配置时，先在锁内发布新回调及其内部视图，再解锁析构旧目标；`on_start(nullptr)` / `on_stop(nullptr)` 清空钩子列表、`on_error(nullptr)` / `on_not_found(nullptr)` 清空全局处理器时同样在解锁后析构被清空的目标。旧目标析构可以调用 `stop()` 或查询应用状态，不会因重新进入配置锁而死锁。运行期间仍拒绝修改这些回调。
+`application::on_access()`、`on_connection_failure()`、`on_tls_client_hello()`、`on_http2_input()`、`on_connection()` 与 `on_request_stream()` 在配置锁外构造地址固定的回调所有者，锁内只交换拥有指针并发布借用视图，解锁后析构旧目标；`on_start(nullptr)` / `on_stop(nullptr)` 清空钩子列表、`on_error(nullptr)` / `on_not_found(nullptr)` 清空全局处理器时同样在解锁后析构被清空的目标。用户目标的移动与析构可查询应用状态，不会因重新进入配置锁而死锁。运行期间仍拒绝修改这些回调。
 
 ---
 
