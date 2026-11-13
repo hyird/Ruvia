@@ -26,11 +26,10 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/rate_limit.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/web/redis/redis_session.h"
-#include "ruvia/web/session.h"
 
 #include "redis_session_store_peer.h"
 #endif

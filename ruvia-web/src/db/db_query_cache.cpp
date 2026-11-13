@@ -18,10 +18,10 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_field_syntax.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_session.h"
@@ -31,7 +31,7 @@
 #include "db/db_pipeline.h"
 #include "db/db_pool.h"
 #include "db/db_sql_format.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "redis/redis_pool.h"
 
 namespace ruvia::detail {

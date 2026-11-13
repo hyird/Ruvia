@@ -10,8 +10,7 @@
 
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_limits.h"
-#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {

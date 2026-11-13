@@ -28,11 +28,11 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/channel.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/one_shot.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/core/worker_wait.h"
 
 #include "worker_task_fixture.h"
 

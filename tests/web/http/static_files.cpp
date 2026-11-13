@@ -1,5 +1,3 @@
-#include "ruvia/web/static_files.h"
-
 #include <gtest/gtest.h>
 
 #include <filesystem>
@@ -7,6 +5,8 @@
 #include <string>
 #include <string_view>
 #include <utility>
+
+#include "ruvia/web/server_config.h"
 
 #include "context_request_fixture.h"
 #include "scoped_temp_directory.h"

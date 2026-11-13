@@ -10,8 +10,7 @@
 #include <vector>
 
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_interim_response.h"
-#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response_server.h"
 
 namespace {

@@ -1,5 +1,3 @@
-#include "ruvia/web/session.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -32,6 +30,7 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/integer.h"
+#include "ruvia/web/middleware.h"
 #include "ruvia/web/testing.h"
 
 #include "http_server_fixture.h"

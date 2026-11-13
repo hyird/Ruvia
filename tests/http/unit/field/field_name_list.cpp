@@ -2,8 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/http_field_values.h"
-
+#include "ruvia/http/http_field_syntax.h"
 TEST(Ruvia, http_field_name_list_preserves_fields_and_skips_empty_members) {
     ruvia::http_field_name_list names(" , X-One,\tX-Two\t, ");
     EXPECT_EQ(names.next().value(), std::string_view("X-One"));

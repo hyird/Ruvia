@@ -21,8 +21,6 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/multipart_reader.h"
-
 class streaming_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/streaming")

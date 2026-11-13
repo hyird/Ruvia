@@ -2,12 +2,87 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <limits>
+#include <optional>
+#include <stdexcept>
 #include <string_view>
+#include <utility>
 
 #include "ruvia/http/http_status.h"
+
+namespace ruvia {
+
+inline constexpr std::size_t max_http_header_bytes = std::size_t{64} * 1024;
+// Field lines per HTTP/1 head or trailer section (the http_field_section_budget
+// rule), received and generated, beside the max_http_header_bytes byte cap. The
+// smallest field line costs 4 bytes, so the byte cap alone admits ~16 K fields
+// whose descriptors outweigh the head; 256 matches Pingora's parser limit.
+inline constexpr std::size_t max_http_header_fields = 256;
+inline constexpr std::size_t default_max_buffered_body_bytes = std::size_t{16} * 1024 * 1024;
+inline constexpr std::size_t default_max_websocket_message_bytes = std::size_t{16} * 1024 * 1024;
+// Bytes one SSE event may buffer while sse_parser assembles it.
+inline constexpr std::size_t default_max_sse_event_bytes = std::size_t{16} * 1024 * 1024;
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+// A protocol byte ceiling with no numeric sentinel: the default is unlimited,
+// while a configured limit is always strictly positive.
+class protocol_byte_limit final {
+public:
+    protocol_byte_limit() noexcept = default;
+
+    [[nodiscard]] static protocol_byte_limit unlimited() noexcept {
+        return protocol_byte_limit();
+    }
+
+    // Validate the original integer before converting to the stored size.
+    // Negative inputs must not become effectively unbounded positive ceilings.
+    template <std::integral integer_type>
+    [[nodiscard]] static protocol_byte_limit limited(integer_type bytes_value) {
+        if (!std::in_range<std::size_t>(+bytes_value) || +bytes_value == 0) {
+            throw std::invalid_argument("protocol byte limit must be positive and representable");
+        }
+        return protocol_byte_limit(static_cast<std::size_t>(bytes_value));
+    }
+
+    [[nodiscard]] bool is_limited() const noexcept {
+        return maximum_.has_value();
+    }
+
+    [[nodiscard]] std::optional<std::size_t> maximum() const noexcept {
+        return maximum_;
+    }
+
+    [[nodiscard]] bool exceeds(std::size_t bytes_value) const noexcept {
+        return maximum_.has_value() && bytes_value > *maximum_;
+    }
+
+    [[nodiscard]] bool addition_exceeds(std::size_t current, std::size_t added) const noexcept {
+        if (added > (std::numeric_limits<std::size_t>::max)() - current) {
+            return true;
+        }
+        return maximum_.has_value() && (current > *maximum_ || added > *maximum_ - current);
+    }
+
+    [[nodiscard]] std::size_t read_ceiling() const noexcept {
+        return maximum_.value_or((std::numeric_limits<std::size_t>::max)());
+    }
+
+private:
+    explicit protocol_byte_limit(std::size_t bytes_value) noexcept
+        : maximum_(bytes_value) {}
+
+    std::optional<std::size_t> maximum_;
+};
+
+}  // namespace ruvia
 
 namespace ruvia {
 

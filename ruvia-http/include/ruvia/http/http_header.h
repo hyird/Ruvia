@@ -15,7 +15,6 @@
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 
 namespace ruvia {

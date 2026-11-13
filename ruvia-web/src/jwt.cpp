@@ -18,10 +18,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_base64.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_utf8.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/model.h"
 
 #include "http/inline_http_header_views.h"

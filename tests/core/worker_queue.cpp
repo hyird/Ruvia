@@ -11,8 +11,7 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_cancellation.h"
-
+#include "ruvia/core/worker_wait.h"
 TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     struct reposting_task final {
         const ruvia::worker_ref* worker_;

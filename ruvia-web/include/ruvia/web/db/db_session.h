@@ -15,11 +15,10 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/db/db_types.h"
-#include "ruvia/web/fixed_string.h"
-
+#include "ruvia/web/integer.h"
 namespace ruvia::detail {
 
 // Walking SQL text well enough to tell code from data.

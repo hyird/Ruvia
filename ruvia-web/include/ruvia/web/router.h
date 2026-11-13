@@ -20,7 +20,6 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/web_worker.h"
 #include "ruvia/web/websocket.h"
 

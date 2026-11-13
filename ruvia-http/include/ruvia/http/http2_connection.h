@@ -15,16 +15,14 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
 
 namespace ruvia {

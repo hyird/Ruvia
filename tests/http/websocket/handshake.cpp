@@ -9,7 +9,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/websocket_handshake.h"

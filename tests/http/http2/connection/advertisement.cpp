@@ -8,7 +8,7 @@
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "output_drain.h"
 TEST(Ruvia, http2_connection_origin_and_alternative_service_events_are_owned_and_role_checked) {

@@ -5,8 +5,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http1_server_semantics.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"

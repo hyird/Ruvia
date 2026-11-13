@@ -2,7 +2,7 @@
 
 #include <stdexcept>
 
-#include "ruvia/web/session.h"
+#include "ruvia/web/middleware.h"
 
 #include "context_request_fixture.h"
 

@@ -36,9 +36,9 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
+#include "ruvia/core/worker_wait.h"
 
 namespace ruvia::test::runtime_worker_tests {
 

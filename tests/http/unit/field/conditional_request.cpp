@@ -5,7 +5,7 @@
 #include <optional>
 #include <string_view>
 
-#include "ruvia/http/http_conditional_request.h"
+#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 

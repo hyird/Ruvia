@@ -15,9 +15,8 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_client_redirect.h"
-#include "ruvia/http/http_limits.h"
-
+#include "ruvia/http/http_client.h"
+#include "ruvia/http/http_protocol_error.h"
 namespace ruvia::test {
 
 using ruvia::http1_client_request_content_completion_status;

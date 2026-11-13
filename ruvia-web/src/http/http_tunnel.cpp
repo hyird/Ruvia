@@ -20,18 +20,18 @@
 #include <openssl/err.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/bytes.h"
-#include "ruvia/core/operation_deadline.h"
-#include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/failure_report.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/web/http_client.h"
 
 #include "client/http_client_pool.h"
 #include "http/http_tunnel_session.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 namespace ruvia::detail {
 class http_capsule_stream_state final {

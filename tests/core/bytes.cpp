@@ -1,11 +1,11 @@
-#include "ruvia/core/bytes.h"
-
 #include <gtest/gtest.h>
 
 #include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
+
+#include "ruvia/core/failure_report.h"
 
 TEST(Ruvia, byte_views_preserve_octets_including_embedded_nul) {
     const char raw[] = {'a', '\0', '\xff'};

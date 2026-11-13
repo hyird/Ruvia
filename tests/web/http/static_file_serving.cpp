@@ -31,7 +31,7 @@
 #include "ruvia/http/http_cache.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/static_files.h"
+#include "ruvia/web/server_config.h"
 
 #include "context_request_fixture.h"
 #include "scoped_temp_directory.h"

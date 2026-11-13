@@ -24,7 +24,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"

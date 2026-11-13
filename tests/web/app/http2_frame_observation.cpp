@@ -22,7 +22,7 @@
 #include "ruvia/http/hpack.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/server_observation.h"
+#include "ruvia/web/http_server.h"
 
 #include "app_run.h"
 #include "http2_wire_fixture.h"

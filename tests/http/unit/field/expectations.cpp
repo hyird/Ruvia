@@ -5,8 +5,7 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/http_expectations.h"
-
+#include "ruvia/http/http_field_section.h"
 namespace {
 
 using ruvia::http_client_expectation_is_valid;

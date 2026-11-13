@@ -24,7 +24,6 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_server_request_parser.h"
-#include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_request.h"
@@ -32,10 +31,10 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/web_worker.h"
 
-#include "integration/operation_interrupt.h"
-#include "router/route_table.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
+#include "server/route_table.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3/http3_session.h"

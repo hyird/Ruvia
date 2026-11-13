@@ -14,8 +14,8 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_client.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/http/websocket_handshake.h"
 namespace {
 void add(std::vector<ruvia::http_header>& head, std::string_view name, std::string_view value) {

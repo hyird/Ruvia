@@ -13,15 +13,14 @@
 
 #include "ruvia/core/failure_report.h"
 #include "ruvia/core/socket.h"
-#include "ruvia/core/worker_cancellation.h"
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_field_values.h"
+#include "ruvia/core/worker_wait.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_tunnel.h"
 
 #include "client/client_tcp_transport.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

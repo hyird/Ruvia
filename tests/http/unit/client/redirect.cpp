@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_client_redirect.h"
 
 #include "http_client_response_fixture.h"
 

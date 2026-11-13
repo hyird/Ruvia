@@ -1,5 +1,3 @@
-#include "ruvia/web/tcp_client.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -29,10 +27,11 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/bytes.h"
 #include "ruvia/core/event_loop.h"
+#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
+#include "ruvia/web/http_client_types.h"
 
 #include "test_tls_identity.h"
 

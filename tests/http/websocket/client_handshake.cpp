@@ -11,7 +11,7 @@
 #include <vector>
 
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_base64.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/http/websocket_handshake.h"
 namespace {
 

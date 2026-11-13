@@ -28,15 +28,15 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "client/client_tcp_transport.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

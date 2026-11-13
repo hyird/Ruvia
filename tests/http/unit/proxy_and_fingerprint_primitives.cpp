@@ -17,12 +17,10 @@
 #include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client_ip.h"
-#include "ruvia/http/http_conditional_request.h"
-#include "ruvia/http/http_content_encoder.h"
+#include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_cors.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_fingerprint.h"
-#include "ruvia/http/http_hop_by_hop.h"
 #include "ruvia/http/http_request_target.h"
 
 namespace {

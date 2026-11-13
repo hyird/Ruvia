@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http_content_encoder.h"
+#include "ruvia/http/http_content_coding.h"
 
 #include "content_decoding_fixture.h"
 #include "test_exceptions.h"

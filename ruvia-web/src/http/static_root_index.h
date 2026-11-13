@@ -17,16 +17,13 @@
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_accept_match.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/static_files.h"
-
+#include "ruvia/web/server_config.h"
 #if defined(__unix__)
 #include "server/connection_lifecycle.h"
 #endif

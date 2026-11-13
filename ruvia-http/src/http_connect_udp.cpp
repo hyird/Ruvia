@@ -7,17 +7,14 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "field/http_connection_fields.h"
+#include "http_connection_fields.h"
 #include "http_wire_sink.h"
-#include "parser/http_uri_grammar.h"
-
 namespace ruvia {
 
 http_connect_udp_target::http_connect_udp_target(std::string host, port_number port) noexcept

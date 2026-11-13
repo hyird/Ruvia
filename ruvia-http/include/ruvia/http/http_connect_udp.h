@@ -12,8 +12,7 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/port_number.h"
-
+#include "ruvia/http/ip_address.h"
 namespace ruvia {
 // Already-expanded proxy URI path, borrowed until open_udp_tunnel() returns.
 struct http_client_udp_tunnel_request_view final {

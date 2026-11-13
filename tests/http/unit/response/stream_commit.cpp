@@ -4,8 +4,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/http_response_stream.h"
-
+#include "ruvia/http/http_response_server.h"
 namespace {
 
 using ruvia::http_known_method;

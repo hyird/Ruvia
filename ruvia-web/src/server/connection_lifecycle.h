@@ -56,14 +56,12 @@
 #include "ruvia/http/http_response_file.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/ip_address.h"
-#include "ruvia/http/port_number.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 #include "ruvia/web/server_config.h"
 
 #include "http/inline_http_header_views.h"
-#include "integration/operation_interrupt.h"
-
+#include "http/operation_interrupt.h"
 #if defined(__unix__)
 #include <fcntl.h>
 #include <sys/stat.h>

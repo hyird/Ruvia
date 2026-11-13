@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/web/db/db_session.h"
 
 #include "db/db_sql_format.h"

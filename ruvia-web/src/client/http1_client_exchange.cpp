@@ -21,10 +21,10 @@
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_client_request_writer.h"
-#include "ruvia/http/http1_client_response_body_decoder.h"
+#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "client/client_tcp_transport.h"

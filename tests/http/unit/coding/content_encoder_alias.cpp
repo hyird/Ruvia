@@ -7,8 +7,6 @@
 #include <string_view>
 
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_content_encoder.h"
-
 namespace {
 
 void check_encoder_alias(ruvia::http_content_coding coding) {

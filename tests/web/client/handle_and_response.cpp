@@ -32,7 +32,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"

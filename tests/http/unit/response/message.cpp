@@ -10,9 +10,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_interim_response.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 
 namespace {
 

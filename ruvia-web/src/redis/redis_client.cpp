@@ -14,14 +14,14 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
 
 #include "client/client_tcp_transport.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "redis/redis_pool.h"
 namespace ruvia::detail {
 namespace {

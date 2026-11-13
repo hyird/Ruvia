@@ -1,5 +1,3 @@
-#include "ruvia/web/server_observation.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -28,7 +26,8 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/rate_limit.h"
+#include "ruvia/web/http_server.h"
+#include "ruvia/web/middleware.h"
 
 #include "app_run.h"
 #include "tcp_port_reservation.h"

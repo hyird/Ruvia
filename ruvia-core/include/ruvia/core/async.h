@@ -18,8 +18,7 @@
 #include <asio/use_awaitable.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_cancellation.h"
-
+#include "ruvia/core/worker_wait.h"
 namespace ruvia {
 
 // The completion argument of async_start(). Void tasks complete with

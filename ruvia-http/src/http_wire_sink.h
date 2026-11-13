@@ -16,8 +16,8 @@
 
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia::detail {

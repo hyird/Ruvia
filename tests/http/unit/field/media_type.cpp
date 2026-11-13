@@ -2,8 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/http_accept_match.h"
-
+#include "ruvia/http/http_accept_encoding.h"
 namespace {
 
 using ruvia::http_media_type_only;

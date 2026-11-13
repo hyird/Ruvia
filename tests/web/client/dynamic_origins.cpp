@@ -28,7 +28,7 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/web/http_client.h"
 
 #include "test_io_context.h"

@@ -9,8 +9,7 @@
 
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
-#include "ruvia/http/http_target_origin.h"
-
+#include "ruvia/http/http_request_target.h"
 namespace {
 
 using ruvia::http_target_host_kind;

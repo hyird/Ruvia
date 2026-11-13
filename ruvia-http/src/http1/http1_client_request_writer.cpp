@@ -9,18 +9,15 @@
 #include <string_view>
 
 #include "ruvia/http/http1_chunked_body_decoder.h"
-#include "ruvia/http/http1_server_semantics.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
-#include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_response_server.h"
 
-#include "field/http_connection_fields.h"
+#include "http_connection_fields.h"
 // What a caller-supplied request header section must satisfy before the writer
 // will encode it, and the facts the encoder then needs from it: its field
 // section budget, which singleton fields it already carries, and the
@@ -29,13 +26,12 @@
 #include <variant>
 
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_base64.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "http_websocket_permessage_deflate.h"
 #include "http_wire_sink.h"
-#include "parser/http_uri_grammar.h"
-#include "response/http_response_header_state.h"
-#include "websocket/http_websocket_permessage_deflate.h"
+#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 struct http1_client_request_field_facts final {

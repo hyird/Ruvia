@@ -35,7 +35,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/router.h"
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/web_worker.h"

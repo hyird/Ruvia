@@ -7,7 +7,7 @@
 #include <string_view>
 
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/protocol_byte_limit.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/websocket_connection.h"
 
 #include "test_exceptions.h"

@@ -8,8 +8,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_base64.h"
-
+#include "ruvia/http/url_encoding.h"
 namespace {
 
 std::string encode(std::string_view input, ruvia::http_base64_padding padding = ruvia::http_base64_padding::required) {

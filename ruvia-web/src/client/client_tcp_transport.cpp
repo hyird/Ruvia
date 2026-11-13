@@ -26,18 +26,17 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/bytes.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/operation_deadline.h"
-#include "ruvia/core/scoped_operation.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/socket.h"
-#include "ruvia/core/worker_cancellation.h"
+#include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/web/tcp_client.h"
+#include "ruvia/web/http_client_types.h"
 
+#include "http/operation_interrupt.h"
 #include "http/tls_protocol_policy.h"
-#include "integration/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 namespace ruvia::detail {

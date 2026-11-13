@@ -24,7 +24,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/static_files.h"
+#include "ruvia/web/server_config.h"
 
 #include "http2_wire_fixture.h"
 #include "http_server_fixture.h"

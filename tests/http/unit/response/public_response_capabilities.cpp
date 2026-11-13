@@ -7,7 +7,6 @@
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_response_stream.h"
 
 #include "test_exceptions.h"
 

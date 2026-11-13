@@ -20,7 +20,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_signal.h"
 
 #include "test_exceptions.h"

@@ -5,8 +5,8 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/context.h"
@@ -14,9 +14,9 @@
 #include "ruvia/web/streaming.h"
 
 #include "client/http_client_pool.h"
-#include "context/context_access.h"
+#include "http/context_access.h"
 #include "http/inline_http_header_views.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 namespace ruvia {
 
 const std::error_category& http_client_category() noexcept {

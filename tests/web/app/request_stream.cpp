@@ -1,5 +1,3 @@
-#include "ruvia/web/request_stream.h"
-
 #include <gtest/gtest.h>
 
 #include <algorithm>

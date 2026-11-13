@@ -27,8 +27,7 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_base64.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/url_encoding.h"
 
@@ -42,12 +41,9 @@
 
 #include <initializer_list>
 
-#include "ruvia/http/http_accept_match.h"
+#include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_hex.h"
-#include "ruvia/http/http_utf8.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/fixed_string.h"
 #include "ruvia/web/integer.h"
 #include "ruvia/web/middleware.h"
 

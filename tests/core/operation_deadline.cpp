@@ -1,5 +1,3 @@
-#include "ruvia/core/operation_deadline.h"
-
 #include <gtest/gtest.h>
 
 #include <chrono>

@@ -1,5 +1,3 @@
-#include "ruvia/core/one_shot.h"
-
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -18,6 +16,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
+#include "ruvia/core/worker_wait.h"
 
 #include "worker_task_fixture.h"
 

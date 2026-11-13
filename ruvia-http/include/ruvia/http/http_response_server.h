@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -18,6 +19,7 @@
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_status.h"
 
 namespace ruvia {
 
@@ -345,5 +347,410 @@ template <detail::http_temporary_owning_range<http_header_view> headers_type>
 http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
 http_response_trailer_section validate_http_response_trailers(
     std::initializer_list<http_header_view>) = delete;
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+// Immutable, bodyless response-head view for 1xx progress messages that precede
+// a final response. 101 is deliberately excluded: switching protocols transfers
+// connection ownership and therefore requires its dedicated protocol driver.
+// Header elements and their strings are borrowed and must remain stable through
+// the synchronous sans-I/O submit call.
+class http_interim_response_head final {
+public:
+    explicit http_interim_response_head(http_status_code status_code, borrowed_http_headers headers = {});
+
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_code_;
+    }
+
+    [[nodiscard]] constexpr std::span<const http_header_view> headers() const noexcept {
+        return headers_;
+    }
+
+private:
+    http_status_code status_code_;
+    std::span<const http_header_view> headers_;
+};
+
+// Connection lifecycle after the encoded interim response. RFC 9112 requires
+// a sender of Connection: close to begin closing after the response containing
+// that option, even though doing so leaves the request without a final response.
+enum class http1_interim_connection_disposition : std::uint8_t {
+    unchanged,
+    close_after_interim_response,
+};
+
+class http1_interim_response_buffer_too_small final {
+public:
+    [[nodiscard]] constexpr std::size_t required_head_bytes() const noexcept {
+        return required_head_bytes_;
+    }
+
+private:
+    friend std::variant<class prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+
+    explicit constexpr http1_interim_response_buffer_too_small(std::size_t required_head_bytes) noexcept
+        : required_head_bytes_(required_head_bytes) {}
+
+    std::size_t required_head_bytes_;
+};
+
+// A transactionally encoded HTTP/1.1 interim head. The byte view points into
+// the caller's output buffer. When Connection: close is present, the owner must
+// initiate connection closure as soon as this interim head has been written.
+class prepared_http1_interim_response final {
+public:
+    [[nodiscard]] constexpr std::string_view head() const noexcept {
+        return head_;
+    }
+
+    [[nodiscard]] constexpr http1_interim_connection_disposition connection_disposition()
+        const noexcept {
+        return connection_disposition_;
+    }
+
+private:
+    friend std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+    prepare_http1_interim_response_head(const http_interim_response_head&, std::span<char>);
+
+    constexpr prepared_http1_interim_response(
+        std::string_view head, http1_interim_connection_disposition connection_disposition) noexcept
+        : head_(head),
+          connection_disposition_(connection_disposition) {}
+
+    std::string_view head_;
+    http1_interim_connection_disposition connection_disposition_;
+};
+
+// Allocation-free HTTP/1.1 interim-head writer. It validates the complete
+// borrowed field set and exact 64-field/64-KiB bounds before touching the
+// output buffer, throwing http1_response_head_error for a head it cannot send.
+// No Server or Date field is injected: the encoded fields are exactly those
+// represented by http_interim_response_head.
+[[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small>
+prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
+
+}  // namespace ruvia
+
+namespace ruvia {
+
+enum class http_response_stream_framing : std::uint8_t {
+    http1_chunked,
+    // RFC 9112 6.1: a server MUST NOT send Transfer-Encoding to a client that did
+    // not indicate HTTP/1.1. An HTTP/1.0 stream therefore carries no chunk framing;
+    // the body is delimited by the connection close (RFC 9112 6.3), so it also
+    // announces Connection: close and the session shuts the socket afterwards.
+    http1_close_delimited,
+    http2_frames,
+    // RFC 9114 §4.1: HTTP/3 delimits content with DATA frames and carries a
+    // trailer section in a trailing HEADERS frame, exactly like HTTP/2.
+    http3_frames
+};
+// A trailer section is terminal message metadata, not an independently queued
+// side channel. The caller declares whether this head commit is reserving a
+// terminal trailer section. Trailers are optional metadata a recipient may
+// discard (RFC 9110 6.5), so framing that cannot carry them (HTTP/1.0
+// close-delimited, known length, or a suppressed body) drops them; only a
+// status that can never carry content rejects the intent before the head.
+enum class http_response_trailer_intent : std::uint8_t { none,
+    present };
+
+// Whether a validated trailer section commits the response to sending trailers.
+// An empty section is not "no decision": it is the decision to send none, which
+// the head must state before any body byte goes out.
+[[nodiscard]] inline http_response_trailer_intent response_trailer_intent(
+    const http_response_trailer_section& section) noexcept {
+    return section.empty() ? http_response_trailer_intent::none : http_response_trailer_intent::present;
+}
+
+// Authoritative phase immediately after the initial response head is submitted.
+// Body-suppressed responses (HEAD / 304) complete at the initial head
+// (message_ended) and discard trailers.
+enum class http_response_stream_head_disposition : std::uint8_t { body_open,
+    message_ended };
+
+class http_response_stream_commit_plan final {
+public:
+    [[nodiscard]] http_status_code response_status() const noexcept {
+        return body_plan_.response_status();
+    }
+
+    [[nodiscard]] http_response_stream_framing framing() const noexcept {
+        return framing_;
+    }
+
+    [[nodiscard]] http_response_body_plan body_plan() const noexcept {
+        return body_plan_;
+    }
+
+    // HTTP/1.1 requires chunked framing for trailers (RFC 9112 7.1.2).
+    // HTTP/2 and HTTP/3 carry them in a trailing field section. A body-suppressed
+    // response (HEAD / 304) ends at its initial head and discards trailers.
+    [[nodiscard]] bool trailers_available() const noexcept {
+        return !body_plan_.body_suppressed() &&
+               (framing_ == http_response_stream_framing::http1_chunked ||
+                   framing_ == http_response_stream_framing::http2_frames ||
+                   framing_ == http_response_stream_framing::http3_frames);
+    }
+
+    [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
+        return body_plan_.body_suppressed() ? http_response_stream_head_disposition::message_ended
+                                            : http_response_stream_head_disposition::body_open;
+    }
+
+    // A status that can never carry content (1xx/204/205/304) has no message
+    // body to terminate with a trailer section; asking for one is a handler
+    // error. Every other unavailable framing discards the trailers instead.
+    [[nodiscard]] bool status_permits_trailers() const noexcept {
+        return body_plan_.status_allows_body();
+    }
+
+    [[nodiscard]] bool trailer_intent_allowed() const noexcept {
+        return !trailer_intent_present_ || status_permits_trailers();
+    }
+
+private:
+    friend http_response_stream_commit_plan plan_http_response_stream_commit(
+        http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
+
+    http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan,
+        bool trailer_intent_present) noexcept
+        : framing_(framing),
+          body_plan_(body_plan),
+          trailer_intent_present_(trailer_intent_present) {}
+
+    http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
+    http_response_body_plan body_plan_;
+    bool trailer_intent_present_{false};
+};
+
+[[nodiscard]] inline http_response_stream_commit_plan plan_http_response_stream_commit(
+    http_response_stream_framing framing, http_known_method request_method, http_status_code response_status,
+    http_response_trailer_intent trailer_intent) noexcept {
+    const auto body_plan = plan_http_response_body(request_method, response_status);
+    return http_response_stream_commit_plan(framing, body_plan,
+        trailer_intent == http_response_trailer_intent::present);
+}
+
+// Preparation normalizes the initial response metadata to the supplied commit
+// plan. Mutating the response afterward can invalidate that relationship; this
+// object is not a permanent proof over a mutable response.
+class http_response_stream_head final {
+public:
+    [[nodiscard]] http_response& response() & noexcept {
+        return response_;
+    }
+    [[nodiscard]] http_response& response() && = delete;
+
+    [[nodiscard]] const http_response& response() const& noexcept {
+        return response_;
+    }
+    [[nodiscard]] const http_response& response() const&& = delete;
+
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept {
+        return commit_plan_;
+    }
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
+
+private:
+    friend http_response_stream_head prepare_http_response_stream_head(
+        http_response, http_response_stream_commit_plan);
+
+    http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan)
+        : response_(std::move(response)),
+          commit_plan_(commit_plan) {}
+
+    http_response response_;
+    http_response_stream_commit_plan commit_plan_;
+};
+
+// An application Transfer-Encoding must be exactly the `chunked` coding (OWS
+// and ASCII case aside): it is a hint the framework's writer replaces with its
+// own framing. Any other value throws http1_response_head_error for an HTTP/1
+// framing and std::invalid_argument for HTTP/2 or HTTP/3 before the response
+// changes.
+[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(
+    http_response response, http_response_stream_commit_plan commit_plan);
+}  // namespace ruvia
+
+namespace ruvia {
+
+class http1_response_stream_plan final {
+public:
+    [[nodiscard]] http_response_stream_framing framing() const noexcept {
+        return framing_;
+    }
+
+    [[nodiscard]] http1_request_connection_plan request_connection_plan() const noexcept {
+        return request_connection_plan_;
+    }
+
+    [[nodiscard]] http1_close_policy close_policy() const noexcept {
+        return close_policy_;
+    }
+
+    [[nodiscard]] http_known_method request_method() const noexcept {
+        return request_method_;
+    }
+
+private:
+    friend http1_response_stream_plan http1_plan_response_stream(
+        const http1_server_request_parse_state&, http1_close_policy, http1_request_body_consumption) noexcept;
+
+    http1_response_stream_plan(http_response_stream_framing framing,
+        http1_request_connection_plan request_connection_plan, http1_close_policy close_policy,
+        http_known_method request_method) noexcept
+        : framing_(framing),
+          request_connection_plan_(request_connection_plan),
+          close_policy_(close_policy),
+          request_method_(request_method) {}
+
+    http_response_stream_framing framing_;
+    http1_request_connection_plan request_connection_plan_;
+    http1_close_policy close_policy_{http1_close_policy::close_after_response};
+    http_known_method request_method_{http_known_method::unknown};
+};
+
+// Pure HTTP/1 response-stream planning. The runtime contributes only its typed
+// product policy (for example, a per-connection request limit) and the request
+// body's consumption state; HTTP retains the request disposition and candidate
+// framing until the response status is known. Commit can therefore distinguish
+// a body-allowed HTTP/1.0 stream, which requires close delimiting, from a
+// body-suppressed response that is already self-delimited. A route that consumed
+// the complete request body before streaming passes `complete`; the parser's
+// body plan still describes the original request framing, so planning for an
+// unread body passes `body_plan_.consumption_if_unread()`.
+[[nodiscard]] inline http1_response_stream_plan http1_plan_response_stream(
+    const http1_server_request_parse_state& parsed_value, http1_close_policy close_policy,
+    http1_request_body_consumption consumption) noexcept {
+    const auto framing = parsed_value.request().protocol_version() == http_protocol_version::http11
+                             ? http_response_stream_framing::http1_chunked
+                             : http_response_stream_framing::http1_close_delimited;
+    return http1_response_stream_plan(framing,
+        apply_request_body_consumption(parsed_value.connection_plan(), consumption), close_policy,
+        parsed_value.request().known_method());
+}
+
+enum class http1_connection_close_field_policy : std::uint8_t { close_only,
+    preserve_upgrade };
+
+inline void http1_mark_connection_close(http_response& response,
+    http1_connection_close_field_policy field_policy = http1_connection_close_field_policy::close_only) {
+    // A runtime close verdict dominates keep-alive. Collapse repeated fields
+    // after the socket lifecycle is decided, while preserving the Upgrade
+    // option required by any retained Upgrade field and any custom hop-by-hop
+    // field names declared in Connection (RFC 9110 section 7.6.1).
+    const std::string_view base =
+        field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade"
+                                                                              : "close";
+    std::string merged;
+    for (const auto& header : response.headers()) {
+        if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
+            continue;
+        }
+        detail::http_visit_comma_separated_quoted(header.value(), [&merged, base](std::string_view option) {
+            if (!http_ascii_equals_ignore_case(option, "close") &&
+                !http_ascii_equals_ignore_case(option, "keep-alive") &&
+                !http_ascii_equals_ignore_case(option, "Upgrade")) {
+                if (merged.empty()) {
+                    merged.assign(base);
+                }
+                merged.append(", ");
+                merged.append(option);
+            }
+            return true;
+        });
+    }
+    if (merged.empty()) {
+        response.header_stable_view("Connection", base);
+    } else {
+        response.header("Connection", std::move(merged));
+    }
+}
+
+class prepared_http1_response_stream;
+
+// Commit response-side HTTP/1 persistence after the runtime has folded in
+// request-body completion and server policy. This is the sole protocol mutation:
+// it honors an application-provided Connection: close and emits the version-
+// appropriate Connection field. Success retains the exact request version for
+// head serialization; a head this endpoint cannot send (for example a 426
+// without an Upgrade protocol, or a Transfer-Encoding other than exactly
+// `chunked`) throws http1_response_head_error before the response changes.
+[[nodiscard]] http1_request_connection_plan http1_commit_final_response(
+    http_response& response, http1_request_connection_plan plan);
+
+// Commit-time result. This object combines request/version/runtime constraints with
+// the response method/status and Connection options, then binds the exact header
+// bytes to the authoritative connection disposition.
+class prepared_http1_response_stream final {
+public:
+    [[nodiscard]] http_response& response() & noexcept {
+        return head_.response();
+    }
+    [[nodiscard]] http_response& response() && = delete;
+
+    [[nodiscard]] const http_response& response() const& noexcept {
+        return head_.response();
+    }
+    [[nodiscard]] const http_response& response() const&& = delete;
+
+    [[nodiscard]] const http1_response_head_plan& response_head_plan() const& noexcept {
+        return response_head_plan_;
+    }
+    [[nodiscard]] const http1_response_head_plan& response_head_plan() const&& = delete;
+
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept {
+        return head_.commit_plan();
+    }
+    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
+
+    [[nodiscard]] http1_request_connection_plan connection_plan() const noexcept {
+        return connection_plan_;
+    }
+
+private:
+    friend prepared_http1_response_stream prepare_http1_response_stream_head(
+        http_response, const http1_response_stream_plan&, http_response_trailer_intent);
+
+    prepared_http1_response_stream(http_response_stream_head head, http1_response_head_plan response_head_plan,
+        http1_request_connection_plan connection_plan) noexcept
+        : head_(std::move(head)),
+          response_head_plan_(response_head_plan),
+          connection_plan_(connection_plan) {}
+
+    http_response_stream_head head_;
+    http1_response_head_plan response_head_plan_;
+    http1_request_connection_plan connection_plan_;
+};
+
+[[nodiscard]] prepared_http1_response_stream prepare_http1_response_stream_head(
+    http_response response, const http1_response_stream_plan& plan,
+    http_response_trailer_intent trailer_intent = http_response_trailer_intent::none);
+
+// The successful head ends HTTP framing and transfers the connection to a
+// duplex byte stream. Payload belongs to that stream, not to an HTTP response.
+// A 2xx head with content or framing fields throws http1_response_head_error.
+[[nodiscard]] http1_response_head_plan prepare_http1_connect_response_head(
+    const http_response& response, http_protocol_version version);
+
+// RFC 9110 §7.8: whether an HTTP/1.1 `request` asks to switch protocols -- an
+// Upgrade field offering at least one protocol, sent with the Upgrade
+// connection option. Any other request's Upgrade field is ignored, as is a
+// CONNECT's: its 2xx establishes a tunnel instead.
+[[nodiscard]] bool http1_request_offers_upgrade(const http_request& request) noexcept;
+
+// Makes `response` -- a head without content or framing fields -- the 101
+// (Switching Protocols) head after which an HTTP/1.1 connection carries the
+// protocol it names (RFC 9110 §7.8, §15.2.2): the response's own Upgrade
+// field, else the first protocol `request` offered, with the Upgrade
+// connection option added when missing. A request that offers no upgrade, a
+// protocol it did not offer, content or framing fields throw
+// http1_response_head_error before `response` changes.
+[[nodiscard]] http1_response_head_plan prepare_http1_upgrade_response_head(
+    http_response& response, const http_request& request);
 
 }  // namespace ruvia

@@ -18,7 +18,6 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/streaming.h"
 
 #include "environment.h"

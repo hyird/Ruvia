@@ -16,12 +16,11 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_content_coding.h"
-#include "ruvia/http/http_field_values.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client.h"

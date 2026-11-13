@@ -20,11 +20,10 @@
 #include <openssl/evp.h>
 #include <openssl/sha.h>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_utf8.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/db/db_entity.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"

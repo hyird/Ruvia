@@ -25,13 +25,12 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/model.h"
 
-#include "integration/operation_interrupt.h"
-
+#include "http/operation_interrupt.h"
 namespace ruvia::detail {
 namespace {
 

@@ -1,5 +1,3 @@
-#include "ruvia/http/port_number.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -10,6 +8,7 @@
 
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_request_target.h"
+#include "ruvia/http/ip_address.h"
 
 TEST(Ruvia, port_number_rejects_wide_inputs_without_changing_an_existing_origin) {
     const auto rejects = [](auto input) {

@@ -18,8 +18,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/static_files.h"
-
+#include "ruvia/web/server_config.h"
 namespace {
 
 std::unique_ptr<ruvia::static_root> g_assets;

@@ -13,7 +13,7 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_content_semantics.h"
 
 #include "test_exceptions.h"

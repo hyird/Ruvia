@@ -10,8 +10,7 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/protocol_byte_limit.h"
-
+#include "ruvia/http/http_protocol_error.h"
 namespace ruvia {
 
 enum class http_transfer_coding : std::uint8_t { gzip,

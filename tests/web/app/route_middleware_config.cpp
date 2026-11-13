@@ -16,7 +16,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/rate_limit.h"
 #include "ruvia/web/testing.h"
 
 namespace route_middleware_config_test {

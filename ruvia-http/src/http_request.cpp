@@ -14,21 +14,16 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_client_redirect.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_target_origin.h"
 #include "ruvia/http/url_encoding.h"
 
-#include "field/http_connection_fields.h"
+#include "http_connection_fields.h"
 #include "http_wire_sink.h"
-#include "parser/http_uri_grammar.h"
-
 namespace ruvia {
 http_request& http_request::operator=(http_request&& other) noexcept {
     if (this == &other) {

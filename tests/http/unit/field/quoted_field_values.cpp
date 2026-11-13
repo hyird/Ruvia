@@ -7,8 +7,7 @@
 #include <vector>
 
 #include "ruvia/http/http_accept_encoding.h"
-#include "ruvia/http/http_field_values.h"
-
+#include "ruvia/http/http_field_syntax.h"
 // A quoted-string in a field value is opaque: a delimiter inside it never splits the field.
 
 TEST(Ruvia, public_quoted_field_visitors_preserve_quoted_delimiters) {

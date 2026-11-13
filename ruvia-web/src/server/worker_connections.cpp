@@ -31,13 +31,13 @@
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/http/proxy_protocol.h"
-#include "ruvia/web/server_connection.h"
+#include "ruvia/web/http_server.h"
 
-#include "context/context_access.h"
+#include "http/context_access.h"
+#include "http/operation_interrupt.h"
 #include "http/tls_protocol_policy.h"
 #include "http2/http2_sans_io_session.h"
-#include "integration/operation_interrupt.h"
-#include "integration/worker_capabilities.h"
+#include "server/app_state.h"
 #include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
 namespace ruvia::detail {

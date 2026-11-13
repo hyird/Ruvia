@@ -1,5 +1,3 @@
-#include "ruvia/web/server_connection.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -34,6 +32,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
+#include "ruvia/web/http_server.h"
 
 #include "app_run.h"
 #include "raw_http_peer.h"

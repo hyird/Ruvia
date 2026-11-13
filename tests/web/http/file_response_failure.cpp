@@ -25,7 +25,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/static_files.h"
+#include "ruvia/web/server_config.h"
 
 #include "app_run.h"
 #include "raw_http_peer.h"

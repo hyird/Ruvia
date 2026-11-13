@@ -17,13 +17,13 @@
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
 namespace ruvia {

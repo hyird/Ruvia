@@ -8,7 +8,7 @@
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 
-#include "context/context_access.h"
+#include "http/context_access.h"
 #include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
 namespace ruvia::detail {

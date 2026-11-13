@@ -21,8 +21,8 @@
 #include <openssl/x509.h>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_hex.h"
-#include "ruvia/http/http_target_origin.h"
+#include "ruvia/http/http_request_target.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/tls_config.h"
 
 namespace ruvia::detail {

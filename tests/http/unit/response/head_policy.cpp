@@ -5,8 +5,6 @@
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_response_stream.h"
-
 TEST(Ruvia, response_write_plan_unifies_method_status_and_body_size) {
     ruvia::http_response response;
     response.status(ruvia::http_status::ok);

@@ -15,14 +15,13 @@
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request_content_semantics.h"
 #include "ruvia/http/http_request_target.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_response_server.h"
 
-#include "field/http_connection_fields.h"
 #include "http2/http2_connection.h"
+#include "http_connection_fields.h"
+#include "http_websocket_permessage_deflate.h"
 #include "http_wire_sink.h"
-#include "parser/http_uri_grammar.h"
-#include "response/http_response_header_state.h"
-#include "websocket/http_websocket_permessage_deflate.h"
+#include "http_zlib_stream.h"
 namespace ruvia::detail {
 namespace {
 

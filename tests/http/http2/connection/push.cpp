@@ -11,7 +11,7 @@
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http2_framing.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "output_drain.h"
 

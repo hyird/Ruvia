@@ -5,8 +5,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_hex.h"
-
+#include "ruvia/http/url_encoding.h"
 TEST(Ruvia, hex_nibbles_decode_and_encode_ascii_digits) {
     EXPECT_EQ(ruvia::http_decode_hex_nibble('0'), 0);
     EXPECT_EQ(ruvia::http_decode_hex_nibble('a'), 10);

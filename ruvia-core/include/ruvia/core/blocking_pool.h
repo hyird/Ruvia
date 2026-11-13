@@ -39,8 +39,6 @@
 #include <variant>
 
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/one_shot.h"
-#include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"

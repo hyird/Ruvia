@@ -17,11 +17,11 @@
 #include <vector>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/port_number.h"
+#include "ruvia/http/ip_address.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/tls_config.h"
 

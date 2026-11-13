@@ -4,8 +4,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/http_accept_match.h"
-
+#include "ruvia/http/http_accept_encoding.h"
 namespace {
 
 std::string media_type_with_parameters(int count) {

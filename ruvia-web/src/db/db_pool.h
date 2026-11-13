@@ -18,7 +18,7 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
@@ -30,7 +30,7 @@
 #include "db/db_pipeline.h"
 #include "db/mariadb_pipeline.h"
 #include "db/postgresql_pipeline.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 struct st_mysql;
 struct pg_conn;
 

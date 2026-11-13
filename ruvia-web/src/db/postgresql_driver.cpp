@@ -17,7 +17,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/url_encoding.h"
 
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"

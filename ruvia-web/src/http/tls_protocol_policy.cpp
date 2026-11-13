@@ -26,10 +26,10 @@
 #include <openssl/x509v3.h>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "client/client_tcp_transport.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "server/http_server_options.h"
 namespace ruvia::detail {
 namespace {

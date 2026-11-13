@@ -24,7 +24,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/static_files.h"
+#include "ruvia/web/server_config.h"
 
 #include "scoped_temp_directory.h"
 #include "tcp_port_reservation.h"

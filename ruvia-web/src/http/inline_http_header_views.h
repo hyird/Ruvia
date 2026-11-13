@@ -21,14 +21,12 @@
 #include <openssl/evp.h>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/ip_address.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/rate_limit.h"
-
+#include "ruvia/web/middleware.h"
 namespace ruvia::detail {
 
 // Length-checked, data-independent (constant-time) byte comparison for secrets

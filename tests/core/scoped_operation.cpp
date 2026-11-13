@@ -1,5 +1,3 @@
-#include "ruvia/core/scoped_operation.h"
-
 #include <gtest/gtest.h>
 
 #include <atomic>

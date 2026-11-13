@@ -27,27 +27,25 @@
 #include <asio/ip/address.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/pool_lease_scheduler.h"
-#include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_cancellation.h"
 #include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"
@@ -56,8 +54,8 @@
 #include "ruvia/web/http_client_types.h"
 
 #include "client/client_tcp_transport.h"
+#include "http/operation_interrupt.h"
 #include "http/tls_protocol_policy.h"
-#include "integration/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 
 #ifdef RUVIA_ENABLE_HTTP2

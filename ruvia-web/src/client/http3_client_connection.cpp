@@ -24,7 +24,7 @@
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 
 #include "client/client_tcp_transport.h"

@@ -30,8 +30,8 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_tunnel.h"
 
-#include "context/context_access.h"
-#include "integration/operation_interrupt.h"
+#include "http/context_access.h"
+#include "http/operation_interrupt.h"
 #include "server/connection_lifecycle.h"
 #include "server/http_server_options.h"
 

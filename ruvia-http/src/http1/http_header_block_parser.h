@@ -13,16 +13,15 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http_expectations.h"
+#include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_status.h"
 
-#include "coding/http_zlib_stream.h"
-#include "field/http_connection_fields.h"
-#include "parser/http_uri_grammar.h"
+#include "http_connection_fields.h"
+#include "http_websocket_permessage_deflate.h"
+#include "http_zlib_stream.h"
 
 namespace ruvia::detail {
 

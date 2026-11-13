@@ -15,7 +15,7 @@
 #include <openssl/evp.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/http/http_ascii.h"
+#include "ruvia/http/http_field_syntax.h"
 
 #include "server/connection_lifecycle.h"
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -48,11 +48,11 @@
 #include "ruvia/core/socket.h"
 #include "ruvia/core/timer.h"
 
-#include "app/app_state.h"
 #include "http/inline_http_header_views.h"
 #include "http/tls_protocol_policy.h"
-#include "router/route_table.h"
+#include "server/app_state.h"
 #include "server/http_server_options.h"
+#include "server/route_table.h"
 
 #if defined(_WIN32)
 #include <windows.h>

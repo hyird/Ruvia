@@ -2,8 +2,7 @@
 
 #include <string_view>
 
-#include "ruvia/http/http_ascii.h"
-
+#include "ruvia/http/http_field_syntax.h"
 namespace {
 
 using ruvia::http_ascii_equals_ignore_case;

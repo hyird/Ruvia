@@ -21,7 +21,7 @@
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_response.h"
-#include "ruvia/http/http_response_stream.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "output_drain.h"
 #include "test_exceptions.h"

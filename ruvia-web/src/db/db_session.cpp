@@ -4,7 +4,7 @@
 #include "ruvia/web/db/db_query.h"
 
 #include "db/db_pool.h"
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #ifdef RUVIA_ENABLE_REDIS
 #endif
 

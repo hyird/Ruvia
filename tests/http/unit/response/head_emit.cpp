@@ -13,11 +13,9 @@
 
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_server_semantics.h"
-#include "ruvia/http/http_limits.h"
+#include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
-#include "ruvia/http/http_response_stream.h"
 
 #include "http1_request_message_fixture.h"
 

@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"

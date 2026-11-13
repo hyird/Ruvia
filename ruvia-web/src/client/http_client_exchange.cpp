@@ -10,13 +10,12 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/bytes.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/operation_deadline.h"
+#include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/http_client_types.h"
@@ -25,8 +24,8 @@
 #include "client/http_client_pool.h"
 #include "http/http_websocket_connection.h"
 #include "http/inline_http_header_views.h"
+#include "http/operation_interrupt.h"
 #include "http/tls_protocol_policy.h"
-#include "integration/operation_interrupt.h"
 namespace ruvia::detail {
 
 struct http_client_output_write_input final {

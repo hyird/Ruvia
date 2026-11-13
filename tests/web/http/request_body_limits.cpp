@@ -24,7 +24,6 @@
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
-#include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/streaming.h"
 
 #include "context_body_decoding_fixture.h"

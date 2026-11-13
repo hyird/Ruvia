@@ -17,7 +17,6 @@
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/session.h"
 
 #include "backend_config.h"
 

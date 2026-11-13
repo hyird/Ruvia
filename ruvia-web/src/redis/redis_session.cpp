@@ -11,13 +11,13 @@
 #include <openssl/evp.h>
 
 #include "ruvia/core/operation_options.h"
-#include "ruvia/http/http_ascii.h"
-#include "ruvia/http/http_hex.h"
+#include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
+#include "ruvia/http/url_encoding.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "integration/operation_interrupt.h"
+#include "http/operation_interrupt.h"
 #include "redis/redis_pool.h"
 namespace ruvia::detail {
 

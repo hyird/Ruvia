@@ -13,8 +13,7 @@
 
 #include "ruvia/http/ip_address.h"
 
-#include "parser/http_uri_grammar.h"
-
+#include "http_connection_fields.h"
 namespace ruvia {
 namespace {
 

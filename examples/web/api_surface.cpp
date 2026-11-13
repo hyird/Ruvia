@@ -23,7 +23,6 @@
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/multipart_reader.h"
 #include "ruvia/web/streaming.h"
 
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));

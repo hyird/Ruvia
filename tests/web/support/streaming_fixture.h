@@ -5,8 +5,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/scoped_operation.h"
-
+#include "ruvia/core/task_scope.h"
 namespace ruvia::test {
 
 class test_scoped_capability final {
