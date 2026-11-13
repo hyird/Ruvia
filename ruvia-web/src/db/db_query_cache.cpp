@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <chrono>
@@ -476,15 +477,15 @@ void db_query_cache_state::require_open() const {
 }
 
 void db_query_cache_state::unlist_fill(const fill& ended) noexcept {
-    if (const auto listed = fills_.find(ended.key_); listed != fills_.end() && listed->second.get() == &ended) {
-        fills_.erase(listed);
-    }
+    std::erase_if(fills_, [&ended](const fill_pointer& listed) noexcept {
+        return listed.get() == &ended;
+    });
 }
 
 void db_query_cache_state::unlist_fills(std::span<const std::string> keys) noexcept {
-    for (const auto& removed : keys) {
-        fills_.erase(std::string_view(removed));
-    }
+    std::erase_if(fills_, [keys](const fill_pointer& listed) noexcept {
+        return std::ranges::find(keys, listed->key_) != keys.end();
+    });
 }
 
 void db_query_cache_state::unlist_all_fills() noexcept {
@@ -532,11 +533,13 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
                 co_return std::move(*rows);
             }
         }
-        const auto running = fills_.find(key);
+        const auto running = std::ranges::find_if(fills_, [&key](const fill_pointer& listed) noexcept {
+            return listed->key_ == key;
+        });
         if (running == fills_.end()) {
             break;
         }
-        const auto joined = running->second;
+        const auto joined = *running;
         joined->awaited_ = true;
         timer_sleep_result woken{};
         {
@@ -564,7 +567,7 @@ task<db_rows> db_query_cache_state::query(std::string key, std::chrono::millisec
     }
 
     auto listed = std::make_shared<fill>(key);
-    fills_.emplace(std::string_view(listed->key_), listed);
+    fills_.push_back(listed);
     fill_lead lead(*this, std::move(listed));
     if (deadline.expired()) {
         throw_db_cache_timeout();

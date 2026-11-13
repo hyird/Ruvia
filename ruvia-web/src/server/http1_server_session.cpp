@@ -39,22 +39,178 @@
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2/http2_sans_io_session.h"
 #endif
+#include <array>
+#include <cstddef>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+
+#include <asio.hpp>
+
+#include "ruvia/core/async.h"
+#include "ruvia/core/task.h"
+#include "ruvia/http/http_response_head_buffer.h"
+
+#include "server/connection_scanner.h"
 #include "server/http1_request_sequence.h"
-#include "server/http1_response_output.h"
 #include "server/http1_route_dispatch.h"
 #include "server/http1_session_request_completion.h"
 #include "server/http_buffered_response.h"
+#include "server/http_connection_close.h"
 #include "server/http_connection_state.h"
 #include "server/http_request_admission.h"
 #include "server/http_response_stream_sink.h"
 #include "server/http_response_writer.h"
 #include "server/http_server_body_route_completion.h"
+#include "server/http_server_options.h"
 #include "server/http_server_response_state.h"
 #include "server/http_upgrade_route.h"
+#include "server/inbound_socket_stream.h"
 #include "server/inbound_transport_error.h"
 #include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
 #include "server/worker_codecs.h"
+
+namespace ruvia::detail {
+
+// Serialized output still bounded by one coalesced write. A pipelined
+// connection holds small buffered responses back while their successors are
+// already buffered, then sends them with the response that ends the run.
+inline constexpr std::size_t pipelined_output_batch_bytes = std::size_t{16} * 1024;
+
+// One write of a connection's serialized response output, optionally followed
+// by a borrowed body. The output is the work set's head buffer: the current
+// response's head, preceded by any pipelined responses held back for this
+// write. A write starts with one non-blocking attempt on plain TCP; only a
+// remainder suspends, through async_asio at the caller's co_await site so a
+// response the socket accepts at once costs no coroutine frame:
+//
+//     if (!output.start(body)) {
+//         auto completion = co_await async_asio<std::size_t>(
+//             [&output](auto handler) { output.write_remaining(std::move(handler)); });
+//         output.finish(completion.error_code(), completion.result());
+//     }
+//     const auto written = output.complete();
+//
+// complete() reports every held-back response whose head the write committed
+// and empties the output. The output must be empty before anything else
+// writes to the stream (interim heads, streams, upgrades, file bodies) and
+// before the session reads or closes.
+template <typename stream_type>
+class http1_response_output final {
+public:
+    http1_response_output(stream_type& stream, http_response_head_buffer& output,
+        http1_deferred_access_log& deferred_access, const access_log_sink& access_log,
+        ip_address remote_address, connection_scanner::entry& progress) noexcept
+        : stream_(&stream),
+          output_(&output),
+          deferred_access_(&deferred_access),
+          access_log_(&access_log),
+          remote_address_(remote_address),
+          progress_(&progress) {}
+
+    http1_response_output(const http1_response_output&) = delete;
+    http1_response_output& operator=(const http1_response_output&) = delete;
+
+    [[nodiscard]] bool empty() const noexcept {
+        return output_->view().empty();
+    }
+
+    // Begins writing the output followed by `body`, which stays borrowed until
+    // complete(). Returns true when the write already settled.
+    // A final plain response half-closes TCP here only after every byte was
+    // accepted, so its Linux send hint is flushed before any logging or frame
+    // cleanup; the session's lingering close then waits for the peer's end.
+    // A partial write falls back to ordinary async_write without that hint.
+    // MSVC 19.51 can lose a required coroutine tail call when this synchronous
+    // path is inlined into its caller.
+    [[nodiscard]]
+#if defined(_MSC_VER) && !defined(__clang__)
+    __declspec(noinline)
+#endif
+    bool start(std::string_view body = {}, bool finish_connection = false) noexcept {
+        body_ = body;
+        written_ = {};
+        if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
+            const auto flags = finish_connection ? final_plain_tcp_send_flags : 0;
+            const auto output = output_->view();
+            const bool completed = body.empty()
+                                       ? try_plain_tcp_sync_write(*stream_, asio::buffer(output), output.size(),
+                                             flags, written_.error_, written_.bytes_)
+                                       : try_plain_tcp_sync_write(*stream_,
+                                             std::array<asio::const_buffer, 2>{asio::buffer(output), asio::buffer(body)},
+                                             output.size() + body.size(), flags, written_.error_, written_.bytes_);
+            if (written_.bytes_ != 0) {
+                progress_->note_write_progress();
+            }
+            if (completed && !written_.error_ && finish_connection) {
+                shutdown_http_connection_send(stream_->lowest_layer());
+            }
+            return completed;
+        } else {
+            return false;
+        }
+    }
+
+    // Initiates the asynchronous write of what start() left. Every partial
+    // transfer touches the scanner entry, so write_timeout measures
+    // inactivity rather than the time to drain the whole output.
+    template <typename handler_type>
+    void write_remaining(handler_type&& handler) {
+        progress_->set_phase(connection_scanner::phase::writing);
+        async_write_after(*stream_, output_->view(), body_, written_.bytes_, *progress_, std::forward<handler_type>(handler));
+    }
+
+    [[nodiscard]] auto async_write_remaining() {
+        return async_asio<std::size_t>(
+            [this](auto handler) { this->write_remaining(std::move(handler)); });
+    }
+
+    // Records the asynchronous remainder's outcome.
+    void finish(std::error_code error, std::size_t bytes) noexcept {
+        written_.error_ = error;
+        written_.bytes_ += bytes;
+    }
+
+    // Reports the held-back responses whose heads were written, empties the
+    // output and returns the write's outcome.
+    [[nodiscard]] connection_write_outcome complete() noexcept {
+        deferred_access_->complete(*access_log_, remote_address_, written_.bytes_);
+        output_->reset();
+        body_ = {};
+        return written_;
+    }
+
+    // Writes held-back output through a coroutine, for the rare writers
+    // (interim heads, file responses) that need the output empty first. A
+    // failed write leaves the connection unusable. The caller's scanner phase
+    // (a handler's idle deadman, a body read, a request-head read) resumes
+    // once the write settles.
+    [[nodiscard]] task<std::error_code> flush() {
+        if (empty()) {
+            co_return std::error_code{};
+        }
+        if (!start()) {
+            const connection_scanner::entry::phase_scope caller_phase(*progress_);
+            const auto completion = co_await async_write_remaining();
+            finish(completion.error_code(), completion.result());
+        }
+        co_return complete().error_;
+    }
+
+private:
+    stream_type* stream_;
+    http_response_head_buffer* output_;
+    http1_deferred_access_log* deferred_access_;
+    const access_log_sink* access_log_;
+    ip_address remote_address_{};
+    connection_scanner::entry* progress_;
+    std::string_view body_;
+    connection_write_outcome written_;
+};
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 // Reads more of a cleartext connection's first bytes, which so far match the

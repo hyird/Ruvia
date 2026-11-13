@@ -9,6 +9,10 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+
+#include "ruvia/http/http_header.h"
+#include "ruvia/http/websocket_client_negotiation.h"
+
 namespace ruvia::detail {
 
 // Borrowed field descriptors stay inline until their reserved or appended count
@@ -105,11 +109,6 @@ private:
 };
 
 }  // namespace ruvia::detail
-
-#include <span>
-
-#include "ruvia/http/http_header.h"
-#include "ruvia/http/websocket_client_negotiation.h"
 
 namespace ruvia::detail {
 

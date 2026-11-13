@@ -41,6 +41,8 @@
 #include "server/http_server_options.h"
 #include "server/request_stream_dispatch.h"
 #include "server/worker_codecs.h"
+#include "websocket/http_websocket_connection.h"
+
 namespace ruvia::detail {
 
 // The single writer of every HTTP/1 final head that hands the connection to
@@ -98,9 +100,6 @@ task<std::error_code> write_websocket_handshake(stream_type& stream,
 }
 
 }  // namespace ruvia::detail
-
-#include "websocket/http_websocket_connection.h"
-#include "websocket/http_websocket_session.h"
 
 // The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP
 // tunnels and WebSocket upgrades) across HTTP/1 and HTTP/2: run the

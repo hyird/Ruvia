@@ -21,7 +21,10 @@
 #include "ruvia/web/server_config.h"
 #include "ruvia/web/tls_config.h"
 
+#include "server/inherited_listener_sockets.h"
 #include "tls/tls_credential.h"
+#include "tls/tls_files.h"
+#include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
 
@@ -64,10 +67,6 @@ struct http_server_tls_identities final {
 };
 
 }  // namespace ruvia::detail
-#include "server/inherited_listener_sockets.h"
-#include "tls/tls_credential.h"
-#include "tls/tls_files.h"
-#include "tls/tls_session_ticket_keys.h"
 
 namespace ruvia::detail {
 

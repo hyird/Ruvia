@@ -10,7 +10,6 @@
 #include "coding/http_content_length.h"
 #include "http1/http_client_response_head.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_request_headers.h"
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in
 // chunks borrowed from the fed input. nghttp2 has already enforced framing,
@@ -507,8 +506,11 @@ void http2_connection::emit_request_headers(http2_stream_state& stream) {
     // public request event acquires its lease. Keep that event's storage alive.
     if (role_ == http2_role::server) {
         if (!priorities_.empty()) {
-            if (const auto priority = priorities_.find(stream.id()); priority != priorities_.end()) {
-                stream.set_priority_update(priority->second);
+            const auto priority = std::ranges::find_if(priorities_, [&stream](const auto& entry_value) noexcept {
+                return entry_value.stream_id_ == stream.id();
+            });
+            if (priority != priorities_.end()) {
+                stream.set_priority_update(priority->fields_);
                 priorities_.erase(priority);
             }
         }

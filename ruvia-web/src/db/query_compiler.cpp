@@ -5,7 +5,6 @@
 #include <optional>
 #include <stdexcept>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -449,12 +448,16 @@ private:
             return nullptr;
         }
         if (positions_owner_ != &s) {
-            auto& positions = parameter_positions_[&s];
-            if (positions.empty()) {
-                positions.assign(s.nodes_.size(), 0);
+            const auto existing = std::ranges::find_if(parameter_positions_, [&s](const auto& entry_value) noexcept {
+                return entry_value.owner_ == &s;
+            });
+            if (existing != parameter_positions_.end()) {
+                positions_ = &existing->positions_;
+            } else {
+                auto& added = parameter_positions_.emplace_back(&s, std::vector<std::uint32_t>(s.nodes_.size(), 0));
+                positions_ = &added.positions_;
             }
             positions_owner_ = &s;
-            positions_ = &positions;
         }
         return &(*positions_)[index];
     }
@@ -505,7 +508,11 @@ private:
     // One dense table per compiled storage, indexed by node and holding the
     // node's 1-based parameter number (0: not yet bound); positions_ caches
     // the table of positions_owner_.
-    std::unordered_map<const db_query_storage*, std::vector<std::uint32_t>> parameter_positions_;
+    struct storage_parameter_positions final {
+        const db_query_storage* owner_{nullptr};
+        std::vector<std::uint32_t> positions_;
+    };
+    std::vector<storage_parameter_positions> parameter_positions_;
     const db_query_storage* positions_owner_{nullptr};
     std::vector<std::uint32_t>* positions_{nullptr};
 };

@@ -32,12 +32,12 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
-#include <unordered_map>
 #include <utility>
 #include <variant>
 #include <vector>
 
 #include "ruvia/http/detail/borrowed_view.h"
+#include "ruvia/http/detail/field/http_trailer_fields.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
@@ -48,18 +48,34 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_io_buffer.h"
+#include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_push.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_content_plan.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/http/websocket_handshake.h"
 
+#include "coding/http_content_length.h"
+#include "field/binary_field_section_size.h"
+#include "field/http_connection_fields.h"
+#include "field/http_field_kind.h"
 #include "field/http_lower_header_name.h"
+#include "field/http_request_field_validation.h"
+#include "field/http_te_fields.h"
+#include "http2/http2_stream_state.h"
 #include "memory/geometric_reserve.h"
+#include "memory/http_c_library_memory.h"
+#include "parser/http_request_target.h"
+#include "request/http_binary_request_fields.h"
+#include "response/http_framed_response_head_plan.h"
 #include "response/http_response_header_bits.h"
+#include "websocket/http_websocket_handshake_fields.h"
+#include "websocket/websocket_server_negotiation.h"
+
 namespace ruvia::detail {
 
 // The field section handed to one nghttp2 HEADERS/PUSH_PROMISE submission.
@@ -191,12 +207,247 @@ private:
 };
 
 }  // namespace ruvia::detail
-#include "http2/http2_request_headers.h"
-#include "http2/http2_stream_state.h"
-#include "memory/geometric_reserve.h"
-#include "memory/http_c_library_memory.h"
-#include "response/http_framed_response_head_plan.h"
-#include "websocket/websocket_server_negotiation.h"
+
+namespace ruvia::detail {
+
+// SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
+// serialized HPACK block. Huffman coding can spend up to 30 bits per decoded
+// octet, so four encoded bytes per decoded-budget byte bound a valid block while
+// keeping a hard memory limit for incomplete CONTINUATION sequences.
+inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http_header_bytes;
+
+// Request TE values are validated with the other request-field semantics
+// (validate_request_field: only "trailers", RFC 9113 Section 8.2.2).
+[[nodiscard]] inline bool http2_is_valid_regular_header(
+    std::string_view name, std::string_view value) noexcept {
+    return is_valid_binary_field_name(name) && is_valid_http_header_value(value) &&
+           !is_forbidden_http_binary_connection_field(name);
+}
+
+struct http2_header_decode_context final {
+    explicit http2_header_decode_context(http2_stream_state& stream_value) noexcept
+        : stream_(stream_value) {}
+
+    http2_stream_state& stream_;
+    binary_field_section_size decoded_header_list_size_{max_http_header_bytes};
+    request_field_state request_fields_{request_field_framing::binary};
+};
+
+// Call only after authority admission (or validated local push submission).
+// HTTP(S) already uses Host syntax; other schemes can contain URI userinfo.
+[[nodiscard]] inline bool http2_request_synthesizes_host(const http2_stream_state& stream) noexcept {
+    return binary_request_synthesizes_host(
+        stream.has_host(), stream.has_authority(), stream.request_scheme(), stream.request_authority());
+}
+
+[[nodiscard]] inline std::string_view http2_request_host_field(const http2_stream_state& stream) noexcept {
+    if (!stream.has_host()) {
+        return {};
+    }
+    const auto index = stream.host_header_index();
+    if (index < stream.remote_header_count()) {
+        const auto header_value = stream.remote_header_at(index);
+        if (header_value.kind_ == http_field_kind::host) {
+            return header_value.value_;
+        }
+    }
+    return {};
+}
+
+// Wire :authority if present; otherwise the Host field of a translated
+// origin-form request (RFC 9113 §8.3.1).
+[[nodiscard]] inline std::string_view http2_effective_request_authority(
+    const http2_stream_state& stream) noexcept {
+    return stream.has_authority() ? stream.request_authority() : http2_request_host_field(stream);
+}
+
+[[nodiscard]] inline bool http2_has_required_request_authority(const http2_stream_state& stream) noexcept {
+    if (!binary_regular_request_requires_authority(stream.request_scheme(), stream.request_path())) {
+        return true;
+    }
+    if (stream.has_authority()) {
+        return true;
+    }
+    return is_valid_binary_request_authority(stream.request_scheme(), http2_request_host_field(stream));
+}
+
+[[nodiscard]] inline bool http2_accumulate_header_list_bytes(
+    http2_header_decode_context& context_value, std::string_view name, std::string_view value) noexcept {
+    return context_value.decoded_header_list_size_.add(name, value);
+}
+
+[[nodiscard]] inline bool http2_append_cookie_header_value(
+    http2_stream_state& stream, std::string_view value) {
+    // RFC 9113 section 8.2.3 joins cookie-pairs with "; ". An empty crumb is
+    // not a cookie-pair (RFC 6265 section 4.2.1) and would leave a leading or
+    // trailing separator in the joined value, so it contributes nothing.
+    if (value.empty()) {
+        return true;
+    }
+    if (!stream.append_request_cookie_header_value(value, stream.has_cookie())) {
+        return false;
+    }
+    stream.mark_cookie();
+    return true;
+}
+
+[[nodiscard]] inline bool http2_on_decoded_initial_header(
+    http2_header_decode_context& context_value, std::string_view name, std::string_view value) {
+    if (!http2_accumulate_header_list_bytes(context_value, name, value)) {
+        return false;
+    }
+
+    auto& stream = context_value.stream_;
+    if (name.empty()) {
+        return false;
+    }
+
+    if (name.front() == ':') {
+        if (stream.regular_header_seen()) {
+            return false;
+        }
+        if (name == ":method") {
+            if (stream.has_method() || !is_valid_http_method_token(value)) {
+                return false;
+            }
+            stream.assign_request_method(value);
+            stream.record_request_pseudo_header(http2_request_pseudo_header::method);
+            return true;
+        }
+        if (name == ":protocol") {
+            if (stream.has_protocol() || !is_valid_http_header_name(value)) {
+                return false;
+            }
+            stream.set_protocol(value);
+            stream.record_request_pseudo_header(http2_request_pseudo_header::protocol);
+            return true;
+        }
+        if (name == ":scheme") {
+            if (stream.has_scheme() || !is_valid_uri_scheme(value)) {
+                return false;
+            }
+            stream.assign_request_scheme(value);
+            stream.mark_scheme(http_uri_scheme_default_port(value));
+            stream.record_request_pseudo_header(http2_request_pseudo_header::scheme);
+            return true;
+        }
+        if (name == ":authority") {
+            if (stream.has_authority() || !is_valid_uri_authority(value)) {
+                return false;
+            }
+            stream.assign_request_authority(value);
+            stream.mark_authority();
+            stream.record_request_pseudo_header(http2_request_pseudo_header::authority);
+            return true;
+        }
+        if (name == ":path") {
+            if (stream.has_path() || value.empty()) {
+                return false;
+            }
+            stream.assign_request_path(value);
+            stream.mark_path();
+            stream.record_request_pseudo_header(http2_request_pseudo_header::path);
+            return true;
+        }
+        return false;
+    }
+
+    if (!http2_is_valid_regular_header(name, value)) {
+        return false;
+    }
+    stream.mark_regular_header_seen();
+    const auto kind = classify_http_field(name);
+    if (validate_request_field(kind, value, http_field_list_role::recipient, context_value.request_fields_) !=
+        request_field_status::ok) {
+        return false;
+    }
+    switch (kind) {
+        case http_field_kind::host:
+            if (stream.has_authority() &&
+                !authority_matches_host(stream.request_authority(), value, stream.scheme_default_port())) {
+                return false;
+            }
+            stream.mark_host(stream.remote_header_count());
+            break;
+        case http_field_kind::cookie:
+            return http2_append_cookie_header_value(stream, value);
+        case http_field_kind::expect:
+            // Expect is an extensible semantic list. Preserve unsupported but
+            // syntactically valid members for the Web product's 417 policy.
+            stream.parse_request_expectation_field(value);
+            break;
+        case http_field_kind::content_length: {
+            http_content_length_state content_length;
+            if (content_length.parse_field(value) != http_content_length_parse_status::ok ||
+                !stream.declare_remote_content_length(*content_length.value())) {
+                return false;
+            }
+            break;
+        }
+        default:
+            break;
+    }
+    return stream.append_remote_header(name, value, kind);
+}
+
+[[nodiscard]] inline bool http2_on_decoded_request_trailer(
+    http2_header_decode_context& context_value, std::string_view name, std::string_view value) {
+    if (!http2_accumulate_header_list_bytes(context_value, name, value)) {
+        return false;
+    }
+
+    // Pseudo-header and connection-specific fields, including a TE value other
+    // than "trailers", are malformed (RFC 9113 sections 8.1 and 8.2.2). A field
+    // merely not permitted as a trailer binds only the sender (RFC 9110 section
+    // 6.5.1) and is discarded.
+    if (!http2_is_valid_regular_header(name, value) ||
+        (name == "te" && !is_valid_binary_http_te_field_value(value, http_field_list_role::recipient))) {
+        return false;
+    }
+    return is_forbidden_http_request_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+[[nodiscard]] inline bool http2_is_pending_websocket_connect(const http2_stream_state& stream) noexcept {
+    const auto* pending = stream.tunnel().pending();
+    return pending != nullptr && pending->form() == http2_connect_form::extended &&
+           stream.protocol_is_websocket();
+}
+
+[[nodiscard]] inline bool http2_websocket_connect_remote_head_ended(
+    const http2_stream_state& stream) noexcept {
+    const auto& remote = stream.remote_receive();
+    const auto* pending_end = remote.connect_pending_end_stream();
+    return remote.head_end_stream_pending() != nullptr ||
+           (pending_end != nullptr && pending_end->ended_without_tunnel_data());
+}
+
+[[nodiscard]] inline bool http2_websocket_connect_content_acceptable(
+    const http2_stream_state& stream) noexcept {
+    const auto* known = stream.remote_content().allowed_known_length();
+    return stream.remote_content().allowed_without_length() != nullptr ||
+           (known != nullptr && known->declared_length() == 0);
+}
+
+[[nodiscard]] inline websocket_handshake_validation_result validate_http2_websocket_handshake(
+    const http2_stream_state& stream, const http_request& request,
+    websocket_handshake_validation_options options = {}) noexcept {
+    if (!http2_is_pending_websocket_connect(stream) || !http2_remote_final_head_decoded(stream) ||
+        http2_websocket_connect_remote_head_ended(stream) ||
+        !http2_websocket_connect_content_acceptable(stream)) {
+        return websocket_handshake_validation_result::make_invalid_request();
+    }
+
+    // RFC 8441 section 5: :protocol supersedes the RFC 6455 key exchange, so
+    // Sec-WebSocket-Key and Sec-WebSocket-Accept are not processed here.
+    return validate_extended_connect_websocket_headers(request, options);
+}
+
+}  // namespace ruvia::detail
+
 namespace ruvia::detail {
 
 // Queue records for the events whose public form the facade materializes from
@@ -1284,7 +1535,11 @@ private:
     http2_field_list fields_;
     http2_stream_table streams_;
     // RFC 9218 priority signals received for streams the peer has not opened yet.
-    std::unordered_map<std::uint32_t, http_priority_fields> priorities_;
+    struct idle_priority_entry final {
+        std::uint32_t stream_id_{0};
+        http_priority_fields fields_{};
+    };
+    std::vector<idle_priority_entry> priorities_;
     std::vector<http2_event> events_;
     std::size_t event_offset_{0};
     http2_stream_lease_ledger leases_;

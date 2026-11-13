@@ -809,17 +809,22 @@ void http2_connection::process_priority_update(const nghttp2_frame& frame) {
         }
         stream->set_priority_update(fields);
     } else if (idle) {
-        if (!priorities_.contains(id)) {
+        const auto existing = std::ranges::find_if(priorities_, [id](const auto& entry_value) noexcept {
+            return entry_value.stream_id_ == id;
+        });
+        if (existing != priorities_.end()) {
+            existing->fields_ = fields;
+        } else {
             // Signals for identifiers the peer skipped become unreachable once a
-            // higher stream opens; drop those only when the map would grow.
-            std::erase_if(priorities_, [this](const auto& entry_value) {
-                return entry_value.first <= highest_peer_stream_id_;
+            // higher stream opens; drop those only when the table would grow.
+            std::erase_if(priorities_, [this](const auto& entry_value) noexcept {
+                return entry_value.stream_id_ <= highest_peer_stream_id_;
             });
             if (priorities_.size() >= http2_local_settings::max_concurrent_streams) {
                 return;
             }
+            priorities_.push_back({id, fields});
         }
-        priorities_.insert_or_assign(id, fields);
     } else {
         return;
     }
@@ -1247,12 +1252,12 @@ void http2_connection::pin_stream(std::uint32_t stream_id) noexcept {
 void http2_connection::unpin_stream(std::uint32_t stream_id) {
     auto* stream = streams_.find(stream_id);
     if (stream == nullptr) {
-        priorities_.erase(stream_id);
+        std::erase_if(priorities_, [stream_id](const auto& entry_value) noexcept { return entry_value.stream_id_ == stream_id; });
         return;
     }
     if (stream->is_aborted()) {
         flush_window_debt(*stream);
-        priorities_.erase(stream_id);
+        std::erase_if(priorities_, [stream_id](const auto& entry_value) noexcept { return entry_value.stream_id_ == stream_id; });
         release_local_request_stream(*stream);
         streams_.remove(stream_id);
         return;
@@ -1261,7 +1266,7 @@ void http2_connection::unpin_stream(std::uint32_t stream_id) {
         flush_window_debt(*stream);
         ++completed_responses_;
         release_local_request_stream_if_closed(*stream);
-        priorities_.erase(stream_id);
+        std::erase_if(priorities_, [stream_id](const auto& entry_value) noexcept { return entry_value.stream_id_ == stream_id; });
         streams_.remove(stream_id);
         return;
     }
@@ -1287,7 +1292,7 @@ bool http2_connection::close_stream_impl(std::uint32_t stream_id, http2_stream_c
     }
     const bool pinned = stream->pinned();
     release_local_request_stream(*stream);
-    priorities_.erase(stream_id);
+    std::erase_if(priorities_, [stream_id](const auto& entry_value) noexcept { return entry_value.stream_id_ == stream_id; });
     (void)stream->abort(source_value);
     if (notification == close_notification_type::emit_event) {
         publish_event(http2_event(http2_stream_closed_event(stream_id, source_value, error)));

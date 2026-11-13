@@ -15,7 +15,6 @@
 #include "http/inline_http_header_views.h"
 #include "tls/tls_random.h"
 #include "websocket/http_websocket_connection.h"
-#include "websocket/http_websocket_session.h"
 
 namespace ruvia::detail {
 

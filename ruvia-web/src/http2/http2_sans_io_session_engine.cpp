@@ -38,8 +38,6 @@
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
 #include "http/http_tunnel_session.h"
-#include "http2/http2_sans_io_request_body.h"
-#include "http2/http2_sans_io_send_window.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"
 #include "server/http_buffered_response.h"
@@ -49,7 +47,6 @@
 #include "server/http_upgrade_route.h"
 #include "server/inbound_transport_error.h"
 #include "websocket/http_websocket_connection.h"
-#include "websocket/http_websocket_session.h"
 
 namespace ruvia::detail {
 namespace {

@@ -35,6 +35,16 @@
 #include "field/http_origin_payload.h"
 #include "field/http_request_field_validation.h"
 #include "http1/http_client_response_head.h"
+#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
+#include "parser/http_header_descriptor_storage.h"
+#include "request/http_binary_request_fields.h"
+#include "response/http_binary_response_fields.h"
+#include "response/http_final_response_control_plan.h"
+#include "response/http_framed_response_head_plan.h"
+#include "response/http_local_content_state.h"
+#include "response/http_response_header_state.h"
+#include "websocket/websocket_server_negotiation.h"
 #include "wire/quic_varint.h"
 
 namespace ruvia::detail {
@@ -254,17 +264,6 @@ private:
 };
 
 }  // namespace ruvia::detail
-#include "memory/http_address_overlap.h"
-#include "memory/http_c_library_memory.h"
-#include "parser/http_header_descriptor_storage.h"
-#include "request/http_binary_request_fields.h"
-#include "response/http_binary_response_fields.h"
-#include "response/http_final_response_control_plan.h"
-#include "response/http_framed_response_head_plan.h"
-#include "response/http_local_content_state.h"
-#include "response/http_response_header_state.h"
-#include "websocket/websocket_server_negotiation.h"
-#include "wire/quic_varint.h"
 
 namespace ruvia {
 
@@ -854,11 +853,14 @@ public:
         if (frame_observer_ == nullptr || bytes.empty()) {
             return;
         }
-        auto position = frame_scanners_.find(stream_id);
+        auto position = std::ranges::find_if(frame_scanners_, [stream_id](const auto& entry_value) noexcept {
+            return entry_value.stream_id_ == stream_id;
+        });
         if (position == frame_scanners_.end()) {
-            position = frame_scanners_.try_emplace(stream_id, (stream_id & 0x2) == 0).first;
+            frame_scanners_.push_back({stream_id, received_frame_scanner((stream_id & 0x2) == 0)});
+            position = std::prev(frame_scanners_.end());
         }
-        position->second.scan(bytes, [&](std::uint64_t type, std::uint64_t length) noexcept {
+        position->scanner_.scan(bytes, [&](std::uint64_t type, std::uint64_t length) noexcept {
             frame_observer_(observer_context_, http3_frame_metadata{
                                                    .observation_sequence_ = frame_observation_sequence_++,
                                                    .stream_id_ = stream_id,
@@ -1554,7 +1556,11 @@ public:
     std::size_t event_offset_{0};
     std::unordered_map<std::int64_t, stream_state> streams_;
     // Per received stream, only with a frame observer.
-    std::unordered_map<std::int64_t, received_frame_scanner> frame_scanners_;
+    struct stream_frame_scanner final {
+        std::int64_t stream_id_{0};
+        received_frame_scanner scanner_;
+    };
+    std::vector<stream_frame_scanner> frame_scanners_;
     std::uint64_t frame_observation_sequence_{0};
     std::vector<char> initial_origin_payload_;
     nghttp3_vec initial_origin_vec_{};
@@ -2285,7 +2291,7 @@ http3_transport_status http3_connection::close_stream(std::int64_t stream_id,
     const int result = nghttp3_conn_close_stream2(impl_->connection_, flags, stream_id,
         static_cast<std::uint64_t>(receive_error.value_or(http3_error_code::no_error)),
         static_cast<std::uint64_t>(send_error.value_or(http3_error_code::no_error)));
-    impl_->frame_scanners_.erase(stream_id);
+    std::erase_if(impl_->frame_scanners_, [stream_id](const auto& entry_value) noexcept { return entry_value.stream_id_ == stream_id; });
     if (impl_->callback_error_) {
         // Only an allocation of the close event can fail; the connection
         // cannot report the closure any more.

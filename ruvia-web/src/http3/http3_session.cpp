@@ -43,8 +43,6 @@
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
 #include "http3/http3_endpoint.h"
-#include "http3/http3_response_write.h"
-#include "http3/http3_stream.h"
 #include "integration/worker_capabilities.h"
 #include "router/route_resolution.h"
 #include "router/route_table.h"

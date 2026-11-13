@@ -29,6 +29,8 @@
 #include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
 #include "server/peer_address.h"
+#include "server/server_tls_stream.h"
+#include "server/worker_connections.h"
 
 namespace ruvia::detail {
 
@@ -142,8 +144,6 @@ private:
 };
 
 }  // namespace ruvia::detail
-#include "server/server_tls_stream.h"
-#include "server/worker_connections.h"
 
 namespace ruvia {
 namespace {

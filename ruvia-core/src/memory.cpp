@@ -25,7 +25,7 @@
 #include <cstddef>
 #include <new>
 
-#include "ruvia/core/detail/task/task_promise.h"
+#include "ruvia/core/task.h"
 
 namespace ruvia {
 

@@ -1,4 +1,3 @@
-#include "http3/http3_response_write.h"
 
 #include <cstddef>
 #include <span>
@@ -11,7 +10,6 @@
 #include "ruvia/http/http_response_server.h"
 
 #include "http3/http3_session.h"
-#include "http3/http3_stream.h"
 
 namespace ruvia::detail {
 namespace {

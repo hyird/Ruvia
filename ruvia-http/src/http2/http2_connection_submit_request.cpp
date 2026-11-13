@@ -9,7 +9,6 @@
 #include "field/http_lower_header_name.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_request_headers.h"
 #include "parser/http_request_target.h"
 #include "request/http_binary_request_fields.h"
 #include "websocket/http_websocket_handshake_fields.h"

@@ -10,7 +10,6 @@
 
 #include "field/http_origin_payload.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_websocket_handshake.h"
 #include "request/http_binary_request_fields.h"
 #include "response/http_binary_response_fields.h"
 #include "response/http_final_response_control_plan.h"

@@ -35,6 +35,13 @@
 #include <asio/error.hpp>
 #include <asio/ip/udp.hpp>
 
+#include "http3/http3_udp_receive.h"
+#include "server/peer_address.h"
+#include "tls/tls_random.h"
+#if defined(_WIN32)
+#include "server/windows_acceptor.h"
+#endif
+
 namespace ruvia::detail {
 
 inline void enable_http3_packet_info(asio::ip::udp::socket& socket) {
@@ -206,12 +213,6 @@ inline std::error_code send_http3_packet(asio::ip::udp::socket& socket, const as
 }
 
 }  // namespace ruvia::detail
-#endif
-#include "http3/http3_udp_receive.h"
-#include "server/peer_address.h"
-#include "tls/tls_random.h"
-#if defined(_WIN32)
-#include "server/windows_acceptor.h"
 #endif
 
 namespace ruvia::detail {

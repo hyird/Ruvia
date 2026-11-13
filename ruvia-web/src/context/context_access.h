@@ -1,17 +1,164 @@
 #pragma once
 
+#include <cassert>
 #include <chrono>
 #include <cstddef>
 #include <exception>
+#include <memory>
+#include <new>
 #include <optional>
+#include <string>
 #include <utility>
+#include <vector>
 
+#include "ruvia/http/http_response.h"
 #include "ruvia/web/context.h"
+#include "ruvia/web/detail/http/context/request_bindings.h"
 
-#include "context/context_request_storage.h"
 #include "context/context_services.h"
+#include "context/context_session_state.h"
 #include "context/http_interim_response_output.h"
+#include "http/request_query_values.h"
 #include "http/static_file_variant.h"
+#include "server/inbound_buffer_budget.h"
+
+namespace ruvia::detail {
+
+// Draft and selected response have disjoint ownership. Building a response
+// consumes the draft; selecting or replacing a response never merges metadata.
+class context_response_state final {
+public:
+    context_response_state() noexcept = default;
+
+    [[nodiscard]] bool has_draft() const noexcept {
+        return draft_.has_value();
+    }
+    [[nodiscard]] http_status_code draft_status() const noexcept {
+        return draft_ ? draft_->status() : http_status::ok;
+    }
+    void reset_draft() noexcept {
+        draft_.reset();
+    }
+    [[nodiscard]] http_response take_draft_or_new() noexcept {
+        if (!draft_) {
+            return http_response{};
+        }
+        auto response = std::move(*draft_);
+        draft_.reset();
+        return response;
+    }
+    [[nodiscard]] http_response& draft() {
+        if (!draft_) {
+            draft_.emplace();
+        }
+        return *draft_;
+    }
+    [[nodiscard]] http_response* final() noexcept {
+        return final_ ? &*final_ : nullptr;
+    }
+    [[nodiscard]] const http_response* final() const noexcept {
+        return final_ ? &*final_ : nullptr;
+    }
+    [[nodiscard]] http_response& policy() {
+        if (!policy_) {
+            policy_.emplace();
+        }
+        return *policy_;
+    }
+    [[nodiscard]] http_response& defaults() {
+        if (!defaults_) {
+            defaults_.emplace();
+        }
+        return *defaults_;
+    }
+    void policy_status(http_status_code status) {
+        policy_status_ = status;
+    }
+    void apply_policy(http_response& response) const {
+        if (defaults_ && !defaults_->headers().empty()) {
+            response.transfer_headers_from(*defaults_, http_response_header_transfer::merge);
+        }
+        if (policy_ && !policy_->headers().empty()) {
+            response.transfer_headers_from(*policy_, http_response_header_transfer::apply);
+        }
+        if (policy_status_) {
+            response.status(*policy_status_);
+        }
+    }
+
+    void finalize(http_response&& response) {
+        final_.emplace(std::move(response));
+    }
+
+    [[nodiscard]] http_response&& release_final() & {
+        assert(final_);
+        apply_policy(*final_);
+        return std::move(*final_);
+    }
+    http_response&& release_final() && = delete;
+
+private:
+    std::optional<http_response> draft_;
+    std::optional<http_response> policy_;
+    std::optional<http_response> defaults_;
+    std::optional<http_status_code> policy_status_;
+    std::optional<http_response> final_;
+};
+
+}  // namespace ruvia::detail
+
+namespace ruvia::detail {
+
+struct aligned_storage_deleter final {
+    std::size_t alignment_{alignof(std::max_align_t)};
+    void operator()(std::byte* storage) const noexcept {
+        ::operator delete[](storage, std::align_val_t{alignment_});
+    }
+};
+
+// Owns every request-local context value that is not a borrowed pointer: lazy
+// caches, response/session machines, typed bindings, and middleware next() hop
+// storage. Synchronous construction borrows the input view, then retains one
+// services value here before returning; no reference to the input survives.
+class context_request_storage final {
+public:
+    explicit context_request_storage(const context_services& service_view) noexcept
+        : services_(service_view),
+          decoded_body_reservation_(services_.inbound_buffers()) {}
+
+    context_request_storage(const context_request_storage&) = delete;
+    context_request_storage& operator=(const context_request_storage&) = delete;
+
+    [[nodiscard]] std::byte* allocate_raw(std::size_t size, std::size_t alignment) {
+        auto* storage = static_cast<std::byte*>(::operator new[](size, std::align_val_t{alignment}));
+        try {
+            owned_blocks_.emplace_back(storage, aligned_storage_deleter{alignment});
+        } catch (...) {
+            ::operator delete[](storage, std::align_val_t{alignment});
+            throw;
+        }
+        return storage;
+    }
+
+    context_services services_;
+    context_response_state response_state_;
+    context_session_state session_state_;
+    request_bindings request_bindings_;
+
+    std::optional<std::string> decoded_body_;
+    inbound_buffer_reservation decoded_body_reservation_;
+    std::optional<request_name_value_list> headers_;
+    std::optional<request_query_cache> query_;
+    std::optional<request_name_value_list> cookies_;
+    std::string decoded_route_params_;
+    // Views borrow route storage, the request path, or decoded_route_params_.
+    std::optional<request_name_value_list> route_params_;
+    std::vector<std::unique_ptr<std::byte[], aligned_storage_deleter>> owned_blocks_;
+    bool route_params_invalid_{false};
+    bool route_params_unencoded_{false};
+};
+
+}  // namespace ruvia::detail
 
 namespace ruvia::detail {
 

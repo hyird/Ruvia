@@ -8,7 +8,6 @@
 #include <span>
 #include <string>
 #include <string_view>
-#include <unordered_map>
 #include <utility>
 #include <vector>
 
@@ -136,8 +135,7 @@ private:
     std::optional<std::size_t> max_entry_reply_bytes_;
     std::string prefix_;
     redis_session redis_;
-    // Keyed by views of each fill's own key.
-    std::unordered_map<std::string_view, fill_pointer> fills_;
+    std::vector<fill_pointer> fills_;
 };
 
 }  // namespace ruvia::detail

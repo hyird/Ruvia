@@ -22,7 +22,6 @@
 #include "ruvia/web/context.h"
 
 #include "context/context_access.h"
-#include "context/context_response_state.h"
 #include "context/context_services.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"

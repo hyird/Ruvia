@@ -14,6 +14,7 @@
 
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/fixed_string.h"
+#include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
 
@@ -386,7 +387,6 @@ template <fixed_string pattern>
 }
 
 }  // namespace ruvia::detail::model
-#include "ruvia/web/model.h"
 
 namespace ruvia::detail::model {
 
