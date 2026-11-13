@@ -18,7 +18,7 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/http_client.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 
 namespace example {

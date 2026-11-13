@@ -39,10 +39,10 @@
 #include <system_error>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 
 namespace ruvia {

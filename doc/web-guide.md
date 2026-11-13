@@ -643,7 +643,7 @@ int main() {
 ```cpp
 #include "ruvia/web/context.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #include "ruvia/web/middleware.h"
 
 // 位于所属 loop 的服务协程内；server.shutdown() 完成前保持 redis 与 routes 存活。

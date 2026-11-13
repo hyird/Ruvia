@@ -15,9 +15,9 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 
 #include "backend_config.h"
 

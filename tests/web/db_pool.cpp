@@ -48,12 +48,10 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db.h"
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/db.h"
+#include "ruvia/web/redis.h"
 
-#include "backend_client_fixture.h"
 #include "http_server_fixture.h"
-#include "worker_task_fixture.h"
 
 namespace ruvia::test {
 

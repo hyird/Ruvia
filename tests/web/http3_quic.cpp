@@ -61,7 +61,6 @@
 #include "ruvia/web/http_client.h"
 
 #include "http_server_fixture.h"
-#include "worker_task_fixture.h"
 
 #if !defined(_WIN32)
 #include <sys/socket.h>

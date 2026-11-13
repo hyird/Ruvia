@@ -38,7 +38,6 @@
 #include "ruvia/web/context.h"
 
 #include "http_server_fixture.h"
-#include "worker_task_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
 #endif

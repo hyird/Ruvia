@@ -9,7 +9,7 @@
 #include <exception>
 #include <iostream>
 
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #include "ruvia/web/middleware.h"
 namespace {
 

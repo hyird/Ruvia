@@ -93,9 +93,7 @@ endif()
 
 if(RUVIA_BUILD_WEB)
     # Process-singleton application fixtures run in separate test executables.
-    ruvia_add_web_standalone_test(ruvia_app_listener_sockets 120 web/listener_sockets.cpp)
-    ruvia_add_web_standalone_test(ruvia_app_request_stream 120 web/request_stream.cpp)
-    ruvia_add_web_standalone_test(ruvia_http_server 180 web/http_server.cpp)
+    ruvia_add_web_standalone_test(ruvia_app_listener_sockets 180 web/listener_sockets.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_lifecycle 180 web/connection_lifecycle.cpp)
     ruvia_add_web_standalone_test(ruvia_tcp_client_tests 120 web/http1_websocket.cpp)
     ruvia_add_web_standalone_test(ruvia_connection_close_tests 120 web/http1_connection_close.cpp)

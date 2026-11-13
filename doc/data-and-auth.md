@@ -11,14 +11,14 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-头文件：`"ruvia/web/db/db.h"`。
+头文件：`"ruvia/web/db.h"`。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
 ```cpp
 #include "ruvia/web/app.h"
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 
 ruvia::db_config config{
     .driver_ = ruvia::db_driver::postgresql, // 或 ruvia::db_driver::mariadb
@@ -124,7 +124,7 @@ co_await stream.close();
 
 连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
-### 1.3 事务与保存点（`"ruvia/web/db/db.h"`）
+### 1.3 事务与保存点（`"ruvia/web/db.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
@@ -150,7 +150,7 @@ PostgreSQL 事务还额外支持：
 - **咨询锁（Advisory Locks）**：`co_await tx.advisory_lock(key)` / `try_advisory_lock(key)`
 - **服务端游标**：`declare_cursor(name, sql, params, scroll)`、`fetch_cursor(name, count)`、`close_cursor(name)`
 
-### 1.4 启动期数据库迁移（`"ruvia/web/db/db.h"`）
+### 1.4 启动期数据库迁移（`"ruvia/web/db.h"`）
 
 `ruvia::db_migrator(event_loop, config, options = {})` 与 `db_client` 一样绑定调用方事件循环；`co_await migrator.migrate(migrations, operation = {})` 在该循环上以独立连接执行有序迁移列表，并在迁移表（默认 `ruvia_schema_migrations`）中记录与核对每个版本 `id_` 的 SQL 校验摘要：
 
@@ -180,7 +180,7 @@ auto report = co_await migrator.migrate(migrations);
 
 ## 2. SQL 构建器、Schema DDL 与存储过程
 
-头文件：`"ruvia/web/db/db.h"`。
+头文件：`"ruvia/web/db.h"`。
 参考示例：[examples/web/sql_queries.cpp](../examples/web/sql_queries.cpp)。
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
@@ -226,13 +226,13 @@ auto report = co_await migrator.migrate(migrations);
 
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
-头文件：`"ruvia/web/db/db.h"`。
+头文件：`"ruvia/web/db.h"`。
 参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 
 ```cpp
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 
 RUVIA_DB_ENTITY(device, "devices",
     RUVIA_DB_COLUMN(id, std::int64_t,
@@ -359,7 +359,7 @@ mixed.with("samples", samples).from_cte("samples")
 - 对包含通配项的 `insert_from(columns, builder)`，Builder 不伪造源宽度或列清单；目标列名照常校验，实际源/目标宽度是否匹配交由数据库检查。无通配项的显式投影保留既有宽度检查。
 - 关系预加载（`relations_` / `*_join_and_select`）解码结果形状错误时同样抛出 `db_conversion_error`：映射列缺失为 `missing_column`，重名列为 `invalid_format`，根主键或复合主键部分为 NULL 为 `unexpected_null`，to-one 关系返回多行或单实体查询返回多个根为 `unexpected_row_count`。
 
-### 3.5 独立字段与实体映射（`"ruvia/web/db/db.h"`）
+### 3.5 独立字段与实体映射（`"ruvia/web/db.h"`）
 
 | 公开入口 | 结果与边界 |
 | --- | --- |
@@ -379,7 +379,7 @@ auto users = ruvia::decode_db_rows<user_projection>(raw);
 
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
 
-聚合头文件：`"ruvia/web/redis/redis.h"`。
+聚合头文件：`"ruvia/web/redis.h"`。
 参考示例：[examples/web/redis.cpp](../examples/web/redis.cpp)、[examples/web/redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)、[examples/web/redis_streams.cpp](../examples/web/redis_streams.cpp)、[examples/web/redis_orm.cpp](../examples/web/redis_orm.cpp)。
 
 ### 4.1 连接池配置 `ruvia::redis_config`

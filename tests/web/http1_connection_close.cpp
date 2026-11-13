@@ -49,7 +49,6 @@
 
 #include "ruvia/web/middleware.h"
 
-#include "worker_task_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "ruvia/http/http2_connection.h"
 #endif
@@ -104,7 +103,7 @@
 #include <asio/use_awaitable.hpp>
 
 #if defined(RUVIA_ENABLE_REDIS)
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 #include <gtest/gtest.h>
 
@@ -133,7 +132,6 @@
 #include "ruvia/web/middleware.h"
 
 #include "http_server_fixture.h"
-#include "worker_task_fixture.h"
 namespace peer_reset_test {
 
 using namespace std::chrono_literals;

@@ -29,10 +29,10 @@
 #include "route_table.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 
 #include <fstream>
@@ -40,12 +40,12 @@
 #include <system_error>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 
 #include "route_table.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 
 #include "route_table.h"
 #endif
@@ -137,17 +137,17 @@
 #include "route_table.h"
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 #include <compare>
 #include <filesystem>
@@ -159,7 +159,7 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 
 #include "route_table.h"
 #endif
@@ -175,10 +175,10 @@
 #include <openssl/x509v3.h>
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 #endif
 namespace ruvia::detail {
 

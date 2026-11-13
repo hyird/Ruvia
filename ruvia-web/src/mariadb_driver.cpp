@@ -28,7 +28,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/http/http_header.h"
-#include "ruvia/web/db/db.h"
+#include "ruvia/web/db.h"
 
 #include "route_table.h"
 namespace ruvia::detail {

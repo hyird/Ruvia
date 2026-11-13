@@ -1,4 +1,4 @@
-#include "ruvia/web/redis/redis.h"
+#include "ruvia/web/redis.h"
 
 #include <gtest/gtest.h>
 
@@ -51,9 +51,7 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task.h"
 
-#include "backend_client_fixture.h"
 #include "http_server_fixture.h"
-#include "worker_task_fixture.h"
 
 namespace redis_client_test {
 
