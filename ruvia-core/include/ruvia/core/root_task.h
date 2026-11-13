@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <concepts>
 #include <condition_variable>
 #include <exception>
@@ -11,11 +12,9 @@
 #include <utility>
 #include <variant>
 
-#include <asio/io_context.hpp>
-
-#include "ruvia/core/detail/io/asio_await.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
 
@@ -44,12 +43,21 @@ public:
         return handle_alive_;
     }
 
+    [[nodiscard]] bool ready() const noexcept {
+        const std::lock_guard lock(mutex_);
+        return complete_;
+    }
+
     void wait() const {
-        if (worker_.is_current()) {
-            throw std::logic_error("cannot wait for a root task on its event loop");
-        }
+        require_foreign_thread();
         std::unique_lock lock(mutex_);
         completed_.wait(lock, [this] { return complete_; });
+    }
+
+    [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline) const {
+        require_foreign_thread();
+        std::unique_lock lock(mutex_);
+        return completed_.wait_until(lock, deadline, [this] { return complete_; });
     }
 
     void abandon() noexcept {
@@ -109,6 +117,12 @@ public:
     }
 
 private:
+    void require_foreign_thread() const {
+        if (worker_.is_current()) {
+            throw std::logic_error("cannot wait for a root task on its event loop");
+        }
+    }
+
     void report(std::exception_ptr failure) const noexcept {
         if (!failure) {
             return;
@@ -172,87 +186,6 @@ private:
     [[no_unique_address]] std::conditional_t<std::is_void_v<t_type>, root_task_void_result, std::optional<t_type>> value_;
 };
 
-// drain() destroys remaining queue closures without invoking them when
-// a posted task throws. Own that destructor path so wait()/get() cannot
-// hang and an unobserved failure still reaches the loop sink.
-template <typename t_type>
-struct root_task_launch_guard final {
-    std::optional<task<t_type>> task_;
-    std::shared_ptr<detail::root_task_state<t_type>> completion_;
-
-    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
-        : task_(std::move(task_value)),
-          completion_(std::move(state_value)) {}
-    root_task_launch_guard(const root_task_launch_guard&) = delete;
-    root_task_launch_guard& operator=(const root_task_launch_guard&) = delete;
-    root_task_launch_guard(root_task_launch_guard&& other) noexcept
-        : task_(std::move(other.task_)),
-          completion_(std::move(other.completion_)) {}
-    root_task_launch_guard& operator=(root_task_launch_guard&&) = delete;
-    ~root_task_launch_guard() {
-        // A rejected or discarded launch still owns a cold frame.
-        // Retire it before waking a caller that may reclaim its inputs.
-        task_.reset();
-        if (completion_ != nullptr) {
-            completion_->completion().complete_failure(
-                std::make_exception_ptr(std::runtime_error("event loop is stopping")));
-        }
-    }
-    void release() noexcept {
-        task_.reset();
-        completion_.reset();
-    }
-};
-template <typename t_type>
-struct root_task_completion_handler final {
-    using executor_type = asio::io_context::executor_type;
-
-    executor_type executor_;
-    std::shared_ptr<detail::root_task_state<t_type>> completion_;
-    std::shared_ptr<void> retirement_lease_;
-    bool delivered_{false};
-
-    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
-        std::shared_ptr<void> lease_value) noexcept
-        : executor_(std::move(executor_value)),
-          completion_(std::move(state_value)),
-          retirement_lease_(std::move(lease_value)) {}
-    root_task_completion_handler(const root_task_completion_handler&) = delete;
-    root_task_completion_handler& operator=(const root_task_completion_handler&) = delete;
-    root_task_completion_handler(root_task_completion_handler&& other) noexcept
-        : executor_(std::move(other.executor_)),
-          completion_(std::move(other.completion_)),
-          retirement_lease_(std::move(other.retirement_lease_)),
-          delivered_(std::exchange(other.delivered_, false)) {}
-    root_task_completion_handler& operator=(root_task_completion_handler&&) = delete;
-    ~root_task_completion_handler() {
-        if (delivered_) {
-            completion_->completion().publish_completion();
-        }
-    }
-    [[nodiscard]] executor_type get_executor() const noexcept {
-        return executor_;
-    }
-    void operator()(detail::task_completion_result<t_type>&& result_value) noexcept {
-        try {
-            if constexpr (std::is_void_v<t_type>) {
-                if (result_value != nullptr) {
-                    completion_->completion().stage_failure(std::move(result_value));
-                } else {
-                    completion_->stage_value();
-                }
-            } else if (result_value.index() == 1) {
-                completion_->completion().stage_failure(std::get<1>(result_value));
-            } else {
-                completion_->stage_value(std::move(std::get<0>(result_value)));
-            }
-        } catch (...) {
-            completion_->completion().stage_failure(std::current_exception());
-        }
-        delivered_ = true;
-    }
-};
-
 }  // namespace detail
 
 template <typename t_type>
@@ -281,8 +214,28 @@ public:
         return state_ && state_->completion().valid();
     }
 
+    // True once the task has completed and its result has not been consumed.
+    [[nodiscard]] bool ready() const noexcept {
+        return state_ && state_->completion().valid() && state_->completion().ready();
+    }
+
+    // Blocks a thread other than the loop's own until completion.
     void wait() const {
         require_state().completion().wait();
+    }
+
+    // Bounded wait(): returns whether the task completed in time. The timeout
+    // must be positive (as for operation_options); a deadline that has passed
+    // only reports the current state.
+    [[nodiscard]] bool wait_for(timeout_duration timeout) const {
+        if (timeout.value() <= std::chrono::milliseconds::zero()) {
+            throw std::invalid_argument("root task wait timeout must be greater than zero");
+        }
+        return wait_until(worker_timer_deadline_after(timeout.value()));
+    }
+
+    [[nodiscard]] bool wait_until(std::chrono::steady_clock::time_point deadline) const {
+        return require_state().completion().wait_until(deadline);
     }
 
     // User result moves run without the state mutex and may re-enter this

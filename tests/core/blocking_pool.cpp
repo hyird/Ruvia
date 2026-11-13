@@ -495,8 +495,15 @@ task<void> exercise_settled_before_submit(
     stopped.request_stop();
     auto cancelled = co_await ruvia::run_blocking(
         worker_value, {.stop_token_ = stopped.token()}, [flag = &ran] { flag->store(true); });
-    auto expired = co_await ruvia::run_blocking(
-        worker_value, {.timeout_ = std::chrono::milliseconds(0)}, [flag = &ran] { flag->store(true); });
+    auto expired = co_await ruvia::run_blocking(worker_value,
+        ruvia::operation_timeout(std::chrono::steady_clock::time_point{}), {}, [flag = &ran] { flag->store(true); });
+    bool nonpositive_rejected = false;
+    try {
+        static_cast<void>(ruvia::run_blocking(
+            worker_value, {.timeout_ = std::chrono::milliseconds(0)}, [flag = &ran] { flag->store(true); }));
+    } catch (const std::invalid_argument&) {
+        nonpositive_rejected = true;
+    }
     bool misplaced = false;
     try {
         static_cast<void>(co_await ruvia::run_blocking(other_worker, {}, [flag = &ran] {
@@ -506,7 +513,7 @@ task<void> exercise_settled_before_submit(
         misplaced = true;
     }
     success = cancelled.status() == blocking_status::cancelled && expired.status() == blocking_status::timed_out &&
-              misplaced;
+              nonpositive_rejected && misplaced;
 }
 
 // A worker whose event loop was given no pool reports that state; the callable

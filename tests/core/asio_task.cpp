@@ -1,15 +1,22 @@
 #include <gtest/gtest.h>
 
 #include <array>
+#include <chrono>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
 #include <future>
 #include <memory>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
+#include <variant>
+
+#include <asio/bind_allocator.hpp>
+#include <asio/bind_executor.hpp>
+#include <asio/io_context.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop_pool.h"
@@ -57,6 +64,36 @@ ruvia::task<void> fail() {
     throw std::runtime_error("root task failure");
     co_return;
 }
+
+ruvia::task<int> answer() {
+    co_return 7;
+}
+
+template <typename t_type>
+// Not final: Asio executors keep an allocator as an empty base.
+struct counting_allocator {
+    using value_type = t_type;
+
+    explicit counting_allocator(std::size_t& allocations) noexcept
+        : allocations_(&allocations) {}
+    template <typename other_type>
+    counting_allocator(const counting_allocator<other_type>& other) noexcept
+        : allocations_(other.allocations_) {}
+
+    [[nodiscard]] t_type* allocate(std::size_t count) {
+        ++*allocations_;
+        return std::allocator<t_type>().allocate(count);
+    }
+    void deallocate(t_type* pointer, std::size_t count) noexcept {
+        std::allocator<t_type>().deallocate(pointer, count);
+    }
+    template <typename other_type>
+    friend bool operator==(const counting_allocator& left, const counting_allocator<other_type>& right) noexcept {
+        return left.allocations_ == right.allocations_;
+    }
+
+    std::size_t* allocations_;
+};
 
 }  // namespace ruvia::test::asio_task_tests
 
@@ -135,4 +172,73 @@ TEST(Ruvia, AsioTaskAbandonedFailureReachesJoin) {
         return;
     }
     ADD_FAILURE() << "Expected abandoned root task failure";
+}
+
+TEST(Ruvia, AsyncStartUsesHandlerExecutorAndAllocator) {
+    asio::io_context io_context;
+    std::size_t allocations = 0;
+    std::optional<int> delivered;
+    bool failure_delivered = false;
+    ruvia::async_start(ruvia::test::asio_task_tests::answer(),
+        asio::bind_allocator(ruvia::test::asio_task_tests::counting_allocator<int>(allocations),
+            asio::bind_executor(io_context.get_executor(),
+                [&delivered](ruvia::task_completion_result<int>&& result_value) {
+                    if (result_value.index() == 0) {
+                        delivered = std::get<0>(result_value);
+                    }
+                })));
+    ruvia::async_start(ruvia::test::asio_task_tests::fail(),
+        asio::bind_executor(io_context.get_executor(), [&failure_delivered](std::exception_ptr failure) {
+            failure_delivered = failure != nullptr;
+        }));
+    // Both tasks complete inline; delivery waits for the handler's executor.
+    EXPECT_FALSE(delivered.has_value());
+    EXPECT_FALSE(failure_delivered);
+    io_context.run();
+    EXPECT_EQ(delivered, 7);
+    EXPECT_TRUE(failure_delivered);
+    EXPECT_GT(allocations, 0U);
+}
+
+TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
+    const auto loop = loops.loop(0);
+    auto accepted = loop.try_start(ruvia::test::asio_task_tests::answer());
+    ASSERT_TRUE(accepted.accepted());
+    EXPECT_EQ(accepted.rejected(), nullptr);
+    auto root = std::move(accepted).take_value();
+
+    auto full = loop.try_start(ruvia::test::asio_task_tests::answer());
+    EXPECT_EQ(full.status(), ruvia::post_status::queue_full);
+    ASSERT_NE(full.rejected(), nullptr);
+    EXPECT_THROW(static_cast<void>(full.value()), std::logic_error);
+    auto returned = std::move(full).take_rejected();
+    try {
+        static_cast<void>(loop.start(std::move(returned)));
+        ADD_FAILURE() << "a full queue must reject start()";
+    } catch (const ruvia::event_loop_start_rejected& error) {
+        EXPECT_EQ(error.status(), ruvia::post_status::queue_full);
+    }
+
+    EXPECT_FALSE(root.ready());
+    EXPECT_FALSE(root.wait_until(std::chrono::steady_clock::now()));
+    EXPECT_FALSE(root.wait_for(std::chrono::milliseconds(1)));
+    EXPECT_THROW(static_cast<void>(root.wait_for(std::chrono::milliseconds(0))), std::invalid_argument);
+    loops.start();
+    EXPECT_TRUE(root.wait_for(std::chrono::seconds(30)));
+    EXPECT_TRUE(root.ready());
+    EXPECT_EQ(root.get(), 7);
+    EXPECT_FALSE(root.ready());
+
+    loops.stop();
+    loops.join();
+    auto stopped = loop.try_start(ruvia::test::asio_task_tests::answer());
+    EXPECT_EQ(stopped.status(), ruvia::post_status::worker_stopping);
+    EXPECT_NE(stopped.rejected(), nullptr);
+    try {
+        static_cast<void>(loop.start(std::move(stopped).take_rejected()));
+        ADD_FAILURE() << "a retired loop must reject start()";
+    } catch (const ruvia::event_loop_start_rejected& error) {
+        EXPECT_EQ(error.status(), ruvia::post_status::worker_stopping);
+    }
 }

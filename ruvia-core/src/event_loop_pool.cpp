@@ -38,7 +38,7 @@ struct event_loop_pool::impl_type final {
             loops_.push_back(std::allocate_shared<detail::event_loop_state>(
                 std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
                 options.queue_capacity_, options.blocking_pool_));
-            loops_.back()->install_shutdown_hook();
+            loops_.back()->install_shutdown_registration();
         }
     }
 

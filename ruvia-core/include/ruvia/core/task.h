@@ -11,6 +11,10 @@ namespace ruvia {
 
 class task_scope;
 
+template <typename t_type, typename completion_token_type>
+    requires detail::asio_task_result<t_type>
+auto async_start(task<t_type>&& task_value, completion_token_type&& token);
+
 // task is a structured, lazy coroutine owner. A cold task may be discarded and
 // a completed task may be destroyed, but a started task must run to completion.
 // Frame allocation happens when the coroutine is called; allocation failure
@@ -53,21 +57,21 @@ public:
         }
     }
 
-    [[nodiscard]] detail::task_awaiter<t_type> operator co_await() &&;
-    [[nodiscard]] detail::task_awaiter<t_type> operator co_await() & = delete;
-    [[nodiscard]] detail::task_awaiter<t_type> operator co_await() const& = delete;
-    [[nodiscard]] detail::task_awaiter<t_type> operator co_await() const&& = delete;
+    [[nodiscard]] task_awaiter<t_type> operator co_await() &&;
+    [[nodiscard]] task_awaiter<t_type> operator co_await() & = delete;
+    [[nodiscard]] task_awaiter<t_type> operator co_await() const& = delete;
+    [[nodiscard]] task_awaiter<t_type> operator co_await() const&& = delete;
 
 private:
     template <typename>
     friend class detail::task_promise;
     template <typename>
-    friend class detail::task_awaiter;
+    friend class task_awaiter;
     template <typename, typename>
     friend class detail::task_completion_state;
     template <typename u_type, typename completion_token_type>
         requires detail::asio_task_result<u_type>
-    friend auto detail::async_start_task(task<u_type>&&, completion_token_type&&);
+    friend auto async_start(task<u_type>&&, completion_token_type&&);
     friend class task_scope;
     template <typename u_type>
     friend task<u_type> make_scoped_operation(operation_scope&, task<u_type>);
@@ -137,8 +141,15 @@ template <typename t_type>
     return task<t_type>{std::coroutine_handle<task_promise<t_type>>::from_promise(*this)};
 }
 
-// Serves value-returning tasks and task<void> alike: task_promise<void>::result() returns void,
-// so `return promise.result();` below is well-formed for it too. Keeping one
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+// The awaiter of `co_await std::move(task_value)`: it owns the started task
+// for the duration of one await-expression and is neither movable nor
+// addressable. Serves value-returning tasks and task<void> alike:
+// task_promise<void>::result() returns void, so `return promise.result();`
+// below is well-formed for it too. Keeping one
 // awaiter keeps the empty-task check and the suspend sequence stated once.
 //
 // await_resume carries no [[nodiscard]]: the compiler calls it as part of the
@@ -148,14 +159,6 @@ template <typename t_type>
 template <typename t_type>
 class task_awaiter final {
 public:
-    explicit task_awaiter(task<t_type>&& task_value)
-        : task_(take_ready_to_start(std::move(task_value))) {
-        // Enter running only after the final owner has received the cold task;
-        // optional return-value elision must not decide whether a move is legal.
-        if (task_.registration_.scoped()) {
-            task_.registration_.start();
-        }
-    }
     task_awaiter(const task_awaiter&) = delete;
     task_awaiter& operator=(const task_awaiter&) = delete;
     task_awaiter(task_awaiter&&) = delete;
@@ -185,6 +188,17 @@ public:
     }
 
 private:
+    friend class task<t_type>;
+
+    explicit task_awaiter(task<t_type>&& task_value)
+        : task_(take_ready_to_start(std::move(task_value))) {
+        // Enter running only after the final owner has received the cold task;
+        // optional return-value elision must not decide whether a move is legal.
+        if (task_.registration_.scoped()) {
+            task_.registration_.start();
+        }
+    }
+
     [[nodiscard]] static task<t_type> take_ready_to_start(task<t_type>&& task_value) {
         task_value.prepare_direct_start();
         return std::move(task_value);
@@ -193,13 +207,9 @@ private:
     task<t_type> task_;
 };
 
-}  // namespace ruvia::detail
-
-namespace ruvia {
-
 template <typename t_type>
-[[nodiscard]] detail::task_awaiter<t_type> task<t_type>::operator co_await() && {
-    return detail::task_awaiter<t_type>{std::move(*this)};
+[[nodiscard]] task_awaiter<t_type> task<t_type>::operator co_await() && {
+    return task_awaiter<t_type>{std::move(*this)};
 }
 
 }  // namespace ruvia

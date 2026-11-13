@@ -8,10 +8,11 @@
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
+#include <variant>
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/io/asio_await.h"
+#include "ruvia/core/async.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/root_task.h"
@@ -23,6 +24,199 @@ namespace ruvia {
 namespace detail {
 struct event_loop_state;
 class event_loop_stop_listener;
+template <typename t_type>
+struct root_task_launch_guard;
+}  // namespace detail
+
+// Thrown by event_loop::start() when the loop refuses a task: status()
+// distinguishes a full admission queue from a stopping or retired loop. Also
+// the failure of an admitted root task whose launch was discarded because
+// the loop stopped before running it.
+class event_loop_start_rejected final : public std::runtime_error {
+public:
+    [[nodiscard]] post_status status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class event_loop;
+    template <typename>
+    friend struct detail::root_task_launch_guard;
+
+    explicit event_loop_start_rejected(post_status status);
+
+    post_status status_;
+};
+
+// The outcome of event_loop::try_start(). The category is fixed at
+// construction: accepted owns the started root_task, and a rejection owns the
+// unconsumed cold task with its post_status.
+template <typename t_type>
+class event_loop_start_result final {
+public:
+    event_loop_start_result(const event_loop_start_result&) = delete;
+    event_loop_start_result& operator=(const event_loop_start_result&) = delete;
+    event_loop_start_result(event_loop_start_result&&) noexcept = default;
+    event_loop_start_result& operator=(event_loop_start_result&&) = delete;
+
+    [[nodiscard]] post_status status() const noexcept {
+        return status_;
+    }
+
+    [[nodiscard]] bool accepted() const noexcept {
+        return status_ == post_status::accepted;
+    }
+
+    [[nodiscard]] root_task<t_type>& value() & {
+        return std::get<root_task<t_type>>(require_accepted());
+    }
+    [[nodiscard]] const root_task<t_type>& value() const& {
+        return std::get<root_task<t_type>>(require_accepted());
+    }
+    root_task<t_type>& value() && = delete;
+    const root_task<t_type>& value() const&& = delete;
+
+    [[nodiscard]] root_task<t_type> take_value() && {
+        return std::move(std::get<root_task<t_type>>(require_accepted()));
+    }
+
+    [[nodiscard]] task<t_type>* rejected() & noexcept {
+        return std::get_if<task<t_type>>(&payload_);
+    }
+    [[nodiscard]] const task<t_type>* rejected() const& noexcept {
+        return std::get_if<task<t_type>>(&payload_);
+    }
+    task<t_type>* rejected() && = delete;
+    const task<t_type>* rejected() const&& = delete;
+
+    [[nodiscard]] task<t_type> take_rejected() && {
+        auto* rejected_task = std::get_if<task<t_type>>(&payload_);
+        if (rejected_task == nullptr) {
+            throw std::logic_error("accepted start result has no rejected task");
+        }
+        return std::move(*rejected_task);
+    }
+
+    [[nodiscard]] static event_loop_start_result accept(root_task<t_type>&& started) noexcept {
+        return event_loop_start_result(post_status::accepted, std::move(started));
+    }
+
+    [[nodiscard]] static event_loop_start_result reject(post_status status, task<t_type>&& rejected_task) {
+        if (status == post_status::accepted) {
+            throw std::invalid_argument("rejected start result requires a rejection status");
+        }
+        return event_loop_start_result(status, std::move(rejected_task));
+    }
+
+private:
+    using payload_type = std::variant<root_task<t_type>, task<t_type>>;
+
+    template <typename payload_value_type>
+    event_loop_start_result(post_status status, payload_value_type&& payload_value) noexcept
+        : status_(status),
+          payload_(std::in_place_type<std::remove_cvref_t<payload_value_type>>,
+              std::forward<payload_value_type>(payload_value)) {}
+
+    [[nodiscard]] payload_type& require_accepted() {
+        if (status_ != post_status::accepted) {
+            throw std::logic_error("rejected start result has no root task");
+        }
+        return payload_;
+    }
+    [[nodiscard]] const payload_type& require_accepted() const {
+        if (status_ != post_status::accepted) {
+            throw std::logic_error("rejected start result has no root task");
+        }
+        return payload_;
+    }
+
+    post_status status_;
+    payload_type payload_;
+};
+
+namespace detail {
+
+// drain() destroys remaining queue closures without invoking them when
+// a posted task throws. Own that destructor path so wait()/get() cannot
+// hang and an unobserved failure still reaches the loop sink.
+template <typename t_type>
+struct root_task_launch_guard final {
+    std::optional<task<t_type>> task_;
+    std::shared_ptr<detail::root_task_state<t_type>> completion_;
+
+    root_task_launch_guard(task<t_type> task_value, std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept
+        : task_(std::move(task_value)),
+          completion_(std::move(state_value)) {}
+    root_task_launch_guard(const root_task_launch_guard&) = delete;
+    root_task_launch_guard& operator=(const root_task_launch_guard&) = delete;
+    root_task_launch_guard(root_task_launch_guard&& other) noexcept
+        : task_(std::move(other.task_)),
+          completion_(std::move(other.completion_)) {}
+    root_task_launch_guard& operator=(root_task_launch_guard&&) = delete;
+    ~root_task_launch_guard() {
+        // A rejected or discarded launch still owns a cold frame.
+        // Retire it before waking a caller that may reclaim its inputs.
+        task_.reset();
+        if (completion_ != nullptr) {
+            completion_->completion().complete_failure(
+                std::make_exception_ptr(event_loop_start_rejected(post_status::worker_stopping)));
+        }
+    }
+    void release() noexcept {
+        task_.reset();
+        completion_.reset();
+    }
+};
+template <typename t_type>
+struct root_task_completion_handler final {
+    using executor_type = asio::io_context::executor_type;
+
+    executor_type executor_;
+    std::shared_ptr<detail::root_task_state<t_type>> completion_;
+    std::shared_ptr<void> retirement_lease_;
+    bool delivered_{false};
+
+    root_task_completion_handler(executor_type executor_value, std::shared_ptr<detail::root_task_state<t_type>> state_value,
+        std::shared_ptr<void> lease_value) noexcept
+        : executor_(std::move(executor_value)),
+          completion_(std::move(state_value)),
+          retirement_lease_(std::move(lease_value)) {}
+    root_task_completion_handler(const root_task_completion_handler&) = delete;
+    root_task_completion_handler& operator=(const root_task_completion_handler&) = delete;
+    root_task_completion_handler(root_task_completion_handler&& other) noexcept
+        : executor_(std::move(other.executor_)),
+          completion_(std::move(other.completion_)),
+          retirement_lease_(std::move(other.retirement_lease_)),
+          delivered_(std::exchange(other.delivered_, false)) {}
+    root_task_completion_handler& operator=(root_task_completion_handler&&) = delete;
+    ~root_task_completion_handler() {
+        if (delivered_) {
+            completion_->completion().publish_completion();
+        }
+    }
+    [[nodiscard]] executor_type get_executor() const noexcept {
+        return executor_;
+    }
+    void operator()(task_completion_result<t_type>&& result_value) noexcept {
+        try {
+            if constexpr (std::is_void_v<t_type>) {
+                if (result_value != nullptr) {
+                    completion_->completion().stage_failure(std::move(result_value));
+                } else {
+                    completion_->stage_value();
+                }
+            } else if (result_value.index() == 1) {
+                completion_->completion().stage_failure(std::get<1>(result_value));
+            } else {
+                completion_->stage_value(std::move(std::get<0>(result_value)));
+            }
+        } catch (...) {
+            completion_->completion().stage_failure(std::current_exception());
+        }
+        delivered_ = true;
+    }
+};
+
 }  // namespace detail
 
 class event_loop_stop_registration final {
@@ -94,41 +288,56 @@ public:
         return snapshot.defer_cleanup_task(move_only_function<void()>(std::forward<fn_type>(fn)));
     }
 
-    // Starts one lazy task on this loop and returns its structured completion
-    // owner. The loop owns the started coroutine until completion; abandoning
-    // the root_task never destroys a suspended frame, and an abandoned failure
-    // is routed to the loop failure sink.
+    // Starts one lazy task on this loop. Accepted: the loop owns the started
+    // coroutine until completion and the result holds its structured
+    // completion owner; abandoning that root_task never destroys a suspended
+    // frame, and an abandoned failure is routed to the loop failure sink.
+    // Rejected: a full admission queue (queue_full) or a stopping or retired
+    // loop (worker_stopping) returns the unconsumed cold task. Admission is
+    // reserved before the task moves, so a rejection never consumes it. Throws
+    // only for allocation failure.
     template <typename t_type>
         requires detail::asio_task_result<t_type>
-    [[nodiscard]] root_task<t_type> start(task<t_type> task_value) const {
+    [[nodiscard]] event_loop_start_result<t_type> try_start(task<t_type> task_value) const {
+        using result_type = event_loop_start_result<t_type>;
         auto retirement_lease = acquire_root_lease();
         if (!retirement_lease) {
-            throw std::runtime_error("event loop is stopping");
+            return result_type::reject(post_status::worker_stopping, std::move(task_value));
         }
         auto completion = std::allocate_shared<detail::root_task_state<t_type>>(
             std::pmr::polymorphic_allocator<detail::root_task_state<t_type>>(process_resource()),
             handle(), state_);
         const auto bound_executor = executor();
-        auto posted = handle().post([bound_executor,
-                                        retirement_lease = std::move(retirement_lease),
-                                        launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
-            try {
-                detail::async_start_task(std::move(*launch.task_),
-                    detail::root_task_completion_handler<t_type>(std::move(bound_executor), launch.completion_, std::move(retirement_lease)));
-                launch.release();
-            } catch (...) {
-                auto failed_completion = std::move(launch.completion_);
-                launch.release();
-                failed_completion->completion().complete_failure(std::current_exception());
-            }
+        const auto status = handle().post_factory([&]() -> move_only_function<void()> {
+            return [bound_executor, retirement_lease = std::move(retirement_lease),
+                       launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
+                try {
+                    async_start(std::move(*launch.task_),
+                        detail::root_task_completion_handler<t_type>(bound_executor, launch.completion_, std::move(retirement_lease)));
+                    launch.release();
+                } catch (...) {
+                    auto failed_completion = std::move(launch.completion_);
+                    launch.release();
+                    failed_completion->completion().complete_failure(std::current_exception());
+                }
+            };
         });
-        if (!posted.accepted()) {
-            if (posted.status() == post_status::queue_full) {
-                throw std::runtime_error("event loop root task queue is full");
-            }
-            throw std::runtime_error("event loop is stopping");
+        if (status != post_status::accepted) {
+            return result_type::reject(status, std::move(task_value));
         }
-        return root_task<t_type>(std::move(completion));
+        return result_type::accept(root_task<t_type>(std::move(completion)));
+    }
+
+    // The local strict form of try_start(): a rejection destroys the cold task
+    // and throws event_loop_start_rejected carrying its status.
+    template <typename t_type>
+        requires detail::asio_task_result<t_type>
+    [[nodiscard]] root_task<t_type> start(task<t_type> task_value) const {
+        auto started = try_start(std::move(task_value));
+        if (!started.accepted()) {
+            throw event_loop_start_rejected(started.status());
+        }
+        return std::move(started).take_value();
     }
 
     // Stop cleanup is asynchronous and joined before runtime retirement. The

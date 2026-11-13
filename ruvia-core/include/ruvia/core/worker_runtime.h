@@ -79,7 +79,7 @@ public:
     worker_runtime& operator=(worker_runtime&&) = delete;
 
     // Configure once, before publishing the runtime or starting/stopping it.
-    // Hook target moves may query failure() during configuration.
+    // Hook target moves may call take_failure() during configuration.
     void configure(worker_runtime_hooks hooks);
     // Launches the owner thread. Returns false when a stop already closed the
     // runtime before launch; a second start throws std::logic_error.
@@ -144,9 +144,9 @@ public:
     [[nodiscard]] thread_join_operation prepare_thread_join(worker_handle caller) &;
     thread_join_operation prepare_thread_join(worker_handle) && = delete;
 #endif
-    // The first failure, if any. Reading it takes ownership: destruction no
-    // longer reports a failure that was read here.
-    [[nodiscard]] std::exception_ptr failure() noexcept;
+    // Takes reporting ownership of the first failure, if any: destruction no
+    // longer reports a failure taken here. Later calls return the same failure.
+    [[nodiscard]] std::exception_ptr take_failure() noexcept;
     [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() & noexcept;
     asio::io_context& io_context() && = delete;

@@ -489,7 +489,7 @@ void windows_acceptor::join() {
 }
 
 std::exception_ptr windows_acceptor::failure() noexcept {
-    return runtime_.failure();
+    return runtime_.take_failure();
 }
 
 task<void> windows_acceptor::run() {

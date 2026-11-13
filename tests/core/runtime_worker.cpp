@@ -2183,8 +2183,8 @@ bool test_abandoned_root_task_completes_when_queue_drain_fails() {
     try {
         static_cast<void>(root.get());
         return false;
-    } catch (const std::runtime_error& error) {
-        return std::string_view(error.what()) == "event loop is stopping";
+    } catch (const ruvia::event_loop_start_rejected& error) {
+        return error.status() == ruvia::post_status::worker_stopping;
     } catch (...) {
         return false;
     }

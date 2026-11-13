@@ -78,11 +78,19 @@ worker_dispatcher::~worker_dispatcher() {
     notify_waiters(shutdown_notification_waiters_.take_all(), false);
 }
 
-worker_shutdown_hook::~worker_shutdown_hook() {
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+worker_shutdown_registration::~worker_shutdown_registration() {
     if (registry_) {
-        registry_->unlink_shutdown_hook(*this);
+        registry_->unlink_shutdown(*this);
     }
 }
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
 
 void worker_dispatcher::schedule_drain_locked() {
     if (!drain_scheduled_) {
@@ -223,18 +231,18 @@ bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value)
     return true;
 }
 
-void worker_dispatcher::register_shutdown_hook(
-    worker_shutdown_hook& hook, std::weak_ptr<void> owner, const worker_shutdown_hook::operations_type& operations) {
+worker_registration_status worker_dispatcher::register_shutdown(worker_shutdown_registration& hook,
+    std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
     // begin_stopping() clears accepting under the admission mutex before
     // notify_stopping() first takes this mutex on the same thread, so a
     // registration that still observes accepting here is linked before the
     // stopping batch walks the list.
     std::lock_guard lock(hooks_mutex_);
-    if (!accepting_) {
-        throw std::runtime_error("cannot register state on a stopping worker");
-    }
     if (hook.registry_) {
-        throw std::logic_error("worker shutdown hook is already registered");
+        throw std::logic_error("worker shutdown registration is already linked");
+    }
+    if (!accepting_) {
+        return worker_registration_status::worker_stopping;
     }
     hook.operations_ = &operations;
     hook.registry_ = shared_from_this();
@@ -248,9 +256,10 @@ void worker_dispatcher::register_shutdown_hook(
         hooks_head_ = &hook;
     }
     hooks_tail_ = &hook;
+    return worker_registration_status::registered;
 }
 
-void worker_dispatcher::unlink_shutdown_hook(worker_shutdown_hook& hook) noexcept {
+void worker_dispatcher::unlink_shutdown(worker_shutdown_registration& hook) noexcept {
     std::lock_guard lock(hooks_mutex_);
     if (!hook.linked_) {
         return;
@@ -489,10 +498,10 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
     // already being destroyed is skipped. References are dropped outside the
     // mutex because the last one runs the hook's unlink.
     struct pinned_hook final {
-        worker_shutdown_hook* hook_{nullptr};
+        worker_shutdown_registration* hook_{nullptr};
         std::shared_ptr<void> owner_;
     };
-    const auto first_live = [](worker_shutdown_hook* hook) noexcept {
+    const auto first_live = [](worker_shutdown_registration* hook) noexcept {
         pinned_hook pinned;
         while (hook != nullptr && !(pinned.owner_ = hook->owner_.lock())) {
             hook = hook->next_;
@@ -500,7 +509,7 @@ void worker_dispatcher::notify_stopping(bool batch_active) noexcept {
         pinned.hook_ = hook;
         return pinned;
     };
-    using operations_type = worker_shutdown_hook::operations_type;
+    using operations_type = worker_shutdown_operations_type;
     const auto notify_each = [this, &first_live](operations_type::phase_type operations_type::* phase) noexcept {
         pinned_hook current;
         {
@@ -718,10 +727,13 @@ worker_handle detail::worker_handle_access::make(
     return worker_handle(dispatcher);
 }
 
-bool detail::worker_handle_access::defer_if_attached(
-    const worker_handle& worker_value, move_only_function<void()> task_value) {
-    const auto& dispatcher = worker_value.dispatcher_;
-    return dispatcher && dispatcher->defer_if_attached(std::move(task_value));
+bool worker_handle::defer_completion(move_only_function<void()> completion) const {
+    if (!completion) {
+        throw std::invalid_argument("worker completion requires a callable task");
+    }
+    // The completion's move may release the last owner of this handle.
+    const auto dispatcher = dispatcher_;
+    return dispatcher && dispatcher->defer_if_attached(std::move(completion));
 }
 
 void detail::worker_handle_access::defer_or_terminate(
@@ -732,13 +744,12 @@ void detail::worker_handle_access::defer_or_terminate(
     worker_value.dispatcher_->defer_or_terminate(std::move(task_value));
 }
 
-void detail::worker_handle_access::register_shutdown_hook(const worker_handle& worker_value,
-    worker_shutdown_hook& hook, std::weak_ptr<void> owner,
-    const worker_shutdown_hook::operations_type& operations) {
-    if (!worker_value.dispatcher_) {
-        throw std::runtime_error("cannot register state on a stopped worker");
+worker_registration_status worker_handle::link_shutdown(worker_shutdown_registration& registration,
+    std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const {
+    if (!dispatcher_) {
+        return worker_registration_status::worker_stopping;
     }
-    worker_value.dispatcher_->register_shutdown_hook(hook, std::move(owner), operations);
+    return dispatcher_->register_shutdown(registration, std::move(owner), operations);
 }
 
 void detail::worker_handle_access::when_shutdown_notifications_complete(

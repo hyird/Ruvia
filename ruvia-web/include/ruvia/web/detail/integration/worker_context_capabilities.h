@@ -52,8 +52,8 @@ public:
         return ruvia::run_blocking(worker_, {.stop_token_ = stop_token_}, std::move(callable));
     }
 
-    // The deadline rounds up to whole milliseconds; a non-positive one rejects
-    // without submitting the callable.
+    // The timeout rounds up to whole milliseconds; a non-positive one throws
+    // std::invalid_argument before submitting the callable.
     template <typename rep_type, typename period_type, typename callable_type>
     [[nodiscard]] task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking(
         std::chrono::duration<rep_type, period_type> timeout, callable_type callable) const {

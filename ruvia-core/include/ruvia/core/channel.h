@@ -16,12 +16,12 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
-#include "ruvia/core/detail/worker/worker_wait_awaiter.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
@@ -87,6 +87,14 @@ struct channel_state final {
 
     [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
         return std::unique_lock(mutex_);
+    }
+
+    [[nodiscard]] const worker_handle& worker() const noexcept {
+        return worker_;
+    }
+
+    [[nodiscard]] worker_wait_slot<node*, channel_state>& wait_slot() noexcept {
+        return wait_slot_;
     }
 
     [[nodiscard]] std::optional<channel_send_status> check_open_locked() const noexcept {
@@ -166,7 +174,7 @@ struct channel_state final {
     };
 
     // First member: unlinks from the worker registry after every other member is gone.
-    worker_shutdown_hook shutdown_hook_;
+    worker_shutdown_registration shutdown_registration_;
     worker_handle worker_;
     std::mutex mutex_;
     std::pmr::vector<node> slots_;
@@ -186,60 +194,6 @@ struct channel_state final {
 
 private:
     void discard_buffered();
-};
-
-// The receive operation: single-use, movable only before it is awaited, and
-// started on the receiver's worker by co_await. Dropping a cold one has no
-// effect on the channel.
-template <typename t_type>
-struct channel_receive_awaiter final {
-    using state_type = channel_state<t_type>;
-    using node = typename state_type::node;
-    using wait_type = worker_single_wait_awaiter<node*, state_type>;
-
-    channel_receive_awaiter(std::shared_ptr<channel_state<t_type>> value,
-        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
-        : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
-
-    void operator&() const = delete;
-    [[nodiscard]] bool await_ready() {
-        wait_.start("channel receive must run on its bound worker");
-        auto& owner_value = wait_.state();
-        auto lock = owner_value.lock_state();
-        if (!owner_value.receiver_closed_) {
-            if (auto* item = owner_value.dequeue()) {
-                (void)wait_.complete_result(worker_wait_result_access::value(item));
-                return true;
-            }
-        }
-        if (std::holds_alternative<channel_worker_stopping>(owner_value.lifecycle_)) {
-            (void)wait_.complete_status(worker_wait_status::worker_stopping);
-            return true;
-        }
-        if (std::holds_alternative<channel_closed>(owner_value.lifecycle_)) {
-            (void)wait_.complete_status(worker_wait_status::closed);
-            return true;
-        }
-        assert(std::holds_alternative<channel_open>(owner_value.lifecycle_));
-        return wait_.complete_or_publish("channel supports one pending receiver");
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle) {
-        return wait_.suspend(handle);
-    }
-
-    [[nodiscard]] worker_wait_result<t_type> await_resume() {
-        auto result = wait_.take_result();
-        if (!result.has_value()) {
-            return worker_wait_result_access::outcome<t_type>(result.status());
-        }
-        auto* item = result.value();
-        typename state_type::node_guard guard(wait_.state(), item);
-        return worker_wait_result_access::value(std::move(*item->value_));
-    }
-
-private:
-    wait_type wait_;
 };
 
 template <typename t_type>
@@ -335,7 +289,7 @@ public:
             rejection = state->check_open_locked();
             if (!rejection) {
                 if (state->wait_slot_.occupied()) {
-                    state->wait_slot_.complete(detail::worker_wait_result_access::value(slot));
+                    state->wait_slot_.complete(worker_wait_result<typename state_type::node*>::with_value(slot));
                 } else {
                     state->enqueue(slot);
                 }
@@ -380,25 +334,82 @@ public:
     [[nodiscard]] bool valid() const noexcept {
         return state_ != nullptr;
     }
+    // The receive operation: single-use, movable only before it is awaited,
+    // and started on the receiver's worker by co_await. Dropping a cold one
+    // has no effect on the channel.
+    class receive_operation final {
+    public:
+        receive_operation(receive_operation&&) noexcept = default;
+        receive_operation(const receive_operation&) = delete;
+        receive_operation& operator=(const receive_operation&) = delete;
+        receive_operation& operator=(receive_operation&&) = delete;
+        void operator&() const = delete;
+
+        [[nodiscard]] bool await_ready() {
+            wait_.start("channel receive must run on its bound worker");
+            auto& owner_value = wait_.state();
+            auto lock = owner_value.lock_state();
+            if (!owner_value.receiver_closed_) {
+                if (auto* item = owner_value.dequeue()) {
+                    wait_.complete_ready(worker_wait_result<node*>::with_value(item));
+                    return true;
+                }
+            }
+            if (std::holds_alternative<detail::channel_worker_stopping>(owner_value.lifecycle_)) {
+                wait_.complete_ready(worker_wait_status::worker_stopping);
+                return true;
+            }
+            if (std::holds_alternative<detail::channel_closed>(owner_value.lifecycle_)) {
+                wait_.complete_ready(worker_wait_status::closed);
+                return true;
+            }
+            assert(std::holds_alternative<detail::channel_open>(owner_value.lifecycle_));
+            return wait_.complete_or_publish("channel supports one pending receiver");
+        }
+
+        bool await_suspend(std::coroutine_handle<> handle) {
+            return wait_.suspend(handle);
+        }
+
+        [[nodiscard]] worker_wait_result<t_type> await_resume() {
+            auto result = wait_.take_result();
+            if (!result.has_value()) {
+                return worker_wait_result<t_type>::with_status(result.status());
+            }
+            auto* item = result.value();
+            typename state_type::node_guard guard(wait_.state(), item);
+            return worker_wait_result<t_type>::with_value(std::move(*item->value_));
+        }
+
+    private:
+        friend class channel_receiver;
+        using state_type = detail::channel_state<t_type>;
+        using node = typename state_type::node;
+
+        receive_operation(std::shared_ptr<state_type> state_value, operation_options options)
+            : wait_(std::move(state_value), std::move(options)) {}
+        receive_operation(std::shared_ptr<state_type> state_value, const operation_timeout& deadline,
+            stop_token stop_token_value) noexcept
+            : wait_(std::move(state_value), deadline, std::move(stop_token_value)) {}
+
+        worker_single_wait_awaiter<node*, state_type> wait_;
+    };
+
     // The receiver owns the receive side: destroying it prevents cold receives
     // from consuming buffered values and closes pending receives. Require a
     // named owner so storing an operation cannot silently turn a temporary
-    // receiver into an already-closed operation.
-    using receive_operation = detail::channel_receive_awaiter<t_type>;
-
-    [[nodiscard]] receive_operation receive(stop_token stop_token_value = {}) const& {
-        return receive_operation(state_, std::nullopt, std::move(stop_token_value));
+    // receiver into an already-closed operation. options.timeout_ must be
+    // positive and bounds the wait from its start; a deadline that has passed
+    // reports timed_out once nothing is buffered.
+    [[nodiscard]] receive_operation receive(operation_options options = {}) const& {
+        return receive_operation(state_, std::move(options));
     }
-    receive_operation receive(stop_token = {}) const&& = delete;
+    receive_operation receive(operation_options = {}) const&& = delete;
 
-    template <typename rep_type, typename period_type>
-    [[nodiscard]] receive_operation receive_for(
-        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {}) const& {
-        return receive_operation(
-            state_, ::ruvia::worker_timer_saturating_duration_cast(duration), std::move(stop_token_value));
+    [[nodiscard]] receive_operation receive(const operation_timeout& deadline, stop_token stop_token_value = {}) const& {
+        return receive_operation(state_, deadline, std::move(stop_token_value));
     }
-    template <typename rep_type, typename period_type>
-    receive_operation receive_for(std::chrono::duration<rep_type, period_type>, stop_token = {}) const&& = delete;
+    receive_operation receive(const operation_timeout&, stop_token = {}) const&& = delete;
 
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from

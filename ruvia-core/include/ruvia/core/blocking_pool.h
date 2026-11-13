@@ -42,6 +42,7 @@
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/one_shot.h"
 #include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -169,8 +170,6 @@ private:
 
 namespace detail {
 
-struct blocking_result_access;
-
 template <typename t_type>
 struct blocking_payload final {
     using value_storage_type =
@@ -229,6 +228,8 @@ private:
 // The outcome category is fixed after construction. Moving a failed result
 // preserves its failure in the source as well; it must not become a successful
 // result without a value. Replace an owning optional by emplacing a new result.
+// with_value(), with_error() and with_status() build the same outcomes for a
+// composed offload.
 template <typename t_type>
 class blocking_result final {
 public:
@@ -289,16 +290,43 @@ public:
         }
     }
 
-private:
-    friend struct detail::blocking_result_access;
+    // The callable completed with this value.
+    template <typename u_type>
+        requires(!std::is_void_v<t_type> && std::constructible_from<t_type, u_type&&>)
+    [[nodiscard]] static blocking_result with_value(u_type&& value) {
+        blocking_result result_value(blocking_status::completed);
+        result_value.payload_.value_.emplace(std::forward<u_type>(value));
+        return result_value;
+    }
 
+    [[nodiscard]] static blocking_result with_value() noexcept
+        requires std::is_void_v<t_type>
+    {
+        return blocking_result(blocking_status::completed);
+    }
+
+    // Execution or result delivery failed with this non-null exception.
+    [[nodiscard]] static blocking_result with_error(std::exception_ptr error) {
+        if (error == nullptr) {
+            throw std::invalid_argument("blocking error result requires an exception");
+        }
+        blocking_result result_value(blocking_status::completed);
+        result_value.payload_.error_ = std::move(error);
+        return result_value;
+    }
+
+    // The operation produced no result of its own; every status but completed.
+    [[nodiscard]] static blocking_result with_status(blocking_status status) {
+        if (status == blocking_status::completed) {
+            throw std::invalid_argument("blocking status result requires a rejection status");
+        }
+        return blocking_result(status);
+    }
+
+private:
     explicit blocking_result(blocking_status status) noexcept {
         payload_.status_ = status;
     }
-
-    explicit blocking_result(detail::blocking_payload<t_type>&& payload_value) noexcept(
-        std::is_nothrow_move_constructible_v<detail::blocking_payload<t_type>>)
-        : payload_(std::move(payload_value)) {}
 
     void rethrow_if_not_completed() const {
         if (payload_.error_ != nullptr) {
@@ -319,27 +347,31 @@ private:
 
 namespace detail {
 
-// Every caller is in run_blocking_until(): rejections never carry the
-// completed status, and a completed payload always holds a value or an error.
-struct blocking_result_access final {
-    template <typename t_type>
-    [[nodiscard]] static blocking_result<t_type> rejected(blocking_status status) noexcept {
-        return blocking_result<t_type>(status);
+// A completed payload always holds a value or an error.
+template <typename t_type>
+[[nodiscard]] blocking_result<t_type> completed_blocking_result(blocking_payload<t_type>&& payload_value) {
+    if (payload_value.error_ != nullptr) {
+        return blocking_result<t_type>::with_error(std::move(payload_value.error_));
     }
-
-    template <typename t_type>
-    [[nodiscard]] static blocking_result<t_type> completed(blocking_payload<t_type>&& payload_value) noexcept(
-        std::is_nothrow_move_constructible_v<blocking_payload<t_type>>) {
-        return blocking_result<t_type>(std::move(payload_value));
+    if constexpr (std::is_void_v<t_type>) {
+        return blocking_result<t_type>::with_value();
+    } else {
+        return blocking_result<t_type>::with_value(std::move(*payload_value.value_));
     }
-};
+}
 
+// A relative timeout starts when the returned task starts; otherwise the
+// caller's deadline bounds the wait.
 template <typename fn_type>
-[[nodiscard]] auto run_blocking_until(worker_handle worker_value,
-    std::optional<std::chrono::steady_clock::duration> timeout, stop_token stop_token_value, fn_type fn)
+[[nodiscard]] auto run_blocking_until(worker_handle worker_value, std::optional<timeout_duration> timeout,
+    operation_timeout deadline, stop_token stop_token_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
     using payload = blocking_payload<result_type>;
+    using outcome_type = blocking_result<result_type>;
+    if (timeout.has_value()) {
+        deadline = operation_timeout(timeout);
+    }
     static_assert(std::is_void_v<result_type> || std::is_move_constructible_v<result_type>,
         "a blocking callable's result travels back to the worker by move");
 
@@ -351,16 +383,16 @@ template <typename fn_type>
     }
     auto* const pool = worker_handle_access::blocking_pool(worker_value);
     if (pool == nullptr) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::unavailable);
+        co_return outcome_type::with_status(blocking_status::unavailable);
     }
     if (stop_token_value.stop_requested()) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::cancelled);
+        co_return outcome_type::with_status(blocking_status::cancelled);
     }
-    if (timeout.has_value() && *timeout <= std::chrono::steady_clock::duration::zero()) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
+    if (deadline.expired()) {
+        co_return outcome_type::with_status(blocking_status::timed_out);
     }
     if (!worker_value.accepting()) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
+        co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
 
     // The one-shot outlives the request that started it: a worker that stops
@@ -375,7 +407,7 @@ template <typename fn_type>
     try {
         channel.emplace(make_one_shot<payload>(std::move(worker_value), {.resource_ = process_resource()}));
     } catch (const std::runtime_error&) {
-        co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
+        co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
     auto& [completion, receiver] = *channel;
     const auto submitted =
@@ -394,35 +426,32 @@ template <typename fn_type>
             guard.answer(std::move(payload_value));
         });
     if (submitted != blocking_submit_status::accepted) {
-        co_return blocking_result_access::rejected<result_type>(
+        co_return outcome_type::with_status(
             submitted == blocking_submit_status::queue_full ? blocking_status::queue_full
                                                             : blocking_status::pool_stopped);
     }
 
     try {
-        auto waited = co_await (timeout ? receiver.wait_for(*timeout, std::move(stop_token_value))
-                                        : receiver.wait(std::move(stop_token_value)));
+        auto waited = co_await receiver.wait(deadline, std::move(stop_token_value));
         if (waited.has_value()) {
             auto& payload_value = waited.value();
             if (payload_value.status_ != blocking_status::completed) {
-                co_return blocking_result_access::rejected<result_type>(payload_value.status_);
+                co_return outcome_type::with_status(payload_value.status_);
             }
-            co_return blocking_result_access::completed<result_type>(std::move(payload_value));
+            co_return completed_blocking_result(std::move(payload_value));
         }
         if (waited.status() == worker_wait_status::timed_out) {
-            co_return blocking_result_access::rejected<result_type>(blocking_status::timed_out);
+            co_return outcome_type::with_status(blocking_status::timed_out);
         }
         if (waited.status() == worker_wait_status::cancelled) {
-            co_return blocking_result_access::rejected<result_type>(blocking_status::cancelled);
+            co_return outcome_type::with_status(blocking_status::cancelled);
         }
         // Closed cannot happen -- this coroutine owns the receiver and is the only
         // waiter -- so anything else is the worker going away under the operation.
-        co_return blocking_result_access::rejected<result_type>(blocking_status::worker_stopping);
+        co_return outcome_type::with_status(blocking_status::worker_stopping);
     } catch (...) {
         // Payload delivery now moves the result on the receiving worker.
-        payload failure;
-        failure.error_ = std::current_exception();
-        co_return blocking_result_access::completed<result_type>(std::move(failure));
+        co_return outcome_type::with_error(std::current_exception());
     }
 }
 
@@ -443,21 +472,29 @@ template <typename fn_type>
 // interrupted, so the pool thread stays occupied until `fn` returns. Use it to
 // keep one wedged dependency from pinning a request -- its connection, its
 // arena, its leases -- indefinitely. options.stop_token_ cancels the wait the
-// same way.
+// same way. The deadline overload bounds the wait by an operation_timeout
+// shared with the caller's other phases.
 //
 // Never throws for a rejection; the status says what happened. A worker
-// without a pool, a stop token that is already stopped, or a timeout that is
-// not positive rejects without submitting `fn`. Use std::move(result).take_value()
-// to turn a rejection into an exception and to rethrow the callable's own
-// exception.
+// without a pool, a stop token that is already stopped, or a deadline that has
+// passed rejects without submitting `fn`. A non-positive options.timeout_
+// throws std::invalid_argument (validate_operation_options) before any task
+// exists. Use std::move(result).take_value() to turn a rejection into an
+// exception and to rethrow the callable's own exception.
 template <typename fn_type>
 [[nodiscard]] auto run_blocking(worker_handle worker_value, operation_options options, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
-    std::optional<std::chrono::steady_clock::duration> timeout;
-    if (options.timeout_) {
-        timeout = worker_timer_saturating_duration_cast(options.timeout_->value());
-    }
-    return detail::run_blocking_until(std::move(worker_value), timeout, std::move(options.stop_token_), std::move(fn));
+    validate_operation_options(options);
+    return detail::run_blocking_until(std::move(worker_value), options.timeout_, operation_timeout(std::nullopt),
+        std::move(options.stop_token_), std::move(fn));
+}
+
+template <typename fn_type>
+[[nodiscard]] auto run_blocking(
+    worker_handle worker_value, const operation_timeout& deadline, stop_token stop_token_value, fn_type fn)
+    -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
+    return detail::run_blocking_until(
+        std::move(worker_value), std::nullopt, deadline, std::move(stop_token_value), std::move(fn));
 }
 
 template <typename fn_type>

@@ -1080,7 +1080,7 @@ task<bool> http_client_pool::execute_http1(http_client_connection& connection_va
         }
     } operation{*this, connection_value, must_buffer};
     const auto acquired =
-        co_await connection_value.http1_scheduler_.acquire(acquire_timeout.remaining(), stop_token_value);
+        co_await connection_value.http1_scheduler_.acquire(acquire_timeout, stop_token_value);
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/1 connection acquire");
     }

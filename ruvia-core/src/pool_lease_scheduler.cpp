@@ -65,7 +65,7 @@ public:
             if (head_ == nullptr) {
                 return false;
             }
-            continuation = head_->resolve(detail::worker_wait_result_access::value(index));
+            continuation = head_->resolve(worker_wait_result<std::size_t>::with_value(index));
             return true;
         }
 
@@ -166,34 +166,33 @@ public:
             auto retained = shared_from_this();
             // A detached worker has already retired the owners of every
             // suspended acquire, so there is nothing left to cancel.
-            (void)detail::worker_handle_access::defer_if_attached(
-                worker_, [retained = std::move(retained), waiter_id] {
-                    (void)retained->queue_.cancel(waiter_id);
-                });
+            (void)worker_.defer_completion([retained = std::move(retained), waiter_id] {
+                (void)retained->queue_.cancel(waiter_id);
+            });
         }
     };
 
     [[nodiscard]] std::optional<acquire_result_type> try_acquire(
-        const std::optional<timeout_duration>& timeout, const stop_token& stop_token_value) {
+        const std::optional<std::chrono::steady_clock::time_point>& deadline, const stop_token& stop_token_value) {
         if (!worker_.is_current()) {
             throw std::logic_error("pool lease acquire must run on its bound worker");
         }
         if (closing_) {
-            return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::closed);
+            return worker_wait_result<std::size_t>::with_status(worker_wait_status::closed);
         }
         if (stop_token_value.stop_requested()) {
-            return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::cancelled);
+            return worker_wait_result<std::size_t>::with_status(worker_wait_status::cancelled);
         }
         if (free_head_ == no_free_slot) {
-            if (timeout.has_value() && timeout->value().count() <= 0 &&
+            if (deadline.has_value() && *deadline <= std::chrono::steady_clock::now() &&
                 worker_.valid() && !detail::worker_handle_access::timers_stopping(worker_)) {
-                return detail::worker_wait_result_access::outcome<std::size_t>(worker_wait_status::timed_out);
+                return worker_wait_result<std::size_t>::with_status(worker_wait_status::timed_out);
             }
             return std::nullopt;
         }
         const auto slot = free_head_;
         free_head_ = std::exchange(next_free_[slot], slot_leased);
-        return detail::worker_wait_result_access::value(slot);
+        return worker_wait_result<std::size_t>::with_value(slot);
     }
 
     [[nodiscard]] std::uint64_t next_waiter_id() noexcept {
@@ -247,15 +246,21 @@ pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_h
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;
 
-pool_lease_acquire pool_lease_scheduler::acquire(
-    const std::optional<timeout_duration>& timeout, stop_token stop_token_value) & {
-    return pool_lease_acquire(*impl_, timeout, std::move(stop_token_value));
+pool_lease_acquire pool_lease_scheduler::acquire(operation_options options) & {
+    validate_operation_options(options);
+    return pool_lease_acquire(*impl_, options.timeout_, std::nullopt, std::move(options.stop_token_));
+}
+
+pool_lease_acquire pool_lease_scheduler::acquire(const operation_timeout& deadline, stop_token stop_token_value) & {
+    return pool_lease_acquire(*impl_, std::nullopt, deadline.deadline(), std::move(stop_token_value));
 }
 
 pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-    std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept
+    std::optional<timeout_duration> timeout, std::optional<std::chrono::steady_clock::time_point> deadline,
+    stop_token stop_token_value) noexcept
     : owner_(&owner_value),
       timeout_(timeout),
+      deadline_(deadline),
       stop_token_(std::move(stop_token_value)) {
     ++owner_->reserved_acquires_;
 }
@@ -263,6 +268,7 @@ pool_lease_acquire::pool_lease_acquire(pool_lease_scheduler::impl_type& owner_va
 pool_lease_acquire::pool_lease_acquire(pool_lease_acquire&& other) noexcept
     : owner_(other.awaited_ ? nullptr : std::exchange(other.owner_, nullptr)),
       timeout_(other.timeout_),
+      deadline_(other.deadline_),
       stop_token_(std::move(other.stop_token_)) {
     if (other.awaited_) {
         std::terminate();
@@ -300,7 +306,7 @@ std::coroutine_handle<> pool_lease_acquire::resolve(worker_wait_result<std::size
 }
 
 std::coroutine_handle<> pool_lease_acquire::resolve(worker_wait_status status) noexcept {
-    return resolve(detail::worker_wait_result_access::outcome<std::size_t>(status));
+    return resolve(worker_wait_result<std::size_t>::with_status(status));
 }
 
 bool pool_lease_acquire::await_ready() {
@@ -308,7 +314,10 @@ bool pool_lease_acquire::await_ready() {
         throw std::logic_error("pool lease acquire cannot be awaited");
     }
     awaited_ = true;
-    if (auto acquired = owner_->try_acquire(timeout_, stop_token_)) {
+    if (timeout_.has_value()) {
+        deadline_ = worker_timer_deadline_after(timeout_->value());
+    }
+    if (auto acquired = owner_->try_acquire(deadline_, stop_token_)) {
         result_.emplace(std::move(*acquired));
     }
     return result_.has_value();
@@ -324,14 +333,12 @@ bool pool_lease_acquire::await_suspend(std::coroutine_handle<> continuation) {
     // A stopped timer queue arms nothing, exactly as stop_timers() cancels a
     // pending deadline: the waiter still completes on release, close(), or
     // its stop token.
-    if (timeout_.has_value() && timeout_->value().count() > 0 &&
-        owner_->worker_.valid()) {
+    if (deadline_.has_value() && owner_->worker_.valid()) {
         try {
             // The worker-local timer belongs to this acquire and is cancelled
             // before it can be destroyed. Its expiry can unlink the waiter
             // directly; cross-thread stop notifications still use waiter IDs.
-            (void)owner_->worker_.schedule_timer(deadline_timer_,
-                worker_timer_deadline_after(timeout_->value()),
+            (void)owner_->worker_.schedule_timer(deadline_timer_, *deadline_,
                 [waiter_state, waiter = this](worker_timer_outcome outcome) noexcept {
                     if (outcome == worker_timer_outcome::expired) {
                         (void)waiter_state->queue_.expire(*waiter);

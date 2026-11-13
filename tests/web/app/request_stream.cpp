@@ -240,8 +240,7 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
         auto upstream = co_await stream.client().get("/ping").send();
         auto body = co_await upstream.text();
         EXPECT_EQ(body.text().size(), 2048);
-        const auto expired = co_await stream.run_blocking(0ms, [] { return 1; });
-        EXPECT_EQ(expired.status(), ruvia::blocking_status::timed_out);
+        EXPECT_THROW(static_cast<void>(stream.run_blocking(0ms, [] { return 1; })), std::invalid_argument);
         (void)co_await stream.response().commit();
         co_await stream.response().write(std::string_view("runtime-ready"));
         co_await stream.response().end();

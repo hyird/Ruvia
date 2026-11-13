@@ -142,9 +142,11 @@ public:
           callback_(std::move(callback_value)),
           loop_(std::move(loop)) {}
 
-    void install_shutdown_hook() {
-        worker_handle_access::register_shutdown_hook(worker_, shutdown_hook_, shared_from_this(),
-            worker_shutdown_operations<event_loop_stop_listener>);
+    void install_shutdown_registration() {
+        if (worker_.register_shutdown(shared_from_this(), &event_loop_stop_listener::shutdown_registration_) !=
+            worker_registration_status::registered) {
+            throw std::runtime_error("cannot register a stop callback on a stopping event loop");
+        }
     }
 
     void cancel() noexcept {
@@ -220,7 +222,7 @@ private:
         }
 
         try {
-            async_start_task(std::move(*task),
+            async_start(std::move(*task),
                 asio::bind_executor(executor_,
                     [self = std::move(self)](std::exception_ptr failure) mutable {
                         if (failure != nullptr) {
@@ -237,7 +239,7 @@ private:
     }
 
     // First member: unlinks from the worker registry after every other member is gone.
-    worker_shutdown_hook shutdown_hook_;
+    worker_shutdown_registration shutdown_registration_;
     worker_handle worker_;
     asio::io_context::executor_type executor_;
     std::mutex mutex_;
@@ -298,9 +300,11 @@ void event_loop_state::shutdown_external_context() noexcept {
     runtime_.detach();
     worker_handle_access::wait_for_reservations(runtime_.handle());
 }
-void event_loop_state::install_shutdown_hook() {
-    worker_handle_access::register_shutdown_hook(
-        runtime_.handle(), shutdown_hook_, shared_from_this(), worker_shutdown_operations<event_loop_state>);
+void event_loop_state::install_shutdown_registration() {
+    if (runtime_.handle().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) !=
+        worker_registration_status::registered) {
+        throw std::runtime_error("cannot register an event loop on a stopping worker");
+    }
 }
 
 void event_loop_state::worker_stopping_complete() noexcept {
@@ -383,8 +387,7 @@ void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> sel
     try {
         // A detached context ran shutdown_external_context(), which
         // already abandoned the stop chain this would finalize.
-        (void)worker_handle_access::defer_if_attached(
-            worker_value, [state_value = std::move(self)] { state_value->finalize_stop(); });
+        (void)worker_value.defer_completion([state_value = std::move(self)] { state_value->finalize_stop(); });
     } catch (...) {
         fail_teardown_start(std::current_exception());
     }
@@ -407,6 +410,11 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 event_loop_stop_registration::event_loop_stop_registration(
     std::shared_ptr<detail::event_loop_stop_listener> listener_value) noexcept
     : listener_(std::move(listener_value)) {}
+
+event_loop_start_rejected::event_loop_start_rejected(post_status status)
+    : std::runtime_error(status == post_status::queue_full ? "event loop root task queue is full"
+                                                           : "event loop is stopping"),
+      status_(status) {}
 
 event_loop_stop_registration::~event_loop_stop_registration() {
     reset();
@@ -528,8 +536,7 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
             }
         }
     };
-    return detail::worker_handle_access::defer_if_attached(state_->runtime_.handle(),
-        [control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
+    return state_->runtime_.handle().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
 }
 
 event_loop_stop_registration event_loop::register_stop_callback(
@@ -546,7 +553,7 @@ event_loop_stop_registration event_loop::register_stop_callback(
     auto listener_value = std::allocate_shared<detail::event_loop_stop_listener>(
         std::pmr::polymorphic_allocator<detail::event_loop_stop_listener>(process_resource()),
         state_->runtime_.handle(), state_->executor_, std::move(callback_value), state_);
-    listener_value->install_shutdown_hook();
+    listener_value->install_shutdown_registration();
     return event_loop_stop_registration(std::move(listener_value));
 }
 
@@ -600,7 +607,7 @@ event_loop_attachment attach_event_loop(
             report_unhandled_failure("attached event loop failure after retirement", std::move(failure));
         }
     };
-    state_value->install_shutdown_hook();
+    state_value->install_shutdown_registration();
     state_value->attach(state_value);
     return event_loop_attachment(std::move(state_value));
 }

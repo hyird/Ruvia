@@ -10,9 +10,9 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
+#include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_runtime.h"
 
 #include "worker_runtime_context.h"
@@ -207,7 +207,7 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     // context service, which retires it at the latest when the context shuts
     // down.
     void attach(const std::shared_ptr<event_loop_state>& self);
-    void install_shutdown_hook();
+    void install_shutdown_registration();
 
     void worker_stopping_complete() noexcept;
 
@@ -225,7 +225,7 @@ struct event_loop_state final : std::enable_shared_from_this<event_loop_state> {
     void shutdown_external_context() noexcept;
 
     // First member: unlinks from the worker registry after every other member is gone.
-    worker_shutdown_hook shutdown_hook_;
+    worker_shutdown_registration shutdown_registration_;
     context_ownership_type context_ownership_;
     asio::io_context* const io_context_;
     asio::io_context::executor_type executor_;

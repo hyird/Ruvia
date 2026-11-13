@@ -30,11 +30,11 @@ namespace worker_runtime_test {
 
 using state = ruvia::worker_runtime_state;
 
-// Reading failure() marks it observed, so it is not offered on a const runtime.
+// take_failure() marks it observed, so it is not offered on a const runtime.
 template <typename runtime_type>
-concept failure_readable_through_const = requires(const runtime_type& runtime_value) { runtime_value.failure(); };
+concept failure_readable_through_const = requires(const runtime_type& runtime_value) { runtime_value.take_failure(); };
 static_assert(!failure_readable_through_const<ruvia::worker_runtime>);
-static_assert(requires(ruvia::worker_runtime& runtime_value) { runtime_value.failure(); });
+static_assert(requires(ruvia::worker_runtime& runtime_value) { runtime_value.take_failure(); });
 
 TEST(Ruvia, worker_runtime_hook_moves_can_query_failure_during_configuration) {
     ruvia::worker_runtime runtime;
@@ -55,7 +55,7 @@ TEST(Ruvia, worker_runtime_hook_moves_can_query_failure_during_configuration) {
               armed_(other.armed_),
               started_(other.started_) {
             if (*armed_) {
-                (void)runtime_->failure();
+                (void)runtime_->take_failure();
             }
         }
         void operator()() {
@@ -241,9 +241,9 @@ TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     runtime.join();
     EXPECT_TRUE(failure_on_owner);
     EXPECT_TRUE(shutdown_after_completion);
-    EXPECT_EQ(reported, runtime.failure());
+    EXPECT_EQ(reported, runtime.take_failure());
     EXPECT_EQ(phases, (std::pmr::vector<int>{{1, 2, 3, 4}, ruvia::process_resource()}));
-    EXPECT_TRUE(runtime.failure() != nullptr);
+    EXPECT_TRUE(runtime.take_failure() != nullptr);
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.start(); }));
 }
 
@@ -351,7 +351,7 @@ TEST(Ruvia, worker_runtime_serves_only_after_owner_published_readiness) {
     EXPECT_EQ(serves.load(), 1);
     EXPECT_TRUE(served_on_owner.load());
     runtime.join();
-    EXPECT_TRUE(runtime.failure() == nullptr);
+    EXPECT_TRUE(runtime.take_failure() == nullptr);
 }
 
 TEST(Ruvia, worker_runtime_stop_before_readiness_aborts_startup) {
@@ -411,7 +411,7 @@ TEST(Ruvia, worker_runtime_serve_failure_fails_the_runtime) {
     runtime.request_serve();
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.wait_until_serving(); }));
     runtime.join();
-    EXPECT_TRUE(runtime.failure() != nullptr);
+    EXPECT_TRUE(runtime.take_failure() != nullptr);
 }
 
 TEST(Ruvia, worker_group_coordinates_startup_serving_and_retirement) {
@@ -819,7 +819,7 @@ TEST(Ruvia, worker_group_destruction_releases_observations_and_preserves_runtime
     EXPECT_TRUE(failure_recorded);
     EXPECT_TRUE(peer_accepting);
     EXPECT_EQ(failure_reports.load(), 1);
-    EXPECT_EQ(member.failure(), error);
+    EXPECT_EQ(member.take_failure(), error);
 }
 
 TEST(Ruvia, worker_group_failure_hook_can_release_completed_member_observations) {
@@ -844,7 +844,7 @@ TEST(Ruvia, worker_group_failure_hook_can_release_completed_member_observations)
     EXPECT_TRUE(stop_observed);
     EXPECT_TRUE(group == nullptr);
     EXPECT_EQ(failure_reports, 1);
-    EXPECT_EQ(failing.failure(), error);
+    EXPECT_EQ(failing.take_failure(), error);
 }
 
 ruvia::task<void> hold_retirement(ruvia::worker_signal& gate_value, std::promise<void>& ready) {

@@ -16,8 +16,6 @@ class move_only_function;
 }  // namespace ruvia
 
 namespace ruvia::detail {
-struct worker_wait_result_access;
-
 template <typename t_type>
 class worker_wait_value final {
 public:
@@ -52,7 +50,8 @@ enum class worker_wait_status : std::uint8_t {
 // The outcome category is fixed at construction. Construction and extraction
 // follow the payload's copy/move semantics; a failed payload move never leaves
 // an existing outcome without a category. Rebuild an owning optional to replace
-// an outcome instead of assigning it.
+// an outcome instead of assigning it. with_value() and with_status() let a
+// composed worker-bound wait produce the same outcomes as the built-in ones.
 template <typename t_type>
 class worker_wait_result final {
 public:
@@ -97,9 +96,22 @@ public:
         return std::move(result_value->value_);
     }
 
-private:
-    friend struct detail::worker_wait_result_access;
+    template <typename u_type>
+        requires std::constructible_from<t_type, u_type&&>
+    [[nodiscard]] static worker_wait_result with_value(u_type&& value) noexcept(
+        std::is_nothrow_constructible_v<t_type, u_type&&>) {
+        return worker_wait_result(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value));
+    }
 
+    // Every status except value; value outcomes come only from with_value().
+    [[nodiscard]] static worker_wait_result with_status(worker_wait_status status) {
+        if (status == worker_wait_status::value) {
+            throw std::invalid_argument("worker wait status result requires a non-value status");
+        }
+        return worker_wait_result(status);
+    }
+
+private:
     using result_type = std::variant<detail::worker_wait_value<t_type>, worker_wait_status>;
 
     template <typename u_type>
@@ -108,11 +120,7 @@ private:
         : result_(std::in_place_type<detail::worker_wait_value<t_type>>, std::forward<u_type>(value)) {}
 
     explicit worker_wait_result(worker_wait_status status) noexcept
-        : result_(status) {
-        if (status == worker_wait_status::value) {
-            std::terminate();
-        }
-    }
+        : result_(status) {}
 
     result_type result_;
 };
@@ -200,22 +208,3 @@ private:
 };
 
 }  // namespace ruvia
-
-namespace ruvia::detail {
-
-struct worker_wait_result_access final {
-    template <typename t_type>
-    [[nodiscard]] static worker_wait_result<std::remove_cvref_t<t_type>> value(t_type&& value) noexcept(
-        std::is_nothrow_constructible_v<std::remove_cvref_t<t_type>, t_type&&>) {
-        using value_type = std::remove_cvref_t<t_type>;
-        return worker_wait_result<value_type>(
-            std::in_place_type<worker_wait_value<value_type>>, std::forward<t_type>(value));
-    }
-
-    template <typename t_type>
-    [[nodiscard]] static worker_wait_result<t_type> outcome(worker_wait_status status) noexcept {
-        return worker_wait_result<t_type>(status);
-    }
-};
-
-}  // namespace ruvia::detail

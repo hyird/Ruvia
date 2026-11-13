@@ -15,6 +15,8 @@ namespace ruvia {
 
 template <typename t_type>
 class task;
+template <typename t_type>
+class task_awaiter;
 class task_scope;
 class operation_scope;
 
@@ -81,17 +83,11 @@ template <std::size_t t_alignment>
 
 template <typename t_type>
 class task_promise;
-template <typename t_type>
-class task_awaiter;
 template <typename t_type, typename handler_type>
 class task_completion_state;
 
 template <typename t_type>
 concept asio_task_result = std::is_void_v<t_type> || std::is_nothrow_move_constructible_v<t_type>;
-
-template <typename t_type, typename completion_token_type>
-    requires asio_task_result<t_type>
-auto async_start_task(task<t_type>&& task_value, completion_token_type&& token);
 
 // The frame is linear: cold frames may be discarded, started frames must finish.
 // Both promise signatures compose this exact control state; it never moves.
@@ -268,7 +264,7 @@ private:
     template <typename>
     friend class ruvia::task;
     template <typename>
-    friend class task_awaiter;
+    friend class ruvia::task_awaiter;
     template <typename, typename>
     friend class task_completion_state;
     friend class ruvia::task_scope;

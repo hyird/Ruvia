@@ -105,14 +105,14 @@ bool sleep_operation::await_ready() {
         throw std::logic_error("sleep operation cannot be awaited");
     }
     if (!worker_->is_current()) {
-        throw std::logic_error("sleep_for must run on its bound worker");
+        throw std::logic_error("sleep must run on its bound worker");
     }
     started_ = true;
     if (stop_token_.stop_requested()) {
         return true;
     }
-    if (const auto* duration = std::get_if<std::chrono::steady_clock::duration>(&target_)) {
-        return *duration <= std::chrono::steady_clock::duration::zero();
+    if (const auto* duration = std::get_if<timeout_duration>(&target_)) {
+        return duration->value() <= std::chrono::milliseconds::zero();
     }
     return std::get<std::chrono::steady_clock::time_point>(target_) <= std::chrono::steady_clock::now();
 }
@@ -122,8 +122,8 @@ bool sleep_operation::await_ready() {
 bool sleep_operation::await_suspend(std::coroutine_handle<> continuation) {
     continuation_ = continuation;
     const auto deadline = [&] {
-        if (const auto* duration = std::get_if<std::chrono::steady_clock::duration>(&target_)) {
-            return worker_timer_deadline_after(*duration);
+        if (const auto* duration = std::get_if<timeout_duration>(&target_)) {
+            return worker_timer_deadline_after(duration->value());
         }
         return std::get<std::chrono::steady_clock::time_point>(target_);
     }();
@@ -149,6 +149,10 @@ timer_sleep_result sleep_operation::await_resume() const noexcept {
     return outcome_ == worker_timer_outcome::expired && !stop_token_.stop_requested()
                ? timer_sleep_result::elapsed
                : timer_sleep_result::stop_requested;
+}
+
+sleep_operation sleep_for(const worker_handle& worker_value, timeout_duration duration, stop_token stop_token_value) {
+    return sleep_operation(worker_value, duration, std::move(stop_token_value));
 }
 
 sleep_operation sleep_until(const worker_handle& worker_value,

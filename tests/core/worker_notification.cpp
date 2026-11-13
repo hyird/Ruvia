@@ -48,7 +48,7 @@ template <typename runtime_type>
 
 [[nodiscard]] bool stop(ruvia::worker_runtime& runtime) {
     runtime.join();
-    return runtime.failure() == nullptr;
+    return runtime.take_failure() == nullptr;
 }
 
 [[nodiscard]] bool finish(spawned_task& task_value) {

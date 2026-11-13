@@ -987,7 +987,7 @@ public:
     }
     task<void> connect(stream& item, std::string_view host, bool allow_early,
         const operation_timeout& acquire_timeout, stop_token stop) {
-        const auto slot = co_await connect_slots_.acquire(acquire_timeout.remaining(), stop);
+        const auto slot = co_await connect_slots_.acquire(acquire_timeout, stop);
         if (!slot.has_value()) {
             throw_http_client_wait_failure(slot.status(), "HTTP/3 connection admission");
         }
@@ -1422,7 +1422,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
     auto& race = *race_;
     const std::string_view host = route_.host_;
     const auto port = route_.port_;
-    const auto acquired = co_await race.selection_.acquire(acquire_timeout.remaining(), stop);
+    const auto acquired = co_await race.selection_.acquire(acquire_timeout, stop);
     if (!acquired.has_value()) {
         throw_http_client_wait_failure(acquired.status(), "HTTP/3 endpoint selection");
     }

@@ -403,13 +403,13 @@ bool stoppable_sleep_works() {
 
 ruvia::task<void> receive_through_timer_stop(
     ruvia::channel_receiver<int>& receiver, ruvia::worker_wait_status& status) {
-    const auto result_value = co_await receiver.receive_for(std::chrono::hours(1));
+    const auto result_value = co_await receiver.receive({.timeout_ = std::chrono::hours(1)});
     status = result_value.status();
 }
 
 ruvia::task<void> acquire_after_timer_stop(
     ruvia::pool_lease_scheduler& pool, std::optional<ruvia::worker_wait_result<std::size_t>>& result) {
-    result.emplace(co_await pool.acquire(std::chrono::milliseconds(1)));
+    result.emplace(co_await pool.acquire({.timeout_ = std::chrono::milliseconds(1)}));
 }
 
 // Once the worker stops, every timed primitive reports its shutdown result
@@ -443,11 +443,11 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
         ruvia::timer_sleep_result::stop_requested) {
         co_return;
     }
-    if ((co_await receiver.receive_for(std::chrono::hours(1))).status() !=
+    if ((co_await receiver.receive({.timeout_ = std::chrono::hours(1)})).status() !=
         ruvia::worker_wait_status::worker_stopping) {
         co_return;
     }
-    if ((co_await one_shot_receiver.wait_for(std::chrono::hours(1))).status() !=
+    if ((co_await one_shot_receiver.wait({.timeout_ = std::chrono::hours(1)})).status() !=
         ruvia::worker_wait_status::worker_stopping) {
         co_return;
     }
@@ -464,7 +464,7 @@ ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attach
 
     // A timed acquire keeps waiting without a timer and ends with the pool.
     ruvia::pool_lease_scheduler pool(1, worker_value);
-    const auto held = co_await pool.acquire(std::nullopt);
+    const auto held = co_await pool.acquire();
     if (!held.has_value()) {
         co_return;
     }

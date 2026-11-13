@@ -20,7 +20,6 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
 #include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -108,10 +107,10 @@ public:
             std::terminate();
         }
     }
-    // Links `hook`, a member of the object `owner` aliases, for both stop
-    // phases. Throws std::runtime_error once the worker stops accepting.
-    void register_shutdown_hook(
-        worker_shutdown_hook& hook, std::weak_ptr<void> owner, const worker_shutdown_hook::operations_type& operations);
+    // Links `registration`, a member of the object `owner` aliases, for both
+    // stop phases; worker_stopping once the worker stops accepting.
+    [[nodiscard]] worker_registration_status register_shutdown(worker_shutdown_registration& registration,
+        std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations);
     // Runs after the first stopping batch has notified every hook, or now if
     // no batch is active. The active bit is published with accepting=false.
     void when_shutdown_notifications_complete(move_only_function<void()> callback);
@@ -165,7 +164,7 @@ public:
     }
 
 private:
-    friend class worker_shutdown_hook;
+    friend class ruvia::worker_shutdown_registration;
     static constexpr std::size_t no_node = static_cast<std::size_t>(-1);
     struct waiter_node_type final {
         explicit waiter_node_type(move_only_function<void()> callback_value) noexcept
@@ -217,7 +216,7 @@ private:
     [[nodiscard]] bool begin_stopping(bool abandon_drain) noexcept;
     [[nodiscard]] bool begin_stopping_locked(bool abandon_drain) noexcept;
     void notify_stopping(bool batch_active) noexcept;
-    void unlink_shutdown_hook(worker_shutdown_hook& hook) noexcept;
+    void unlink_shutdown(worker_shutdown_registration& registration) noexcept;
     void abandon_queued() noexcept;
     void schedule_drain_locked();
     // Claims one free node against capacity; the caller owns it until it
@@ -272,8 +271,8 @@ private:
     // Registered shutdown hooks in registration order. A separate mutex keeps
     // registration and unlinking off the admission lock.
     std::mutex hooks_mutex_;
-    worker_shutdown_hook* hooks_head_{nullptr};
-    worker_shutdown_hook* hooks_tail_{nullptr};
+    worker_shutdown_registration* hooks_head_{nullptr};
+    worker_shutdown_registration* hooks_tail_{nullptr};
     std::pmr::vector<timer_entry> timers_;
     std::pmr::deque<timer_slot> timer_slots_;
     std::size_t free_timer_slot_{no_timer_slot};

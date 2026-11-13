@@ -238,7 +238,7 @@ bool test_concurrent_completion_reservation(bool throw_first) {
 }
 
 task<void> wait_for_cancellation(one_shot_receiver<payload>& receiver, stop_token token, bool& cancelled) {
-    const auto result = co_await receiver.wait(std::move(token));
+    const auto result = co_await receiver.wait({.stop_token_ = std::move(token)});
     cancelled = result.status() == worker_wait_status::cancelled;
 }
 
@@ -311,7 +311,7 @@ private:
 };
 
 ruvia::task<void> wait_for_value(ruvia::one_shot_receiver<int>& receiver, int expected, bool& success) {
-    const auto result_value = co_await receiver.wait_for(std::chrono::seconds(1));
+    const auto result_value = co_await receiver.wait({.timeout_ = std::chrono::seconds(1)});
     success = result_value.status() == ruvia::worker_wait_status::value && result_value.has_value() &&
               result_value.value() == expected;
 }
@@ -341,7 +341,7 @@ ruvia::task<void> settled_outcomes_survive_worker_stopping(ruvia::event_loop_att
 }
 
 ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, bool& success) {
-    const auto result_value = co_await receiver.wait_for(std::chrono::seconds(1));
+    const auto result_value = co_await receiver.wait({.timeout_ = std::chrono::seconds(1)});
     success = result_value.status() == ruvia::worker_wait_status::closed;
 }
 
@@ -352,7 +352,7 @@ ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_clos
         static_cast<void>(completion.complete(7));
     }
     if (timed) {
-        return receiver.wait_for(std::chrono::seconds(1));
+        return receiver.wait({.timeout_ = std::chrono::seconds(1)});
     }
     return receiver.wait();
 }
@@ -408,7 +408,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
 
     {
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
-        const auto timeout = co_await receiver.wait_for(std::chrono::milliseconds(1));
+        const auto timeout = co_await receiver.wait({.timeout_ = std::chrono::milliseconds(1)});
         if (timeout.status() != ruvia::worker_wait_status::timed_out ||
             !completion.complete(9).accepted()) {
             co_return;
@@ -423,7 +423,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         ruvia::stop_source source;
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
-        const auto cancelled = co_await receiver.wait_for(std::chrono::seconds(1), source.token());
+        const auto cancelled = co_await receiver.wait({.timeout_ = std::chrono::seconds(1), .stop_token_ = source.token()});
         if (cancelled.status() != ruvia::worker_wait_status::cancelled ||
             !completion.complete(11).accepted()) {
             co_return;
@@ -440,7 +440,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         bool first_cancelled = false;
         ruvia::task_scope scope(worker_value);
         scope.spawn([](ruvia::one_shot_receiver<int>& rx, ruvia::stop_token token, bool& cancelled) -> ruvia::task<void> {
-            const auto outcome = co_await rx.wait(std::move(token));
+            const auto outcome = co_await rx.wait({.stop_token_ = std::move(token)});
             cancelled = outcome.status() == ruvia::worker_wait_status::cancelled;
         }(receiver, source.token(), first_cancelled));
         source.request_stop();
@@ -459,7 +459,7 @@ ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
         ruvia::stop_source source;
         source.request_stop();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
-        const auto cancelled = co_await receiver.wait_for(std::chrono::seconds(1), source.token());
+        const auto cancelled = co_await receiver.wait({.timeout_ = std::chrono::seconds(1), .stop_token_ = source.token()});
         if (cancelled.status() != ruvia::worker_wait_status::cancelled ||
             !completion.complete(12).accepted()) {
             co_return;

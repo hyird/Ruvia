@@ -13,12 +13,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/detail/worker/worker_dispatcher.h"
-#include "ruvia/core/detail/worker/worker_wait_awaiter.h"
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_wait.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
@@ -66,6 +66,12 @@ struct one_shot_state final {
     [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
         return std::unique_lock(mutex_);
     }
+    [[nodiscard]] const worker_handle& worker() const noexcept {
+        return worker_;
+    }
+    [[nodiscard]] worker_wait_slot<std::monostate, one_shot_state>& wait_slot() noexcept {
+        return wait_slot_;
+    }
     [[nodiscard]] t_type take_ready_value() {
         struct ready_consumption final {
             std::optional<t_type>& value_;
@@ -77,7 +83,7 @@ struct one_shot_state final {
     }
 
     // First member: unlinks from the worker registry after every other member is gone.
-    worker_shutdown_hook shutdown_hook_;
+    worker_shutdown_registration shutdown_registration_;
     worker_handle worker_;
     std::mutex mutex_;
     using lifecycle_type = std::variant<one_shot_pending, one_shot_completing, one_shot_ready,
@@ -87,57 +93,6 @@ struct one_shot_state final {
     // stable slot until its value has been moved or destroyed outside mutex_.
     std::optional<t_type> ready_value_;
     worker_wait_slot<std::monostate, one_shot_state<t_type>> wait_slot_;
-};
-
-// The wait operation: single-use, movable only before it is awaited, and
-// started on the receiver's worker by co_await. Dropping a cold one has no
-// effect on the exchange.
-template <typename t_type>
-struct one_shot_awaiter final {
-    using wait_type = worker_single_wait_awaiter<std::monostate, one_shot_state<t_type>>;
-
-    one_shot_awaiter(std::shared_ptr<one_shot_state<t_type>> value,
-        std::optional<std::chrono::steady_clock::duration> timeout_value, stop_token stop_token_value) noexcept
-        : wait_(std::move(value), timeout_value, std::move(stop_token_value)) {}
-
-    void operator&() const = delete;
-    [[nodiscard]] bool await_ready() {
-        wait_.start("one-shot wait must run on its bound worker");
-        auto& owner_value = wait_.state();
-        std::unique_lock lock(owner_value.mutex_);
-        if (std::holds_alternative<one_shot_ready>(owner_value.lifecycle_)) {
-            owner_value.lifecycle_.template emplace<one_shot_consumed>();
-            (void)wait_.complete_result(worker_wait_result_access::value(std::monostate{}));
-            return true;
-        }
-        if (std::holds_alternative<one_shot_worker_stopping>(owner_value.lifecycle_)) {
-            (void)wait_.complete_status(worker_wait_status::worker_stopping);
-            return true;
-        }
-        if (std::holds_alternative<one_shot_receiver_closed>(owner_value.lifecycle_) ||
-            std::holds_alternative<one_shot_consumed>(owner_value.lifecycle_)) {
-            (void)wait_.complete_status(worker_wait_status::closed);
-            return true;
-        }
-        assert(std::holds_alternative<one_shot_pending>(owner_value.lifecycle_) ||
-               std::holds_alternative<one_shot_completing>(owner_value.lifecycle_));
-        return wait_.complete_or_publish("one-shot supports one pending receiver");
-    }
-
-    bool await_suspend(std::coroutine_handle<> handle) {
-        return wait_.suspend(handle);
-    }
-
-    [[nodiscard]] worker_wait_result<t_type> await_resume() {
-        auto result = wait_.take_result();
-        if (!result.has_value()) {
-            return worker_wait_result_access::outcome<t_type>(result.status());
-        }
-        return worker_wait_result_access::value(wait_.state().take_ready_value());
-    }
-
-private:
-    wait_type wait_;
 };
 
 template <typename t_type>
@@ -215,7 +170,7 @@ public:
                 rejection = one_shot_complete_status::worker_stopping;
             } else if (state->wait_slot_.occupied()) {
                 state->lifecycle_.template emplace<detail::one_shot_consumed>();
-                state->wait_slot_.complete(detail::worker_wait_result_access::value(std::monostate{}));
+                state->wait_slot_.complete(worker_wait_result<std::monostate>::with_value(std::monostate{}));
             } else {
                 state->lifecycle_.template emplace<detail::one_shot_ready>();
             }
@@ -249,24 +204,79 @@ public:
     [[nodiscard]] bool valid() const noexcept {
         return state_ != nullptr;
     }
+    // The wait operation: single-use, movable only before it is awaited, and
+    // started on the receiver's worker by co_await. Dropping a cold one has no
+    // effect on the exchange.
+    class wait_operation final {
+    public:
+        wait_operation(wait_operation&&) noexcept = default;
+        wait_operation(const wait_operation&) = delete;
+        wait_operation& operator=(const wait_operation&) = delete;
+        wait_operation& operator=(wait_operation&&) = delete;
+        void operator&() const = delete;
+
+        [[nodiscard]] bool await_ready() {
+            wait_.start("one-shot wait must run on its bound worker");
+            auto& owner_value = wait_.state();
+            auto lock = owner_value.lock_state();
+            if (std::holds_alternative<detail::one_shot_ready>(owner_value.lifecycle_)) {
+                owner_value.lifecycle_.template emplace<detail::one_shot_consumed>();
+                wait_.complete_ready(worker_wait_result<std::monostate>::with_value(std::monostate{}));
+                return true;
+            }
+            if (std::holds_alternative<detail::one_shot_worker_stopping>(owner_value.lifecycle_)) {
+                wait_.complete_ready(worker_wait_status::worker_stopping);
+                return true;
+            }
+            if (std::holds_alternative<detail::one_shot_receiver_closed>(owner_value.lifecycle_) ||
+                std::holds_alternative<detail::one_shot_consumed>(owner_value.lifecycle_)) {
+                wait_.complete_ready(worker_wait_status::closed);
+                return true;
+            }
+            assert(std::holds_alternative<detail::one_shot_pending>(owner_value.lifecycle_) ||
+                   std::holds_alternative<detail::one_shot_completing>(owner_value.lifecycle_));
+            return wait_.complete_or_publish("one-shot supports one pending receiver");
+        }
+
+        bool await_suspend(std::coroutine_handle<> handle) {
+            return wait_.suspend(handle);
+        }
+
+        [[nodiscard]] worker_wait_result<t_type> await_resume() {
+            auto result = wait_.take_result();
+            if (!result.has_value()) {
+                return worker_wait_result<t_type>::with_status(result.status());
+            }
+            return worker_wait_result<t_type>::with_value(wait_.state().take_ready_value());
+        }
+
+    private:
+        friend class one_shot_receiver;
+        using state_type = detail::one_shot_state<t_type>;
+
+        wait_operation(std::shared_ptr<state_type> state_value, operation_options options)
+            : wait_(std::move(state_value), std::move(options)) {}
+        wait_operation(std::shared_ptr<state_type> state_value, const operation_timeout& deadline,
+            stop_token stop_token_value) noexcept
+            : wait_(std::move(state_value), deadline, std::move(stop_token_value)) {}
+
+        worker_single_wait_awaiter<std::monostate, state_type> wait_;
+    };
+
     // The receiver owns the receive side: destroying it closes every cold or
     // running wait. Require a named owner so storing an operation cannot
     // silently turn a temporary receiver into an already-closed operation.
-    using wait_operation = detail::one_shot_awaiter<t_type>;
-
-    [[nodiscard]] wait_operation wait(stop_token stop_token_value = {}) const& {
-        return wait_operation(state_, std::nullopt, std::move(stop_token_value));
+    // options.timeout_ must be positive and bounds the wait from its start; a
+    // deadline that has passed reports timed_out unless a value is ready.
+    [[nodiscard]] wait_operation wait(operation_options options = {}) const& {
+        return wait_operation(state_, std::move(options));
     }
-    wait_operation wait(stop_token = {}) const&& = delete;
+    wait_operation wait(operation_options = {}) const&& = delete;
 
-    template <typename rep_type, typename period_type>
-    [[nodiscard]] wait_operation wait_for(
-        std::chrono::duration<rep_type, period_type> duration, stop_token stop_token_value = {}) const& {
-        return wait_operation(
-            state_, ::ruvia::worker_timer_saturating_duration_cast(duration), std::move(stop_token_value));
+    [[nodiscard]] wait_operation wait(const operation_timeout& deadline, stop_token stop_token_value = {}) const& {
+        return wait_operation(state_, deadline, std::move(stop_token_value));
     }
-    template <typename rep_type, typename period_type>
-    wait_operation wait_for(std::chrono::duration<rep_type, period_type>, stop_token = {}) const&& = delete;
+    wait_operation wait(const operation_timeout&, stop_token = {}) const&& = delete;
 
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from

@@ -35,7 +35,9 @@ inline void validate_operation_options(const operation_options& options) {
     return merged;
 }
 
-// Absolute timeout shared across the asynchronous phases of one operation.
+// Absolute timeout shared across the asynchronous phases of one operation:
+// relative to its construction, or an explicit steady-clock deadline. Every
+// timed core wait accepts it as its deadline overload.
 class operation_timeout final {
 public:
     using clock_type = std::chrono::steady_clock;
@@ -45,6 +47,9 @@ public:
             deadline_ = worker_timer_deadline_after(timeout->value());
         }
     }
+
+    explicit operation_timeout(clock_type::time_point deadline) noexcept
+        : deadline_(deadline) {}
 
     [[nodiscard]] std::optional<clock_type::time_point> deadline() const noexcept {
         return deadline_;

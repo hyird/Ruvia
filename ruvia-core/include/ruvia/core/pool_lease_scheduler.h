@@ -9,6 +9,8 @@
 #include <optional>
 
 #include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/core/operation_options.h"
+#include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_handle.h"
 #include "ruvia/core/worker_timer.h"
@@ -38,14 +40,16 @@ public:
     // The result carries the leased slot index as its value, or closed,
     // timed_out or cancelled; it is never worker_stopping.
     // A timed-out waiter leaves other queued acquisitions unchanged.
-    // A timeout arms a timer on the scheduler's worker. Once that
-    // worker's timer queue stops (pending or new acquires alike) no timer
-    // fires: the acquire completes only through release(), close() (closed),
-    // or its stop token (cancelled). It never throws for that.
-    [[nodiscard]] pool_lease_acquire acquire(
-        const std::optional<timeout_duration>& timeout = std::nullopt, stop_token stop = {}) &;
-    pool_lease_acquire acquire(
-        const std::optional<timeout_duration>& = std::nullopt, stop_token = {}) && = delete;
+    // options.timeout_ must be positive and bounds the wait from await; a
+    // deadline that has passed times out a saturated acquire at once. A
+    // timeout arms a timer on the scheduler's worker. Once that worker's timer
+    // queue stops (pending or new acquires alike) no timer fires: the acquire
+    // completes only through release(), close() (closed), or its stop token
+    // (cancelled). It never throws for that.
+    [[nodiscard]] pool_lease_acquire acquire(operation_options options = {}) &;
+    pool_lease_acquire acquire(operation_options = {}) && = delete;
+    [[nodiscard]] pool_lease_acquire acquire(const operation_timeout& deadline, stop_token stop = {}) &;
+    pool_lease_acquire acquire(const operation_timeout&, stop_token = {}) && = delete;
 
     // Return a caller-owned slot on the bound worker. A queued acquire takes
     // ownership before this call returns, but its coroutine resumes in a later
@@ -84,8 +88,8 @@ public:
 private:
     friend class pool_lease_scheduler;
 
-    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value,
-        std::optional<timeout_duration> timeout, stop_token stop_token_value) noexcept;
+    pool_lease_acquire(pool_lease_scheduler::impl_type& owner_value, std::optional<timeout_duration> timeout,
+        std::optional<std::chrono::steady_clock::time_point> deadline, stop_token stop_token_value) noexcept;
     void cancel_registrations() noexcept;
     void complete(worker_wait_result<std::size_t> result_value) noexcept;
     [[nodiscard]] std::coroutine_handle<> resolve(worker_wait_result<std::size_t> result_value) noexcept;
@@ -93,6 +97,7 @@ private:
 
     pool_lease_scheduler::impl_type* owner_;
     std::optional<timeout_duration> timeout_;
+    std::optional<std::chrono::steady_clock::time_point> deadline_;
     stop_token stop_token_;
     std::optional<worker_wait_result<std::size_t>> result_;
     std::uint64_t waiter_id_{0};

@@ -106,15 +106,15 @@ public:
     // Saturated pools use the same scheduler, timeout and cancellation path.
     [[nodiscard]] acquire_awaiter acquire(const operation_timeout& timeout,
         std::optional<timeout_duration> acquire_timeout, stop_token stop_token_value) {
-        return acquire_awaiter(owner_, scheduler_.acquire(
-                                           timeout.constrained_by(acquire_timeout).remaining(), std::move(stop_token_value)));
+        return acquire_awaiter(
+            owner_, scheduler_.acquire(timeout.constrained_by(acquire_timeout), std::move(stop_token_value)));
     }
 
     // Leases a free slot without waiting; nullopt while every slot is leased
     // or the pool is closing. A free slot is exactly what acquire() leases
     // without suspending.
     [[nodiscard]] std::optional<std::size_t> try_acquire() {
-        auto acquire = scheduler_.acquire(std::nullopt);
+        auto acquire = scheduler_.acquire();
         if (!acquire.await_ready()) {
             return std::nullopt;
         }

@@ -103,6 +103,7 @@ if(RUVIA_BUILD_CORE)
     ruvia_add_test(ruvia_channel ruvia::core SOURCES core/channel.cpp)
     ruvia_add_test(ruvia_one_shot ruvia::core SOURCES core/one_shot.cpp)
     ruvia_add_test(ruvia_worker_timer ruvia::core SOURCES core/worker_timer.cpp)
+    ruvia_add_test(ruvia_worker_wait ruvia::core SOURCES core/worker_wait.cpp)
 endif()
 
 if(RUVIA_BUILD_HTTP)

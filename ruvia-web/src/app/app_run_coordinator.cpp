@@ -96,7 +96,7 @@ public:
     }
 
     [[nodiscard]] std::exception_ptr failure() noexcept {
-        return runtime_.failure();
+        return runtime_.take_failure();
     }
 
 private:
