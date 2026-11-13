@@ -17,7 +17,7 @@
 #include "ruvia/web/detail/integration/worker_state.h"
 
 #include "client/http_client_registry.h"
-#include "client/http_client_result_budget.h"
+#include "client/http_client_worker_limits.h"
 #include "context/context_services.h"
 #include "db/db_registry.h"
 #include "integration/worker_client_registry_view.h"
@@ -45,7 +45,7 @@ struct worker_capability_options final {
     route_rate_limit_presence route_rate_limits_{route_rate_limit_presence::absent};
     std::size_t rate_limit_capacity_{default_rate_limit_capacity_per_worker};
     std::size_t max_decoded_body_bytes_{default_max_buffered_body_bytes};
-    http_client_result_budget_config http_client_result_budget_{};
+    http_client_worker_config http_client_worker_{};
     const env* env_{nullptr};
     const trusted_proxy_set* trusted_proxies_{nullptr};
     bool precompressed_static_files_{false};
@@ -94,7 +94,7 @@ private:
     const worker_handle& worker_;
     redis_registry redis_;
     db_registry databases_;
-    std::shared_ptr<http_client_result_budget_domain> http_client_result_budget_domain_;
+    http_client_worker_services http_client_services_;
     http_client_registry http_clients_;
     worker_state_registry worker_states_;
     rate_limiter rate_limiter_;

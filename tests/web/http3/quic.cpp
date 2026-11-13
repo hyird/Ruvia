@@ -1203,6 +1203,10 @@ public:
         return retry_udp_.endpoint();
     }
 
+    [[nodiscard]] std::uint16_t enabled_tcp_port() const noexcept {
+        return enabled_tcp_.endpoint().port();
+    }
+
     [[nodiscard]] asio::ip::udp::endpoint enabled_endpoint() const noexcept {
         return enabled_udp_.endpoint();
     }
@@ -1216,7 +1220,7 @@ public:
 
     [[nodiscard]] ruvia::http_client_config outbound_config() const {
         ruvia::http_client_config config{.base_url_ = base_url_};
-        config.protocol_ = ruvia::http_client_protocol::http3_only;
+        config.versions_ = ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true};
         config.http3_.enable_early_data_ = true;
         config.idle_timeout_ = 100ms;
         config.tls_.ca_file_ = identity_.ca_file_;
@@ -1728,7 +1732,63 @@ ruvia::task<void> exercise_route_tickets(ruvia::event_loop loop, ruvia::http_cli
     }
 }
 
+// Alt-Svc is learned and used per route (dial host, dial port, server name).
+ruvia::task<void> exercise_route_alt_svc(ruvia::event_loop loop, ruvia::http_client_config config, std::uint16_t tcp_port) {
+    const std::pmr::string base_url("https://localhost:" + std::pmr::string(std::to_string(tcp_port), ruvia::process_resource()), ruvia::process_resource());
+    config.base_url_ = base_url;
+    config.versions_ = ruvia::http_client_versions{.http3_ = true};
+    config.http3_.enable_early_data_ = false;
+    config.idle_timeout_ = 10s;
+    ruvia::http_client owner(loop, config);
+    std::exception_ptr failure;
+    try {
+        const auto client = owner.client();
+        const auto authority = [tcp_port](std::string_view host) {
+            return std::pmr::string(host, ruvia::process_resource()).append(":").append(std::to_string(tcp_port));
+        };
+        const auto fetch = [&](std::string_view host) -> ruvia::task<std::pair<ruvia::http_protocol_version, std::pmr::string>> {
+            auto response = co_await client.get("/resumption/route").configure(route_options(authority(host))).send();
+            EXPECT_TRUE(response.ok());
+            const auto body = co_await response.text();
+            co_return std::pair{response.protocol_version(), std::pmr::string(body.text(), ruvia::process_resource())};
+        };
+        const auto learned = co_await fetch("a.localhost");
+        EXPECT_TRUE(learned.first != ruvia::http_protocol_version::http3);
+        const auto upgraded = co_await fetch("a.localhost");
+        EXPECT_TRUE(upgraded.first == ruvia::http_protocol_version::http3);
+        EXPECT_TRUE(upgraded.second.starts_with("a.localhost|"));
+        // Another route has not learned the alternative yet.
+        const auto other = co_await fetch("b.localhost");
+        EXPECT_TRUE(other.first != ruvia::http_protocol_version::http3);
+        const auto other_upgraded = co_await fetch("b.localhost");
+        EXPECT_TRUE(other_upgraded.first == ruvia::http_protocol_version::http3);
+        EXPECT_TRUE(other_upgraded.second.starts_with("b.localhost|"));
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    co_await owner.shutdown();
+    if (failure) {
+        std::rethrow_exception(failure);
+    }
+}
+
 }  // namespace http3_resumption_test
+
+TEST(Ruvia, http3_outbound_alt_svc_is_learned_and_used_per_route) {
+    auto& server = http3_resumption_test::server::shared();
+    ruvia::blocking_pool blocking;
+    ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &blocking});
+    loops.start();
+    try {
+        loops.loop(0).start(http3_resumption_test::exercise_route_alt_svc(loops.loop(0), server.outbound_config(), server.enabled_tcp_port())).get();
+    } catch (...) {
+        loops.stop();
+        loops.join();
+        throw;
+    }
+    loops.stop();
+    loops.join();
+}
 
 TEST(Ruvia, http3_outbound_request_routes_send_their_authority_and_server_name_per_connection) {
     auto& server = http3_resumption_test::server::shared();

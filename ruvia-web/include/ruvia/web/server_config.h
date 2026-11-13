@@ -202,7 +202,7 @@ struct server_config final {
     // quiet scan interval.
     std::size_t request_arena_initial_bytes_{request_arena_initial_bytes};
     // Shared by all registered outbound HTTP client aliases on each worker.
-    http_client_result_budget_config http_client_result_budget_{};
+    http_client_worker_config http_client_worker_{};
     // Host-wide representation policies applied to every HTTP response this
     // host prepares: routes, router::dispatch() and request_stream callbacks
     // alike. Absence disables the policy. compression_ also enables

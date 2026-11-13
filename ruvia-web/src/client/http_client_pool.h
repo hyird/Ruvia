@@ -33,6 +33,7 @@
 #include "client/http_client_request_storage.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_result_budget.h"
+#include "client/http_client_worker_limits.h"
 
 namespace ruvia::detail {
 
@@ -61,9 +62,9 @@ class http_client_pool final {
 public:
     // Process-lifetime storage backs the pool and its retained responses.
     http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
-        http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain);
+        http_client_config_storage config, const http_client_worker_services& services);
     http_client_pool(asio::io_context&, worker_handle&&, http_client_config_storage,
-        std::shared_ptr<http_client_result_budget_domain>) = delete;
+        const http_client_worker_services&) = delete;
     ~http_client_pool();
     http_client_pool(const http_client_pool&) = delete;
     http_client_pool& operator=(const http_client_pool&) = delete;
@@ -103,8 +104,9 @@ public:
     void abandon_response(http_client_response_state& state_value, bool malformed = false) noexcept;
     void reprioritize(http_client_response_state& state_value, http_priority priority);
     void release_response_data(http_client_response_state& state_value) noexcept;
-    // Authenticated origin responses alone update this pool's bounded Alt-Svc cache.
-    void observe_alt_svc(std::span<const http_header> fields);
+    // TLS-authenticated responses of `route` update its entries in this pool's
+    // bounded Alt-Svc cache.
+    void observe_alt_svc(const http_client_route& route, std::span<const http_header> fields);
     [[nodiscard]] task<void> migrate_http3(std::pmr::string local_address, std::uint16_t port,
         operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
@@ -127,8 +129,12 @@ public:
     [[nodiscard]] const http_client_config_storage& config() const noexcept {
         return config_;
     }
-    [[nodiscard]] const http_origin_view& origin() const noexcept {
-        return origin_;
+    // The fixed origin; std::logic_error for an alias without one.
+    [[nodiscard]] const http_origin_view& origin() const {
+        if (!origin_) {
+            throw std::logic_error("HTTP client alias has no fixed origin");
+        }
+        return *origin_;
     }
     [[nodiscard]] client_request_policy& policy() noexcept {
         return policy_;
@@ -151,19 +157,26 @@ public:
     void record_idle_connection_with_pending_data() noexcept {
         ++idle_connections_with_pending_data_;
     }
+    // Worker idle bound (http_client_worker_limits): this pool's idle count of
+    // one kind (an upper bound until recount_idle()), its least recently used
+    // idle connection's order, and closing that connection.
+    [[nodiscard]] std::size_t idle_count(bool multiplexed) const noexcept;
+    void recount_idle() noexcept;
+    [[nodiscard]] std::optional<std::uint64_t> least_recent_idle(bool multiplexed) const noexcept;
+    [[nodiscard]] bool close_least_recent_idle(std::optional<bool> multiplexed) noexcept;
     // A connection gained capacity or settled its protocol: admission waiters
     // re-check.
     void admission_changed() noexcept;
     // A connection closed or one of its tasks ended: it may be reclaimable.
     void connection_retired() noexcept;
-    // The origin answered HTTP_1_1_REQUIRED (RFC 9113 section 7) to a
-    // negotiate client: every later connect of this pool offers only
-    // http/1.1, like Pingora's prefer_h1.
+    // The origin answered HTTP_1_1_REQUIRED (RFC 9113 section 7) on a
+    // connection offering h2 and http/1.1: every later connect of such an
+    // offer in this pool offers only http/1.1, like Pingora's prefer_h1.
     [[nodiscard]] bool prefers_http11() const noexcept {
         return prefers_http11_;
     }
     void require_http11() noexcept {
-        prefers_http11_ = config_.protocol_ == http_client_protocol::negotiate;
+        prefers_http11_ = true;
     }
 #ifdef RUVIA_ENABLE_HTTP2
     // Admits or rejects one HTTP/2 PUSH_PROMISE of `connection`.
@@ -175,9 +188,15 @@ private:
     struct admission_waiter;
     void require_accepting() const;
     void require_open() const;
+    void require_fixed_dial() const;
     void validate_addresses(const client_resolve_result& result) const;
     void install_addresses(client_resolve_result result);
     void schedule_dns_refresh();
+    // One refresh period: looks up each DNS dial target with a live connection
+    // within the worker's concurrency bound, and retires connections to
+    // addresses the answer no longer contains.
+    [[nodiscard]] task<void> refresh_live_routes();
+    void retire_unresolved(std::string_view host, std::uint16_t port, const client_resolve_result& result) noexcept;
     [[nodiscard]] task<void> background_refresh_dns();
 #ifdef RUVIA_ENABLE_HTTP2
     struct http2_push_driver;
@@ -204,12 +223,13 @@ private:
     // One wait for admission_changed(), the acquisition deadline or a stop;
     // the caller re-checks every condition. Throws timeout once the bound expired.
     [[nodiscard]] task<void> wait_for_admission(const operation_timeout& acquire_timeout);
-    [[nodiscard]] bool requires_http11_connection(const http_client_request_storage& request) const noexcept;
+    // The TCP connection key's offer for the request's versions: TLS ALPN, or
+    // over plaintext http2 for prior-knowledge h2c and http11 otherwise.
+    [[nodiscard]] client_alpn tcp_offer(const http_client_request_storage& request) const noexcept;
     void throw_if_admission_ended(const stop_token& stop, const http_client_response_state& state) const;
     // A new connection fits within max_open_, possibly after closing the least
     // recently used idle connection (reclaimed later).
     [[nodiscard]] bool admits_new_connection() noexcept;
-    [[nodiscard]] bool close_least_recent_idle(std::optional<bool> multiplexed) noexcept;
     void mark_idle(std::uint64_t& idle_order, bool multiplexed) noexcept;
     void enforce_idle_limits() noexcept;
     void start_reclaimer();
@@ -232,11 +252,21 @@ private:
         http_client_response_state& state_value);
 
 #ifdef RUVIA_ENABLE_HTTP3
+    // An h3 alternative (RFC 7838) advertised by the responses of one route:
+    // its dial host, dial port and TLS server name.
     struct alternative_service final {
+        std::pmr::string route_host_;
+        std::uint16_t route_port_;
+        std::pmr::string server_name_;
         std::pmr::string host_;
         std::uint16_t port_;
         std::chrono::steady_clock::time_point expires_;
+        // A failed alternative is not tried again before then.
+        std::chrono::steady_clock::time_point broken_until_;
+        std::uint64_t used_;
     };
+    [[nodiscard]] alternative_service* find_alternative_service(
+        const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept;
     [[nodiscard]] task<bool> execute_http3(const http_client_request_storage& request,
         const operation_timeout& timeout, const operation_timeout& acquire_timeout,
         stop_token stop, http_client_response_state& state, request_admission& admission);
@@ -247,7 +277,7 @@ private:
     worker_handle worker_;
     http_client_config_storage config_;
     // Borrows config_.uri_host_; the pool is address-stable and never moved.
-    http_origin_view origin_;
+    std::optional<http_origin_view> origin_;
     client_request_policy policy_;
     http_client_advertisement_queue advertisements_;
     std::pmr::list<http_client_push> pushes_;
@@ -257,6 +287,7 @@ private:
     std::size_t received_pushes_{};
     std::size_t rejected_pushes_{};
     std::shared_ptr<http_client_result_budget_domain> result_budget_domain_;
+    std::shared_ptr<http_client_worker_limits> worker_limits_;
     http_client_response_memory_domain::owner response_memory_{};
     client_wire_counters wire_counters_;
     asio::ssl::context tls_context_;
@@ -265,7 +296,10 @@ private:
     // Owners stay at one address; a null entry is a free position.
     std::pmr::vector<connection_owner_type> connections_;
 #ifdef RUVIA_ENABLE_HTTP3
+    // Bounded by http3_.max_alt_svc_entries_ across routes, least recently
+    // used first out.
     std::pmr::vector<alternative_service> alternative_services_{process_resource()};
+    std::uint64_t alternative_clock_{};
     // Created with the first HTTP/3 connection.
     std::unique_ptr<http3_client_tls, pmr_object_deleter<http3_client_tls>> http3_tls_{nullptr, pmr_object_deleter<http3_client_tls>{process_resource()}};
     std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> http3_connections_{process_resource()};
@@ -274,11 +308,11 @@ private:
     worker_signal reclaim_signal_;
     admission_waiter* admission_waiters_{};
     std::size_t open_connections_{0};
+    std::size_t dns_refreshes_{0};
     // Upper bounds of the idle connections, recounted when exceeded.
     std::size_t idle_http1_{0};
     std::size_t idle_multiplexed_{0};
     std::uint64_t next_connection_serial_{0};
-    std::uint64_t idle_clock_{0};
     bool closing_{false};
     bool reclaimer_started_{false};
     std::size_t requests_buffered_{0};

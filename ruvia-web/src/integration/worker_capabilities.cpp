@@ -58,10 +58,9 @@ worker_capabilities::worker_capabilities(asio::io_context& io_context, const wor
     : worker_(require_worker_capabilities_worker(worker_value)),
       redis_(io_context, definitions.redis_, worker_),
       databases_(io_context, worker_, definitions.databases_, &redis_),
-      http_client_result_budget_domain_(
-          std::make_shared<http_client_result_budget_domain>(options.http_client_result_budget_)),
+      http_client_services_(make_http_client_worker_services(options.http_client_worker_)),
       http_clients_(io_context, worker_,
-          definitions.http_clients_, http_client_result_budget_domain_),
+          definitions.http_clients_, http_client_services_),
       worker_states_(definitions.worker_states_),
       rate_limiter_(
           options.default_rate_limit_, options.route_rate_limits_, options.rate_limit_capacity_),

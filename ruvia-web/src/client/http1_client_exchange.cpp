@@ -203,6 +203,29 @@ task<void> http1_client_exchange::write(std::span<const asio::const_buffer> part
     }
 }
 
+void http1_client_exchange::restart_inactivity() noexcept {
+    inactivity_timer_.cancel();
+    if (!inactivity_bound_) {
+        return;
+    }
+    try {
+        (void)pool_.worker().schedule_timer(inactivity_timer_, worker_timer_deadline_after(inactivity_bound_->value()),
+            [this, generation = connection_.generation_](worker_timer_outcome outcome) noexcept {
+                if (outcome == worker_timer_outcome::expired) {
+                    connection_.cancel(generation, client_abort_reason::timeout);
+                }
+            });
+    } catch (...) {
+        // An exchange without its inactivity bound is not continued.
+        connection_.cancel(connection_.generation_, client_abort_reason::timeout);
+    }
+}
+
+void http1_client_exchange::stop_inactivity() noexcept {
+    inactivity_bound_.reset();
+    inactivity_timer_.cancel();
+}
+
 task<client_transport_result> http1_client_exchange::read_append(
     http_io_buffer& target, std::size_t max_bytes, const operation_timeout& timeout, bool read_inactivity_bound) {
     auto read_space = target.prepare_spare();
@@ -284,6 +307,10 @@ task<void> http1_client_exchange::run(
     task_scope writers(pool_.worker(), {.resource_ = process_resource()});
     std::exception_ptr writer_failure;
     bool immediate_completed = false;
+    // An origin may read the whole request before it answers: until the final
+    // head, sending progress also restarts the read inactivity bound.
+    inactivity_bound_ = state_value.effective_read_timeout_;
+    restart_inactivity();
     std::array<asio::const_buffer, 2> parts;
     if (immediate_content) {
         parts = {asio::buffer(prepared->head()), asio::buffer(immediate->bytes())};
@@ -370,10 +397,11 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
             if (read_buffer.size() >= max_http_header_bytes) {
                 throw http_client_error(http_client_error::code_type::protocol_error, "HTTP response head is too large");
             }
-            if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout)).ok()) {
+            if (!(co_await read_append(read_buffer, response_read_chunk_bytes, timeout, !inactivity_bound_)).ok()) {
                 throw http_client_error(
                     http_client_error::code_type::io_error, "upstream closed before the HTTP response head");
             }
+            restart_inactivity();
             continue;
         }
         auto* parsed = parse_result.parsed();
@@ -421,6 +449,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
     } else {
         state_value.framing_ = http_client_response_framing::none;
     }
+    stop_inactivity();
     const bool tunnel_opened = opens_tunnel(request, *head);
     if (!tunnel_opened && (plan.connect_tunnel() != nullptr || plan.protocol_upgrade() != nullptr)) {
         throw http_client_error(http_client_error::code_type::protocol_error,
@@ -601,6 +630,7 @@ task<void> http1_client_exchange::write_tunnel_output(http_client_output_queue& 
                                    : co_await plain_transport.write_bytes(bytes_value, ending, &completed_bytes);
             pool_.wire_counters().sent_ += completed_bytes;
             write_timer.cancel();
+            restart_inactivity();
             connection_.throw_if_aborted();
             if (error) {
                 throw http_client_error(secure && is_tls_error(error) ? http_client_error::code_type::tls_failed
@@ -652,6 +682,8 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
                     }
                 });
         }
+        inactivity_bound_ = websocket ? std::nullopt : state_value.tunnel_->config_.idle_timeout_;
+        restart_inactivity();
         writers.spawn(write_tunnel_output(output, timeout, tls ? &*tls : nullptr, writer_failure));
         auto& read_buffer = connection.read_buffer_;
         constexpr std::size_t read_chunk_bytes = 4096;
@@ -679,7 +711,11 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
             // reads land in the connection buffer and move on the next pass.
             // A WebSocket arms read inactivity only while its application is
             // receiving; the background tunnel still observes the total deadline.
-            const auto read = co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout, !websocket);
+            // read_timeout_ no longer applies; the tunnel's idle timeout counts
+            // both directions. A WebSocket arms read inactivity only while its
+            // application is receiving.
+            const auto read = co_await read_append(read_buffer, std::min(read_chunk_bytes, room), timeout, false);
+            restart_inactivity();
             if (!read.ok()) {
                 // Same rule as a message body: a TLS peer that drops TCP
                 // without close_notify leaves the tunnel end unauthenticated
@@ -702,6 +738,7 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     if (tls) {
         co_await tls->join();
     }
+    stop_inactivity();
     lifetime_timer.cancel();
     connection.close();
     connection.retain_idle_buffers();
@@ -717,6 +754,7 @@ task<void> http1_client_exchange::write_immediate(std::span<const asio::const_bu
     const operation_timeout& timeout, http1_client_response_parser& parser, bool& completed, std::exception_ptr& failure) {
     try {
         co_await write(parts, timeout);
+        restart_inactivity();
         completed = true;
         const auto status = parser.complete_request_content();
         if (status == http1_client_request_content_completion_status::already_complete) {
@@ -776,6 +814,7 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
                 const auto write_parts = coalesce_tls_write_parts(
                     connection_.transport_.secure(), connection_.write_buffer_, parts);
                 co_await write(write_parts, timeout);
+                restart_inactivity();
                 if (write_parts.size() == 1) {
                     connection_.write_buffer_.clear_retaining_small();
                 }

@@ -160,7 +160,7 @@ private:
         {.base_url_ = base_url,
             .connect_timeout_ = connect_timeout,
             .request_timeout_ = 3s,
-            .protocol_ = ruvia::http_client_protocol::http1_only});
+            .versions_ = ruvia::http_client_versions{.http2_ = false}});
     std::exception_ptr failure;
     try {
         auto response = co_await client.client().get("/happy-eyeballs").send();

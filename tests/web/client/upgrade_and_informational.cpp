@@ -87,7 +87,7 @@ peer_observation exchange(std::string_view wire, client_fn_type&& exercise) {
         ruvia::http_client client(attachment.loop(),
             {.base_url_ = url,
                 .request_timeout_ = std::chrono::seconds(3),
-                .protocol_ = ruvia::http_client_protocol::http1_only});
+                .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             co_await exercise(client, worker);
         } catch (...) {
@@ -446,7 +446,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
         const auto run = [&]() -> ruvia::task<void> {
             const auto url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
             ruvia::http_client client(attachment.loop(),
-                {.base_url_ = url, .request_timeout_ = std::chrono::seconds(5), .protocol_ = ruvia::http_client_protocol::http1_only});
+                {.base_url_ = url, .request_timeout_ = std::chrono::seconds(5), .versions_ = ruvia::http_client_versions{.http2_ = false}});
             ruvia::stop_source stop;
             const auto handle = client.client().with_options({.stop_token_ = stop.token()});
             auto request = handle.post("/buffered");
@@ -562,7 +562,7 @@ TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_
     const auto run = [&]() -> ruvia::task<void> {
         const auto url = "http://127.0.0.1:" + std::to_string(peer.local_endpoint().port());
         ruvia::http_client client(attachment.loop(),
-            {.base_url_ = url, .read_timeout_ = std::chrono::milliseconds(50), .request_timeout_ = std::chrono::seconds(3), .protocol_ = ruvia::http_client_protocol::http1_only});
+            {.base_url_ = url, .read_timeout_ = std::chrono::milliseconds(50), .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             auto response = co_await client.client().get("/slow-consumer").send();
             const auto first = co_await response.stream().text();

@@ -896,17 +896,17 @@ TEST(Ruvia, client_response_body_claims_its_shared_lane_only_when_started) {
 }
 
 namespace {
-void exercise_final_head_cookies(ruvia::http_client_protocol protocol) {
+void exercise_final_head_cookies(ruvia::http_client_versions protocol) {
     for (const auto policy : {ruvia::http_client_received_cookie_policy::retain_and_send,
              ruvia::http_client_received_cookie_policy::ignore}) {
         auto& io = ruvia::test::new_test_io_context();
         test_worker worker(io);
-        const bool http2 = protocol == ruvia::http_client_protocol::http2_only;
+        const bool http2 = protocol == ruvia::http_client_versions{.http1_ = false};
         cookie_stream_peer peer(io, worker.handle_, http2 ? cookie_peer_mode::http2 : cookie_peer_mode::http1);
         const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(peer.port())));
         auto config = local_http_client_config(config_url);
         config.connection_limits_.max_open_ = http2 ? 1 : 2;
-        config.protocol_ = protocol;
+        config.versions_ = protocol;
         config.received_cookies_ = policy;
         config.request_timeout_ = std::chrono::seconds(3);
         ruvia::http_client client(worker.attachment_.loop(), config);
@@ -941,12 +941,12 @@ void exercise_final_head_cookies(ruvia::http_client_protocol protocol) {
 }  // namespace
 
 TEST(Ruvia, http_client_retains_final_head_cookies_before_body_completion_and_after_abandonment) {
-    exercise_final_head_cookies(ruvia::http_client_protocol::negotiate);
+    exercise_final_head_cookies(ruvia::http_client_versions{});
 }
 
 #if defined(RUVIA_ENABLE_HTTP2)
 TEST(Ruvia, http2_client_retains_final_head_cookies_before_body_completion_and_after_abandonment) {
-    exercise_final_head_cookies(ruvia::http_client_protocol::http2_only);
+    exercise_final_head_cookies(ruvia::http_client_versions{.http1_ = false});
 }
 
 #endif
@@ -1923,7 +1923,7 @@ TEST(Ruvia, client_body_result_uses_pool_budget_after_client_and_worker_teardown
                 const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
                 ruvia::http_client client(worker.attachment_.loop(),
                     {.base_url_ = client_url},
-                    {.max_retained_bytes_ = expected.size()});
+                    {.result_budget_ = {.max_retained_bytes_ = expected.size()}});
                 auto operation = [&]() -> ruvia::task<void> {
                     auto send = client.client().get("/").send();
                     auto response = co_await std::move(send);
@@ -1960,7 +1960,7 @@ TEST(Ruvia, client_result_budget_rejects_zero_limit_at_client_startup) {
     bool rejected_at_client_startup = false;
     try {
         ruvia::http_client client(worker.attachment_.loop(), {.base_url_ = "http://127.0.0.1"},
-            {.max_retained_bytes_ = 0});
+            {.result_budget_ = {.max_retained_bytes_ = 0}});
     } catch (const std::invalid_argument&) {
         rejected_at_client_startup = true;
     }
@@ -2130,7 +2130,7 @@ TEST(Ruvia, http1_small_upload_completes_with_a_bounded_response_budget) {
         // Completing a six-byte upload (with or without trailers) must not
         // require a header-section-sized buffer from the response budget.
         ruvia::http_client client(worker.attachment_.loop(), config,
-            {.max_retained_bytes_ = 4096, .max_in_flight_bytes_ = 32 * 1024});
+            {.result_budget_ = {.max_retained_bytes_ = 4096, .max_in_flight_bytes_ = 32 * 1024}});
         peer.start();
         auto operation = [&]() -> ruvia::task<void> {
             std::exception_ptr failure;
@@ -2893,7 +2893,7 @@ TEST(Ruvia, tls_client_sends_close_notify_before_closing) {
         config.tls_.ca_file_ = identity.ca_file_;
         config.request_timeout_ = std::chrono::seconds(3);
         if (mode == peer_mode::http2) {
-            config.protocol_ = ruvia::http_client_protocol::http2_only;
+            config.versions_ = ruvia::http_client_versions{.http1_ = false};
         }
         ruvia::http_client client(worker.attachment_.loop(), config);
         auto operation = [&]() -> ruvia::task<void> {
@@ -3885,7 +3885,7 @@ TEST(Ruvia, http2_client_uses_available_stream_capacity_across_connections) {
     auto config = local_http_client_config(config_url);
     config.connection_limits_.max_open_ = 2;
     config.max_concurrent_http2_streams_per_connection_ = 2;
-    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.versions_ = ruvia::http_client_versions{.http1_ = false};
     config.request_timeout_ = std::chrono::seconds(2);
     ruvia::http_client client(worker.attachment_.loop(), config);
     const auto send = [&](ruvia::http_client& client_value, std::string_view target) -> ruvia::task<void> {
@@ -3985,7 +3985,7 @@ TEST(Ruvia, http2_cold_start_cancelled_waiter_does_not_close_active_session) {
     const std::pmr::string config_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
     auto config = local_http_client_config(config_url);
     config.connection_limits_.max_open_ = 1;
-    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.versions_ = ruvia::http_client_versions{.http1_ = false};
     ruvia::http_client client(worker.attachment_.loop(), config);
     const auto send_first = [](ruvia::http_client& c, bool& ok_out) -> ruvia::task<void> {
         auto response = co_await c.client().get("/first").send();
@@ -4139,11 +4139,11 @@ TEST(Ruvia, http_client_alpn_renegotiates_after_http2_disconnect_and_closes_on_m
     auto config = local_http_client_config(config_url);
     config.tls_.ca_file_ = identity.ca_file_;
     config.connection_limits_.max_open_ = 1;
-    config.protocol_ = ruvia::http_client_protocol::negotiate;
+    config.versions_ = ruvia::http_client_versions{};
     ruvia::http_client negotiate_client(worker.attachment_.loop(), config);
 
     auto h2_only_config = config;
-    h2_only_config.protocol_ = ruvia::http_client_protocol::http2_only;
+    h2_only_config.versions_ = ruvia::http_client_versions{.http1_ = false};
     ruvia::http_client h2_only_client(worker.attachment_.loop(), h2_only_config);
 
     auto operation = [&]() -> ruvia::task<void> {
@@ -4557,7 +4557,7 @@ private:
 [[nodiscard]] ruvia::http_client_config local_http2_client_config(std::string_view base_url) {
     auto config = local_http_client_config(base_url);
     config.connection_limits_.max_open_ = 1;
-    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.versions_ = ruvia::http_client_versions{.http1_ = false};
     config.request_timeout_ = std::chrono::seconds(20);
     return config;
 }
@@ -4906,7 +4906,7 @@ using tcp_origin_connection = http2_origin_connection<asio::ip::tcp::socket>;
 [[nodiscard]] ruvia::http_client_config http2_client_config(std::string_view base_url) {
     auto config = local_http_client_config(base_url);
     config.connection_limits_.max_open_ = 1;
-    config.protocol_ = ruvia::http_client_protocol::http2_only;
+    config.versions_ = ruvia::http_client_versions{.http1_ = false};
     config.request_timeout_ = std::chrono::seconds(5);
     return config;
 }

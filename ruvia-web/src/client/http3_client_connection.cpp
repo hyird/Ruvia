@@ -430,6 +430,13 @@ public:
         socket_.reset();
     }
     void read_progress(stream& item) {
+        // An accepted tunnel is bounded by its own idle timeout, not read_timeout_.
+        if (!item.websocket_ && item.response_.tunnel_ && item.response_.tunnel_->accepted_ &&
+            item.response_.tunnel_->config_.idle_timeout_ && !item.done_) {
+            item.timer_.read_deadline_ = worker_timer_deadline_after(item.response_.tunnel_->config_.idle_timeout_->value());
+            schedule(item);
+            return;
+        }
         if ((item.websocket_ && item.response_.head_ready_) ||
             (item.response_.tunnel_ && item.response_.tunnel_->accepted_)) {
             item.timer_.read_deadline_.reset();
@@ -1260,6 +1267,12 @@ public:
                 item.timer_.write_deadline_ = worker_timer_deadline_after(item.response_.effective_write_timeout_->value());
                 schedule(item);
             }
+            // Until the final head, and through an accepted tunnel, sending
+            // progress also restarts read inactivity.
+            if (sent.accepted_bytes_ != 0 && item.timer_.read_deadline_ &&
+                (!item.response_.head_ready_ || (item.response_.tunnel_ && item.response_.tunnel_->accepted_))) {
+                read_progress(item);
+            }
             writer_.notify();
             if (!bytes.empty()) {
                 co_await item.signal_.wait();
@@ -1687,6 +1700,12 @@ bool http3_client_connection::serves(std::string_view host, std::uint16_t port, 
     return !fresh_ && !race_->retired_ && route_.port_ == port && http_ascii_equals_ignore_case(route_.host_, host) &&
            http_ascii_equals_ignore_case(route_.server_name_, server_name);
 }
+std::optional<asio::ip::address> http3_client_connection::peer_address() const noexcept {
+    if (!session_ || !session_->open_) {
+        return std::nullopt;
+    }
+    return session_->remote_.address();
+}
 bool http3_client_connection::connecting() const noexcept {
     return race_->selecting_;
 }
@@ -1982,6 +2001,12 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                             co_await self.flush_stream(item);
                             co_return true;
                         });
+                    if (request.upload() != nullptr && request.upload()->abandoned_ && !output->ended_ && item.id_ >= 0) {
+                        // Only the sending half ends; the response keeps
+                        // arriving (RFC 9114 section 4.1).
+                        self.quic_->reset_send_stream(item.id_, static_cast<std::uint64_t>(http3_error_code::no_error));
+                        self.writer_.notify();
+                    }
                     if (response.tunnel_ && response.tunnel_->accepted_ && response.tunnel_->receive_ended_ &&
                         (output->ended_ || output->stopped_)) {
                         item.done_ = true;

@@ -19,37 +19,23 @@ namespace {
 // response. Larger growth (long heads, a busy tunnel) goes back to the worker.
 constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 1024;
 
-[[nodiscard]] client_alpn select_client_alpn(http_client_protocol protocol) noexcept {
-    switch (protocol) {
-        case http_client_protocol::negotiate:
-#ifdef RUVIA_ENABLE_HTTP2
-            return client_alpn::negotiate;
-#else
-            return client_alpn::http11;
-#endif
-        case http_client_protocol::http1_only:
-            return client_alpn::http11;
-        case http_client_protocol::http2_only:
-#ifdef RUVIA_ENABLE_HTTP2
-            return client_alpn::http2;
-#else
-            return client_alpn::none;
-#endif
-        case http_client_protocol::http3_only:
-            return client_alpn::none;
-    }
-    std::terminate();
+[[nodiscard]] bool alpn_allows_http1(client_alpn alpn) noexcept {
+    return alpn == client_alpn::http11 || alpn == client_alpn::negotiate;
+}
+
+[[nodiscard]] bool alpn_allows_http2(client_alpn alpn) noexcept {
+    return alpn == client_alpn::http2 || alpn == client_alpn::negotiate;
 }
 
 [[nodiscard]] client_tcp_endpoint http_client_endpoint(http_client_pool& pool, std::string_view dial_host,
-    std::uint16_t dial_port, std::string_view server_name, bool http11_only) noexcept {
+    std::uint16_t dial_port, std::string_view server_name, client_alpn alpn) noexcept {
     const auto& config = pool.config();
     const bool https = config.scheme_ == http_scheme::https;
     return {.host_ = dial_host,
         .port_ = dial_port,
         .tls_ = https ? &config.tls_ : nullptr,
         .tcp_ = config.tcp_,
-        .alpn_ = client_alpn_bytes(http11_only ? client_alpn::http11 : select_client_alpn(config.protocol_)),
+        .alpn_ = https ? client_alpn_bytes(alpn) : std::span<const unsigned char>{},
         .identity_host_ = server_name,
         .resolve_context_ = &pool,
         .resolve_ = [](void* context, client_host_resolver& resolver, const operation_timeout& timeout, std::string_view host, std::uint16_t port) -> task<client_resolve_result> {
@@ -61,11 +47,11 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
     std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
-    bool http11_only)
+    client_alpn alpn)
     : dial_host_(dial_host, process_resource()),
       server_name_(server_name, process_resource()),
       transport_(pool.io_context(), pool.tls_context(), pool.worker(),
-          http_client_endpoint(pool, dial_host_, dial_port, server_name_, http11_only), pool.wire_counters()),
+          http_client_endpoint(pool, dial_host_, dial_port, server_name_, alpn), pool.wire_counters()),
       read_buffer_(process_resource()),
       write_buffer_(process_resource()),
 #ifdef RUVIA_ENABLE_HTTP2
@@ -73,7 +59,7 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 #endif
       connect_scheduler_(1, pool.worker(), process_resource()),
       http1_scheduler_(1, pool.worker(), process_resource()),
-      http11_only_(http11_only),
+      alpn_(alpn),
       pool_(pool),
       index_(index),
       serial_(serial),
@@ -87,14 +73,15 @@ http_client_connection::http_client_connection(http_client_pool& pool, std::size
 http_client_connection::~http_client_connection() = default;
 
 bool http_client_connection::serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
-    bool http11_only) const noexcept {
+    client_alpn alpn) const noexcept {
     if (fresh_ || retired_ || address_retired_ || transport_.endpoint().port_ != dial_port ||
         !http_ascii_equals_ignore_case(dial_host_, dial_host) || !http_ascii_equals_ignore_case(server_name_, server_name)) {
         return false;
     }
-    // An HTTP/1.1-only exchange may also reuse a connection that negotiated
-    // HTTP/1.1 from the alias offer.
-    return http11_only_ == http11_only || (http11_only && protocol_ == protocol_type::http1);
+    // Another offer also reuses a connection whose negotiated protocol it
+    // permits; an unsettled one only serves its own offer.
+    return alpn_ == alpn || (protocol_ == protocol_type::http1 && alpn_allows_http1(alpn)) ||
+           (protocol_ == protocol_type::http2 && alpn_allows_http2(alpn));
 }
 
 bool http_client_connection::idle() const noexcept {
@@ -479,7 +466,7 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
 #ifdef RUVIA_ENABLE_HTTP2
     http2_.reset();
 #endif
-    if (pool_.prefers_http11()) {
+    if (pool_.prefers_http11() && alpn_ == client_alpn::negotiate) {
         // The origin required HTTP/1.1 (RFC 9113 section 7): later connects
         // offer only http/1.1, like Pingora's prefer_h1.
         transport_.offer_alpn(client_alpn::http11);
@@ -507,13 +494,14 @@ task<bool> http_client_connection::ensure_connected(const operation_timeout& ope
     const auto& config = pool_.config();
     if (transport_.secure()) {
         const auto alpn = transport_.alpn();
-        if (config.protocol_ == http_client_protocol::http2_only && alpn != "h2") {
+        if (alpn_ == client_alpn::http2 && alpn != "h2") {
             throw http_client_error(
                 http_client_error::code_type::protocol_unavailable, "upstream did not negotiate HTTP/2");
         }
         protocol_ = alpn == "h2" ? protocol_type::http2 : protocol_type::http1;
     } else {
-        protocol_ = config.protocol_ == http_client_protocol::http2_only ? protocol_type::http2 : protocol_type::http1;
+        // Plaintext HTTP/2 is prior knowledge (RFC 9113 section 3.3).
+        protocol_ = alpn_ == client_alpn::http2 ? protocol_type::http2 : protocol_type::http1;
     }
 #else
     protocol_ = protocol_type::http1;

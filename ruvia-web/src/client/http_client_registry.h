@@ -21,30 +21,30 @@
 
 #include "client/http_client_config_storage.h"
 #include "client/http_client_response_memory.h"
-#include "client/http_client_result_budget.h"
+#include "client/http_client_worker_limits.h"
 #include "integration/named_capability.h"
 
 namespace ruvia::detail {
 
 class http_client_pool;
 
-// Every pool of one owner shares the owner's result budget domain: one per
-// standalone client, one per application worker. Process-lifetime storage
+// Every pool of one owner shares the owner's worker services (result budget
+// and worker limits): one per standalone client, one per application worker. Process-lifetime storage
 // backs the pools and their retained responses.
 class http_client_registry final {
 public:
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
         std::span<const http_client_definition_type> definitions,
-        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+        const http_client_worker_services& services);
     http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
         std::span<const http_client_config> configs,
-        const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain);
+        const http_client_worker_services& services);
     http_client_registry(asio::io_context&, worker_handle&&,
         std::span<const http_client_definition_type>,
-        const std::shared_ptr<http_client_result_budget_domain>&) = delete;
+        const http_client_worker_services&) = delete;
     http_client_registry(asio::io_context&, worker_handle&&,
         std::span<const http_client_config>,
-        const std::shared_ptr<http_client_result_budget_domain>&) = delete;
+        const http_client_worker_services&) = delete;
     ~http_client_registry();
     http_client_registry(const http_client_registry&) = delete;
     http_client_registry& operator=(const http_client_registry&) = delete;
@@ -84,7 +84,7 @@ private:
     void initialize(std::span<const config_type> configs);
     asio::io_context& io_context_;
     const worker_handle& worker_;
-    std::shared_ptr<http_client_result_budget_domain> result_budget_domain_;
+    http_client_worker_services services_;
     alias_map_type aliases_;
     task_scope retirements_;
     stop_source preparation_stop_;

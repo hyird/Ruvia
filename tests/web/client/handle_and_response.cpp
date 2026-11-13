@@ -150,7 +150,7 @@ private:
     std::thread thread_;
 };
 
-void exercise_legacy_http_peer(int version, ruvia::http_client_protocol protocol,
+void exercise_legacy_http_peer(int version, ruvia::http_client_versions protocol,
     bool select_h2, bool matching_san = true, bool elliptic_curve = false) {
     ruvia::test::tls_identity identity("server.example",
         matching_san ? "DNS:server.example" : "DNS:other.example", elliptic_curve);
@@ -177,10 +177,10 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_protocol protocol
         {.base_url_ = url,
             .connect_timeout_ = std::chrono::seconds(2),
             .request_timeout_ = std::chrono::seconds(2),
-            .protocol_ = protocol,
+            .versions_ = protocol,
             .tls_ = {.ca_file_ = identity.ca_file_, .server_name_ = "server.example"}});
     const bool expect_success = version == TLS1_1_VERSION && !select_h2 && matching_san &&
-                                protocol != ruvia::http_client_protocol::http2_only;
+                                protocol != ruvia::http_client_versions{.http1_ = false};
     std::optional<ruvia::http_client_error::code_type> failure_code;
     std::exception_ptr unexpected;
     bool exchanged = false;
@@ -216,7 +216,7 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_protocol protocol
         EXPECT_EQ(failure_code, ruvia::http_client_error::code_type::tls_failed);
         EXPECT_TRUE(peer.request_.empty());
         if (version == TLS1_1_VERSION && select_h2 &&
-            protocol == ruvia::http_client_protocol::negotiate && matching_san) {
+            protocol == ruvia::http_client_versions{} && matching_san) {
             // The intentionally noncompliant peer really selected h2 in a
             // completed TLS 1.1 handshake, rather than failing earlier.
             EXPECT_EQ(peer.tls_version_, TLS1_1_VERSION);
@@ -227,8 +227,8 @@ void exercise_legacy_http_peer(int version, ruvia::http_client_protocol protocol
 }  // namespace
 
 TEST(Ruvia, http_client_tls11_http1_and_negotiation_exchange_with_verified_san) {
-    for (const auto protocol : {ruvia::http_client_protocol::http1_only,
-             ruvia::http_client_protocol::negotiate}) {
+    for (const auto protocol : {ruvia::http_client_versions{.http2_ = false},
+             ruvia::http_client_versions{}}) {
         for (const bool elliptic_curve : {false, true}) {
             exercise_legacy_http_peer(TLS1_1_VERSION, protocol, false, true, elliptic_curve);
         }
@@ -237,13 +237,13 @@ TEST(Ruvia, http_client_tls11_http1_and_negotiation_exchange_with_verified_san) 
 }
 
 TEST(Ruvia, http_client_rejects_tls10_and_h2_below_tls12_without_http2_bytes) {
-    for (const auto protocol : {ruvia::http_client_protocol::http1_only,
-             ruvia::http_client_protocol::negotiate}) {
+    for (const auto protocol : {ruvia::http_client_versions{.http2_ = false},
+             ruvia::http_client_versions{}}) {
         exercise_legacy_http_peer(TLS1_VERSION, protocol, false);
     }
 #ifdef RUVIA_ENABLE_HTTP2
-    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_protocol::negotiate, true);
-    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_protocol::http2_only, true);
+    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_versions{}, true);
+    exercise_legacy_http_peer(TLS1_1_VERSION, ruvia::http_client_versions{.http1_ = false}, true);
 #endif
 }
 
@@ -542,9 +542,9 @@ public:
         auto& app = ruvia::app();
         app.server({.worker_count_ = 1})
             .listen(std::span<const ruvia::listen_config>(listeners))
-            .client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .protocol_ = ruvia::http_client_protocol::http1_only, .cookies_ = {{"configured", "source-secret"}}})
-            .client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .protocol_ = ruvia::http_client_protocol::http1_only})
-            .client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .protocol_ = ruvia::http_client_protocol::http1_only, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
+            .client({.alias_ = "source", .base_url_ = targets_->source_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .cookies_ = {{"configured", "source-secret"}}})
+            .client({.alias_ = "destination", .base_url_ = targets_->destination_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}})
+            .client({.alias_ = "secure", .base_url_ = targets_->secure_, .request_timeout_ = std::chrono::seconds(3), .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}});
         app.use_worker_state<std::shared_ptr<redirect_destinations>>([targets = targets_] { return targets; });
         app.on_start([this] {
             ready_.set_value();
@@ -568,7 +568,7 @@ public:
     }
 
     ruvia::http_client_config secure_config() const {
-        return {.alias_ = "secure", .base_url_ = targets_->secure_, .protocol_ = ruvia::http_client_protocol::http1_only, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}};
+        return {.alias_ = "secure", .base_url_ = targets_->secure_, .versions_ = ruvia::http_client_versions{.http2_ = false}, .tls_ = {.ca_file_ = identity_.ca_file_, .server_name_ = "localhost"}};
     }
 
     void finish() {
@@ -603,7 +603,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), {.base_url_ = server.targets().source_,
                                                          .request_timeout_ = std::chrono::seconds(5),
-                                                         .protocol_ = ruvia::http_client_protocol::http1_only});
+                                                         .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             const auto origin = client.client();
             auto cold = [&] {
@@ -767,15 +767,15 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                 EXPECT_EQ(text.text(), "redirect");
             }
             for (const auto protocol : {
-                     ruvia::http_client_protocol::http1_only,
+                     ruvia::http_client_versions{.http2_ = false},
 #if defined(RUVIA_ENABLE_HTTP2)
-                     ruvia::http_client_protocol::http2_only,
+                     ruvia::http_client_versions{.http1_ = false},
 #endif
                  }) {
                 ruvia::http_client websocket_client(attachment.loop(),
                     {.base_url_ = server.targets().source_,
                         .request_timeout_ = std::chrono::seconds(1),
-                        .protocol_ = protocol});
+                        .versions_ = protocol});
                 std::exception_ptr websocket_failure;
                 try {
                     auto connecting = [&] {
@@ -789,7 +789,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
                     auto session = std::move(connected);
                     EXPECT_EQ(session.subprotocol(), "echo.v1");
                     EXPECT_TRUE(session.protocol_version() ==
-                                (protocol == ruvia::http_client_protocol::http1_only
+                                (protocol == ruvia::http_client_versions{.http2_ = false}
                                         ? ruvia::http_protocol_version::http11
                                         : ruvia::http_protocol_version::http2));
                     // Accepted WebSockets are not ordinary finite HTTP responses.
@@ -917,11 +917,11 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
         untrusted.tls_ = {};
         const std::array configs{
             ruvia::http_client_config{.base_url_ = server.targets().source_,
-                .protocol_ = ruvia::http_client_protocol::http1_only,
+                .versions_ = ruvia::http_client_versions{.http2_ = false},
                 .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
                 .user_agent_ = "source-agent",
                 .cookies_ = {{"configured", "source"}}},
-            ruvia::http_client_config{.alias_ = "destination", .base_url_ = server.targets().destination_, .protocol_ = ruvia::http_client_protocol::http1_only, .user_agent_ = "destination-agent", .cookies_ = {{"configured", "destination"}}},
+            ruvia::http_client_config{.alias_ = "destination", .base_url_ = server.targets().destination_, .versions_ = ruvia::http_client_versions{.http2_ = false}, .user_agent_ = "destination-agent", .cookies_ = {{"configured", "destination"}}},
             secure, untrusted};
         ruvia::http_client client(attachment.loop(), std::span<const ruvia::http_client_config>(configs));
         try {
@@ -998,7 +998,7 @@ void fluent_client_tests::verify_standalone_origins(server& server) {
         co_await client.shutdown();
         if (!failure) {
             const std::span<const ruvia::http_client_config> origins(configs.data(), 2);
-            ruvia::http_client bounded(attachment.loop(), origins, {.max_retained_bytes_ = 16});
+            ruvia::http_client bounded(attachment.loop(), origins, {.result_budget_ = {.max_retained_bytes_ = 16}});
             try {
                 auto first = co_await bounded.client().get("/fluent/stream-source").send();
                 const auto retained = co_await first.bytes(11);
@@ -1031,7 +1031,7 @@ void fluent_client_tests::verify_request_host_cancellation(server& server) {
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client owner(attachment.loop(), {.base_url_ = server.targets().source_,
                                                         .request_timeout_ = std::chrono::seconds(2),
-                                                        .protocol_ = ruvia::http_client_protocol::http1_only});
+                                                        .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             const auto before_waiters = fluent_client_tests::host_cancel_waiters.load();
             const auto before_cancelled = fluent_client_tests::host_cancelled_requests.load();

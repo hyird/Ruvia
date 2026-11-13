@@ -183,9 +183,8 @@ void publish_http_client_final_head(
         policy.retain_response_cookies(*head.origin_target_, state_value.headers_);
     }
 #ifdef RUVIA_ENABLE_HTTP3
-    if (head.origin_target_ && state_value.alias_route_ && state_value.pool_ != nullptr &&
-        state_value.pool_->scheme() == http_scheme::https) {
-        state_value.pool_->observe_alt_svc(state_value.headers_);
+    if (state_value.route_ != nullptr && state_value.pool_ != nullptr) {
+        state_value.pool_->observe_alt_svc(*state_value.route_, state_value.headers_);
     }
 #endif
     auto* const tunnel = state_value.tunnel_ ? &*state_value.tunnel_ : nullptr;

@@ -44,8 +44,8 @@ struct http_client_route final {
     // Dial target and server name are the alias defaults: a connection of
     // this transport is authenticated for the alias origin (server push).
     bool alias_transport_{true};
-    // Both of the above: Alt-Svc applies.
-    bool alias_route_{true};
+    // The alias's versions, or the request's override.
+    http_client_versions versions_{};
 };
 
 struct http_client_websocket_handshake final {

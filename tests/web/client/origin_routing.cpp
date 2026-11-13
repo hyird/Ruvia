@@ -6,8 +6,10 @@
 #include <cstdint>
 #include <deque>
 #include <exception>
+#include <future>
 #include <initializer_list>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,6 +22,7 @@
 #include <asio/detached.hpp>
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
+#include <asio/ip/udp.hpp>
 #include <asio/read_until.hpp>
 #include <asio/redirect_error.hpp>
 #include <asio/ssl/stream.hpp>
@@ -28,6 +31,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
+#include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
@@ -50,17 +54,23 @@ struct observed_connection final {
     std::string offered_alpn_;
     std::string selected_alpn_;
     std::deque<std::string> authorities_;
+    // HTTP/2 RST_STREAM error codes the client sent.
+    std::deque<ruvia::http2_error_code> resets_;
+    // HTTP/1 request content bytes read before the response.
+    std::size_t content_bytes_{0};
     bool closed_{false};
 };
 
 // A real TCP or TLS origin on the client's own io_context. HTTP/1 requests
-// receive their target as the body; "/hold" waits for release(). A TLS
-// connection that negotiated h2 is served by the sans-I/O HTTP/2 core, and an
-// HTTP/1 Upgrade request is switched with 101.
+// receive their target as the body; "/hold" waits for release(), "/drain"
+// first reads the complete chunked request content, "/early" answers before
+// reading any content, and "/redirect" answers 302 to redirect_location_. A
+// TLS connection that negotiated h2 is served by the sans-I/O HTTP/2 core, and
+// an HTTP/1 Upgrade request is switched with 101 and echoes its bytes.
 class routing_peer final {
 public:
-    routing_peer(asio::io_context& io, asio::ssl::context* tls)
-        : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
+    routing_peer(asio::io_context& io, asio::ssl::context* tls, std::string_view address = "127.0.0.1")
+        : acceptor_(io, {asio::ip::make_address(address), 0}),
           gate_(io),
           tls_(tls) {
         gate_.expires_at(asio::steady_timer::time_point::max());
@@ -88,6 +98,9 @@ public:
 
     std::deque<observed_connection> connections_;
     std::size_t held_{0};
+    std::string redirect_location_;
+    // Sent as Alt-Svc with every HTTP/1 200 response when not empty.
+    std::string alt_svc_;
 
 private:
     // asio owns the SSL app data; the observation uses its own slot.
@@ -163,7 +176,8 @@ private:
                 co_await asio::async_write(stream, asio::buffer(switched), asio::use_awaitable);
                 std::array<char, 256> bytes{};
                 for (;;) {
-                    (void)co_await stream.async_read_some(asio::buffer(bytes), asio::use_awaitable);
+                    const auto count = co_await stream.async_read_some(asio::buffer(bytes), asio::use_awaitable);
+                    co_await asio::async_write(stream, asio::buffer(bytes.data(), count), asio::use_awaitable);
                 }
             }
             if (target == "/hold") {
@@ -171,7 +185,19 @@ private:
                 std::error_code ignored;
                 co_await gate_.async_wait(asio::redirect_error(asio::use_awaitable, ignored));
             }
-            const std::string response = "HTTP/1.1 200 OK\r\nContent-Length: " + std::to_string(target.size()) + "\r\n\r\n" + target;
+            if (target == "/drain") {
+                // Chunked content up to its last chunk, read before answering.
+                const auto end = co_await asio::async_read_until(stream, asio::dynamic_buffer(input), "\r\n0\r\n\r\n", asio::use_awaitable);
+                observed.content_bytes_ += end;
+                input.erase(0, end);
+            }
+            if (target == "/redirect") {
+                const std::string response = "HTTP/1.1 302 Found\r\nLocation: " + redirect_location_ + "\r\nContent-Length: 0\r\n\r\n";
+                co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
+                continue;
+            }
+            const std::string response = "HTTP/1.1 200 OK\r\n" + (alt_svc_.empty() ? std::string() : "Alt-Svc: " + alt_svc_ + "\r\n") +
+                                         "Content-Length: " + std::to_string(target.size()) + "\r\n\r\n" + target;
             co_await asio::async_write(stream, asio::buffer(response), asio::use_awaitable);
         }
     }
@@ -179,6 +205,7 @@ private:
     template <typename stream_type>
     asio::awaitable<void> serve_http2(stream_type& stream, observed_connection& observed) {
         auto connection = ruvia::http2_connection::server();
+        std::deque<ruvia::http2_request_head_event> unreleased;
         std::pmr::string output(ruvia::process_resource());
         std::array<char, 16384> input{};
         for (;;) {
@@ -195,6 +222,10 @@ private:
                     throw std::runtime_error("invalid HTTP/2 input");
                 }
                 while (auto event = connection.next_event()) {
+                    if (const auto* closed = event->stream_closed();
+                        closed != nullptr && closed->source() == ruvia::http2_stream_close_source::peer) {
+                        observed.resets_.push_back(closed->error());
+                    }
                     auto* request = event->request_head();
                     if (request == nullptr) {
                         continue;
@@ -204,8 +235,14 @@ private:
                     ruvia::http_response response;
                     const auto submitted = connection.submit_response_head(request->stream_id(), response,
                         ruvia::plan_buffered_http_response_write(built.known_method(), response));
-                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted) ||
-                        connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
+                    if (!std::holds_alternative<ruvia::http_buffered_response_write_plan>(submitted)) {
+                        throw std::runtime_error("HTTP/2 response rejected");
+                    }
+                    if (built.target() == "/early") {
+                        // Keep receiving the request content after the
+                        // complete response, so only the client ends it.
+                        unreleased.push_back(std::move(*request));
+                    } else if (connection.release(std::move(*request)) != ruvia::http2_server_request_release_status::released) {
                         throw std::runtime_error("HTTP/2 response rejected");
                     }
                 }
@@ -225,14 +262,15 @@ private:
 // Runs `exercise` against a client of `config`, then retires the client and
 // every peer connection before the loop stops.
 template <typename exercise_type>
-void run_client(asio::io_context& io, ruvia::event_loop_attachment& attachment, std::initializer_list<routing_peer*> peers,
-    const ruvia::http_client_config& config, exercise_type&& exercise) {
+void run_clients(ruvia::event_loop_attachment& attachment, std::initializer_list<routing_peer*> peers,
+    std::span<const ruvia::http_client_config> configs, const ruvia::http_client_worker_config& worker_config,
+    exercise_type&& exercise) {
     std::exception_ptr failure;
     auto loop = attachment.loop();
     const auto& worker = loop.handle();
     const auto run = [&]() -> ruvia::task<void> {
         {
-            ruvia::http_client client(loop, config);
+            ruvia::http_client client(loop, configs, worker_config);
             try {
                 co_await exercise(client, worker);
             } catch (...) {
@@ -253,10 +291,17 @@ void run_client(asio::io_context& io, ruvia::event_loop_attachment& attachment, 
     auto root = loop.start(run());
     attachment.run();
     std::move(root).get();
-    (void)io;
     if (failure) {
         std::rethrow_exception(failure);
     }
+}
+
+template <typename exercise_type>
+void run_client(asio::io_context& io, ruvia::event_loop_attachment& attachment, std::initializer_list<routing_peer*> peers,
+    const ruvia::http_client_config& config, exercise_type&& exercise) {
+    (void)io;
+    run_clients(attachment, peers, std::span<const ruvia::http_client_config>(&config, 1), {},
+        std::forward<exercise_type>(exercise));
 }
 
 [[nodiscard]] ruvia::http_client_request_options route(std::optional<std::string_view> authority,
@@ -290,7 +335,7 @@ TEST(Ruvia, http_client_request_routes_send_their_host_and_sni_and_share_connect
     auto attachment = ruvia::attach_event_loop(io);
     routing_peer peer(io, &identity.context_);
     ruvia::http_client_config config{.base_url_ = "https://alias.example", .dial_host_ = "127.0.0.1", .dial_port_ = peer.port()};
-    config.protocol_ = ruvia::http_client_protocol::http1_only;
+    config.versions_ = ruvia::http_client_versions{.http2_ = false};
     config.request_timeout_ = 5s;
     config.tls_.ca_file_ = identity.ca_file_;
     run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
@@ -380,6 +425,94 @@ TEST(Ruvia, http_client_upgrade_on_a_negotiated_h2_origin_uses_an_http11_connect
 }
 #endif
 
+#if defined(RUVIA_ENABLE_HTTP2)
+TEST(Ruvia, http_client_request_versions_override_the_alias_offer) {
+    using namespace origin_routing_tests;
+    ruvia::test::tls_identity identity("origin.example");
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, &identity.context_);
+    ruvia::http_client_config config{.base_url_ = "https://origin.example", .dial_host_ = "127.0.0.1", .dial_port_ = peer.port()};
+    config.request_timeout_ = 5s;
+    config.tls_.ca_file_ = identity.ca_file_;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+        auto multiplexed = co_await client.client().get("/h2").send();
+        EXPECT_TRUE(multiplexed.protocol_version() == ruvia::http_protocol_version::http2);
+        (void)co_await multiplexed.text();
+        ruvia::http_client_request_options http1;
+        http1.versions_ = ruvia::http_client_versions{.http2_ = false};
+        auto serial = co_await client.client().get("/h1").configure(std::move(http1)).send();
+        EXPECT_TRUE(serial.protocol_version() == ruvia::http_protocol_version::http11);
+        const auto body = co_await serial.text();
+        EXPECT_EQ(body.text(), "/h1");
+        ruvia::http_client_request_options none;
+        none.versions_ = ruvia::http_client_versions{.http1_ = false, .http2_ = false};
+        EXPECT_THROW((void)client.client().get("/").configure(std::move(none)), std::invalid_argument);
+    });
+    ASSERT_EQ(peer.connections_.size(), 2U);
+    EXPECT_EQ(peer.connections_[0].selected_alpn_, "h2");
+    EXPECT_EQ(peer.connections_[1].offered_alpn_, std::string_view("\x08http/1.1"));
+}
+#endif
+
+#if defined(RUVIA_ENABLE_HTTP3)
+TEST(Ruvia, http_client_unreachable_alt_svc_falls_back_to_tcp_and_rests) {
+    using namespace origin_routing_tests;
+    ruvia::test::tls_identity identity("origin.example");
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, &identity.context_);
+    // A UDP endpoint that never answers a QUIC Initial.
+    asio::ip::udp::socket sink(io, {asio::ip::make_address("127.0.0.1"), 0});
+    std::size_t datagrams = 0;
+    bool sink_done = false;
+    asio::co_spawn(io, [&]() -> asio::awaitable<void> {
+        std::array<char, 2048> bytes{};
+        asio::ip::udp::endpoint sender;
+        for (;;) {
+            std::error_code error;
+            (void)co_await sink.async_receive_from(asio::buffer(bytes), sender, asio::redirect_error(asio::use_awaitable, error));
+            if (error) {
+                break;
+            }
+            ++datagrams;
+        }
+        sink_done = true; }, asio::detached);
+    peer.alt_svc_ = "h3=\":" + std::to_string(sink.local_endpoint().port()) + "\"";
+    ruvia::http_client_config config{.base_url_ = "https://origin.example", .dial_host_ = "127.0.0.1", .dial_port_ = peer.port()};
+    config.versions_ = ruvia::http_client_versions{.http2_ = false, .http3_ = true};
+    config.connect_timeout_ = 300ms;
+    config.request_timeout_ = 5s;
+    config.tls_.ca_file_ = identity.ca_file_;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        auto learned = co_await client.client().get("/learn").send();
+        EXPECT_TRUE(learned.protocol_version() == ruvia::http_protocol_version::http11);
+        (void)co_await learned.text();
+        // The advertised alternative never answers: the request falls back to TCP.
+        auto fallback = co_await client.client().get("/fallback").send();
+        EXPECT_TRUE(fallback.protocol_version() == ruvia::http_protocol_version::http11);
+        const auto fallback_body = co_await fallback.text();
+        EXPECT_EQ(fallback_body.text(), "/fallback");
+        (void)co_await ruvia::sleep_for(worker, 100ms);
+        EXPECT_NE(datagrams, 0U);
+        const auto attempted = datagrams;
+        // The failed alternative rests even though every response re-advertises it.
+        for (int request = 0; request != 3; ++request) {
+            auto rested = co_await client.client().get("/rested").send();
+            EXPECT_TRUE(rested.protocol_version() == ruvia::http_protocol_version::http11);
+            (void)co_await rested.text();
+        }
+        (void)co_await ruvia::sleep_for(worker, 100ms);
+        EXPECT_EQ(datagrams, attempted);
+        std::error_code ignored;
+        sink.close(ignored);
+        while (!sink_done) {
+            (void)co_await ruvia::sleep_for(worker, 1ms);
+        }
+    });
+}
+#endif
+
 TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_without_preallocation) {
     using namespace origin_routing_tests;
     auto& io = ruvia::test::new_test_io_context();
@@ -439,4 +572,315 @@ TEST(Ruvia, http_client_connection_limits_bound_open_and_idle_connections_withou
     ASSERT_EQ(peer.connections_.size(), 2U);
     EXPECT_TRUE(peer.connections_[0].closed_);
     EXPECT_TRUE(peer.connections_[1].closed_);
+}
+
+TEST(Ruvia, http_client_upload_progress_keeps_the_response_head_wait_alive) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    ruvia::http_client_config config{.base_url_ = base_url};
+    config.read_timeout_ = 100ms;
+    config.request_timeout_ = 5s;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        // The origin reads the complete request before it answers; the upload
+        // outlasts read_timeout_ while every chunk arrives within it.
+        auto exchange = co_await client.client().post("/drain").upload();
+        for (int chunk = 0; chunk != 6; ++chunk) {
+            co_await exchange.body().write(std::string_view("chunk"));
+            (void)co_await ruvia::sleep_for(worker, 50ms);
+        }
+        co_await exchange.body().end();
+        auto response = co_await exchange.response();
+        EXPECT_TRUE(response.ok());
+        const auto body = co_await response.text();
+        EXPECT_EQ(body.text(), "/drain");
+    });
+    ASSERT_EQ(peer.connections_.size(), 1U);
+    EXPECT_GT(peer.connections_[0].content_bytes_, 6U * 5U);
+}
+
+TEST(Ruvia, http_client_upgrade_tunnels_follow_their_own_idle_timeout) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    ruvia::http_client_config config{.base_url_ = base_url};
+    config.read_timeout_ = 50ms;
+    config.request_timeout_ = 5s;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        const auto upgrade = [&](ruvia::http_client_tunnel_config tunnel) {
+            return client.client().get("/chat").header("Connection", "Upgrade").header("Upgrade", "chat").upgrade(tunnel);
+        };
+        {
+            // Without an idle timeout, read_timeout_ no longer bounds the tunnel.
+            auto opened = co_await upgrade({});
+            auto* tunnel = opened.tunnel();
+            if (tunnel == nullptr) {
+                ADD_FAILURE() << "Upgrade was not switched";
+                co_return;
+            }
+            (void)co_await ruvia::sleep_for(worker, 200ms);
+            co_await tunnel->write(std::string_view("ping"));
+            const auto echoed = co_await tunnel->text();
+            EXPECT_TRUE(echoed == std::optional<std::string_view>("ping"));
+        }
+        {
+            auto opened = co_await upgrade({.idle_timeout_ = std::chrono::milliseconds(150)});
+            auto* tunnel = opened.tunnel();
+            if (tunnel == nullptr) {
+                ADD_FAILURE() << "Upgrade was not switched";
+                co_return;
+            }
+            // Traffic in either direction restarts the idle bound.
+            for (int round = 0; round != 3; ++round) {
+                (void)co_await ruvia::sleep_for(worker, 75ms);
+                co_await tunnel->write(std::string_view("tick"));
+                EXPECT_TRUE((co_await tunnel->text()) == std::optional<std::string_view>("tick"));
+            }
+            std::optional<ruvia::http_client_error::code_type> failure;
+            try {
+                (void)co_await tunnel->read();
+            } catch (const ruvia::http_client_error& error) {
+                failure = error.code();
+            }
+            EXPECT_EQ(failure, ruvia::http_client_error::code_type::timeout);
+        }
+    });
+}
+
+TEST(Ruvia, http1_client_abandoned_upload_keeps_the_early_response) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://127.0.0.1:" + std::to_string(peer.port());
+    ruvia::http_client_config config{.base_url_ = base_url};
+    config.request_timeout_ = 5s;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+        auto exchange = co_await client.client().post("/early").upload();
+        co_await exchange.body().write(std::string_view("partial"));
+        auto response = co_await exchange.response();
+        EXPECT_TRUE(response.ok());
+        exchange.body().abandon();
+        EXPECT_FALSE(exchange.body().complete());
+        const auto body = co_await response.text();
+        EXPECT_EQ(body.text(), "/early");
+        // The unfinished request leaves the connection unusable.
+        auto next = co_await client.client().get("/next").send();
+        EXPECT_FALSE(next.connection_info().reused_);
+        (void)co_await next.text();
+    });
+    ASSERT_EQ(peer.connections_.size(), 2U);
+    EXPECT_TRUE(peer.connections_[0].closed_);
+}
+
+#if defined(RUVIA_ENABLE_HTTP2)
+TEST(Ruvia, http2_client_abandoned_upload_ends_only_its_sending_half) {
+    using namespace origin_routing_tests;
+    ruvia::test::tls_identity identity("origin.example");
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, &identity.context_);
+    ruvia::http_client_config config{.base_url_ = "https://origin.example", .dial_host_ = "127.0.0.1", .dial_port_ = peer.port()};
+    config.request_timeout_ = 5s;
+    config.tls_.ca_file_ = identity.ca_file_;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        // The origin answers the head at once and completes its response
+        // while the request content is still open.
+        auto exchange = co_await client.client().post("/early").upload();
+        auto response = co_await exchange.response();
+        EXPECT_TRUE(response.ok());
+        EXPECT_TRUE(response.protocol_version() == ruvia::http_protocol_version::http2);
+        exchange.body().abandon();
+        EXPECT_FALSE(exchange.body().complete());
+        const auto body = co_await response.text();
+        EXPECT_TRUE(body.empty());
+        EXPECT_TRUE(response.stream().complete());
+        for (int attempt = 0; attempt != 200 && (peer.connections_.empty() || peer.connections_[0].resets_.empty()); ++attempt) {
+            (void)co_await ruvia::sleep_for(worker, 5ms);
+        }
+    });
+    ASSERT_EQ(peer.connections_.size(), 1U);
+    EXPECT_EQ(peer.connections_[0].resets_, (std::deque<ruvia::http2_error_code>{ruvia::http2_error_code::no_error}));
+}
+#endif
+
+TEST(Ruvia, http_client_worker_idle_bound_spans_aliases) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer first_peer(io, nullptr);
+    routing_peer second_peer(io, nullptr);
+    const std::string first_url = "http://127.0.0.1:" + std::to_string(first_peer.port());
+    const std::string second_url = "http://127.0.0.1:" + std::to_string(second_peer.port());
+    const std::array configs{ruvia::http_client_config{.alias_ = "first", .base_url_ = first_url},
+        ruvia::http_client_config{.alias_ = "second", .base_url_ = second_url}};
+    run_clients(attachment, {&first_peer, &second_peer}, configs, {.max_idle_http1_ = 1},
+        [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+            const auto first = client.client("first");
+            const auto second = client.client("second");
+            auto a = co_await first.get("/a").send();
+            (void)co_await a.text();
+            EXPECT_EQ(first.stats().idle_connections_, 1U);
+            auto b = co_await second.get("/b").send();
+            (void)co_await b.text();
+            // Each alias allows 64 idle connections; the worker keeps one, so
+            // the least recently used, of the other alias, closes.
+            for (int attempt = 0; attempt != 200 && first.stats().open_connections_ != 0; ++attempt) {
+                (void)co_await ruvia::sleep_for(worker, 5ms);
+            }
+            EXPECT_EQ(first.stats().open_connections_, 0U);
+            EXPECT_EQ(second.stats().idle_connections_, 1U);
+        });
+    ASSERT_EQ(first_peer.connections_.size(), 1U);
+    EXPECT_TRUE(first_peer.connections_[0].closed_);
+}
+
+TEST(Ruvia, http_client_alias_without_a_fixed_origin_routes_each_request_to_its_authority) {
+    using namespace origin_routing_tests;
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    routing_peer peer(io, nullptr);
+    routing_peer other_peer(io, nullptr);
+    const auto authority = "127.0.0.1:" + std::to_string(peer.port());
+    const auto other_authority = "127.0.0.1:" + std::to_string(other_peer.port());
+    peer.redirect_location_ = "http://" + other_authority + "/landing";
+    ruvia::http_client_config config{.base_url_ = "http://"};
+    config.request_timeout_ = 5s;
+    config.address_validator_ = [](std::string_view ip, std::uint16_t) { return ip == "127.0.0.1"; };
+    run_client(io, attachment, {&peer, &other_peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+        const auto handle = client.client();
+        const auto to = [](std::string_view value) {
+            ruvia::http_client_request_options options;
+            options.authority_.emplace(value);
+            return options;
+        };
+        const auto fails_with = [&](ruvia::http_client_request request) -> ruvia::task<std::optional<ruvia::http_client_error::code_type>> {
+            try {
+                (void)co_await request.send();
+            } catch (const ruvia::http_client_error& error) {
+                co_return error.code();
+            }
+            co_return std::nullopt;
+        };
+        bool rejected = false;
+        try {
+            (void)co_await handle.get("/").send();
+        } catch (const std::invalid_argument&) {
+            rejected = true;
+        }
+        EXPECT_TRUE(rejected);
+        auto response = co_await handle.get("/direct").configure(to(authority)).send();
+        const auto direct = co_await response.text();
+        EXPECT_EQ(direct.text(), "/direct");
+        // Every dial address passes the validator.
+        const auto rejected_dial = co_await fails_with(std::move(handle.get("/").configure(to("127.0.0.2:" + std::to_string(peer.port())))));
+        EXPECT_EQ(rejected_dial, ruvia::http_client_error::code_type::resolve_failed);
+        // Without a policy a cross-origin redirect is not followed.
+        auto unfollowed = co_await handle.get("/redirect").configure(to(authority)).send();
+        EXPECT_EQ(unfollowed.status().value(), 302);
+        (void)co_await unfollowed.text();
+        // An accepted origin is reached through this alias with its authority.
+        auto followed = co_await handle.get("/redirect").configure(to(authority)).redirect_policy([](ruvia::http_origin_view, ruvia::stop_token) -> ruvia::task<bool> {
+                                                                                     co_return true;
+                                                                                 })
+                            .send();
+        const auto landing = co_await followed.text();
+        EXPECT_EQ(landing.text(), "/landing");
+    });
+    ASSERT_EQ(peer.connections_.size(), 1U);
+    EXPECT_EQ(peer.connections_[0].authorities_.front(), authority);
+    ASSERT_EQ(other_peer.connections_.size(), 1U);
+    EXPECT_EQ(other_peer.connections_[0].authorities_, (std::deque<std::string>{other_authority}));
+}
+
+TEST(Ruvia, http_client_alias_without_a_fixed_origin_requires_an_address_validator) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    EXPECT_THROW(ruvia::http_client(attachment.loop(), {.base_url_ = "http://"}), std::invalid_argument);
+    ruvia::http_client_config cookies{.base_url_ = "https://"};
+    cookies.address_validator_ = [](std::string_view, std::uint16_t) { return true; };
+    cookies.received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send;
+    EXPECT_THROW(ruvia::http_client(attachment.loop(), cookies), std::invalid_argument);
+}
+
+TEST(Ruvia, http_client_dns_refresh_queries_only_live_routes_and_retires_moved_connections) {
+    using namespace origin_routing_tests;
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
+    routing_peer peer(io, nullptr, "0.0.0.0");
+    const std::string base_url = "http://localhost:" + std::to_string(peer.port());
+    ruvia::http_client_config config{.base_url_ = base_url};
+    config.request_timeout_ = 5s;
+    config.dns_refresh_interval_ = 30ms;
+    run_client(io, attachment, {&peer}, config, [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        const auto handle = client.client();
+        (void)co_await ruvia::sleep_for(worker, 150ms);
+        // No connection, no query.
+        EXPECT_EQ(handle.stats().dns_refreshes_, 0U);
+        const std::array moved{ruvia::http_client_endpoint_address("127.0.0.2", peer.port())};
+        handle.update_dns(moved);
+        auto first = co_await handle.get("/first").send();
+        EXPECT_EQ(first.connection_info().peer_ip_, "127.0.0.2");
+        (void)co_await first.text();
+        // The refresh finds localhost elsewhere and retires the moved connection.
+        for (int attempt = 0; attempt != 400 && !peer.connections_[0].closed_; ++attempt) {
+            (void)co_await ruvia::sleep_for(worker, 5ms);
+        }
+        EXPECT_TRUE(peer.connections_[0].closed_);
+        EXPECT_GE(handle.stats().dns_refreshes_, 1U);
+        auto second = co_await handle.get("/second").send();
+        EXPECT_NE(second.connection_info().peer_ip_, "127.0.0.2");
+        (void)co_await second.text();
+        lookups.join();
+    });
+}
+
+TEST(Ruvia, http_client_dns_refresh_concurrency_is_bounded_per_worker) {
+    using namespace origin_routing_tests;
+    ruvia::blocking_pool lookups({.thread_count_ = 1});
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
+    routing_peer peer(io, nullptr);
+    const std::string base_url = "http://localhost:" + std::to_string(peer.port());
+    std::array configs{ruvia::http_client_config{.alias_ = "first", .base_url_ = base_url},
+        ruvia::http_client_config{.alias_ = "second", .base_url_ = base_url}};
+    for (auto& config : configs) {
+        config.request_timeout_ = 5s;
+        config.dns_refresh_interval_ = 20ms;
+    }
+    run_clients(attachment, {&peer}, configs, {.max_concurrent_dns_refreshes_ = 1},
+        [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+            const auto first = client.client("first");
+            const auto second = client.client("second");
+            auto a = co_await first.get("/a").send();
+            (void)co_await a.text();
+            auto b = co_await second.get("/b").send();
+            (void)co_await b.text();
+            // Hold the only lookup thread: the first refresh started stays
+            // running, and every other period of either alias defers.
+            std::promise<void> release;
+            auto released = release.get_future();
+            ruvia::task_scope blocker(worker);
+            blocker.spawn([](ruvia::worker_handle owner, std::future<void>& gate) -> ruvia::task<void> {
+                (void)co_await ruvia::run_blocking(std::move(owner), ruvia::operation_options{}, [&gate] { gate.wait(); });
+            }(worker, released));
+            const auto started = [&] { return first.stats().dns_refreshes_ + second.stats().dns_refreshes_; };
+            for (int attempt = 0; attempt != 200 && started() == 0; ++attempt) {
+                (void)co_await ruvia::sleep_for(worker, 5ms);
+            }
+            (void)co_await ruvia::sleep_for(worker, 150ms);
+            EXPECT_EQ(started(), 1U);
+            release.set_value();
+            co_await blocker.join();
+            for (int attempt = 0; attempt != 200 && started() < 3; ++attempt) {
+                (void)co_await ruvia::sleep_for(worker, 5ms);
+            }
+            EXPECT_GE(started(), 3U);
+        });
+    lookups.join();
 }

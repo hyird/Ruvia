@@ -666,7 +666,7 @@ ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protoco
 
 struct client_target final {
     std::string base_url_;
-    ruvia::http_client_protocol protocol_;
+    ruvia::http_client_versions versions_;
     ruvia::http_protocol_version version_;
     std::string label_;
 };
@@ -679,7 +679,7 @@ ruvia::task<void> exercise_all(ruvia::event_loop loop, std::vector<client_target
         std::optional<ruvia::http_client> owner;
         try {
             ruvia::http_client_config config{.base_url_ = target.base_url_};
-            config.protocol_ = target.protocol_;
+            config.versions_ = target.versions_;
             config.connect_timeout_ = 5s;
             config.request_timeout_ = 20s;
             config.max_response_bytes_ = 64 * 1024;
@@ -798,16 +798,16 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     const auto plain_url = "http://127.0.0.1:" + std::to_string(plain_endpoint.port());
     const auto tls_url = "https://localhost:" + std::to_string(tls_port);
     std::vector<client_target> targets{
-        {plain_url, ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "HTTP/1.1"},
-        {tls_url, ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "HTTP/1.1 over TLS"},
+        {plain_url, ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, "HTTP/1.1"},
+        {tls_url, ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, "HTTP/1.1 over TLS"},
     };
 #if defined(RUVIA_ENABLE_HTTP2)
     targets.push_back(
-        {plain_url, ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2, "h2c"});
-    targets.push_back({tls_url, ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2, "h2"});
+        {plain_url, ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2, "h2c"});
+    targets.push_back({tls_url, ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2, "h2"});
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-    targets.push_back({"https://localhost:" + std::to_string(http3_port), ruvia::http_client_protocol::http3_only,
+    targets.push_back({"https://localhost:" + std::to_string(http3_port), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true},
         ruvia::http_protocol_version::http3, "HTTP/3"});
 #endif
     {
@@ -1066,7 +1066,7 @@ TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
         const auto upstream_origin = "http://127.0.0.1:" + std::to_string(source_port.endpoint().port());
         ruvia::http_client upstream(attachment.loop(),
             {.base_url_ = upstream_origin,
-                .protocol_ = ruvia::http_client_protocol::http1_only});
+                .versions_ = ruvia::http_client_versions{.http2_ = false}});
         ruvia::http_server proxy(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& request) -> ruvia::task<void> {
             struct retirement final {
                 unsigned& count_;
@@ -1094,19 +1094,19 @@ TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
             co_await source.start();
             co_await proxy.start();
             std::vector<client_target> targets{{"http://127.0.0.1:" + std::to_string(plain_port.endpoint().port()),
-                ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "HTTP/1"}};
+                ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, "HTTP/1"}};
 #if defined(RUVIA_ENABLE_HTTP2)
             targets.push_back({"https://127.0.0.1:" + std::to_string(tls_port.endpoint().port()),
-                ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2, "HTTP/2"});
+                ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2, "HTTP/2"});
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
             targets.push_back({"https://127.0.0.1:" + std::to_string(udp_port.endpoint().port()),
-                ruvia::http_client_protocol::http3_only, ruvia::http_protocol_version::http3, "HTTP/3"});
+                ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, ruvia::http_protocol_version::http3, "HTTP/3"});
 #endif
             for (const auto& target : targets) {
                 release_source = false;
                 const auto prior_retired = forwarding_retired;
-                ruvia::http_client_config config{.base_url_ = target.base_url_, .protocol_ = target.protocol_};
+                ruvia::http_client_config config{.base_url_ = target.base_url_, .versions_ = target.versions_};
                 config.tls_.ca_file_ = identity.ca_file_;
                 config.request_timeout_ = 10s;
                 ruvia::http_client client(attachment.loop(), config);
@@ -1264,16 +1264,16 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
         try {
             co_await server.start();
             std::vector<client_target> targets{
-                {"http://127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "HTTP/1"},
-                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11, "TLS HTTP/1"}};
+                {"http://127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, "HTTP/1"},
+                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11, "TLS HTTP/1"}};
 #if defined(RUVIA_ENABLE_HTTP2)
-            targets.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2, "HTTP/2"});
+            targets.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2, "HTTP/2"});
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-            targets.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_protocol::http3_only, ruvia::http_protocol_version::http3, "HTTP/3"});
+            targets.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, ruvia::http_protocol_version::http3, "HTTP/3"});
 #endif
             for (const auto& target : targets) {
-                ruvia::http_client_config config{.base_url_ = target.base_url_, .protocol_ = target.protocol_};
+                ruvia::http_client_config config{.base_url_ = target.base_url_, .versions_ = target.versions_};
                 config.tls_.ca_file_ = identity.ca_file_;
                 config.request_timeout_ = 5s;
                 ruvia::http_client client(attachment.loop(), config);

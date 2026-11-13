@@ -71,7 +71,7 @@ ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& l
     while (lookups.stats().running_ != 1) {
         (void)co_await ruvia::sleep_for(worker, 1ms);
     }
-    ruvia::http_client client(loop, {.base_url_ = "http://localhost:1", .connect_timeout_ = kind == stop_kind::timeout ? 30ms : 3s, .request_timeout_ = 3s, .protocol_ = ruvia::http_client_protocol::http1_only});
+    ruvia::http_client client(loop, {.base_url_ = "http://localhost:1", .connect_timeout_ = kind == stop_kind::timeout ? 30ms : 3s, .request_timeout_ = 3s, .versions_ = ruvia::http_client_versions{.http2_ = false}});
     ruvia::stop_source stop;
     ruvia::task_scope operations(worker);
     std::exception_ptr failure;

@@ -104,7 +104,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
         {
             const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                             .protocol_ = ruvia::http_client_protocol::http2_only,
+                                                             .versions_ = ruvia::http_client_versions{.http1_ = false},
                                                              .push_ = {.enabled_ = true}});
             const auto client_origin = client.client();
             std::exception_ptr failure;
@@ -202,7 +202,7 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
         auto run = [&]() -> ruvia::task<void> {
             const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
             ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
-                                                             .protocol_ = ruvia::http_client_protocol::http2_only,
+                                                             .versions_ = ruvia::http_client_versions{.http1_ = false},
                                                              .push_ = {.enabled_ = enabled, .max_queued_pushes_ = 1}});
             const auto client_origin = client.client();
             std::exception_ptr failure;

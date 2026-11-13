@@ -81,7 +81,7 @@ void with_server(ruvia::request_stream_callback callback, check_type check) {
         ruvia::http_server server(attachment.loop(), {.request_stream_ = std::move(callback)});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             co_await server.start();
@@ -470,7 +470,7 @@ TEST(Ruvia, independent_request_stream_releases_selected_file_exactly_once_on_er
         }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             co_await server.start();

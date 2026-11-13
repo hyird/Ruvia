@@ -431,7 +431,7 @@ void exercise_abandon_during_drain() {
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(5),
-                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
             auto held = co_await client.client().get("/hold").send();
             EXPECT_TRUE(held.status() == ruvia::http_status::ok);
@@ -489,7 +489,7 @@ void exercise(response_mode mode) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(2),
-                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
         try {
             if (mode == response_mode::refused || mode == response_mode::connection_lost) {
                 // These cases start with the request below.

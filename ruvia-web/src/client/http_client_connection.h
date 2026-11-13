@@ -377,11 +377,12 @@ public:
     };
 #endif
 
-    // `server_name` is the TLS SNI and verified name (empty for http);
-    // `http11_only` offers only http/1.1 over TLS for HTTP/1.1-only exchanges.
+    // `server_name` is the TLS SNI and verified name (empty for http); `alpn`
+    // is the TLS ALPN offer, and over plaintext http2 selects prior-knowledge
+    // h2c, anything else HTTP/1.1.
     http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
         std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
-        bool http11_only);
+        client_alpn alpn);
     void capture_connection_info(http_client_response_state& response, bool reused) const;
     void retire_addresses() noexcept;
     [[nodiscard]] std::uint64_t connection_id() const noexcept {
@@ -402,7 +403,7 @@ public:
         return alias_route_;
     }
     [[nodiscard]] bool serves(std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name,
-        bool http11_only) const noexcept;
+        client_alpn alpn) const noexcept;
     // Kept between uses: an HTTP/1 connection between exchanges, or an HTTP/2
     // session admitting streams without any.
     [[nodiscard]] bool idle() const noexcept;
@@ -519,7 +520,8 @@ public:
     bool retired_{false};
     bool address_retired_{false};
     bool fresh_{false};
-    const bool http11_only_;
+    // The connection key's offer; reconnects keep it.
+    const client_alpn alpn_;
     // Requests the pool routed here that have not released it yet.
     std::size_t users_{0};
     // Order in which the connection last turned idle (larger is newer); 0

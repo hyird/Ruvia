@@ -130,6 +130,10 @@ void validate_http_client_route_options(const http_client_request_options& optio
     if (options.server_name_) {
         validate_client_origin_host(*options.server_name_, "HTTP request TLS server name must not be empty", "HTTP request TLS server name is invalid");
     }
+    if (options.versions_) {
+        // The alias scheme is checked with the route.
+        validate_http_client_versions(*options.versions_, http_scheme::https);
+    }
 }
 
 void http_client_request_storage::resolve_route(const http_client_config_storage& config) {
@@ -138,27 +142,38 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
     if (options_.server_name_ && !https) {
         throw std::invalid_argument("HTTP request TLS server name requires an https origin");
     }
+    if (!config.fixed_origin_ && !options_.authority_) {
+        throw std::invalid_argument("HTTP client alias without a fixed origin requires authority_ on each request");
+    }
     const port_number default_port = https ? 443 : 80;
-    http_client_route route{.origin_ = config.origin(),
-        .authority_ = config.authority_,
-        .dial_host_ = config.dial_host_,
-        .dial_port_ = config.dial_port_,
-        .server_name_ = {},
-        .alias_origin_ = true,
-        .alias_transport_ = true,
-        .alias_route_ = true};
+    std::optional<http_origin_view> authority_origin;
     std::string_view authority_host;
     if (options_.authority_) {
         const auto parsed = parse_route_authority(*options_.authority_);
         const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(default_port)};
-        route.origin_ = https ? http_origin_view::https(origin) : http_origin_view::http(origin);
-        route_authority_ = make_http_origin_authority(route.origin_, route_authority_.get_allocator().resource());
-        route.authority_ = route_authority_;
-        route.alias_origin_ = http_authorities_equal(borrowed_text(route.authority_), borrowed_text(std::string_view(config.authority_)), default_port);
+        authority_origin = https ? http_origin_view::https(origin) : http_origin_view::http(origin);
+        route_authority_ = make_http_origin_authority(*authority_origin, route_authority_.get_allocator().resource());
         authority_host = parsed.host();
         if (authority_host.starts_with('[')) {
             authority_host = authority_host.substr(1, authority_host.size() - 2);
         }
+    }
+    const auto origin_value = authority_origin ? *authority_origin : config.origin();
+    http_client_route route{.origin_ = origin_value,
+        .authority_ = authority_origin ? std::string_view(route_authority_) : std::string_view(config.authority_),
+        // An alias without a fixed origin (or dial target) dials the authority.
+        .dial_host_ = config.dial_host_.empty() ? authority_host : std::string_view(config.dial_host_),
+        .dial_port_ = config.dial_port_ != 0 ? config.dial_port_ : origin_value.port(),
+        .server_name_ = {},
+        .alias_origin_ = true,
+        .alias_transport_ = true,
+        .versions_ = options_.versions_.value_or(config.versions_)};
+    if (options_.versions_) {
+        validate_http_client_versions(*options_.versions_, config.scheme_);
+    }
+    if (authority_origin) {
+        route.alias_origin_ = config.fixed_origin_ && http_authorities_equal(borrowed_text(route.authority_),
+                                                          borrowed_text(std::string_view(config.authority_)), default_port);
     }
     if (is_tunnel_ && !is_upgrade_ && options_.authority_) {
         if (websocket_ != nullptr) {
@@ -178,9 +193,8 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
     route.server_name_ = options_.server_name_           ? std::string_view(*options_.server_name_)
                          : !route.alias_origin_ && https ? authority_host
                                                          : alias_server_name;
-    route.alias_transport_ = http_ascii_equals_ignore_case(route.dial_host_, config.dial_host_) &&
+    route.alias_transport_ = config.fixed_origin_ && http_ascii_equals_ignore_case(route.dial_host_, config.dial_host_) &&
                              route.dial_port_ == config.dial_port_ && http_ascii_equals_ignore_case(route.server_name_, alias_server_name);
-    route.alias_route_ = route.alias_origin_ && route.alias_transport_;
     route_.emplace(route);
 }
 
@@ -565,16 +579,22 @@ task<http_client_response> http_client_request::send_owned(http_client_request r
             } else if (request.client_.scheme() == http_scheme::https && next->scheme() != http_scheme::https) {
                 co_return response;
             }
-            if (request.client_.registry_ == nullptr) {
-                co_return response;
-            }
             auto authority = make_http_origin_authority(next->origin(), request.client_.resource_);
-            next_pool = request.client_.registry_->find_origin(next->scheme(), authority);
-            if (next_pool == nullptr) {
-                co_return response;
-            }
             // Route overrides belong to the origin that set them.
             clear_route_overrides(request.request_options_);
+            if (!request.client_.pool_->config().fixed_origin_ && request.redirect_policy_ &&
+                next->scheme() == request.client_.scheme()) {
+                // An alias without a fixed origin reaches the accepted origin itself.
+                request.request_options_.authority_.emplace(std::string_view(authority));
+            } else {
+                if (request.client_.registry_ == nullptr) {
+                    co_return response;
+                }
+                next_pool = request.client_.registry_->find_origin(next->scheme(), authority);
+                if (next_pool == nullptr) {
+                    co_return response;
+                }
+            }
         }
         const http_client_request_view view{
             .method_ = request.method_,

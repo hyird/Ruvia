@@ -60,10 +60,10 @@ struct http_client_registry::origin_preparation final {
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::span<const http_client_definition_type> definitions,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
+    const http_client_worker_services& services)
     : io_context_(io_context),
       worker_(worker_value),
-      result_budget_domain_(result_budget_domain),
+      services_(services),
       aliases_(validated_http_client_resource(definitions)),
       retirements_(worker_, {.resource_ = process_resource()}) {
     initialize(definitions);
@@ -72,10 +72,10 @@ http_client_registry::http_client_registry(asio::io_context& io_context, const w
 
 http_client_registry::http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
     std::span<const http_client_config> configs,
-    const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
+    const http_client_worker_services& services)
     : io_context_(io_context),
       worker_(worker_value),
-      result_budget_domain_(result_budget_domain),
+      services_(services),
       aliases_(validated_http_client_resource(configs)),
       retirements_(worker_, {.resource_ = process_resource()}) {
     initialize(configs);
@@ -87,7 +87,7 @@ void http_client_registry::initialize(std::span<const config_type> configs) {
     for (const auto& config : configs) {
         auto pool = std::allocate_shared<http_client_pool>(
             std::pmr::polymorphic_allocator<http_client_pool>(process_resource()), io_context_, worker_,
-            http_client_config_storage(client_config(config), process_resource()), result_budget_domain_);
+            http_client_config_storage(client_config(config), process_resource()), services_);
         aliases_.emplace(std::pmr::string(std::string_view(config.alias_), process_resource()),
             alias_binding{std::move(pool), next_origin_order_++});
     }
@@ -144,7 +144,7 @@ task<void> http_client_registry::prepare_origin(preparation_owner_type input, op
     }
     auto replacement = std::allocate_shared<http_client_pool>(
         std::pmr::polymorphic_allocator<http_client_pool>(process_resource()), io_context_, worker_,
-        std::move(input->config_), result_budget_domain_);
+        std::move(input->config_), services_);
     require_prepared(stop, timeout);
     publish(std::move(input->alias_), std::move(replacement));
 }
@@ -266,7 +266,7 @@ std::shared_ptr<http_client_pool> http_client_registry::find_origin(http_scheme 
 class http_client_state final : public std::enable_shared_from_this<http_client_state> {
 public:
     http_client_state(event_loop loop, std::span<const http_client_config> configs,
-        http_client_result_budget_config result_budget);
+        const http_client_worker_config& worker_config);
 
     http_client_state(const http_client_state&) = delete;
     http_client_state& operator=(const http_client_state&) = delete;
@@ -312,13 +312,11 @@ private:
 };
 
 http_client_state::http_client_state(event_loop loop, std::span<const http_client_config> configs,
-    http_client_result_budget_config result_budget)
+    const http_client_worker_config& worker_config)
     : loop_(client_lifecycle<http_client_state>::require_loop(std::move(loop))),
       worker_(loop_.handle()),
       // Responses may outlive this client: the process resource backs them.
-      registry_(loop_.io_context(), worker_, configs,
-          std::allocate_shared<http_client_result_budget_domain>(
-              std::pmr::polymorphic_allocator<http_client_result_budget_domain>(process_resource()), result_budget)),
+      registry_(loop_.io_context(), worker_, configs, make_http_client_worker_services(worker_config)),
       lifecycle_(*this, loop_, worker_, client_phase::connected) {}
 
 void http_client_state::throw_not_ready() {
@@ -339,14 +337,14 @@ http_client_handle http_client_state::client(std::string_view alias) {
 namespace ruvia {
 
 http_client::http_client(event_loop loop, const http_client_config& config,
-    http_client_result_budget_config result_budget)
-    : http_client(std::move(loop), std::span<const http_client_config>(&config, 1), result_budget) {}
+    const http_client_worker_config& worker)
+    : http_client(std::move(loop), std::span<const http_client_config>(&config, 1), worker) {}
 
 http_client::http_client(event_loop loop, std::span<const http_client_config> configs,
-    http_client_result_budget_config result_budget)
+    const http_client_worker_config& worker)
     : state_(std::allocate_shared<detail::http_client_state>(
           std::pmr::polymorphic_allocator<detail::http_client_state>(process_resource()),
-          std::move(loop), configs, result_budget)) {
+          std::move(loop), configs, worker)) {
     state_->bind_stop();
 }
 

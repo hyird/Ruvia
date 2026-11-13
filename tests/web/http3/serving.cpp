@@ -683,6 +683,16 @@ ruvia::task<void> run_negotiate_upgrade_lane(
     EXPECT_EQ(text.text(), "hello over http/3");
 }
 
+// negotiate learns nothing from Alt-Svc: every request stays on TCP ALPN.
+ruvia::task<void> run_negotiate_tcp_lane(ruvia::http_client_handle client) {
+    for (int request = 0; request != 3; ++request) {
+        auto response = co_await client.get("/hello").send();
+        EXPECT_TRUE(response.ok());
+        EXPECT_TRUE(response.protocol_version() != ruvia::http_protocol_version::http3);
+        (void)co_await response.text();
+    }
+}
+
 ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruvia::http_client_handle client) {
     bool entered = false;
     bool released = false;
@@ -731,13 +741,13 @@ ruvia::task<void> exercise_independent_informational(ruvia::event_loop loop, ruv
 }
 
 ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint16_t port,
-    const std::filesystem::path& ca_file, ruvia::http_client_protocol protocol) {
+    const std::filesystem::path& ca_file, ruvia::http_client_versions protocol) {
     bool allowed = true;
     std::size_t validations = 0;
     ruvia::http_client_config config{.base_url_ = "https://localhost",
         .dial_host_ = "127.0.0.1",
         .dial_port_ = port};
-    config.protocol_ = protocol;
+    config.versions_ = protocol;
     // Unbounded open connections: fresh connections then never evict the
     // pooled one this test expects to reuse.
     config.request_timeout_ = 5s;
@@ -795,11 +805,11 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         const auto replacement_id = replaced.connection_info().id_;
         EXPECT_NE(replacement_id, first_info.id_);
         (void)co_await replaced.text();
-        if (protocol != ruvia::http_client_protocol::http1_only) {
+        if (protocol != ruvia::http_client_versions{.http2_ = false}) {
             stage = "independent-informational";
             co_await exercise_independent_informational(loop, client);
         }
-        if (protocol == ruvia::http_client_protocol::http3_only) {
+        if (protocol == ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}) {
             // The peer can finish both halves before the UDP send completion
             // resumes the producer that is awaiting its submitted trailers/FIN.
             for (int attempt = 0; attempt != 4; ++attempt) {
@@ -921,7 +931,7 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
         EXPECT_GT(validations, 0U);
     } catch (const std::exception& error) {
         failure = std::make_exception_ptr(std::runtime_error(
-            "connection controls protocol=" + std::to_string(static_cast<unsigned>(protocol)) +
+            "connection controls versions=" + std::string(protocol.http1_ ? "1" : "") + (protocol.http2_ ? "2" : "") + (protocol.http3_ ? "3" : "") +
             " stage=" + std::string(stage) + " attempt=" + std::to_string(finish_attempt) + ": " + error.what()));
     } catch (...) {
         failure = std::current_exception();
@@ -939,17 +949,13 @@ ruvia::task<void> exercise_connection_controls(ruvia::event_loop loop, std::uint
             std::pmr::string("127.0.0.2", ruvia::process_resource()), port}};
         auto refreshed = refreshing.client();
         refreshed.update_dns(initial);
-        const auto deadline = std::chrono::steady_clock::now() + 1s;
-        for (;;) {
-            const auto snapshot = refreshed.dns_snapshot();
-            if (snapshot.size() == 1 && snapshot.front().ip_ == "127.0.0.1") {
-                break;
-            }
-            if (std::chrono::steady_clock::now() >= deadline) {
-                throw std::runtime_error("background DNS refresh did not replace the snapshot");
-            }
-            (void)co_await ruvia::sleep_for(loop.handle(), 5ms);
-        }
+        // Background refresh only looks up DNS dial names that still have a
+        // live connection: this literal dial host is never queried, so the
+        // published snapshot stays.
+        (void)co_await ruvia::sleep_for(loop.handle(), 100ms);
+        const auto snapshot = refreshed.dns_snapshot();
+        EXPECT_TRUE(snapshot.size() == 1 && snapshot.front().ip_ == "127.0.0.2");
+        EXPECT_EQ(refreshed.stats().dns_refreshes_, 0U);
     } catch (...) {
         failure = std::current_exception();
     }
@@ -964,36 +970,37 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
     const std::pmr::string& expected_stream, const std::pmr::string& expected_file,
     std::atomic<std::size_t>& completed_ops) {
     const std::pmr::string base_url("https://localhost:" + std::pmr::string(std::to_string(port), ruvia::process_resource()), ruvia::process_resource());
-    const auto make_client_config = [&](ruvia::http_client_protocol protocol) {
+    const auto make_client_config = [&](ruvia::http_client_versions protocol) {
         ruvia::http_client_config cfg{.base_url_ = base_url};
-        cfg.protocol_ = protocol;
-        cfg.connection_limits_.max_open_ = protocol == ruvia::http_client_protocol::http1_only ? 4 : 1;
+        cfg.versions_ = protocol;
+        cfg.connection_limits_.max_open_ = protocol == ruvia::http_client_versions{.http2_ = false} ? 4 : 1;
         cfg.connect_timeout_ = 5s;
         cfg.acquire_timeout_ = 5s;
         cfg.read_timeout_ = 5s;
         cfg.write_timeout_ = 5s;
         cfg.request_timeout_ = 10s;
         cfg.tls_.ca_file_ = ca_file;
-        cfg.push_.enabled_ = protocol == ruvia::http_client_protocol::http2_only;
-        cfg.advertisements_.receive_origins_ = protocol != ruvia::http_client_protocol::http1_only;
+        cfg.push_.enabled_ = protocol == ruvia::http_client_versions{.http1_ = false};
+        cfg.advertisements_.receive_origins_ = protocol != ruvia::http_client_versions{.http2_ = false};
         return cfg;
     };
 
-    ruvia::http_client h1_owner(loop, make_client_config(ruvia::http_client_protocol::http1_only));
+    ruvia::http_client h1_owner(loop, make_client_config(ruvia::http_client_versions{.http2_ = false}));
     std::optional<ruvia::http_client> h2_owner;
 #ifdef RUVIA_ENABLE_HTTP2
-    h2_owner.emplace(loop, make_client_config(ruvia::http_client_protocol::http2_only));
+    h2_owner.emplace(loop, make_client_config(ruvia::http_client_versions{.http1_ = false}));
 #endif
-    ruvia::http_client h3_owner(loop, make_client_config(ruvia::http_client_protocol::http3_only));
-    ruvia::http_client neg_owner(loop, make_client_config(ruvia::http_client_protocol::negotiate));
+    ruvia::http_client h3_owner(loop, make_client_config(ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}));
+    ruvia::http_client neg_owner(loop, make_client_config(ruvia::http_client_versions{.http3_ = true}));
+    ruvia::http_client tcp_owner(loop, make_client_config(ruvia::http_client_versions{}));
     std::exception_ptr worker_failure;
     try {
         if (loop_idx == 0) {
-            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http1_only);
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_versions{.http2_ = false});
 #ifdef RUVIA_ENABLE_HTTP2
-            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http2_only);
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_versions{.http1_ = false});
 #endif
-            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_protocol::http3_only);
+            co_await exercise_connection_controls(loop, port, ca_file, ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true});
         }
         {
             if (h2_owner) {
@@ -1021,11 +1028,13 @@ ruvia::task<void> exercise_mixed_protocol_worker(ruvia::event_loop loop, std::si
         tasks.spawn(run_cancellation_and_migration_lane(
             loop.handle(), h2_owner ? std::optional(h2_owner->client()) : std::nullopt, h3_owner.client()));
         tasks.spawn(run_negotiate_upgrade_lane(neg_owner.client()));
+        tasks.spawn(run_negotiate_tcp_lane(tcp_owner.client()));
         co_await tasks.join();
     } catch (...) {
         worker_failure = std::current_exception();
     }
     co_await neg_owner.shutdown();
+    co_await tcp_owner.shutdown();
     co_await h3_owner.shutdown();
     if (h2_owner) {
         co_await h2_owner->shutdown();
@@ -1048,9 +1057,9 @@ ruvia::task<void> run_goaway_reconnect_request(ruvia::http_client_handle client,
 ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uint16_t port,
     const std::filesystem::path& ca_file) {
     const std::pmr::string base_url("https://localhost:" + std::pmr::string(std::to_string(port), ruvia::process_resource()), ruvia::process_resource());
-    const auto make_cfg = [&](ruvia::http_client_protocol protocol) {
+    const auto make_cfg = [&](ruvia::http_client_versions protocol) {
         ruvia::http_client_config cfg{.base_url_ = base_url};
-        cfg.protocol_ = protocol;
+        cfg.versions_ = protocol;
         cfg.connection_limits_.max_open_ = 1;
         cfg.connect_timeout_ = 5s;
         cfg.acquire_timeout_ = 5s;
@@ -1060,9 +1069,9 @@ ruvia::task<void> exercise_capped_goaway_worker(ruvia::event_loop loop, std::uin
     };
     std::optional<ruvia::http_client> h2_owner;
 #ifdef RUVIA_ENABLE_HTTP2
-    h2_owner.emplace(loop, make_cfg(ruvia::http_client_protocol::http2_only));
+    h2_owner.emplace(loop, make_cfg(ruvia::http_client_versions{.http1_ = false}));
 #endif
-    ruvia::http_client h3_owner(loop, make_cfg(ruvia::http_client_protocol::http3_only));
+    ruvia::http_client h3_owner(loop, make_cfg(ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}));
     std::exception_ptr err;
     try {
         {

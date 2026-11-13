@@ -221,7 +221,7 @@ public:
           tasks_(worker_, {.resource_ = process_resource()}),
           capabilities_(loop_.io_context(), worker_, {},
               {.max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
-                  .http_client_result_budget_ = options_.server_.http_client_result_budget_,
+                  .http_client_worker_ = options_.server_.http_client_worker_,
                   .trusted_proxies_ = &options_.trusted_proxies_,
                   .precompressed_static_files_ = options_.compression_.has_value(),
                   .file_io_timeout_ = options_.server_.write_timeout_,

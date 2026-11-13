@@ -206,7 +206,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
                                                          .connection_failure_ = [&](const ruvia::connection_failure_record&) noexcept { ++connection_failures; }});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             co_await server.start();
@@ -405,7 +405,7 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
             {.compression_ = ruvia::compression_config{.min_bytes_ = 16}, .cors_ = ruvia::cors_config{}});
         server.listen({.address_ = "127.0.0.1", .http_ = port.endpoint().port(), .dispatch_ = ruvia::listener_dispatch::request_stream});
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             co_await server.start();
@@ -475,9 +475,9 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
         std::exception_ptr failure;
         try {
             co_await server.start();
-            for (const auto protocol : {ruvia::http_client_protocol::http1_only, ruvia::http_client_protocol::http2_only}) {
-                const std::string label = protocol == ruvia::http_client_protocol::http1_only ? "HTTP/1.1" : "h2c";
-                ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = protocol});
+            for (const auto protocol : {ruvia::http_client_versions{.http2_ = false}, ruvia::http_client_versions{.http1_ = false}}) {
+                const std::string label = protocol == ruvia::http_client_versions{.http2_ = false} ? "HTTP/1.1" : "h2c";
+                ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = protocol});
                 std::exception_ptr exchange_failure;
                 try {
                     upgrade_marker::calls_ = 0;
@@ -572,7 +572,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
         const auto& worker = attachment.loop().handle();
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::redis_client redis(attachment.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = 2s, .command_timeout_ = 2s});
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         visit_counter visits;
         std::exception_ptr failure;
         try {

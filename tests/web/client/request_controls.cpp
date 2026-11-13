@@ -195,7 +195,7 @@ void raw_stream(bool http2, bool configured_raw) {
                                                          .decode_content_ = !configured_raw,
                                                          .read_timeout_ = std::chrono::milliseconds(5),
                                                          .request_timeout_ = std::chrono::seconds(3),
-                                                         .protocol_ = http2 ? ruvia::http_client_protocol::http2_only : ruvia::http_client_protocol::http1_only});
+                                                         .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
         try {
             bool informed = false;
             auto request = client.client().get("/raw");
@@ -259,7 +259,7 @@ void read_timeout(bool http2, bool total_only) {
         ruvia::http_client client(attachment.loop(), {.base_url_ = url,
                                                          .read_timeout_ = std::chrono::seconds(2),
                                                          .request_timeout_ = total_only ? std::chrono::milliseconds(30) : std::chrono::milliseconds(2000),
-                                                         .protocol_ = http2 ? ruvia::http_client_protocol::http2_only : ruvia::http_client_protocol::http1_only});
+                                                         .versions_ = http2 ? ruvia::http_client_versions{.http1_ = false} : ruvia::http_client_versions{.http2_ = false}});
         std::optional<ruvia::http_client_error> observed_error;
         try {
             auto request = client.client().get("/silent");
@@ -379,7 +379,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         const auto url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
         ruvia::http_client client(attachment.loop(), {.base_url_ = url,
                                                          .request_timeout_ = std::chrono::seconds(3),
-                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
         ruvia::task_scope operations(worker);
         ruvia::worker_signal entered(worker);
         ruvia::stop_source release;
@@ -484,7 +484,7 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
         peers.spawn(peer());
         ruvia::http_client client(attachment.loop(), {.base_url_ = logical_url,
                                                          .dial_host_ = "::1",
-                                                         .protocol_ = ruvia::http_client_protocol::http1_only});
+                                                         .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             auto response = co_await client.client().get("/").send();
             EXPECT_EQ(response.status().value(), 200);

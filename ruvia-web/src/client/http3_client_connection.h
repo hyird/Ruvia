@@ -6,11 +6,13 @@
 #include <cstdint>
 #include <memory>
 #include <memory_resource>
+#include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <asio/ip/address.hpp>
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/memory/pmr_object.h"
@@ -84,6 +86,11 @@ public:
     [[nodiscard]] std::uint64_t serial() const noexcept {
         return serial_;
     }
+    [[nodiscard]] const http3_client_route& route() const noexcept {
+        return route_;
+    }
+    // The current QUIC peer while a session is open.
+    [[nodiscard]] std::optional<asio::ip::address> peer_address() const noexcept;
     [[nodiscard]] bool serves(std::string_view host, std::uint16_t port, std::string_view server_name) const noexcept;
     // An endpoint selection (resolve and handshake race) is in progress;
     // further requests of the route queue behind it.

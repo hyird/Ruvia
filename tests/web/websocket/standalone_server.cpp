@@ -53,7 +53,7 @@ using namespace std::chrono_literals;
 struct target final {
     std::string origin_;
     std::string authority_;
-    ruvia::http_client_protocol protocol_;
+    ruvia::http_client_versions versions_;
     ruvia::http_protocol_version version_;
     asio::ip::tcp::endpoint endpoint_;
 };
@@ -1075,7 +1075,7 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
 }  // namespace standalone_websocket_test
 
 namespace standalone_websocket_test {
-void exercise_protocol(ruvia::http_client_protocol protocol) {
+void exercise_protocol(ruvia::http_client_versions protocol) {
     asio::io_context io;
     ruvia::blocking_pool preparation({.thread_count_ = 1});
     auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &preparation});
@@ -1098,21 +1098,21 @@ void exercise_protocol(ruvia::http_client_protocol protocol) {
         try {
             co_await server.start();
             std::vector<target> destinations{{"http://127.0.0.1:" + std::to_string(plain.endpoint().port()),
-                "127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_protocol::http1_only,
+                "127.0.0.1:" + std::to_string(plain.endpoint().port()), ruvia::http_client_versions{.http2_ = false},
                 ruvia::http_protocol_version::http11, plain.endpoint()}};
 #if defined(RUVIA_ENABLE_HTTP2)
             destinations.push_back({"https://127.0.0.1:" + std::to_string(secure.endpoint().port()),
-                "127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only,
+                "127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false},
                 ruvia::http_protocol_version::http2, secure.endpoint()});
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
             destinations.push_back({"https://127.0.0.1:" + std::to_string(udp.endpoint().port()),
-                "127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_protocol::http3_only,
+                "127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true},
                 ruvia::http_protocol_version::http3, {}});
 #endif
             for (const auto& destination : destinations) {
-                if (destination.protocol_ != protocol) continue;
-                ruvia::http_client_config config{.base_url_ = destination.origin_, .protocol_ = destination.protocol_};
+                if (destination.versions_ != protocol) continue;
+                ruvia::http_client_config config{.base_url_ = destination.origin_, .versions_ = destination.versions_};
                 config.tls_.ca_file_ = identity.ca_file_;
                 ruvia::http_client client(attachment.loop(), config);
                 std::exception_ptr exchange_failure;
@@ -1171,17 +1171,17 @@ void exercise_protocol(ruvia::http_client_protocol protocol) {
 }  // namespace standalone_websocket_test
 
 TEST(Ruvia, independent_http1_websocket_handshake_frames_liveness_and_retirement) {
-    standalone_websocket_test::exercise_protocol(ruvia::http_client_protocol::http1_only);
+    standalone_websocket_test::exercise_protocol(ruvia::http_client_versions{.http2_ = false});
 }
 
 #if defined(RUVIA_ENABLE_HTTP2)
 TEST(Ruvia, independent_http2_websocket_handshake_frames_liveness_and_retirement) {
-    standalone_websocket_test::exercise_protocol(ruvia::http_client_protocol::http2_only);
+    standalone_websocket_test::exercise_protocol(ruvia::http_client_versions{.http1_ = false});
 }
 #endif
 
 #if defined(RUVIA_ENABLE_HTTP3)
 TEST(Ruvia, independent_http3_websocket_handshake_frames_liveness_and_retirement) {
-    standalone_websocket_test::exercise_protocol(ruvia::http_client_protocol::http3_only);
+    standalone_websocket_test::exercise_protocol(ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true});
 }
 #endif

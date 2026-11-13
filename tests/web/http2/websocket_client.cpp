@@ -170,7 +170,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
             .base_url_ = base_url,
             .write_timeout_ = std::chrono::milliseconds(2000),
             .read_timeout_ = std::chrono::milliseconds(2000),
-            .protocol_ = ruvia::http_client_protocol::http2_only};
+            .versions_ = ruvia::http_client_versions{.http1_ = false}};
         if (identity) {
             config.tls_.ca_file_ = identity->ca_file_;
             config.tls_.server_name_ = "localhost";
@@ -346,7 +346,7 @@ void exercise_closing_peer(closing_peer behavior) {
     const auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
-                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
             auto websocket = co_await client.client().websocket("/").connect();
@@ -496,7 +496,7 @@ void exercise_handshake_end(handshake_end mode) {
     const auto run = [&]() -> ruvia::task<void> {
         const std::pmr::string base_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.local_endpoint().port()), ruvia::process_resource()), ruvia::process_resource());
         ruvia::http_client client(attachment.loop(), {.base_url_ = base_url,
-                                                         .protocol_ = ruvia::http_client_protocol::http2_only});
+                                                         .versions_ = ruvia::http_client_versions{.http1_ = false}});
         std::exception_ptr failure;
         try {
             auto websocket = co_await client.client().websocket("/").lifecycle({.close_handshake_timeout_ = std::chrono::milliseconds(50)}).connect();

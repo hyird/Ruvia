@@ -941,6 +941,20 @@ void http3_quic_connection::reset_stream(
     }
 }
 
+void http3_quic_connection::reset_send_stream(
+    std::int64_t stream_id, std::uint64_t application_error_code) noexcept {
+    if (impl_->state_ != impl::close_state::open) {
+        return;
+    }
+    // nghttp3 stops producing the stream first, so no frame of it is written
+    // after the RESET_STREAM.
+    (void)impl_->http3_.shutdown_stream_write(stream_id);
+    const int result = ngtcp2_conn_shutdown_stream_write(impl_->connection_, 0, stream_id, application_error_code);
+    if (result != 0 && result != NGTCP2_ERR_STREAM_NOT_FOUND) {
+        (void)impl_->fail_transport(result);
+    }
+}
+
 void http3_quic_connection::stop_receiving(
     std::int64_t stream_id, std::uint64_t application_error_code) noexcept {
     if (impl_->state_ != impl::close_state::open) {

@@ -481,7 +481,15 @@ void http_client_connection::restart_http2_stream_read(http2_stream& stream) {
         schedule_http2_stream_timer(stream);
         return;
     }
-    const auto& read_timeout = stream.state_->effective_read_timeout_;
+    // An accepted tunnel is bounded by its own idle timeout, not read_timeout_.
+    const auto& read_timeout = stream.state_->tunnel_ && stream.state_->tunnel_->accepted_
+                                   ? stream.state_->tunnel_->config_.idle_timeout_
+                                   : stream.state_->effective_read_timeout_;
+    if (!read_timeout && stream.state_->tunnel_ && stream.state_->tunnel_->accepted_) {
+        stream.timer_.read_deadline_.reset();
+        schedule_http2_stream_timer(stream);
+        return;
+    }
     if (!read_timeout || stream.complete_ || stream.state_->informational_active_ ||
         (stream.state_->tunnel_ && stream.state_->tunnel_->receive_ended_)) {
         return;
@@ -796,8 +804,8 @@ void http_client_connection::on_http2_event(http2_event& event) {
                 // now on and this session admits no further request.
                 stream->retryable_ = true;
                 stream->http11_required_ = true;
-                pool_.require_http11();
-                if (pool_.prefers_http11()) {
+                if (alpn_ == client_alpn::negotiate) {
+                    pool_.require_http11();
                     http2_.mark_draining();
                 }
                 stream->signal_.notify();
@@ -835,7 +843,9 @@ void http_client_connection::on_http2_event(http2_event& event) {
         if (goaway->error() == http2_error_code::http11_required) {
             // Its unprocessed requests retry over a connection offering only
             // http/1.1.
-            pool_.require_http11();
+            if (alpn_ == client_alpn::negotiate) {
+                pool_.require_http11();
+            }
         }
         http2_.mark_draining();
     }
@@ -844,7 +854,8 @@ void http_client_connection::on_http2_event(http2_event& event) {
 void http_client_connection::on_http2_failure(
     const client_transport_result& transport, std::exception_ptr failure) noexcept {
     connected_ = false;
-    if (pool_.config().protocol_ == http_client_protocol::negotiate) {
+    // An h2-only offer reconnects as HTTP/2 again.
+    if (alpn_ != client_alpn::http2) {
         protocol_ = protocol_type::unknown;
     }
     auto stream_error = http_client_error::code_type::io_error;
@@ -900,8 +911,12 @@ void http_client_connection::remove_http2_stream(http2_stream& stream) noexcept 
     const bool both_halves_closed =
         stream.complete_ && !stream.failed() &&
         (stream.state_->output() != nullptr ? stream.state_->output()->ended_ : !stream.request_body_pending_);
+    // Once the complete response arrived, only the unfinished sending half
+    // ends, without error (RFC 9113 section 8.1), whether the caller abandoned
+    // its upload or the response made it unnecessary.
+    const bool response_kept = stream.complete_ && !stream.failed() && !stream.state_->abandoned_;
     if (!stream.retryable_ && stream.stream_id_ != 0 && !both_halves_closed) {
-        http2_.submit_reset(stream.stream_id_);
+        http2_.submit_reset(stream.stream_id_, response_kept ? http2_error_code::no_error : http2_error_code::cancel);
     }
     stream.timer_.cancel();
     if (stream.state_->http2_data_credit_) {
@@ -1155,7 +1170,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
             // RFC 9113 section 7 (Pingora downgrades and retries): the
             // retry reconnects this slot offering only http/1.1, once the
             // drained session retired.
-            if (pool_.prefers_http11() && request.output() == nullptr && may_retry) {
+            if (alpn_ == client_alpn::negotiate && pool_.prefers_http11() && request.output() == nullptr && may_retry) {
                 continue;
             }
             throw http_client_error(
@@ -1209,6 +1224,13 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
     // or upload queue retains the unsent suffix until it reaches the transport.
     const auto status = co_await http2_.send_data(
         stream.stream_id_, bytes, end_stream, http2_default_max_frame_size, stopped);
+    // Until the response head, and through an accepted tunnel, sending
+    // progress also proves the exchange alive: an origin may read the whole
+    // request before it answers.
+    if (status == http2_client_data_status::submitted && stream.timer_.read_deadline_ &&
+        (!stream.state_->head_ready_ || (stream.state_->tunnel_ && stream.state_->tunnel_->accepted_))) {
+        restart_http2_stream_read(stream);
+    }
     // A complete response may close the stream before its buffered request
     // content was sent; that response stands.
     if (status == http2_client_data_status::rejected && (upload != nullptr || !stream.complete_)) {

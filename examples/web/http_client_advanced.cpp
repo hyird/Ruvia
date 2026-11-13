@@ -65,7 +65,7 @@ ruvia::task<ruvia::http_client_response_bytes> exercise(
     // Construction performs no I/O. A client owns one fixed origin and binds
     // to this loop; its first request lazily establishes the connection.
     ruvia::http_client client(loop, config,
-        {.max_retained_bytes_ = 1024 * 1024, .max_in_flight_bytes_ = 4 * 1024 * 1024});
+        {.result_budget_ = {.max_retained_bytes_ = 1024 * 1024, .max_in_flight_bytes_ = 4 * 1024 * 1024}});
     std::optional<ruvia::http_client_response_bytes> retained;
     std::exception_ptr failure;
     try {
@@ -154,8 +154,8 @@ int main(int argc, char** argv) {
         const bool tls = env.get<bool>("RUVIA_CLIENT_TLS").value_or(false);
         ruvia::http_client_config config{
             .base_url_ = tls ? "https://localhost:8444" : "http://localhost:8093",
-            .protocol_ = protocol == "2" ? ruvia::http_client_protocol::http2_only
-                                         : ruvia::http_client_protocol::http1_only,
+            .versions_ = protocol == "2" ? ruvia::http_client_versions{.http1_ = false}
+                                         : ruvia::http_client_versions{.http2_ = false},
             .advertisements_ = {.receive_origins_ = tls, .receive_alternative_services_ = tls},
             .push_ = {.enabled_ = true},
             .tls_ = {.ca_file_ = env.path("RUVIA_TLS_CA")},

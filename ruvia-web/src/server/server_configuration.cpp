@@ -215,10 +215,12 @@ void validate_server_limits(const server_config& config) {
         "connection inbound buffer budget must be greater than zero");
     detail::ensure_positive_optional_durations("completion deadlines must be greater than zero",
         config.header_completion_timeout_, config.body_completion_timeout_);
-    detail::ensure_positive_size(config.http_client_result_budget_.max_retained_bytes_,
+    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_retained_bytes_,
         "HTTP client retained result byte budget must be greater than zero");
-    detail::ensure_positive_size(config.http_client_result_budget_.max_in_flight_bytes_,
+    detail::ensure_positive_size(config.http_client_worker_.result_budget_.max_in_flight_bytes_,
         "HTTP client in-flight response budget must be greater than zero");
+    detail::ensure_positive_size(config.http_client_worker_.max_concurrent_dns_refreshes_,
+        "HTTP client DNS refresh concurrency must be greater than zero");
 }
 
 [[nodiscard]] validated_http_server_configuration validate_http_server_configuration(

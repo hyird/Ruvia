@@ -161,6 +161,10 @@ public:
     // Abandons both directions of a request stream with RESET_STREAM and
     // STOP_SENDING carrying `application_error_code` (RFC 9114 §4.1.1).
     void reset_stream(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;
+    // Ends only the sending half of a stream with RESET_STREAM carrying
+    // `application_error_code`; its receiving half keeps delivering
+    // (RFC 9000 section 3.1, RFC 9114 section 4.1).
+    void reset_send_stream(std::int64_t stream_id, std::uint64_t application_error_code) noexcept;
     // Stops reading a request whose response no longer needs the rest of its
     // content (RFC 9114 §4.1.2 permits H3_NO_ERROR once the response is
     // complete).

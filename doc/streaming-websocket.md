@@ -425,7 +425,8 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
-- **Upgrade 协议选择**：`negotiate` 的 HTTPS origin 上，`upgrade()` 复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；`http2_only`、`http3_only` 返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
+- **Upgrade 协议选择**：`upgrade()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
+- **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 
 句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样只返回句柄（取句柄规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_handle)）；句柄的 `with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
@@ -433,12 +434,19 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 | 独立拥有者入口 | origin 选择 |
 | --- | --- |
-| `http_client(loop, config, result_budget = {})` | `.client()` 选择唯一配置，`.client(alias)` 可按别名选择 |
-| `http_client(loop, span<const http_client_config>, result_budget = {})` | `.client(alias)` 选择已配置 origin；无参 `.client()` 要求存在 `"default"` |
+| `http_client(loop, config, worker = {})` | `.client()` 选择唯一配置，`.client(alias)` 可按别名选择 |
+| `http_client(loop, span<const http_client_config>, worker = {})` | `.client(alias)` 选择已配置 origin；无参 `.client()` 要求存在 `"default"` |
 | `co_await owner.upsert(config, options = {})` | 增加或原子替换一个 alias；入口即拥有输入，TLS 凭据在绑定 `blocking_pool` 中准备，worker 上发布 |
 | `owner.remove(alias)` | 撤销一个 alias，返回是否存在；旧池取消并异步 join，其他 alias 的连接与 Cookie 不变 |
 
-配置集合在构造返回前拥有化；所有别名共用拥有者生命周期与结果预算，各自保留 TLS、连接、Cookie 及凭据策略。运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
+配置集合在构造返回前拥有化；所有别名共用拥有者生命周期与 `http_client_worker_config`（应用内为 `server_config::http_client_worker_`，每 worker 一份），各自保留 TLS、连接、Cookie 及凭据策略。
+
+| `http_client_worker_config` | 跨 alias 共享 |
+| --- | --- |
+| `result_budget_` | 收集结果的保留字节与在途响应字节预算 |
+| `max_idle_http1_` / `max_idle_multiplexed_` | 所有 alias 合计保留的空闲 HTTP/1 与 HTTP/2/3 连接（默认各 256），与 alias 级 `connection_limits_` 嵌套，取更紧者；超出时关闭任一 alias 中最久未用的空闲连接 |
+| `max_concurrent_dns_refreshes_` | 同时进行的后台 DNS 刷新查询（默认 8）；达到上限的刷新周期顺延到下一周期 |
+运行期只对变化的 alias 调用 `upsert()`；它取消被替换池的在途操作，未更新的池不重建。准备失败或取消不发布候选；不可中断的凭据解析完成并收束后才结束取消，`shutdown()` 等待全部准备与退休任务。
 
 自动重定向由 `.redirects(maximum)` 控制（默认最多 5 次）；未设置策略时，只跟随同一 origin 或当前拥有者已注册的其他 origin，未知 origin 或 HTTPS → HTTP 降级返回原响应。`.redirect_policy(task<bool>(http_origin_view, stop_token))` 在跨源跳转前等待调用方策略，策略可先 `co_await owner.upsert(...)` 注册目标；返回 `false` 保留原响应。回调须响应令牌，目标视图只借用到回调完成。跨源始终剥离 `Authorization`、`Proxy-Authorization` 与原源 `Cookie`，目标使用自身 TLS、连接池及凭据策略。
 
@@ -447,7 +455,8 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 | 拨号与身份分离 | `base_url_` 决定 Host / `:authority` 及默认 SNI、证书验证名；`dial_host_` / `dial_port_` 只覆盖物理目标。`tls_.server_name_` 可进一步覆盖 TLS 名称，不改 HTTP authority |
 | 请求级路由覆盖 | `http_client_request_options` 的 `authority_`（`host[:port]`，拒绝 userinfo）、`dial_host_` / `dial_port_`、`server_name_` 逐请求覆盖 alias 默认值；未设字段继承 alias，scheme 不可改。Host / `:authority` 取有效 authority，SNI 与证书名默认取其 host（IP 字面量不发 SNI、按 IP SAN 校验）；请求级拨号域名只在新建连接时解析并经 `address_validator_` |
 | 连接复用键 | 连接按 `(拨号 host, 拨号端口, TLS server name, ALPN 报价)` 复用，Host / `:authority` 不入键：HTTP/1 keep-alive 可跨 Host 复用；HTTP/2、HTTP/3 同一连接上发送其他 authority 时，由调用方保证所选证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。每个 alias 只有一个 TLS 上下文，QUIC 会话票据按路由隔离 |
-| 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；任何路由覆盖的请求既不记录也不使用 Alt-Svc，Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
+| 覆盖与 origin 策略 | 有效 authority 不同于 alias 时不使用 Cookie jar；Alt-Svc 按实际路由记录与使用（见 5.3），Server Push 只在 alias 路由的连接上接受。重定向按有效 origin 解析，跨 origin 跳转丢弃全部覆盖，同 origin 跳转保留 |
+| 无固定源站的出口 alias | `base_url_` 只写 scheme（`"https://"` / `"http://"`）时 alias 不绑定 origin：每个请求必须给 `authority_`（否则 `std::invalid_argument`），拨号默认取其 host 与端口；构造期要求 `address_validator_`，并拒绝 Cookie 配置与 `tls_.server_name_`；无 Cookie jar、无 Alt-Svc、无 DNS 快照（`update_dns` / `refresh_dns` 抛 `std::logic_error`）。`redirect_policy` 接受的同 scheme 跨源跳转仍经此 alias 并改用新 authority |
 | 按需连接与上限 | `connection_limits_` 中 `max_open_` 限定全部物理连接（含拨号中与空闲，`nullopt` 不限）；达上限时关闭最久未用的空闲连接，无空闲则在 `acquire_timeout_` 内等待。`max_idle_http1_` / `max_idle_multiplexed_`（默认各 64）限定跨路由保留的空闲 HTTP/1 与 HTTP/2/3 连接，超出立即关闭最久空闲者 |
 | 连接观测 | handle 的 `stats()` 中 `open_connections_` 为尚未回收的连接对象数，`idle_connections_` 为空闲连接数；启动不预建连接，关闭且无借用者的连接对象随即回收 |
 | SSRF 策略 | `address_validator_(numeric_ip, port)` 校验实际数值候选，再交给 TCP/QUIC 拨号；与重定向 origin 策略分开配置，也覆盖替代服务端点 |
@@ -457,10 +466,12 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 | 每请求阶段超时 | `.timeouts(http_client_phase_timeouts)` 分别覆盖 `connect_`、`read_`、`write_`、`acquire_`；默认继承，`http_client_timeout_override::after(duration)` 替换，`disabled()` 只禁用该阶段 |
 | 独立探测连接 | `.fresh_connection()` 使用不借用、也不归还业务复用池的物理连接，支持 HTTP/1、HTTP/2、HTTP/3 |
 | 统一请求配置 | `.configure(http_client_request_options)` 设置上述请求策略；CONNECT 构造器也提供该入口 |
-| DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析，`dns_refresh_interval_` 启用后台刷新 |
+| DNS 观察与更新 | handle 的 `dns_snapshot()` 返回自有数值地址；`update_dns(addresses)` 同步校验并发布外部快照，`co_await refresh_dns()` 主动解析 alias 拨号名。`dns_refresh_interval_` 每周期只重新解析仍有存活连接的拨号域名（含请求级 `dial_host_`，IP 字面量不查询，无连接不发查询），受 worker 级并发上限约束；答案不再包含连接所用地址时退役该连接。`stats().dns_refreshes_` 计数后台查询 |
 | 定向断连 | handle 的 `close_connection(id)` 按实际物理连接 ID 关闭，旧 ID 不会命中新连接；共享多路复用连接上的流一并终止 |
 
 - **总期限独立**：阶段覆盖不改变 `request_timeout_` 或宿主取消。总期限仍计入慢下游与 1xx 回调等待；代理若不需要整体时限，须在 origin 配置中显式设为 `nullopt`。读无活动预算在等待调用方消费正文时暂停。
+- **慢速上传**：最终响应头到达前，请求内容的写出进展同样重启读无活动预算：等待响应头的无活动期从最后一次双向进展起算，源站读完全部请求体后再应答不会被误判超时。
+- **隧道空闲**：CONNECT / Upgrade 隧道建立后不再受 `read_timeout_` 约束，只受 `http_client_tunnel_config::idle_timeout_`（默认 `nullopt` 不限）与总期限约束；任一方向的字节进展都重启它。
 - **1xx 背压边界**：HTTP/2、HTTP/3 只背压当前响应，不阻塞其他流；回调异常终止该交换。回调不得反过来等待本交换，或依赖它释放池容量的操作。
 - **地址退役**：刷新失败保留旧快照；地址集合改变时关闭空闲连接和隧道，活动 HTTP/1 完成本次后关闭，HTTP/2、HTTP/3 停止接新流并排空。等待旧连接退役仍计入 acquire 预算。
 - **独立连接预算**：fresh 请求的独立连接同样计入 `max_open_`，用后关闭并回收。
@@ -468,9 +479,19 @@ WebSocket 构造器通过 `.header()` / `.headers()`、`.subprotocol()`、`.defl
 
 ### 5.3 协议选择与扩展
 
-`http_client_config::protocol_` 可限定为 `http1_only`、`http2_only` 或 `http3_only`。TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；自动协商可在旧服务端使用 HTTP/1.1，`http2_only` 不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
+`http_client_versions`（`http1_` / `http2_` / `http3_`）是请求可用的版本集合：`http_client_config::versions_` 给 alias 默认值（{1, 2}），`http_client_request_options::versions_` 可逐请求覆盖，一个 alias 即可服务不同档位的站点。空集合、未编译进库的版本或明文下的 HTTP/3 抛 `std::invalid_argument`。
 
-`negotiate` 模式从 alias 路由 HTTPS 响应的 `Alt-Svc` 缓存 `h3` 替代地址，后续 alias 路由请求尝试 QUIC，证书身份仍按原始 origin 校验；带路由覆盖的请求只走 TCP，`http3_only` 的覆盖请求按其路由直接建立 QUIC 连接。替代端点在请求发送前连接失败时淘汰该缓存项并回落至原站 TCP/TLS；显式 `http3_only` 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
+| 集合 | https | http |
+| --- | --- | --- |
+| 含 1 或 2 | TCP 上 TLS ALPN 报价集合 ∩ {1, 2}（`http/1.1` / `h2`），ALPN 报价入连接复用键 | 含 1 走 HTTP/1.1；仅 {2} 为 prior-knowledge h2c |
+| 含 3 且含 1 或 2 | 先走 TCP，同一路由的认证响应通告 `Alt-Svc` `h3` 后升级 QUIC | 不允许 |
+| 仅 {3} | 直连路由的 QUIC | 不允许 |
+
+TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；含 1 的协商可在旧服务端使用 HTTP/1.1，仅 h2 的报价不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
+
+- **Alt-Svc 按路由**：替代服务按实际路由（拨号 host、拨号端口、TLS server name）记录与查找，包括 alias 原路由与请求级覆盖；只采信 TLS 认证的响应，alt-authority 省略 host 时取该路由的拨号 host，QUIC 用同一 server name 校验证书。不含 3 的请求不记录、不升级。
+- **容量**：条目数受 `http3_.max_alt_svc_entries_` 跨路由约束，最久未用者先淘汰；`Alt-Svc: clear` 只清除该路由。
+- **失败回落**：替代端点在请求发送前连接或握手失败时，请求回落该路由的 TCP，不因此失败；该替代条目 5 分钟内标记不可用、不再尝试，重新通告也不解除（RFC 7838 §2.4）。仅 {3} 不回落。升级与回落共享原请求期限，不降级为明文 HTTP。
 
 客户端 0-RTT 默认关闭，需显式设置 `http3_.enable_early_data_ = true`；仅在持有同一路由（拨号目标与 server name）已认证连接保存的 TLS 票据、QUIC 传输参数与对端 SETTINGS 时尝试；票据按最久未用淘汰，条目数上限同 `max_idle_multiplexed_`（至少 1）。只有无正文、非流式上传、非隧道的 `GET` / `HEAD` / `OPTIONS` / `TRACE` 请求可提前发送。TLS 拒绝早期数据或服务器返回 `425` 时，等待握手完成后最多重发一次 1-RTT 请求，并继续受原请求期限约束；其他请求不自动进行早期重放。
 

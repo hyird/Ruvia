@@ -51,6 +51,9 @@ template <typename owner_type>
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
+// How long an alternative service that failed to connect stays unused.
+constexpr std::chrono::minutes alternative_service_retry_delay{5};
+
 // RFC 7838 field members: commas and semicolons inside quoted strings do not
 // delimit members. Unsupported ALPN identifiers are skipped, never downgraded.
 std::string_view take_component(std::string_view& text, char delimiter) noexcept {
@@ -126,15 +129,16 @@ struct http_client_pool::admission_waiter final {
 };
 
 http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
-    http_client_config_storage config, std::shared_ptr<http_client_result_budget_domain> result_budget_domain)
+    http_client_config_storage config, const http_client_worker_services& services)
     : io_context_(io_context),
       worker_(worker_value),
       config_(std::move(config)),
-      origin_(config_.origin()),
+      origin_(config_.fixed_origin_ ? std::optional(config_.origin()) : std::nullopt),
       policy_(config_),
       advertisements_(worker_, config_.advertisements_),
       pushes_(process_resource()),
-      result_budget_domain_(std::move(result_budget_domain)),
+      result_budget_domain_(services.result_budget_),
+      worker_limits_(services.limits_),
       tls_context_(asio::ssl::context::tls_client),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),
       background_tasks_(worker_, {.resource_ = process_resource()}),
@@ -144,7 +148,9 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       dns_changed_(worker_) {
     // Connections are created on demand; a DNS alias still needs its lookup
     // pool from the start.
-    require_client_host_lookup(config_.dial_host_, worker_);
+    if (!config_.dial_host_.empty()) {
+        require_client_host_lookup(config_.dial_host_, worker_);
+    }
     if (config_.scheme_ == http_scheme::https) {
         configure_client_tls_context(*tls_context_.native_handle(), config_.tls_);
     }
@@ -208,14 +214,18 @@ void http_client_pool::install_addresses(client_resolve_result result) {
     dns_addresses_ = std::move(result);
     ++dns_revision_;
     if (had_addresses && changed) {
+        // Only connections dialed through this snapshot: request routes with
+        // their own dial host keep theirs.
         for (auto& connection : connections_) {
-            if (connection) {
+            if (connection && connection->transport_.endpoint().port_ == config_.dial_port_ &&
+                http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, config_.dial_host_)) {
                 connection->retire_addresses();
             }
         }
 #ifdef RUVIA_ENABLE_HTTP3
         for (auto& connection : http3_connections_) {
-            if (connection) {
+            if (connection && connection->route().port_ == config_.dial_port_ &&
+                http_ascii_equals_ignore_case(connection->route().host_, config_.dial_host_)) {
                 connection->retire_addresses();
             }
         }
@@ -228,6 +238,7 @@ void http_client_pool::install_addresses(client_resolve_result result) {
 
 void http_client_pool::update_dns(std::span<const http_client_endpoint_address> addresses) {
     require_accepting();
+    require_fixed_dial();
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
@@ -286,6 +297,7 @@ task<client_resolve_result> http_client_pool::resolve_addresses(std::string_view
 
 task<void> http_client_pool::refresh_dns(operation_options options) {
     require_accepting();
+    require_fixed_dial();
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
     }
@@ -336,9 +348,105 @@ void http_client_pool::schedule_dns_refresh() {
         });
 }
 
+namespace {
+[[nodiscard]] bool resolved_to(const client_resolve_result& result, const asio::ip::address& address) noexcept {
+    if (result.literal_) {
+        return result.literal_->address() == address;
+    }
+    return std::ranges::any_of(result.addresses_, [&address](const auto& entry) { return entry.endpoint().address() == address; });
+}
+}  // namespace
+
+void http_client_pool::retire_unresolved(std::string_view host, std::uint16_t port, const client_resolve_result& result) noexcept {
+    for (auto& connection : connections_) {
+        if (connection && connection->connected_ && connection->transport_.endpoint().port_ == port &&
+            http_ascii_equals_ignore_case(connection->transport_.endpoint().host_, host) &&
+            !resolved_to(result, connection->transport_.peer_endpoint().address())) {
+            connection->retire_addresses();
+        }
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (auto& connection : http3_connections_) {
+        if (connection == nullptr || connection->route().port_ != port ||
+            !http_ascii_equals_ignore_case(connection->route().host_, host)) {
+            continue;
+        }
+        if (const auto peer = connection->peer_address(); peer && !resolved_to(result, *peer)) {
+            connection->retire_addresses();
+        }
+    }
+#endif
+}
+
+task<void> http_client_pool::refresh_live_routes() {
+    // Distinct DNS dial targets of the live connections; IP literals and
+    // routes without a connection cost no query.
+    std::pmr::vector<std::pair<std::pmr::string, std::uint16_t>> targets(process_resource());
+    const auto add = [&targets](std::string_view host, std::uint16_t port) {
+        if (!client_host_needs_lookup(host)) {
+            return;
+        }
+        for (const auto& target : targets) {
+            if (target.second == port && http_ascii_equals_ignore_case(target.first, host)) {
+                return;
+            }
+        }
+        targets.emplace_back(std::pmr::string(host, process_resource()), port);
+    };
+    for (const auto& connection : connections_) {
+        if (connection && (connection->connected_ || connection->users_ != 0)) {
+            add(connection->transport_.endpoint().host_, connection->transport_.endpoint().port_);
+        }
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (const auto& connection : http3_connections_) {
+        if (connection && (connection->connection_id() != 0 || connection->users_ != 0)) {
+            add(connection->route().host_, connection->route().port_);
+        }
+    }
+#endif
+    for (const auto& [host, port] : targets) {
+        // A worker running its bound of refreshes defers the rest to the next period.
+        if (closing_ || !worker_limits_->try_begin_dns_refresh()) {
+            co_return;
+        }
+        struct refresh_slot final {
+            http_client_worker_limits& limits_;
+            ~refresh_slot() {
+                limits_.end_dns_refresh();
+            }
+        } slot{*worker_limits_};
+        ++dns_refreshes_;
+        client_host_resolver resolver(worker_);
+        const operation_timeout timeout(config_.connect_timeout_);
+        const auto revision = dns_revision_;
+        auto pending = resolver.resolve(host, port, timeout, dns_stop_.token());
+        client_resolve_result result;
+        if (auto* immediate = std::get_if<client_resolve_result>(&pending)) {
+            result = std::move(*immediate);
+        } else {
+            result = co_await std::move(std::get<task<client_resolve_result>>(pending));
+        }
+        if (closing_ || result.error_ || (!result.literal_ && result.addresses_.empty())) {
+            continue;
+        }
+        if (host == config_.dial_host_ && port == config_.dial_port_) {
+            if (revision == dns_revision_) {
+                try {
+                    install_addresses(std::move(result));
+                } catch (const http_client_error&) {
+                    // A snapshot the validator rejects leaves the previous one.
+                }
+            }
+        } else {
+            retire_unresolved(host, port, result);
+        }
+    }
+}
+
 task<void> http_client_pool::background_refresh_dns() {
     try {
-        co_await refresh_dns({});
+        co_await refresh_live_routes();
     } catch (...) {
         if (!closing_) {
             report_unhandled_failure("HTTP DNS refresh", std::current_exception());
@@ -370,6 +478,7 @@ bool http_client_pool::close_connection(std::uint64_t id) noexcept {
 
 http_client_pool::~http_client_pool() {
     close_now();
+    worker_limits_->leave(*this);
     cancellation_target_->detach(*this);
 }
 
@@ -403,6 +512,7 @@ task<void> http_client_pool::join() {
     }
     background_joined_ = true;
     dns_refresh_timer_.cancel();
+    worker_limits_->leave(*this);
     std::exception_ptr failure;
     try {
         co_await background_tasks_.join();
@@ -466,6 +576,7 @@ http_client_stats http_client_pool::stats() const noexcept {
         .idle_connections_with_pending_data_ = idle_connections_with_pending_data_,
         .open_connections_ = open_connections_,
         .idle_connections_ = idle,
+        .dns_refreshes_ = dns_refreshes_,
         .dropped_advertisements_ = advertisements_.dropped(),
         .received_pushes_ = received_pushes_,
         .rejected_pushes_ = rejected_pushes_};
@@ -629,6 +740,12 @@ void http_client_pool::require_accepting() const {
     }
 }
 
+void http_client_pool::require_fixed_dial() const {
+    if (config_.dial_host_.empty()) {
+        throw std::logic_error("HTTP client alias without a fixed origin or dial host has no DNS snapshot");
+    }
+}
+
 void http_client_pool::require_open() const {
     if (closing_) {
         throw http_client_error(http_client_error::code_type::closing, "HTTP client pool is closed");
@@ -658,6 +775,7 @@ void http_client_pool::connection_retired() noexcept {
 
 void http_client_pool::start_reclaimer() {
     if (!reclaimer_started_) {
+        worker_limits_->join(*this);
         background_tasks_.spawn(run_reclaimer());
         reclaimer_started_ = true;
     }
@@ -707,17 +825,48 @@ void http_client_pool::mark_idle(std::uint64_t& idle_order, bool multiplexed) no
     if (idle_order == 0) {
         ++(multiplexed ? idle_multiplexed_ : idle_http1_);
     }
-    idle_order = ++idle_clock_;
+    idle_order = worker_limits_->next_idle_order();
     enforce_idle_limits();
+}
+
+std::size_t http_client_pool::idle_count(bool multiplexed) const noexcept {
+    return multiplexed ? idle_multiplexed_ : idle_http1_;
+}
+
+std::optional<std::uint64_t> http_client_pool::least_recent_idle(bool multiplexed) const noexcept {
+    std::optional<std::uint64_t> oldest;
+    for (const auto& owner : connections_) {
+        if (owner && owner->users_ == 0 && owner->idle() &&
+            (owner->protocol_ != http_client_connection::protocol_type::http1) == multiplexed &&
+            (!oldest || owner->idle_order_ < *oldest)) {
+            oldest = owner->idle_order_;
+        }
+    }
+#ifdef RUVIA_ENABLE_HTTP3
+    for (const auto& owner : http3_connections_) {
+        if (multiplexed && owner && owner->users_ == 0 && owner->idle() && (!oldest || owner->idle_order_ < *oldest)) {
+            oldest = owner->idle_order_;
+        }
+    }
+#endif
+    return oldest;
 }
 
 void http_client_pool::enforce_idle_limits() noexcept {
     const auto& limits = config_.connection_limits_;
-    if (idle_http1_ <= limits.max_idle_http1_ && idle_multiplexed_ <= limits.max_idle_multiplexed_) {
-        return;
+    if (idle_http1_ > limits.max_idle_http1_ || idle_multiplexed_ > limits.max_idle_multiplexed_) {
+        recount_idle();
+        while (idle_http1_ > limits.max_idle_http1_ && close_least_recent_idle(false)) {
+        }
+        while (idle_multiplexed_ > limits.max_idle_multiplexed_ && close_least_recent_idle(true)) {
+        }
     }
+    worker_limits_->enforce_idle_limits();
+}
+
+void http_client_pool::recount_idle() noexcept {
     // The counters are upper bounds: a connection also stops idling by
-    // closing on its own. Recount before closing anything.
+    // closing on its own.
     idle_http1_ = 0;
     idle_multiplexed_ = 0;
     for (auto& owner : connections_) {
@@ -742,10 +891,6 @@ void http_client_pool::enforce_idle_limits() noexcept {
         ++idle_multiplexed_;
     }
 #endif
-    while (idle_http1_ > limits.max_idle_http1_ && close_least_recent_idle(false)) {
-    }
-    while (idle_multiplexed_ > limits.max_idle_multiplexed_ && close_least_recent_idle(true)) {
-    }
 }
 
 bool http_client_pool::close_least_recent_idle(std::optional<bool> multiplexed) noexcept {
@@ -839,28 +984,27 @@ task<void> http_client_pool::wait_for_admission(const operation_timeout& acquire
     co_await admission_signal_.wait();
 }
 
-bool http_client_pool::requires_http11_connection(const http_client_request_storage& request) const noexcept {
-#ifdef RUVIA_ENABLE_HTTP2
-    // HTTP/1.1 Upgrade never runs over h2 (RFC 9113 section 8.6): a negotiating
-    // TLS origin gets a connection offering only http/1.1.
-    return request.is_upgrade() && config_.protocol_ == http_client_protocol::negotiate &&
-           config_.scheme_ == http_scheme::https;
-#else
-    (void)request;
-    return false;
-#endif
+client_alpn http_client_pool::tcp_offer(const http_client_request_storage& request) const noexcept {
+    const auto& versions = request.route().versions_;
+    // HTTP/1.1 Upgrade never runs over h2 (RFC 9113 section 8.6).
+    if (request.is_upgrade() || !versions.http2_) {
+        return client_alpn::http11;
+    }
+    if (!versions.http1_) {
+        return client_alpn::http2;
+    }
+    // Plaintext offers nothing to negotiate: HTTP/1.1 is preferred to h2c.
+    return config_.scheme_ == http_scheme::http || prefers_http11_ ? client_alpn::http11 : client_alpn::negotiate;
 }
 
 task<http_client_connection*> http_client_pool::acquire_tcp_connection(const http_client_request_storage& request,
     const operation_timeout& acquire_timeout, stop_token stop, http_client_response_state& state_value,
     request_admission& admission) {
     const auto& route = request.route();
-    const bool http11_only = requires_http11_connection(request);
+    const auto offer = tcp_offer(request);
     const bool fresh = request.options_.fresh_connection_;
 #ifdef RUVIA_ENABLE_HTTP2
-    const bool may_multiplex = !http11_only && (config_.protocol_ == http_client_protocol::http2_only ||
-                                                   (config_.protocol_ == http_client_protocol::negotiate &&
-                                                       config_.scheme_ == http_scheme::https && !prefers_http11_));
+    const bool may_multiplex = offer == client_alpn::http2 || offer == client_alpn::negotiate;
 #endif
     admission_waiter waiter(*this, state_value, stop);
     for (;;) {
@@ -870,7 +1014,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
         bool negotiating = false;
         for (auto& owner : connections_) {
             auto* const candidate = owner.get();
-            if (fresh || candidate == nullptr || !candidate->serves(route.dial_host_, route.dial_port_, route.server_name_, http11_only)) {
+            if (fresh || candidate == nullptr || !candidate->serves(route.dial_host_, route.dial_port_, route.server_name_, offer)) {
                 continue;
             }
             if (candidate->users_ == 0 && candidate->idle_unconnected()) {
@@ -909,7 +1053,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
             const auto index = free_connection_position(connections_);
             connections_[index] = make_pmr_object<http_client_connection>(process_resource(), *this, index,
                 ++next_connection_serial_, route.dial_host_, route.dial_port_, route.server_name_, route.alias_transport_,
-                http11_only);
+                offer);
             ++open_connections_;
             selected = connections_[index].get();
             selected->fresh_ = fresh;
@@ -974,7 +1118,14 @@ task<void> http_client_pool::execute_request_into(
         ++failed_requests_;
         throw;
     }
-    state_value->alias_route_ = request.route().alias_route_;
+    // The route is borrowed by response heads published during this exchange.
+    struct route_binding final {
+        http_client_response_state& state_;
+        ~route_binding() {
+            state_.route_ = nullptr;
+        }
+    } route_binding_value{*state_value};
+    state_value->route_ = &request.route();
     const operation_timeout timeout(options.timeout_.has_value() ? options.timeout_ : config_.request_timeout_);
     const std::array stop_tokens{request.host_stop(), options.stop_token_, dns_stop_.token()};
     stop_group cancellation(stop_tokens);
@@ -989,8 +1140,7 @@ task<void> http_client_pool::execute_request_into(
     request_admission admission{*this};
     try {
         require_open();
-        if (request.is_upgrade() && (config_.protocol_ == http_client_protocol::http2_only ||
-                                        config_.protocol_ == http_client_protocol::http3_only)) {
+        if (request.is_upgrade() && !request.route().versions_.http1_) {
             throw http_client_error(http_client_error::code_type::protocol_unavailable, "HTTP Upgrade requires HTTP/1.1");
         }
 #ifdef RUVIA_ENABLE_HTTP3
@@ -1234,26 +1384,39 @@ void http_client_pool::release_response_data(http_client_response_state& state_v
 #endif
 }
 
-void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
+void http_client_pool::observe_alt_svc(const http_client_route& route, std::span<const http_header> fields) {
 #ifdef RUVIA_ENABLE_HTTP3
-    if (config_.protocol_ != http_client_protocol::negotiate || config_.scheme_ != http_scheme::https) {
+    // Only TLS-authenticated responses of a fixed-origin alias, for requests
+    // that may use HTTP/3 beside a TCP version, advertise alternatives.
+    if (config_.scheme_ != http_scheme::https || !config_.fixed_origin_ || !route.versions_.http3_ ||
+        (!route.versions_.http1_ && !route.versions_.http2_)) {
         return;
     }
+    const auto names_route = [&route](const alternative_service& service) noexcept {
+        return service.route_port_ == route.dial_port_ && http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
+               http_ascii_equals_ignore_case(service.server_name_, route.server_name_);
+    };
+    // The route's failed alternatives stay unavailable across a re-advertisement.
+    std::pmr::vector<alternative_service> previous(process_resource());
     bool first = true;
     for (const auto& field : fields) {
         if (!http_ascii_equals_ignore_case(field.name(), "alt-svc")) {
             continue;
         }
         if (first) {
-            alternative_services_.clear();
+            for (const auto& service : alternative_services_) {
+                if (names_route(service)) {
+                    previous.push_back(service);
+                }
+            }
+            std::erase_if(alternative_services_, names_route);
             first = false;
         }
         auto value = http_trim_ows(field.value());
         if (value == "clear") {
-            alternative_services_.clear();
             return;
         }
-        while (!value.empty() && alternative_services_.size() < config_.http3_.max_alt_svc_entries_) {
+        while (!value.empty()) {
             auto member = take_component(value, ',');
             auto authority = take_component(member, ';');
             const auto equals = authority.find('=');
@@ -1281,7 +1444,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
                     continue;
                 }
                 port = static_cast<std::uint16_t>(parsed_port);
-                host = config_.host_;
+                host = route.dial_host_;
             } else {
                 const auto parsed_authority = parse_http_authority(authority);
                 if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
@@ -1295,7 +1458,7 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
                     host.remove_suffix(1);
                 }
                 if (host.empty()) {
-                    host = config_.host_;
+                    host = route.dial_host_;
                 }
             }
             if (host.size() > 253) {
@@ -1339,10 +1502,28 @@ void http_client_pool::observe_alt_svc(std::span<const http_header> fields) {
             const auto now = std::chrono::steady_clock::now();
             const auto maximum = std::chrono::duration_cast<std::chrono::seconds>((std::chrono::steady_clock::time_point::max)() - now).count();
             const auto seconds = (std::min)(age, static_cast<std::uint64_t>(maximum));
-            alternative_services_.push_back({std::pmr::string(host, process_resource()), port, now + std::chrono::seconds(seconds)});
+            if (alternative_services_.size() == config_.http3_.max_alt_svc_entries_) {
+                // One bound across routes: the least recently used entry goes.
+                alternative_services_.erase(std::ranges::min_element(alternative_services_, {}, &alternative_service::used_));
+            }
+            alternative_service entry{.route_host_ = std::pmr::string(route.dial_host_, process_resource()),
+                .route_port_ = route.dial_port_,
+                .server_name_ = std::pmr::string(route.server_name_, process_resource()),
+                .host_ = std::pmr::string(host, process_resource()),
+                .port_ = port,
+                .expires_ = now + std::chrono::seconds(seconds),
+                .broken_until_ = {},
+                .used_ = ++alternative_clock_};
+            for (const auto& failed : previous) {
+                if (failed.port_ == port && http_ascii_equals_ignore_case(failed.host_, host)) {
+                    entry.broken_until_ = failed.broken_until_;
+                }
+            }
+            alternative_services_.push_back(std::move(entry));
         }
     }
 #else
+    (void)route;
     (void)fields;
 #endif
 }
@@ -1377,27 +1558,36 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     const operation_timeout& timeout, const operation_timeout& acquire_timeout, stop_token stop,
     http_client_response_state& state, request_admission& admission) {
     require_open();
-    const bool required = config_.protocol_ == http_client_protocol::http3_only;
-    if (!required && config_.protocol_ != http_client_protocol::negotiate) {
-        co_return false;
-    }
     const auto& route = request.route();
-    // The Alt-Svc cache belongs to the alias route: requests with route
-    // overrides neither record nor consume it, and Upgrade stays on HTTP/1.1.
-    if (!required && (!route.alias_route_ || request.is_upgrade())) {
+    const auto& versions = route.versions_;
+    if (!versions.http3_) {
         co_return false;
     }
-    const auto now = std::chrono::steady_clock::now();
-    std::erase_if(alternative_services_, [now](const alternative_service& service) { return service.expires_ <= now; });
-    if (!required && alternative_services_.empty()) {
-        co_return false;
+    // HTTP/3 alone dials the route; beside a TCP version it follows only an
+    // Alt-Svc this route advertised, and Upgrade stays on HTTP/1.1.
+    const bool required = !versions.http1_ && !versions.http2_;
+    // Another response can replace the cache while DNS or the handshake waits,
+    // so the selected endpoint is owned across suspension. TLS verifies the
+    // route's server name, never the advertised transport name.
+    std::pmr::string host(process_resource());
+    std::uint16_t port = 0;
+    if (required) {
+        host.assign(route.dial_host_);
+        port = route.dial_port_;
+    } else {
+        if (request.is_upgrade() || !config_.fixed_origin_) {
+            co_return false;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        std::erase_if(alternative_services_, [now](const alternative_service& service) { return service.expires_ <= now; });
+        auto* const alternative = find_alternative_service(route, now);
+        if (alternative == nullptr) {
+            co_return false;
+        }
+        alternative->used_ = ++alternative_clock_;
+        host.assign(alternative->host_);
+        port = alternative->port_;
     }
-    // Another response can replace the cache while DNS or the handshake waits.
-    // The selected endpoint is therefore owned across suspension; TLS always
-    // verifies the route's server name, never this advertised transport name.
-    const bool configured_endpoint = required || config_.dial_overridden_;
-    std::pmr::string host(configured_endpoint ? route.dial_host_ : std::string_view(alternative_services_.front().host_), process_resource());
-    const auto port = configured_endpoint ? route.dial_port_ : alternative_services_.front().port_;
     const bool fresh = request.options_.fresh_connection_;
     http3_client_connection* selected = nullptr;
     {
@@ -1448,9 +1638,29 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     } use{*this, *selected, fresh};
     const auto used = co_await selected->execute(request, !required, timeout, acquire_timeout, stop, state);
     if (!used) {
-        std::erase_if(alternative_services_, [&](const alternative_service& service) { return service.host_ == host && service.port_ == port; });
+        // RFC 7838 section 2.4: the request falls back to TCP, and the failed
+        // alternative is not tried again for a while.
+        for (auto& service : alternative_services_) {
+            if (service.port_ == port && service.host_ == host && service.route_port_ == route.dial_port_ &&
+                http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
+                http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
+                service.broken_until_ = std::chrono::steady_clock::now() + alternative_service_retry_delay;
+            }
+        }
     }
     co_return used;
+}
+
+http_client_pool::alternative_service* http_client_pool::find_alternative_service(
+    const http_client_route& route, std::chrono::steady_clock::time_point now) noexcept {
+    for (auto& service : alternative_services_) {
+        if (service.broken_until_ <= now && service.route_port_ == route.dial_port_ &&
+            http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
+            http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
+            return &service;
+        }
+    }
+    return nullptr;
 }
 
 task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input(http_client_response_state& state) {

@@ -50,6 +50,8 @@ class response_stream_writer;
 
 namespace ruvia::detail {
 
+struct http_client_route;
+
 class http_client_pool;
 class http_client_response_memory_domain;
 
@@ -155,6 +157,8 @@ public:
     http_client_output_queue output_;
     http_client_upload_config config_;
     std::pmr::vector<http_header> trailers_;
+    // The caller stopped sending through abandon(); the response stays valid.
+    bool abandoned_{};
     // Upload-only failures belong to the writer, not to an otherwise valid
     // response. HTTP/1 may record them while the response is still arriving;
     // late failures in any protocol must preserve an already validated EOF.
@@ -462,8 +466,9 @@ public:
     std::size_t connection_index_{0};
     std::uint64_t connection_serial_{0};
     std::uint64_t connection_generation_{0};
-    // The request used the alias route: its response may update Alt-Svc.
-    bool alias_route_{true};
+    // The request's route while its exchange runs: a final head may teach it
+    // Alt-Svc. Null for pushes and once the request finished.
+    const http_client_route* route_{};
     std::uint64_t request_id_{0};
     std::uint64_t cancellation_id_{0};
     std::uint64_t stream_id_{0};

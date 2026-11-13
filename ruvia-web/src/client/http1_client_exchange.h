@@ -10,6 +10,7 @@
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_io_buffer.h"
 
@@ -63,6 +64,10 @@ private:
     // One transport write of all `parts` (a head, or a framed upload chunk:
     // prefix, payload, suffix) under the write timeout.
     [[nodiscard]] task<void> write(std::span<const asio::const_buffer> parts, const operation_timeout& timeout);
+    // Restarts the exchange-level inactivity bound, when armed: read
+    // inactivity counted from the last progress in either direction.
+    void restart_inactivity() noexcept;
+    void stop_inactivity() noexcept;
     // Appends at most `max_bytes` read from the transport to `target` under the
     // read inactivity bound; returns the read, which is not ok() at the peer's
     // end of stream, and throws any other transport failure.
@@ -73,6 +78,11 @@ private:
     http_client_pool& pool_;
     http_client_connection& connection_;
     const http_client_response_state* response_{};
+    // Armed while request content may still be sent before the final response
+    // head (read_timeout_), and through an accepted tunnel (its idle_timeout_).
+    std::optional<timeout_duration> inactivity_bound_;
+    // Last: destroyed first, so its expiry never sees a retiring exchange.
+    worker_timer_registration inactivity_timer_;
 };
 
 }  // namespace ruvia::detail

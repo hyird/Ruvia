@@ -111,7 +111,7 @@ void exercise_client_connect(unsigned mode) {
         };
         tasks.spawn(serve());
         const std::pmr::string client_url = std::move(std::pmr::string("http://127.0.0.1:", ruvia::process_resource()).append(std::to_string(acceptor.local_endpoint().port())));
-        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = client_url, .request_timeout_ = std::chrono::seconds(5), .max_response_bytes_ = 16384, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         try {
             if (mode == 3) {
                 bool unavailable = false;

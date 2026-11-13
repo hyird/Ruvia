@@ -111,24 +111,24 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
             co_await other.start();
             struct target {
                 std::string origin_;
-                ruvia::http_client_protocol protocol_;
+                ruvia::http_client_versions versions_;
                 ruvia::http_protocol_version version_;
             };
             std::vector<target> targets{
-                {"http://127.0.0.1:" + std::to_string(plain), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
-                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
-                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http1_only, ruvia::http_protocol_version::http11},
+                {"http://127.0.0.1:" + std::to_string(plain), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11},
+                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11},
+                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http2_ = false}, ruvia::http_protocol_version::http11},
 #if defined(RUVIA_ENABLE_HTTP2)
-                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2},
-                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_protocol::http2_only, ruvia::http_protocol_version::http2},
+                {"http://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2},
+                {"https://127.0.0.1:" + std::to_string(secure.endpoint().port()), ruvia::http_client_versions{.http1_ = false}, ruvia::http_protocol_version::http2},
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)
-                {"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_protocol::http3_only, ruvia::http_protocol_version::http3},
+                {"https://127.0.0.1:" + std::to_string(udp.endpoint().port()), ruvia::http_client_versions{.http1_ = false, .http2_ = false, .http3_ = true}, ruvia::http_protocol_version::http3},
 #endif
             };
             for (const auto& target : targets) {
                 ruvia::http_client_config config{.base_url_ = target.origin_};
-                config.protocol_ = target.protocol_;
+                config.versions_ = target.versions_;
                 config.tls_.ca_file_ = identity.ca_file_;
                 ruvia::http_client client(attachment.loop(), config);
                 std::exception_ptr client_failure;
@@ -180,7 +180,7 @@ TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_service
         accepts.spawn(adopt_one(server, http));
         std::exception_ptr failure;
         const std::string origin = "http://127.0.0.1:" + std::to_string(http.local_endpoint().port());
-        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .protocol_ = ruvia::http_client_protocol::http1_only});
+        ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         asio::ip::tcp::socket peer(io);
         try {
             auto connected = co_await ruvia::async_asio([&](auto completion) { peer.async_connect(raw.local_endpoint(), std::move(completion)); });

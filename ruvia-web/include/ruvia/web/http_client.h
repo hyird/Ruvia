@@ -473,6 +473,13 @@ public:
     [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}) &;
     task<void> end(std::span<const http_header_view> = {}) && = delete;
     [[nodiscard]] bool complete() const noexcept;
+    // Stops sending without failing the exchange: the request content stays
+    // incomplete and response() remains consumable. HTTP/1 closes the
+    // connection after the response; HTTP/2 and HTTP/3 end only the sending
+    // direction (RFC 9113 section 8.1, RFC 9114 section 4.1). A running write()
+    // or end() completes with cancelled; idempotent, no-op once complete().
+    void abandon() & noexcept;
+    void abandon() && = delete;
 
 private:
     friend class http_client_exchange;
@@ -666,9 +673,9 @@ private:
 class http_client final {
 public:
     http_client(event_loop loop, const http_client_config& config,
-        http_client_result_budget_config result_budget = {});
+        const http_client_worker_config& worker = {});
     http_client(event_loop loop, std::span<const http_client_config> configs,
-        http_client_result_budget_config result_budget = {});
+        const http_client_worker_config& worker = {});
     ~http_client();
 
     http_client(const http_client&) = delete;

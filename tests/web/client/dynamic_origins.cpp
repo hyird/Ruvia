@@ -219,7 +219,7 @@ TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cook
     ruvia::test::dynamic_origin_tests::peer peer(io, loop.handle(), replies);
     const auto url = peer.url();
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::http_client client(loop, {.alias_ = "stable", .base_url_ = url, .request_timeout_ = std::chrono::seconds(2), .protocol_ = ruvia::http_client_protocol::http1_only, .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send});
+        ruvia::http_client client(loop, {.alias_ = "stable", .base_url_ = url, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}, .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send});
         std::exception_ptr failure;
         try {
             auto stable = client.client("stable");
@@ -288,7 +288,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(loop, {.base_url_ = source_url,
                                             .request_timeout_ = std::chrono::seconds(2),
-                                            .protocol_ = ruvia::http_client_protocol::http1_only});
+                                            .versions_ = ruvia::http_client_versions{.http2_ = false}});
         std::exception_ptr failure;
         try {
             auto denied = co_await client.client().get("/without-policy").send();
@@ -309,7 +309,7 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
             request.redirect_policy([&](ruvia::http_origin_view origin, ruvia::stop_token stop) -> ruvia::task<bool> {
                 ++decisions;
                 EXPECT_EQ(origin.host(), "127.0.0.1");
-                co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .protocol_ = ruvia::http_client_protocol::http1_only},
+                co_await client.upsert({.alias_ = "discovered", .base_url_ = target_url, .versions_ = ruvia::http_client_versions{.http2_ = false}},
                     {.stop_token_ = std::move(stop)});
                 co_return true;
             });
@@ -643,7 +643,7 @@ void exercise_redirect_policy_cancellation(cancellation_case mode) {
     peer source(io, worker, replies);
     const auto url = source.url();
     const auto run = [&]() -> task<void> {
-        http_client client(attachment.loop(), {.base_url_ = url, .protocol_ = http_client_protocol::http1_only});
+        http_client client(attachment.loop(), {.base_url_ = url, .versions_ = ruvia::http_client_versions{.http2_ = false}});
         stop_source stop;
         worker_signal changed(worker);
         bool entered = false;

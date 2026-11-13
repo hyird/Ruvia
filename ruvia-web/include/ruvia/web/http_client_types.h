@@ -30,11 +30,24 @@
 #include "ruvia/web/tls_config.h"
 namespace ruvia {
 
-enum class http_client_protocol : std::uint8_t {
-    negotiate,
-    http1_only,
-    http2_only,
-    http3_only,
+// The HTTP versions a request may use: at least one, each built into this
+// library (std::invalid_argument otherwise).
+// https: TCP connections offer TLS ALPN for http1_ and http2_. http3_ alone
+// dials QUIC directly; beside a TCP version it follows an Alt-Svc h3 that an
+// authenticated response of the same route advertised, and without http3_
+// Alt-Svc never upgrades a request.
+// http: http1_ uses HTTP/1.1, http2_ alone prior-knowledge h2c; http3_ needs
+// https.
+struct http_client_versions final {
+    bool http1_{true};
+#ifdef RUVIA_ENABLE_HTTP2
+    bool http2_{true};
+#else
+    bool http2_{false};
+#endif
+    bool http3_{false};
+
+    friend constexpr bool operator==(const http_client_versions&, const http_client_versions&) noexcept = default;
 };
 
 enum class http_client_received_cookie_policy : std::uint8_t {
@@ -86,7 +99,8 @@ struct http_client_request_options final {
     std::shared_ptr<http_client_informational_callback> informational_;
     // 请求级路由覆盖；未设字段继承 alias，scheme 始终来自 alias 的 base_url_。
     // authority_：逻辑 Host / :authority（host[:port]，无 userinfo）。不同于
-    // alias authority 时，Cookie jar 与 Alt-Svc 不参与，跨 origin 重定向丢弃全部覆盖。
+    // alias authority 时 Cookie jar 不参与，跨 origin 重定向丢弃全部覆盖；
+    // Alt-Svc 按实际路由（拨号 host、拨号端口、server name）记录与使用。
     std::optional<std::pmr::string> authority_;
     // 物理拨号目标；域名只在新建连接时解析，并经 address_validator_ 校验。
     std::optional<std::pmr::string> dial_host_;
@@ -96,6 +110,8 @@ struct http_client_request_options final {
     // Host / :authority 不入键：HTTP/2/3 连接上发送其他 authority 时，调用方
     // 负责该证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。
     std::optional<std::pmr::string> server_name_;
+    // Replaces the alias's versions_ for this request; part of its connection key.
+    std::optional<http_client_versions> versions_;
 };
 
 enum class http_client_response_framing : std::uint8_t {
@@ -175,6 +191,10 @@ struct http_client_upload_config final {
 // the size of one transport write, independently of Capsule payload limits.
 struct http_client_tunnel_config final {
     std::size_t max_chunk_bytes_{64 * 1024};
+    // Once accepted, the tunnel closes with timeout after this long without
+    // bytes in either direction; read_timeout_ no longer applies. nullopt
+    // leaves it unbounded except by request_timeout_.
+    std::optional<timeout_duration> idle_timeout_{};
 };
 // Bounds bytes retained by response bytes()/text() and stream collection: per standalone client or,
 // in an application, across all registered aliases of one business worker. This is
@@ -184,6 +204,20 @@ struct http_client_result_budget_config final {
     // Worker-local live response allocations, including compressed input,
     // decoder output, metadata and simultaneous buffer growth.
     std::size_t max_in_flight_bytes_{std::size_t{64} * 1024 * 1024};
+};
+
+// Shared by every alias of one standalone http_client, or of one application
+// worker. Alias connection_limits_ still apply: the tighter bound wins.
+struct http_client_worker_config final {
+    http_client_result_budget_config result_budget_{};
+    // Idle connections kept across all aliases; beyond these the least
+    // recently used idle connection of that kind, of any alias, closes.
+    std::size_t max_idle_http1_{256};
+    // HTTP/2 and HTTP/3 connections without streams.
+    std::size_t max_idle_multiplexed_{256};
+    // Background DNS refresh lookups (dns_refresh_interval_) running at once;
+    // a refresh period finding none free defers to the next period.
+    std::size_t max_concurrent_dns_refreshes_{8};
 };
 
 struct http_client_http3_config final {
@@ -220,6 +254,10 @@ struct http_client_config final {
     std::optional<port_number> dial_port_;
     // 接收已经解析的数值地址；拒绝的候选绝不交给 connect。
     std::function<bool(std::string_view, std::uint16_t)> address_validator_;
+    // Each period looks up again only the DNS dial targets that still have a
+    // live connection (the alias's and request dial_host_ overrides), within
+    // http_client_worker_config::max_concurrent_dns_refreshes_, and retires
+    // connections to addresses an answer no longer contains.
     std::optional<timeout_duration> dns_refresh_interval_;
     bool decode_content_{true};
     http_client_connection_limits connection_limits_{};
@@ -232,11 +270,13 @@ struct http_client_config final {
     // immediate content share one write; streamed upload chunks remain separate.
     std::optional<timeout_duration> write_timeout_{30000};
     // Inactivity bound of a response read, restarted by every read that
-    // receives bytes: the HTTP/1 response head, body or tunnel bytes, or an
-    // HTTP/2 stream's head or DATA. A response read that waits for this
-    // client's consumer to drain buffered body (HTTP/2: to return flow-control
-    // credit) is not inactive. Reads during a streaming upload are bounded too.
-    // Expiry fails the response with timeout within request_timeout_.
+    // receives bytes: the response head, body, or an HTTP/2/3 stream's DATA.
+    // Until the final response head, sending request content restarts it too:
+    // an origin may read the complete request before it answers. A response
+    // read that waits for this client's consumer to drain buffered body
+    // (HTTP/2/3: to return flow-control credit) is not inactive. Accepted
+    // tunnels use http_client_tunnel_config::idle_timeout_ instead. Expiry
+    // fails the response with timeout within request_timeout_.
     std::optional<timeout_duration> read_timeout_{30000};
     // Total deadline of one exchange, from admission through connect,
     // request transfer, response head and the complete body, including the
@@ -262,7 +302,8 @@ struct http_client_config final {
     // another interval passes without input; nullopt sends no PING.
     std::optional<timeout_duration> http2_ping_interval_{};
     std::size_t max_response_bytes_{default_max_buffered_body_bytes};
-    http_client_protocol protocol_{http_client_protocol::negotiate};
+    // Default versions of the alias's requests.
+    http_client_versions versions_{};
     http_client_advertisement_config advertisements_{};
     http_client_push_config push_{};
     http_client_http3_config http3_{};
@@ -380,6 +421,9 @@ struct http_client_stats final {
     std::size_t open_connections_{0};
     // HTTP/1 connections between exchanges and HTTP/2/3 ones without streams.
     std::size_t idle_connections_{0};
+    // Background DNS refresh lookups started: one per refresh period for each
+    // DNS dial target that still has a live connection.
+    std::size_t dns_refreshes_{0};
     std::size_t dropped_advertisements_{0};
     std::size_t received_pushes_{0};
     std::size_t rejected_pushes_{0};
