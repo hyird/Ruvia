@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -26,20 +25,20 @@ namespace ruvia::detail {
 [[nodiscard]] std::size_t resp_header_serialized_size(std::size_t arg_count);
 [[nodiscard]] std::size_t resp_bulk_serialized_size(std::size_t arg_bytes);
 void add_resp_serialized_size(std::size_t& current, std::size_t amount);
-void append_resp_header(std::pmr::string& output, std::size_t arg_count);
-void append_resp_bulk(std::pmr::string& output, std::string_view arg);
-void serialize_resp_command(std::pmr::string& output, std::span<const std::string_view> args);
-void serialize_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args);
+void append_resp_header(std::string& output, std::size_t arg_count);
+void append_resp_bulk(std::string& output, std::string_view arg);
+void serialize_resp_command(std::string& output, std::span<const std::string_view> args);
+void serialize_resp_command(std::string& output, std::span<const std::string> args);
 void serialize_resp_command(
-    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest);
-void append_resp_command(std::pmr::string& output, std::span<const std::string_view> args);
-void append_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args);
+    std::string& output, std::string_view first, std::span<const std::string_view> rest);
+void append_resp_command(std::string& output, std::span<const std::string_view> args);
+void append_resp_command(std::string& output, std::span<const std::string> args);
 void append_resp_command(
-    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest);
+    std::string& output, std::string_view first, std::span<const std::string_view> rest);
 // Throws std::invalid_argument when args is empty, or std::length_error when
 // the complete RESP command size cannot be represented by std::size_t.
 [[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::string_view> args);
-[[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::pmr::string> args);
+[[nodiscard]] std::size_t resp_command_serialized_size(std::span<const std::string> args);
 [[nodiscard]] std::size_t resp_command_serialized_size(
     std::string_view first, std::span<const std::string_view> rest);
 [[nodiscard]] const char* hiredis_reader_error(const redisReader& reader_value) noexcept;
@@ -64,7 +63,7 @@ public:
 
     // Starts reading one reply: its owned payload uses `resource` and the
     // per-reply budget is restored.
-    void begin(std::pmr::memory_resource* resource) noexcept;
+    void begin() noexcept;
 
     // After the reader failed, reports a rejection raised by this builder:
     // the budget's redis_error or the exception a node construction threw.
@@ -104,7 +103,6 @@ private:
     // One root may be under construction until hiredis completes or rejects it.
     std::optional<root_slot> root_;
     redisReader* reader_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
     std::optional<std::size_t> max_reply_bytes_;
     std::size_t maximum_elements_;
     std::size_t remaining_elements_;

@@ -4,7 +4,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -12,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
@@ -62,11 +60,11 @@ private:
 
     template <typename t_type>
     t_type& emplace() {
-        auto* raw = construct_pmr_object<t_type>(process_resource());
+        auto* raw = new t_type();
         try {
             add_lifetime(raw, &controller_store::destroy<t_type>);
         } catch (...) {
-            destroy_pmr_object(raw, process_resource());
+            delete raw;
             throw;
         }
         return *raw;
@@ -107,7 +105,7 @@ private:
     };
 
     struct controller_lifetime_list final {
-        std::pmr::vector<controller_lifetime> items_{process_resource()};
+        std::vector<controller_lifetime> items_{};
 
         controller_lifetime_list() = default;
         controller_lifetime_list(const controller_lifetime_list&) = delete;
@@ -147,7 +145,7 @@ private:
 
     template <typename t_type>
     static void destroy(void* target) noexcept {
-        destroy_pmr_object(static_cast<t_type*>(target), process_resource());
+        delete static_cast<t_type*>(target);
     }
 
     controller_lifetime_list lifetimes_{};
@@ -163,11 +161,8 @@ private:
     template <typename controller_type>
     friend class controller_registration_access;
 
-    // Middlewares come from make_middlewares(), already allocated from
-    // process_resource(), and are stored as-is.
     controller_route_builder(
-        router& router_value, std::string_view prefix, std::pmr::vector<controller_middleware_descriptor> middlewares);
-
+        router& router_value, std::string_view prefix, std::vector<controller_middleware_descriptor> middlewares);
     // Each builds the endpoint its route kind runs and registers it through
     // the router's single registration path.
     void register_route(http_known_method method, std::string_view method_token, std::string_view path,
@@ -183,19 +178,19 @@ private:
         std::string_view prefix, std::span<const controller_middleware_descriptor> middlewares) const;
 
     struct owned_prefix_tag_type final {};
-    controller_route_builder(router& router_value, std::pmr::string prefix,
-        std::pmr::vector<controller_middleware_descriptor> middlewares, owned_prefix_tag_type);
+    controller_route_builder(router& router_value, std::string prefix,
+        std::vector<controller_middleware_descriptor> middlewares, owned_prefix_tag_type);
 
     router& router_;
-    std::pmr::string prefix_;
-    std::pmr::vector<controller_middleware_descriptor> middlewares_;
+    std::string prefix_;
+    std::vector<controller_middleware_descriptor> middlewares_;
 };
 
 [[nodiscard]] bool add_controller_registrar(controller_registrar registrar_value);
 // Static controller discovery is complete before main. The first application/test_app
 // build seals this registry; loading a controller-bearing module afterwards is
 // a startup contract error instead of silently changing only later workers.
-[[nodiscard]] std::pmr::vector<controller_registrar> seal_controller_registrars();
+[[nodiscard]] std::vector<controller_registrar> seal_controller_registrars();
 
 template <typename controller_type>
 void* create_controller(controller_store& controllers) {

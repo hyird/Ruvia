@@ -15,7 +15,7 @@
 
 TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     struct reposting_task final {
-        const ruvia::worker_handle* worker_;
+        const ruvia::worker_ref* worker_;
         ruvia::event_loop_attachment* attachment_;
         const bool* foreign_ran_;
         unsigned* runs_;
@@ -30,7 +30,7 @@ TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     };
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     bool foreign_ran{};
     unsigned runs{};
     EXPECT_TRUE(worker_value.post(reposting_task{&worker_value, &attachment, &foreign_ran, &runs}).accepted());
@@ -56,7 +56,7 @@ TEST(Ruvia, worker_cancellation_registration_retires_before_slot_reuse) {
     } state;
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     auto target = ruvia::make_worker_cancellation_target(state, worker_value);
     using registration = ruvia::worker_cancellation_registration<ruvia::worker_cancellation_target<owner>>;
     using target_owner = std::shared_ptr<ruvia::worker_cancellation_target<owner>>;
@@ -113,7 +113,7 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
     } state;
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     auto target = ruvia::make_worker_cancellation_target(state, worker_value);
     ruvia::stop_source source;
     source.request_stop();

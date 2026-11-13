@@ -35,7 +35,7 @@ struct held_queries final {
     }
 };
 
-ruvia::task<void> hold_executor(ruvia::worker_handle worker, std::shared_ptr<held_queries> held) {
+ruvia::task<void> hold_executor(ruvia::worker_ref worker, std::shared_ptr<held_queries> held) {
     auto result = co_await ruvia::run_blocking(std::move(worker), {}, [held] {
         held->release_.acquire();
         ++held->finished_;
@@ -63,7 +63,7 @@ struct observation final {
 ruvia::task<void> exercise(ruvia::event_loop loop, const ruvia::blocking_pool& lookups, stop_kind kind,
     std::shared_ptr<held_queries> held, observation& observed, std::promise<void>& ready,
     std::promise<void>& retired) {
-    auto worker = loop.handle();
+    auto worker = loop.worker();
     ruvia::task_scope occupied(worker);
     // 事件循环借用的单线程池被一个未释放的任务占住，名称查询确定性地排队等待，
     // 不依赖外部 DNS 服务器、网络超时或对系统解析器的进程级修改。

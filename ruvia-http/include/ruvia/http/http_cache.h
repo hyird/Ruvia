@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <ctime>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -14,13 +13,11 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_header.h"
 
 namespace ruvia {
 
-class http_request;
 class http_response;
 class http_response_headers;
 
@@ -209,82 +206,87 @@ private:
     bool stale_if_error_seen_{false};
 };
 
-// Parse a Cache-Control field value (a single line, or several joined by commas).
-[[nodiscard]] cache_control parse_cache_control(std::string_view value) noexcept;
-[[nodiscard]] cache_control parse_cache_control(std::span<const http_header> headers) noexcept;
-[[nodiscard]] cache_control parse_cache_control(std::span<const http_header_view> headers) noexcept;
-[[nodiscard]] cache_control parse_cache_control(const http_request& request) noexcept;
-[[nodiscard]] cache_control parse_cache_control(const http_response_headers& headers) noexcept;
-[[nodiscard]] cache_control parse_cache_control(const http_response& response) noexcept;
-
-// RFC 9213 Targeted HTTP Cache Control (e.g. CDN-Cache-Control).
-// Parses an RFC 8941 Structured Field Dictionary of cache directives; returns
-// std::nullopt when absent, empty, or syntactically invalid per RFC 9213 §2.1.
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    std::string_view value) noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    std::span<const http_header> headers,
-    std::string_view header_name = "CDN-Cache-Control") noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    std::span<const http_header_view> headers,
-    std::string_view header_name = "CDN-Cache-Control") noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    const http_response_headers& headers,
-    std::string_view header_name = "CDN-Cache-Control") noexcept;
-[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
-    const http_response& response,
-    std::string_view header_name = "CDN-Cache-Control") noexcept;
-
 struct targeted_cache_control_selection final {
     cache_control control_{};
     std::string_view selected_header_{};
     bool targeted_{false};
 };
 
+class http_vary_spec;
+
+namespace detail {
+[[nodiscard]] cache_control parse_cache_control_headers(http_header_range_view headers) noexcept;
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control_headers(
+    http_header_range_view headers, std::string_view header_name) noexcept;
+[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control_headers(
+    http_header_range_view headers, std::span<const std::string_view> target_headers) noexcept;
+[[nodiscard]] std::string rewrite_http_cache_control_max_age_headers(
+    http_header_range_view headers, std::uint64_t client_max_age);
+[[nodiscard]] std::optional<std::string> format_http_vary_cache_key_headers(
+    const http_vary_spec& vary, http_header_range_view request_headers);
+[[nodiscard]] std::uint64_t compute_http_cache_age_headers(
+    http_header_range_view response_headers, std::time_t request_time, std::time_t response_time,
+    std::time_t now) noexcept;
+void merge_http_304_response_headers_into(
+    std::vector<http_header>& cached_headers, http_header_range_view not_modified_headers);
+void merge_http_304_response_headers_into(
+    http_response_headers& cached_headers, http_header_range_view not_modified_headers);
+}  // namespace detail
+
+// Parse a Cache-Control field value (a single line, or several joined by commas).
+[[nodiscard]] cache_control parse_cache_control(std::string_view value) noexcept;
+template <http_header_field_source headers_type>
+[[nodiscard]] cache_control parse_cache_control(const headers_type& headers) noexcept {
+    return detail::parse_cache_control_headers(headers);
+}
+
+// RFC 9213 Targeted HTTP Cache Control (e.g. CDN-Cache-Control).
+// Parses an RFC 8941 Structured Field Dictionary of cache directives; returns
+// std::nullopt when absent, empty, or syntactically invalid per RFC 9213 §2.1.
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    std::string_view value) noexcept;
+template <http_header_field_source headers_type>
+[[nodiscard]] std::optional<cache_control> parse_targeted_cache_control(
+    const headers_type& headers,
+    std::string_view header_name = "CDN-Cache-Control") noexcept {
+    return detail::parse_targeted_cache_control_headers(headers, header_name);
+}
+
 // RFC 9213 §2.2 target-list selection: evaluates `target_headers` in priority
 // order and returns the first present, valid non-empty targeted policy; falls
 // back to standard Cache-Control when no targeted header matches.
+template <http_header_field_source headers_type>
 [[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
-    std::span<const http_header> headers,
-    std::span<const std::string_view> target_headers) noexcept;
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
-    std::span<const http_header_view> headers,
-    std::span<const std::string_view> target_headers) noexcept;
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
-    const http_response_headers& headers,
-    std::span<const std::string_view> target_headers) noexcept;
-[[nodiscard]] targeted_cache_control_selection resolve_targeted_cache_control(
-    const http_response& response,
-    std::span<const std::string_view> target_headers) noexcept;
+    const headers_type& headers,
+    std::span<const std::string_view> target_headers) noexcept {
+    return detail::resolve_targeted_cache_control_headers(headers, target_headers);
+}
 
 // RFC 9111 §5.2.2.7 & §5.2.2.3 field-qualified header stripping for shared caches.
 // Returns false if unqualified `private` or `no-store` forbids shared-cache
 // storage; returns true when storable (after stripping any field-qualified
 // `private="field1, field2"` headers in place).
 bool strip_http_cache_private_headers(
-    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept;
+    std::vector<http_header>& headers, const cache_control& control) noexcept;
 bool strip_http_cache_private_headers(
     http_response_headers& headers, const cache_control& control);
 bool strip_http_cache_private_headers(
     http_response& response, const cache_control& control);
-bool strip_http_cache_private_headers(std::pmr::vector<http_header>& headers) noexcept;
+bool strip_http_cache_private_headers(std::vector<http_header>& headers) noexcept;
 bool strip_http_cache_private_headers(http_response_headers& headers);
 bool strip_http_cache_private_headers(http_response& response);
 
 bool strip_http_cache_no_cache_headers(
-    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept;
+    std::vector<http_header>& headers, const cache_control& control) noexcept;
 bool strip_http_cache_no_cache_headers(
     http_response_headers& headers, const cache_control& control);
 bool strip_http_cache_no_cache_headers(
     http_response& response, const cache_control& control);
 [[nodiscard]] bool http_cache_control_has_no_transform(std::string_view field_value) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(std::span<const http_header> headers) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(
-    std::span<const http_header_view> headers) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(const http_request& request) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(
-    const http_response_headers& headers) noexcept;
-[[nodiscard]] bool http_cache_control_has_no_transform(const http_response& response) noexcept;
+template <http_header_field_source headers_type>
+[[nodiscard]] bool http_cache_control_has_no_transform(const headers_type& headers) noexcept {
+    return parse_cache_control(headers).no_transform();
+}
 
 struct http_cache_control_directive_view final {
     std::string_view raw_{};
@@ -295,17 +297,15 @@ struct http_cache_control_directive_view final {
 // Rewrites Cache-Control to preserve all directives except max-age and s-maxage
 // while setting client max-age=<client_max_age>. Header-block overloads also
 // clear Expires so the rewritten max-age governs client freshness.
-[[nodiscard]] std::pmr::string rewrite_http_cache_control_max_age(
-    std::string_view field_value, std::uint64_t client_max_age,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::pmr::string rewrite_http_cache_control_max_age(
-    std::span<const http_header> headers, std::uint64_t client_max_age,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::pmr::string rewrite_http_cache_control_max_age(
-    std::span<const http_header_view> headers, std::uint64_t client_max_age,
-    std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(
+    std::string_view field_value, std::uint64_t client_max_age);
+template <http_header_field_source headers_type>
+[[nodiscard]] std::string rewrite_http_cache_control_max_age(
+    const headers_type& headers, std::uint64_t client_max_age) {
+    return detail::rewrite_http_cache_control_max_age_headers(headers, client_max_age);
+}
 void rewrite_http_response_cache_max_age(
-    std::pmr::vector<http_header>& response_headers, std::uint64_t client_max_age);
+    std::vector<http_header>& response_headers, std::uint64_t client_max_age);
 void rewrite_http_response_cache_max_age(
     http_response_headers& response_headers, std::uint64_t client_max_age);
 void rewrite_http_response_cache_max_age(
@@ -315,13 +315,13 @@ void rewrite_http_response_cache_max_age(
 // normalized to lowercase, deduplicated, and sorted in fixed ASCII order.
 class http_vary_spec final {
 public:
-    explicit http_vary_spec(std::pmr::memory_resource* resource = nullptr)
-        : field_names_(detail::http_pmr_resource_or_default(resource)) {}
+    http_vary_spec() noexcept = default;
 
     void update(std::string_view field_value);
-    void update_headers(std::span<const http_header> headers);
-    void update_headers(std::span<const http_header_view> headers);
-    void update_headers(const http_response_headers& headers);
+    template <http_header_field_source headers_type>
+    void update_headers(const headers_type& headers) {
+        update_header_range(headers);
+    }
 
     [[nodiscard]] constexpr bool is_wildcard() const noexcept {
         return wildcard_;
@@ -329,50 +329,41 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return !wildcard_ && field_names_.empty();
     }
-    [[nodiscard]] std::span<const std::pmr::string> field_names() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const std::string> field_names() const& noexcept RUVIA_LIFETIMEBOUND {
         return field_names_;
     }
-    std::span<const std::pmr::string> field_names() const&& = delete;
+    std::span<const std::string> field_names() const&& = delete;
 
 private:
-    std::pmr::vector<std::pmr::string> field_names_;
+    void update_header_range(detail::http_header_range_view headers);
+
+    std::vector<std::string> field_names_;
     bool wildcard_{false};
 };
 
-[[nodiscard]] http_vary_spec parse_http_vary(
-    std::string_view field_value, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] http_vary_spec parse_http_vary(
-    std::span<const http_header> headers, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] http_vary_spec parse_http_vary(
-    std::span<const http_header_view> headers, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] http_vary_spec parse_http_vary(
-    const http_response_headers& headers, std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] http_vary_spec parse_http_vary(
-    const http_response& response, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] http_vary_spec parse_http_vary(std::string_view field_value);
+template <http_header_field_source headers_type>
+[[nodiscard]] http_vary_spec parse_http_vary(const headers_type& headers) {
+    http_vary_spec spec;
+    spec.update_headers(headers);
+    return spec;
+}
 
 // Normalizes the request header values nominated by `vary` in canonical field
 // order for cache-key generation. Returns std::nullopt when vary.is_wildcard().
-[[nodiscard]] std::optional<std::pmr::string> format_http_vary_cache_key(
-    const http_vary_spec& vary, std::span<const http_header> request_headers,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::optional<std::pmr::string> format_http_vary_cache_key(
-    const http_vary_spec& vary, std::span<const http_header_view> request_headers,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::optional<std::pmr::string> format_http_vary_cache_key(
-    const http_vary_spec& vary, const http_request& request,
-    std::pmr::memory_resource* resource = nullptr);
+template <http_header_field_source headers_type>
+[[nodiscard]] std::optional<std::string> format_http_vary_cache_key(
+    const http_vary_spec& vary, const headers_type& request_headers) {
+    return detail::format_http_vary_cache_key_headers(vary, request_headers);
+}
 
+template <http_header_field_source first_type, http_header_field_source second_type>
 [[nodiscard]] bool http_vary_requests_match(const http_vary_spec& vary,
-    std::span<const http_header> first_request, std::span<const http_header> second_request,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] bool http_vary_requests_match(const http_vary_spec& vary,
-    std::span<const http_header_view> first_request,
-    std::span<const http_header_view> second_request,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] bool http_vary_requests_match(const http_vary_spec& vary,
-    const http_request& first_request, const http_request& second_request,
-    std::pmr::memory_resource* resource = nullptr);
-
+    const first_type& first_request, const second_type& second_request) {
+    const auto first_key = format_http_vary_cache_key(vary, first_request);
+    const auto second_key = format_http_vary_cache_key(vary, second_request);
+    return first_key.has_value() && second_key.has_value() && *first_key == *second_key;
+}
 // RFC 9111 section 4.2.3 Age calculation.
 struct http_cache_age_input final {
     std::optional<std::time_t> date_value_{};
@@ -423,24 +414,46 @@ struct http_cache_age_input final {
     });
 }
 
-[[nodiscard]] std::uint64_t compute_http_cache_age(std::span<const http_header> response_headers,
-    std::time_t request_time, std::time_t response_time, std::time_t now) noexcept;
+template <http_header_field_source headers_type>
+[[nodiscard]] std::uint64_t compute_http_cache_age(const headers_type& response_headers,
+    std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
+    return detail::compute_http_cache_age_headers(
+        response_headers, request_time, response_time, now);
+}
 
 // RFC 9110 section 15.4.5 and RFC 9111 section 4.3.4: representation metadata
 // and framing fields that must not be emitted in a 304 Not Modified response or
 // overwrite stored representation headers during 304 cache freshening.
 [[nodiscard]] bool is_http_304_forbidden_header(std::string_view field_name) noexcept;
 
-void sanitize_http_304_response_headers(std::pmr::vector<http_header>& headers);
+void sanitize_http_304_response_headers(std::vector<http_header>& headers);
 void sanitize_http_304_response_headers(http_response_headers& headers);
 void sanitize_http_304_response_headers(http_response& response);
 
-void merge_http_304_response_headers(std::pmr::vector<http_header>& cached_headers,
-    std::span<const http_header> not_modified_headers);
-void merge_http_304_response_headers(std::pmr::vector<http_header>& cached_headers,
-    std::span<const http_header_view> not_modified_headers);
+template <http_header_field_source headers_type>
 void merge_http_304_response_headers(
-    http_response_headers& cached_headers, const http_response_headers& not_modified_headers);
+    std::vector<http_header>& cached_headers, const headers_type& not_modified_headers) {
+    if constexpr (std::same_as<std::remove_cvref_t<headers_type>, std::vector<http_header>>) {
+        if (&cached_headers == &not_modified_headers) {
+            auto copy = not_modified_headers;
+            detail::merge_http_304_response_headers_into(cached_headers, copy);
+            return;
+        }
+    }
+    detail::merge_http_304_response_headers_into(cached_headers, not_modified_headers);
+}
+template <http_header_field_source headers_type>
+void merge_http_304_response_headers(
+    http_response_headers& cached_headers, const headers_type& not_modified_headers) {
+    if constexpr (std::same_as<std::remove_cvref_t<headers_type>, http_response_headers>) {
+        if (&cached_headers == &not_modified_headers) {
+            auto copy = not_modified_headers.clone();
+            detail::merge_http_304_response_headers_into(cached_headers, copy);
+            return;
+        }
+    }
+    detail::merge_http_304_response_headers_into(cached_headers, not_modified_headers);
+}
 void merge_http_304_response_headers(
     http_response& cached_response, const http_response& not_modified_response);
 

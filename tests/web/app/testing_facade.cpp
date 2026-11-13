@@ -12,13 +12,11 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/app.h"
@@ -68,14 +66,14 @@ public:
         throw testing_facade_startup_error("testing facade middleware startup failed");
     }
 
-    ruvia::task<void> handle(ruvia::context&, ruvia::next&) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next&) {
         co_return;
     }
 };
 
 class testing_facade_stamp final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-Stamp", "on");
         c.edit_response().header("X-Middleware-Method", c.req().method());
@@ -91,7 +89,7 @@ public:
         : name_(name),
           level_(level) {}
 
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-Configured", name_);
         c.edit_response().header("X-Test-Level", level_ == 2 ? "two" : "other");
@@ -112,7 +110,7 @@ struct testing_facade_user final {
 // of its next() for exactly that scope.
 class testing_facade_auth final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         const testing_facade_user user_value{
             .name_ = c.req().header("X-User").value_or("anonymous"), .level_ = 2};
         const auto binding = c.bind_request_state(user_value);
@@ -126,7 +124,7 @@ public:
     explicit testing_facade_scoped(std::string_view tag) noexcept
         : tag_(tag) {}
 
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-Scope", tag_);
     }
@@ -141,14 +139,14 @@ class testing_facade_always final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-Always", "on");
     }
 };
 class testing_facade_const_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) const {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) const {
         co_await next_value();
         c.edit_response().header("X-Const-Middleware", "yes");
     }
@@ -159,7 +157,7 @@ class testing_facade_unmatched_reject final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         if (c.req().path().starts_with("/guarded")) {
             throw ruvia::http_error({.status_ = ruvia::http_status::unauthorized});
         }
@@ -171,7 +169,7 @@ public:
 // one by responding.
 class testing_facade_deny_after final {
 public:
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next_value) {
         co_await next_value();
         throw ruvia::http_error({.status_ = ruvia::http_status::forbidden});
     }
@@ -179,7 +177,7 @@ public:
 
 class testing_facade_replace_after final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.respond(c.text("denied"));
     }
@@ -189,7 +187,7 @@ class testing_facade_policy_stamp final {
 public:
     explicit testing_facade_policy_stamp(bool after) noexcept
         : after_(after) {}
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         if (!after_) {
             c.policy().header("X-Policy", "retained");
         }
@@ -206,7 +204,7 @@ private:
 // Replaces a downstream response through context metadata assigned after next().
 class testing_facade_forbid_after final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.draft().status(ruvia::http_status::forbidden);
         c.draft().header("X-Test-Denied", "after");
@@ -217,7 +215,7 @@ public:
 // Post-processes a downstream response after next(), then fails.
 class testing_facade_stamp_then_fail final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Test-After", "1");
         throw ruvia::http_error({.status_ = ruvia::http_status::conflict});
@@ -302,8 +300,8 @@ private:
     // Relays a subrequest named by the query as status and body; X-Test-Relayed
     // tells a relayed answer from a failure escaping dispatch().
     ruvia::task<ruvia::http_response> subrequest(ruvia::context& c) {
-        std::pmr::string method(c.req().query("method").value_or("GET"), ruvia::process_resource());
-        std::pmr::string target(c.req().query("target").value_or("/"), c.arena());
+        std::string method(c.req().query("method").value_or("GET"));
+        std::string target(c.req().query("target").value_or("/"));
         auto pending = c.dispatch({
             .method_ = method,
             .target_ = target,
@@ -337,7 +335,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> greet(ruvia::context& c) {
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(c.req().query("name").value_or("nobody"));
         reply.push_back('/');
         reply.append(c.req().cookie("sid").value_or("no-sid"));
@@ -351,7 +349,7 @@ private:
     ruvia::task<ruvia::http_response> count(ruvia::context& c) {
         auto& counter = c.worker_state<testing_facade_counter>();
         ++counter.count_;
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(std::to_string(counter.count_));
         co_return c.body(std::move(reply));
     }
@@ -361,7 +359,7 @@ private:
         const auto value = body.get<"value">().has_value() ? body.get<"value">()->view()
                                                            : std::string_view("missing");
         if (const auto independent = c.req().header("X-Test-Independent")) {
-            std::pmr::string reply(c.arena());
+            std::string reply;
             reply.append(*independent);
             reply.push_back('/');
             reply.append(value);
@@ -391,7 +389,7 @@ private:
 
     ruvia::task<ruvia::http_response> whoami(ruvia::context& c) {
         const auto& user_value = c.request_state<testing_facade_user>();
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(user_value.name_);
         reply.push_back('/');
         reply.append(std::to_string(user_value.level_));
@@ -402,26 +400,26 @@ private:
     // schema; JSON output never bypasses the model boundary.
     ruvia::task<ruvia::http_response> report(ruvia::context& c) {
         const std::string_view tags[] = {"a\"quoted", "b"};
-        testing_facade_report report({.resource_ = c.arena()});
+        testing_facade_report report;
         report.set<"path">(c.req().path());
         report.set<"count">(static_cast<std::uint64_t>(std::size(tags)));
         auto& report_tags = report.ensure<"tags">();
         report_tags.reserve(std::size(tags));
         for (const auto tag : tags) {
-            report_tags.emplace_back(tag, ruvia::model_options{.resource_ = c.arena()});
+            report_tags.emplace_back(tag);
         }
         co_return c.json(report);
     }
 
     ruvia::task<ruvia::http_response> large(ruvia::context& c) {
-        std::pmr::string body(c.arena());
+        std::string body;
         const auto fill = c.req().query("fill").value_or("x");
         body.assign(1024 * 1024, fill.empty() ? 'x' : fill.front());
         co_return c.body(std::move(body));
     }
 
     ruvia::task<ruvia::http_response> worker(ruvia::context& c) {
-        std::pmr::string state_value(c.arena());
+        std::string state_value;
         state_value.append(c.worker().valid() ? "valid" : "invalid");
         state_value.push_back('/');
         state_value.append(c.worker().is_current() ? "current" : "foreign");
@@ -445,7 +443,7 @@ private:
         const auto verbose = c.req().query<bool>("verbose").value_or(false);
         const auto* optional_user = c.try_request_state<testing_facade_user>();
         const std::string_view span_args[] = {"12", "true"};
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(std::to_string(id));
         reply.push_back(':');
         reply.append(active ? "1" : "0");
@@ -462,8 +460,8 @@ private:
 
     ruvia::task<ruvia::http_response> json_array(ruvia::context& c) const {
         const auto raw = co_await c.req().text();
-        auto items = ruvia::from_json<ruvia::array<ruvia::string>>(raw, {.resource_ = c.arena()});
-        items.emplace_back("tail", ruvia::model_options{.resource_ = c.arena()});
+        auto items = ruvia::from_json<ruvia::array<ruvia::string>>(raw);
+        items.emplace_back("tail");
         co_return c.json(items);
     }
 
@@ -473,12 +471,12 @@ private:
     }
 
     ruvia::task<ruvia::http_response> conn_info_handler(ruvia::context& c) const {
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(c.conn().remote().address().to_string());
         reply.push_back(':');
         reply.append(std::to_string(c.conn().remote().port()));
         reply.push_back('/');
-        reply.append(c.conn().client().address().to_string(c.arena()));
+        reply.append(c.conn().client().address().to_string());
         reply.push_back('/');
         reply.append(c.conn().via_trusted_proxy() ? "proxy" : "direct");
         reply.push_back('/');
@@ -491,7 +489,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> trailing_links(ruvia::context& c) {
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append(c.url_for("/t/literal/"));
         reply.push_back(' ');
         reply.append(c.url_for("/t/tail/:id//", {"789"}));
@@ -514,7 +512,7 @@ private:
         static constexpr std::string_view cases[][2] = {{"/t/users/:id", "."}, {"/t/users/:id", ".."},
             {"/t/tree/*", "."}, {"/t/tree/*", ".."}, {"/t/tree/*", "./a"}, {"/t/tree/*", "a/../b"},
             {"/t/tree/*", "a/."}, {"/t/tree/*", "a\\b"}, {"example.com:443", "a"}};
-        std::pmr::string reply(c.arena());
+        std::string reply;
         for (const auto& entry : cases) {
             reply.push_back(rejects(entry[0], entry[1]) ? 'x' : '-');
         }
@@ -587,7 +585,7 @@ private:
             .target_ = "/t/hello",
             .headers_ = encoding_headers,
         });
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.push_back(stream_rejected ? '1' : '0');
         reply.push_back(multipart_file_rejected ? '1' : '0');
         reply.push_back(not_acceptable.status() == ruvia::http_status::not_acceptable ? '1' : '0');
@@ -606,7 +604,7 @@ private:
                 .target_ = "/t/hello",
                 .headers_ = encoding_headers,
             });
-            std::pmr::string reply("delivered:", c.arena());
+            std::string reply("delivered:");
             reply.append(std::to_string(refused.body().size()));
             co_return c.body(std::move(reply));
         } catch (const std::logic_error&) {
@@ -736,7 +734,7 @@ TEST(Ruvia, testing_facade_rejects_invalid_request_headers) {
     }
     EXPECT_TRUE(app.request(many).status() == ruvia::http_status::ok);
 
-    const std::pmr::string oversized_header_value(ruvia::max_http_header_bytes, 'x', ruvia::process_resource());
+    const std::string oversized_header_value(ruvia::max_http_header_bytes, 'x');
     EXPECT_TRUE(
         app.request(ruvia::test_request::get("/t/hello").header("X-Big", oversized_header_value))
             .status() == ruvia::http_status::request_header_fields_too_large);
@@ -880,9 +878,9 @@ TEST(Ruvia, testing_facade_runs_fallback_handlers_that_carry_state) {
     // needed had to be a global. It now accepts any callable, including one that
     // captures the collaborators the handler depends on.
     struct branding final {
-        std::pmr::string label_{ruvia::process_resource()};
+        std::string label_{};
     };
-    const branding branding_value{std::pmr::string("tenant-a", ruvia::process_resource())};
+    const branding branding_value{std::string("tenant-a")};
 
     ruvia::test_app app;
     app.on_not_found([branding_value](ruvia::context& c) -> ruvia::task<ruvia::http_response> {
@@ -892,7 +890,7 @@ TEST(Ruvia, testing_facade_runs_fallback_handlers_that_carry_state) {
     app.on_error([branding_value](ruvia::context& c,
                      ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
         c.draft().status(error.status());
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append(branding_value.label_);
         body.append(":error");
         co_return c.text(std::move(body));
@@ -919,7 +917,7 @@ TEST(Ruvia, testing_facade_error_handler_throwing_validation_issues_keeps_its_st
     ruvia::test_app app;
     app.on_error([](ruvia::context& c, ruvia::http_error_info) -> ruvia::task<ruvia::http_response> {
         ruvia::validator checks;
-        std::optional<std::pmr::string> absent;
+        std::optional<std::string> absent;
         checks.required(absent, "email", "email is required");
         checks.throw_if_invalid({.status_ = ruvia::http_status::unprocessable_content,
             .code_ = "invalid_payload",
@@ -1092,13 +1090,13 @@ TEST(Ruvia, testing_facade_response_owns_large_bodies_across_requests) {
     ruvia::test_app app;
     const auto first = app.request(ruvia::test_request::get("/t/large?fill=a"));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
-    EXPECT_EQ(first.body(), std::pmr::string(1024 * 1024, 'a', ruvia::process_resource()));
+    EXPECT_EQ(first.body(), std::string(1024 * 1024, 'a'));
 
     const auto second = app.request(ruvia::test_request::get("/t/large?fill=b"));
     EXPECT_EQ(second.body().size(), std::size_t(1024 * 1024));
     EXPECT_EQ(first.body().size(), std::size_t(1024 * 1024));
-    EXPECT_EQ(second.body(), std::pmr::string(1024 * 1024, 'b', ruvia::process_resource()));
-    EXPECT_EQ(first.body(), std::pmr::string(1024 * 1024, 'a', ruvia::process_resource()));
+    EXPECT_EQ(second.body(), std::string(1024 * 1024, 'b'));
+    EXPECT_EQ(first.body(), std::string(1024 * 1024, 'a'));
 }
 
 TEST(Ruvia, testing_facade_path_scoped_middleware_runs_only_under_its_prefix) {
@@ -1316,7 +1314,7 @@ TEST(Ruvia, testing_facade_subrequest_answers_like_a_network_request) {
     // when reached through the public subrequest API.
     for (const auto target : {"/t/users/42", "/t/boom", "/missing"}) {
         const auto direct = app.request(ruvia::test_request::get(target));
-        const auto relayed = app.request(ruvia::test_request::get(std::pmr::string("/t/subrequest?target=", ruvia::process_resource()) + target));
+        const auto relayed = app.request(ruvia::test_request::get(std::string("/t/subrequest?target=") + target));
         EXPECT_EQ(relayed.status(), direct.status());
         EXPECT_TRUE(relayed.header("X-Test-Relayed").has_value());
         EXPECT_EQ(relayed.body(), direct.body());
@@ -1387,7 +1385,7 @@ TEST(Ruvia, testing_facade_security_headers_own_configured_policy) {
         config.frame_options_header_ = ruvia::default_security_header_policy::omit;
         config.xss_protection_header_ = ruvia::xss_protection_header_policy::omit;
         config.content_security_policy_ = "default-src 'none'";
-        const std::pmr::string custom_value(80, 'v', ruvia::process_resource());
+        const std::string custom_value(80, 'v');
         config.custom_headers_ = {{"X-Custom-Security", custom_value}};
         app.use<ruvia::security_headers_middleware>(config);
     }
@@ -1397,7 +1395,7 @@ TEST(Ruvia, testing_facade_security_headers_own_configured_policy) {
         response.header("Content-Security-Policy"), std::string_view("default-src 'none'"));
     EXPECT_TRUE(!response.header("X-Frame-Options").has_value());
     EXPECT_TRUE(!response.header("X-XSS-Protection").has_value());
-    const std::pmr::string expected_custom_value(80, 'v', ruvia::process_resource());
+    const std::string expected_custom_value(80, 'v');
     EXPECT_EQ(response.header("X-Custom-Security"), std::string_view(expected_custom_value));
 }
 
@@ -1406,8 +1404,8 @@ TEST(Ruvia, testing_facade_session_middleware_owns_configured_cookie_policy) {
     ruvia::test_app app;
     {
         ruvia::session_config config;
-        const std::pmr::string redis_alias(80, 'r', ruvia::process_resource());
-        const std::pmr::string key_prefix(80, 'k', ruvia::process_resource());
+        const std::string redis_alias(80, 'r');
+        const std::string key_prefix(80, 'k');
         config.redis_alias_ = redis_alias;
         config.cookie_name_ = "ruvia_session";
         config.key_prefix_ = key_prefix;
@@ -1659,7 +1657,7 @@ TEST(Ruvia, testing_facade_subrequest_rejects_a_file_response_recovered_from_406
     testing_facade_file_path() = dir / "large.bin";
     // Larger than the inline-read limit, so the error handler's answer stays
     // a file body instead of being read into the response.
-    const std::pmr::string large_payload(20000, 'L', ruvia::process_resource());
+    const std::string large_payload(20000, 'L');
     {
         std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
         out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));
@@ -1681,7 +1679,7 @@ TEST(Ruvia, testing_facade_reads_file_bodies_and_negotiates_precompressed_static
     const ruvia::test::scoped_temp_directory directory("ruvia_testing_facade_files");
     const auto& dir = directory.path();
     testing_facade_file_path() = dir / "large.bin";
-    const std::pmr::string large_payload(20000, 'L', ruvia::process_resource());
+    const std::string large_payload(20000, 'L');
     {
         std::ofstream out(testing_facade_file_path(), std::ios::binary | std::ios::trunc);
         out.write(large_payload.data(), static_cast<std::streamsize>(large_payload.size()));

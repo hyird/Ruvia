@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -17,7 +16,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
@@ -30,8 +28,9 @@
 
 #include "body/http_body_buffer.h"
 #include "context/http_interim_response_output.h"
+#include "integration/operation_interrupt.h"
 #include "server/connection_scanner.h"
-#include "util/operation_interrupt.h"
+#include "server/inbound_buffer_budget.h"
 
 namespace ruvia::detail {
 
@@ -77,12 +76,12 @@ inline void require_complete_transfer_coding(http_transfer_coding_stack_decoder&
 // bytes have arrived: double them, at least known_length_min_read_bytes, never
 // past the declared final size. Returns that final size, saturated at max_size().
 [[nodiscard]] inline std::size_t reserve_known_length_growth(
-    std::pmr::string& body, std::size_t filled, std::size_t remaining) {
+    std::string& body, inbound_buffer_reservation& body_reservation, std::size_t filled, std::size_t remaining) {
     const auto final_size = remaining > body.max_size() - filled ? body.max_size() : filled + remaining;
     const auto doubled = filled > body.max_size() / 2 ? body.max_size() : filled * 2;
     const auto target_capacity = std::min(final_size, std::max(doubled, known_length_min_read_bytes));
     if (target_capacity > body.capacity()) {
-        body.reserve(target_capacity);
+        inbound_reserve(body, body_reservation, target_capacity);
     }
     return final_size;
 }
@@ -144,21 +143,17 @@ class stream_body_reader final {
 public:
     // `interim_output` is the request's interim lane, which carries the 100
     // Continue an expectation asks for.
-    stream_body_reader(stream_type& stream, std::pmr::polymorphic_allocator<char> allocator,
+    stream_body_reader(stream_type& stream, inbound_buffer_account* inbound_buffers,
         std::string_view initial_body_and_pipeline, http1_request_body_plan body_plan,
         protocol_byte_limit body_limit_value, connection_scanner::entry& scanner_entry,
-        http_interim_response_output& interim_output, const worker_handle& worker)
+        http_interim_response_output& interim_output, const worker_ref& worker)
         : stream_(stream),
-          buffer_(allocator),
-          transfer_output_(allocator),
-          transfer_decoder_(nullptr,
-              pmr_object_deleter<http_transfer_coding_stack_decoder>{allocator.resource()}),
+          buffer_reservation_(inbound_buffers),
+          transfer_output_reservation_(inbound_buffers),
           initial_body_and_pipeline_(initial_body_and_pipeline),
           body_plan_(body_plan),
           body_limit_(body_limit_value),
-          chunk_decoder_(http1_chunked_body_decoder_config{
-              .body_limit_ = body_limit_value, .resource_ = allocator.resource()}),
-          trailers_(allocator.resource()),
+          chunk_decoder_(http1_chunked_body_decoder_config{.body_limit_ = body_limit_value}),
           scanner_entry_(scanner_entry),
           interim_output_(interim_output),
           worker_(worker),
@@ -169,9 +164,7 @@ public:
         const auto* chunked = body_plan_.chunked();
         if (chunked != nullptr && !chunked->transfer_codings().empty()) {
             const auto& codings = chunked->transfer_codings();
-            transfer_decoder_ = make_pmr_object<http_transfer_coding_stack_decoder>(allocator.resource(),
-                std::span<const http_transfer_coding>(codings.data(), codings.size()),
-                allocator.resource(), body_limit_value);
+            transfer_decoder_ = std::make_unique<http_transfer_coding_stack_decoder>(std::span<const http_transfer_coding>(codings.data(), codings.size()), body_limit_value);
         }
     }
 
@@ -215,7 +208,7 @@ public:
     // suffix lives in this reader's own buffer or a later reader supplies
     // `additional_pipeline`; those later bytes follow both existing sources.
     [[nodiscard]] body_pipeline_handover take_pipeline(
-        std::pmr::string& stash, std::string_view additional_pipeline = {}) {
+        std::string& stash, std::string_view additional_pipeline = {}) {
         // The body reader's suffix is either the tail of the connection read
         // buffer or its own over-read. A passive reader can add a later suffix:
         // in that case all three sources must outlive their readers, in order.
@@ -270,7 +263,7 @@ public:
 
     // Like read(), an interruption keeps the bytes already appended to `body`
     // and the decoder state; the next call resumes.
-    task<std::string_view> read_all(std::pmr::string& body, operation_options operation = {}) {
+    task<std::string_view> read_all(std::string& body, inbound_buffer_reservation& body_reservation, operation_options operation = {}) {
         require_not_failed();
         operation_interrupt interrupt(
             interrupts_, worker_, operation, &read_cancellation_, &wake_read, "request body read");
@@ -293,7 +286,7 @@ public:
                     mark_finished();
                     co_return initial_body_and_pipeline_.substr(0, content_length);
                 }
-                co_return co_await read_known_length_all(body, content_length);
+                co_return co_await read_known_length_all(body, body_reservation, content_length);
             }
             if (body_plan_.without_body() != nullptr) {
                 co_return std::string_view(body);
@@ -304,7 +297,7 @@ public:
             }
             while (auto chunk = co_await read_chunked()) {
                 if (transfer_decoder_ != nullptr) {
-                    decode_transfer_append(::ruvia::as_chars(*chunk), body);
+                    decode_transfer_append(::ruvia::as_chars(*chunk), body, body_reservation);
                 } else {
                     if (body_limit_.addition_exceeds(body.size(), chunk->size())) {
                         throw_request_body_too_large();
@@ -355,7 +348,7 @@ private:
 
     // The unread window never received bytes; an interrupted read keeps only
     // the `filled` prefix for the next one.
-    void throw_if_read_interrupted_keeping(std::pmr::string& body, std::size_t filled) const {
+    void throw_if_read_interrupted_keeping(std::string& body, std::size_t filled) const {
         if (read_interrupt_ != nullptr && read_interrupt_->interrupted()) {
             body.resize(filled);
             read_interrupt_->throw_if_interrupted();
@@ -443,9 +436,9 @@ private:
                                             ? hard_limit
                                             : remainder.size() + extra_reserve;
             if (target_reserve > buffer_.capacity()) {
-                buffer_.reserve(std::max(remainder.size(), target_reserve));
+                inbound_reserve(buffer_, buffer_reservation_, std::max(remainder.size(), target_reserve));
             }
-            buffer_.append(remainder);
+            inbound_append(buffer_, buffer_reservation_, remainder);
         }
         initial_body_and_pipeline_ = {};
         read_cursor_ = 0;
@@ -467,7 +460,7 @@ private:
         const auto writable = std::min<std::size_t>(http_body_buffer_bytes, hard_limit - old_size);
         auto read_space = buffer_.prepare_spare();
         if (read_space.empty()) {
-            read_space = buffer_.prepare(writable);
+            read_space = inbound_prepare(buffer_, buffer_reservation_, writable);
         } else {
             read_space = read_space.first(std::min(writable, read_space.size()));
         }
@@ -491,7 +484,7 @@ private:
         scanner_entry_.touch();
     }
 
-    task<std::string_view> read_known_length_all(std::pmr::string& body, std::size_t content_length) {
+    task<std::string_view> read_known_length_all(std::string& body, inbound_buffer_reservation& body_reservation, std::size_t content_length) {
         const auto initial_body_bytes = std::min(content_length, initial_body_and_pipeline_.size());
         if (continue_pending_) {
             co_await send_continue();
@@ -511,9 +504,9 @@ private:
             const auto after_preread = body.size() + preread_unread;
             const auto remaining_after_preread = remaining_after_initial - buffered_unread;
             if (remaining_after_preread == 0) {
-                body.reserve(after_preread);
+                inbound_reserve(body, body_reservation, after_preread);
             } else {
-                (void)reserve_known_length_growth(body, after_preread, remaining_after_preread);
+                (void)reserve_known_length_growth(body, body_reservation, after_preread, remaining_after_preread);
             }
         }
         if (initial_unread != 0) {
@@ -542,8 +535,8 @@ private:
         while (delivered_bytes_ < content_length) {
             const auto remaining_body = content_length - delivered_bytes_;
             if (filled == body.size()) {
-                const auto final_size = reserve_known_length_growth(body, filled, remaining_body);
-                body.resize(std::min(final_size, body.capacity()));
+                const auto final_size = reserve_known_length_growth(body, body_reservation, filled, remaining_body);
+                inbound_resize(body, body_reservation, std::min(final_size, body.capacity()));
             }
             const auto writable = std::min(remaining_body, body.size() - filled);
             throw_if_read_interrupted_keeping(body, filled);
@@ -688,20 +681,20 @@ private:
     // The transfer decoder's output scratch: a fixed window sized once per reader.
     [[nodiscard]] std::span<char> transfer_output() {
         if (transfer_output_.empty()) {
-            transfer_output_.resize(http_body_buffer_bytes);
+            inbound_resize(transfer_output_, transfer_output_reservation_, http_body_buffer_bytes);
         }
         return std::span<char>(transfer_output_);
     }
 
     // Decodes into the reused scratch and appends what the decoder produced, so
     // `target` only ever grows by written bytes.
-    void decode_transfer_append(std::string_view input, std::pmr::string& target) {
+    void decode_transfer_append(std::string_view input, std::string& target, inbound_buffer_reservation& target_reservation) {
         const auto output_window = transfer_output();
         for (;;) {
             const auto result_value = transfer_decoder_->decode(input, output_window);
             input.remove_prefix(std::min(input.size(), result_value.consumed_bytes()));
             if (const auto* output = result_value.output()) {
-                target.append(output->bytes());
+                inbound_append(target, target_reservation, output->bytes());
                 continue;
             }
             require_transfer_coding_progress(result_value);
@@ -722,8 +715,11 @@ private:
     }
     stream_type& stream_;
     http_io_buffer buffer_;
-    std::pmr::string transfer_output_;
-    std::unique_ptr<http_transfer_coding_stack_decoder, pmr_object_deleter<http_transfer_coding_stack_decoder>>
+    inbound_buffer_reservation buffer_reservation_;
+    std::string transfer_output_;
+    inbound_buffer_reservation transfer_output_reservation_;
+    asio::cancellation_signal read_cancellation_;
+    std::unique_ptr<http_transfer_coding_stack_decoder>
         transfer_decoder_;
     std::string_view transfer_input_;
     std::string_view initial_body_and_pipeline_;
@@ -733,8 +729,7 @@ private:
     http_request_trailers trailers_;
     connection_scanner::entry& scanner_entry_;
     http_interim_response_output& interim_output_;
-    const worker_handle& worker_;
-    asio::cancellation_signal read_cancellation_;
+    const worker_ref& worker_;
     // The running read's interrupt; null between reads.
     const operation_interrupt* read_interrupt_{};
     // Offset of the first unconsumed byte in the active source: the borrowed
@@ -753,14 +748,13 @@ private:
 template <typename stream_type>
 class lazy_buffered_body final {
 public:
-    lazy_buffered_body(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
-        std::pmr::memory_resource* request_resource, std::string_view initial_body_and_pipeline,
-        http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
-        connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output,
-        const worker_handle& worker)
-        : reader_(stream, worker_allocator, initial_body_and_pipeline, body_plan, body_limit_value, scanner_entry,
+    lazy_buffered_body(stream_type& stream, inbound_buffer_account* inbound_buffers,
+        std::string_view initial_body_and_pipeline, http1_request_body_plan body_plan,
+        protocol_byte_limit body_limit_value, connection_scanner::entry& scanner_entry,
+        http_interim_response_output& interim_output, const worker_ref& worker)
+        : reader_(stream, inbound_buffers, initial_body_and_pipeline, body_plan, body_limit_value, scanner_entry,
               interim_output, worker),
-          body_(pmr_resource_or_default(request_resource)) {}
+          body_reservation_(inbound_buffers) {}
 
     [[nodiscard]] http1_request_body_consumption consumption() const noexcept {
         return reader_.consumption();
@@ -779,7 +773,7 @@ public:
     }
 
     [[nodiscard]] task<std::string_view> read_all(operation_options operation) {
-        return reader_.read_all(body_, std::move(operation));
+        return reader_.read_all(body_, body_reservation_, std::move(operation));
     }
 
     task<void> discard(operation_options operation) {
@@ -790,7 +784,8 @@ public:
 
 private:
     stream_body_reader<stream_type> reader_;
-    std::pmr::string body_;
+    std::string body_;
+    inbound_buffer_reservation body_reservation_;
 };
 
 }  // namespace ruvia::detail

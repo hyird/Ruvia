@@ -247,7 +247,7 @@ TEST(Ruvia, proxy_source_is_the_router_rate_limit_key) {
     ruvia::test::tcp_port_reservation port(io);
     std::unique_ptr<ruvia::http_server> server;
     const auto setup = [&]() -> ruvia::task<void> {
-        auto routes = std::make_shared<ruvia::router>(runtime.loop_.handle());
+        auto routes = std::make_shared<ruvia::router>(runtime.loop_.worker());
         routes->use<ruvia::rate_limit<1, 60000>>();
         routes->add("GET", "/", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
             co_return context.text("allowed");

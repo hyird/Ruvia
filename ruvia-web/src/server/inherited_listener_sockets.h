@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <utility>
@@ -44,7 +43,7 @@ void adopt_inherited_udp_socket(native_socket socket, const asio::ip::udp::endpo
 // with the last owner.
 class inherited_listener_sockets final {
 public:
-    inherited_listener_sockets(std::pmr::vector<native_socket> tcp, std::pmr::vector<native_socket> udp) noexcept
+    inherited_listener_sockets(std::vector<native_socket> tcp, std::vector<native_socket> udp) noexcept
         : tcp_(std::move(tcp)),
           udp_(std::move(udp)) {}
     ~inherited_listener_sockets();
@@ -70,15 +69,15 @@ public:
         return index < tcp_.size() ? std::exchange(tcp_[index], invalid_native_socket) : invalid_native_socket;
     }
     // Takes every UDP socket at once, for the one opener of the HTTP/3 service.
-    [[nodiscard]] std::pmr::vector<native_socket> claim_udp() noexcept {
-        std::pmr::vector<native_socket> claimed(udp_.get_allocator());
+    [[nodiscard]] std::vector<native_socket> claim_udp() noexcept {
+        std::vector<native_socket> claimed(udp_.get_allocator());
         claimed.swap(udp_);
         return claimed;
     }
 
 private:
-    std::pmr::vector<native_socket> tcp_;
-    std::pmr::vector<native_socket> udp_;
+    std::vector<native_socket> tcp_;
+    std::vector<native_socket> udp_;
 };
 
 }  // namespace ruvia::detail

@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <forward_list>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <ratio>
 #include <span>
@@ -18,39 +17,32 @@
 #include <string>
 #include <string_view>
 #include <utility>
-#include <variant>
 #include <vector>
 
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_utf8.h"
-#include "ruvia/web/detail/json/json_containers.h"
-#include "ruvia/web/detail/json/json_escape.h"
-#include "ruvia/web/detail/json/json_lex.h"
-#include "ruvia/web/detail/json/json_object_fields.h"
-#include "ruvia/web/detail/json/json_string.h"
+#include "ruvia/web/detail/json/json_traversal.h"
 
 #include "auth/constant_time.h"
 #include "auth/hmac.h"
-#include "util/inline_text_concat.h"
-#include "util/pmr_owned_storage.h"
+#include "http/inline_text_concat.h"
 
 namespace ruvia {
 
 namespace detail {
 struct jwt_payload_access final {
-    [[nodiscard]] static jwt_claim claim(std::pmr::string name, std::pmr::string value) noexcept {
+    [[nodiscard]] static jwt_claim claim(std::string name, std::string value) noexcept {
         return jwt_claim(std::move(name), std::move(value));
     }
-    [[nodiscard]] static jwt_numeric_date numeric_date(
-        std::string_view text, std::pmr::memory_resource* resource) {
-        return jwt_numeric_date(text, resource);
+    [[nodiscard]] static jwt_numeric_date numeric_date(std::string_view text) {
+        return jwt_numeric_date(text);
     }
 
     [[nodiscard]] static bool decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
-        std::string_view& value, std::uint8_t& seen_reserved_mask, std::pmr::memory_resource* resource);
-    static jwt_payload decode_payload_json(std::string_view json, std::pmr::memory_resource* resource);
+        std::string_view& value, std::uint8_t& seen_reserved_mask);
+    static jwt_payload decode_payload_json(std::string_view json);
 };
 
 namespace {
@@ -99,33 +91,15 @@ struct decimal_parts final {
     bool exponent_negative_{};
 };
 
-[[nodiscard]] std::optional<decimal_parts> scan_decimal(std::string_view text, bool require_complete = true) noexcept {
+// Decomposes a JSON number whose RFC 8259 grammar was already validated by scan_json_number_token.
+[[nodiscard]] decimal_parts decompose_validated_decimal(std::string_view text) noexcept {
     decimal_parts parts{.text_ = text};
     std::size_t position = 0;
     if (position < text.size() && text[position] == '-') {
         parts.negative_ = true;
         ++position;
     }
-    if (position == text.size() || !is_digit(text[position])) {
-        return std::nullopt;
-    }
-    const auto integer_begin = position;
-    while (position < text.size() && is_digit(text[position])) {
-        if (text[position] != '0') {
-            if (parts.first_nonzero_ == std::string_view::npos) {
-                parts.first_nonzero_ = position;
-            }
-            parts.last_nonzero_ = position;
-        }
-        ++position;
-    }
-    if (position - integer_begin > 1 && text[integer_begin] == '0') {
-        return std::nullopt;
-    }
-    parts.integer_end_ = position;
-    if (position < text.size() && text[position] == '.') {
-        ++position;
-        const auto fraction_begin = position;
+    const auto consume_mantissa_digits = [&] {
         while (position < text.size() && is_digit(text[position])) {
             if (text[position] != '0') {
                 if (parts.first_nonzero_ == std::string_view::npos) {
@@ -135,9 +109,12 @@ struct decimal_parts final {
             }
             ++position;
         }
-        if (position == fraction_begin) {
-            return std::nullopt;
-        }
+    };
+    consume_mantissa_digits();
+    parts.integer_end_ = position;
+    if (position < text.size() && text[position] == '.') {
+        ++position;
+        consume_mantissa_digits();
     }
     if (position < text.size() && (text[position] == 'e' || text[position] == 'E')) {
         ++position;
@@ -145,23 +122,11 @@ struct decimal_parts final {
             parts.exponent_negative_ = text[position] == '-';
             ++position;
         }
-        const auto exponent_begin = position;
         while (position < text.size() && text[position] == '0') {
             ++position;
         }
-        const auto significant_begin = position;
-        while (position < text.size() && is_digit(text[position])) {
-            ++position;
-        }
-        if (position == exponent_begin) {
-            return std::nullopt;
-        }
-        parts.exponent_ = text.substr(significant_begin, position - significant_begin);
+        parts.exponent_ = text.substr(position);
     }
-    if (require_complete && position != text.size()) {
-        return std::nullopt;
-    }
-    parts.text_ = text.substr(0, position);
     return parts;
 }
 
@@ -363,7 +328,7 @@ struct clock_parts final {
     std::string_view date, clock_type::time_point now, std::chrono::seconds offset) noexcept {
     std::array<char, 40> buffer;
     return compare_decimal(
-        normalize_decimal(*scan_decimal(date)), format_clock_decimal(buffer, offset_clock(now, offset)));
+        normalize_decimal(decompose_validated_decimal(date)), format_clock_decimal(buffer, offset_clock(now, offset)));
 }
 
 // A validated nonnegative offset rounds up; zero rounds down to whole seconds.
@@ -414,17 +379,15 @@ struct clock_parts final {
 // rejects the object, so visiting each field on demand changes nothing for
 // callers while avoiding a pre-pass skip and field slice buffering.
 template <typename visitor_type>
-[[nodiscard]] bool visit_unique_jwt_json_object_fields(
-    std::string_view json, std::pmr::memory_resource* resource, visitor_type&& visitor) {
+[[nodiscard]] bool visit_unique_jwt_json_object_fields(std::string_view json, visitor_type&& visitor) {
     // Literal names are views into json. Escaped names arrive decoded in storage
     // that lives for one visitor call, so only those are copied; list nodes keep
     // each copy at a stable address.
     static constexpr std::size_t inline_capacity = 16;
     std::array<std::string_view, inline_capacity> inline_names;
     std::size_t inline_count = 0;
-    auto* const resolved = pmr_resource_or_default(resource);
-    std::pmr::vector<std::string_view> heap_names(resolved);
-    std::pmr::forward_list<std::pmr::string> decoded_names(resolved);
+    std::vector<std::string_view> heap_names;
+    std::forward_list<std::string> decoded_names;
     const auto record_name = [&](std::string_view stored_name) {
         if (!heap_names.empty()) {
             heap_names.push_back(stored_name);
@@ -439,7 +402,7 @@ template <typename visitor_type>
     auto input = json;
     auto& visitor_ref = visitor;
     const auto json_begin = reinterpret_cast<std::uintptr_t>(json.data());
-    const bool consumed = consume_json_object_fields(resolved_pmr_resource_tag{}, input, resolved, 0,
+    const bool consumed = consume_json_object_fields(input, 0,
         [&](std::string_view name, std::string_view& value_input) {
             const auto name_begin = reinterpret_cast<std::uintptr_t>(name.data());
             if (name_begin >= json_begin && name_begin - json_begin <= json.size() &&
@@ -484,17 +447,17 @@ template <typename visitor_type>
 
 [[nodiscard]] std::optional<std::string_view> jwt_parse_json_numeric_date(std::string_view& value) noexcept {
     skip_json_whitespace(value);
-    const auto number = scan_decimal(value, false);
-    if (!number) {
+    const auto token = scan_json_number_token(value);
+    if (token.length_ == 0) {
         return std::nullopt;
     }
-    value.remove_prefix(number->text_.size());
-    return number->text_;
+    const auto number = value.substr(0, token.length_);
+    value.remove_prefix(token.length_);
+    return number;
 }
 
-[[nodiscard]] std::optional<std::pmr::string> jwt_decode_json_string_value(
-    std::string_view& value, std::pmr::memory_resource* resource) {
-    std::pmr::string decoded(pmr_resource_or_default(resource));
+[[nodiscard]] std::optional<std::string> jwt_decode_json_string_value(std::string_view& value) {
+    std::string decoded;
     const auto parsed_value = parse_json_string(value, &decoded);
     if (!parsed_value.has_value()) {
         return std::nullopt;
@@ -510,14 +473,13 @@ template <typename visitor_type>
 // malformed structure (non-string element, unterminated array, trailing junk)
 // `out` is cleared and false is returned, so verification fails closed rather
 // than acting on a half-parsed list.
-[[nodiscard]] bool jwt_decode_audiences(std::pmr::vector<std::pmr::string>& out,
-    std::string_view& value, std::pmr::memory_resource* resource) {
+[[nodiscard]] bool jwt_decode_audiences(std::vector<std::string>& out, std::string_view& value) {
     detail::skip_json_whitespace(value);
     if (value.empty()) {
         return false;
     }
     if (value.front() != '[') {
-        if (auto single = detail::jwt_decode_json_string_value(value, resource)) {
+        if (auto single = detail::jwt_decode_json_string_value(value)) {
             out.push_back(std::move(*single));
             return true;
         }
@@ -525,8 +487,8 @@ template <typename visitor_type>
     }
 
     const bool consumed = detail::consume_json_array_elements(value, 1,
-        [&out, resource](std::string_view& element) {
-            if (auto decoded = detail::jwt_decode_json_string_value(element, resource)) {
+        [&out](std::string_view& element) {
+            if (auto decoded = detail::jwt_decode_json_string_value(element)) {
                 out.push_back(std::move(*decoded));
                 return true;
             }
@@ -561,14 +523,12 @@ void jwt_append_json_numeric_date(
     out.append(value);
 }
 
-void jwt_validate_jose_header(std::string_view json,
-    std::optional<std::string_view> expected_algorithm, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
+void jwt_validate_jose_header(std::string_view json, std::optional<std::string_view> expected_algorithm) {
     std::optional<std::string_view> algorithm;
-    std::pmr::string decoded_algorithm(resolved);
+    std::string decoded_algorithm;
     bool unsupported_extension = false;
     const bool valid = visit_unique_jwt_json_object_fields(
-        json, resolved, [&](std::string_view name, std::string_view& value) {
+        json, [&](std::string_view name, std::string_view& value) {
             if (name == "alg") {
                 const auto parsed = parse_json_string(value, &decoded_algorithm);
                 if (!parsed.has_value()) {
@@ -629,11 +589,10 @@ void jwt_base64_url_encode_into(char* out, std::string_view input) noexcept {
 struct jwt_decoded_section final {
     static constexpr std::size_t inline_capacity = 256;
     std::array<char, inline_capacity> inline_;
-    std::pmr::string heap_;
+    std::string heap_;
     std::size_t size_{0};
 
-    jwt_decoded_section(std::string_view input, std::pmr::memory_resource* resource)
-        : heap_(pmr_resource_or_default(resource)) {
+    explicit jwt_decoded_section(std::string_view input) {
         const auto bound = http_base64_decoded_size_bound(input.size());
         char* target = inline_.data();
         if (bound > inline_capacity) {
@@ -729,15 +688,15 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
 // a key shorter than the selected digest and std::length_error when the secret
 // or signing input exceeds OpenSSL's HMAC length parameters.
 [[nodiscard]] std::string_view jwt_hmac_sign(
-    jwt_algorithm algorithm, std::string_view secret, std::string_view data, char* out) {
+    jwt_algorithm algorithm, std::string_view secret, std::string_view signing_input, char* out) {
     const auto digest = jwt_hmac_digest(algorithm);
     const auto digest_size = hmac_digest_size(digest);
     validate_jwt_hmac_secret(digest_size, secret);
-    if (data.size() > hmac_max_input_size) {
+    if (signing_input.size() > hmac_max_input_size) {
         throw std::length_error("JWT signing input is too large");
     }
     std::array<std::uint8_t, hmac_max_digest_size> mac;
-    if (!compute_hmac(digest, secret, data, mac)) {
+    if (!compute_hmac(digest, secret, signing_input, mac)) {
         throw std::runtime_error("JWT HMAC signing failed");
     }
     const auto encoded_size = http_base64_encoded_size(digest_size, http_base64_padding::forbidden);
@@ -749,7 +708,7 @@ void validate_jwt_custom_claims(std::span<const jwt_claim_view> claims) {
 }  // namespace
 
 bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, std::string_view key,
-    std::string_view& value, std::uint8_t& seen_reserved_mask, std::pmr::memory_resource* resolved) {
+    std::string_view& value, std::uint8_t& seen_reserved_mask) {
     if (const auto bit = detail::jwt_reserved_claim_bit(key); bit != 0) {
         if ((seen_reserved_mask & bit) != 0) {
             return false;
@@ -757,40 +716,40 @@ bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, st
         seen_reserved_mask |= bit;
         switch (bit) {
             case 1U << 0:
-                if (auto issuer = detail::jwt_decode_json_string_value(value, resolved)) {
+                if (auto issuer = detail::jwt_decode_json_string_value(value)) {
                     payload_value.issuer_ = std::move(*issuer);
                     return true;
                 }
                 return false;
             case 1U << 1:
-                if (auto subject = detail::jwt_decode_json_string_value(value, resolved)) {
+                if (auto subject = detail::jwt_decode_json_string_value(value)) {
                     payload_value.subject_ = std::move(*subject);
                     return true;
                 }
                 return false;
             case 1U << 2:
-                return jwt_decode_audiences(payload_value.audiences_, value, resolved);
+                return jwt_decode_audiences(payload_value.audiences_, value);
             case 1U << 3:
-                if (auto id = detail::jwt_decode_json_string_value(value, resolved)) {
+                if (auto id = detail::jwt_decode_json_string_value(value)) {
                     payload_value.id_ = std::move(*id);
                     return true;
                 }
                 return false;
             case 1U << 4:
                 if (const auto exp = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.expires_at_.emplace(jwt_numeric_date(*exp, resolved));
+                    payload_value.expires_at_.emplace(jwt_numeric_date(*exp));
                     return true;
                 }
                 return false;
             case 1U << 5:
                 if (const auto nbf = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.not_before_.emplace(jwt_numeric_date(*nbf, resolved));
+                    payload_value.not_before_.emplace(jwt_numeric_date(*nbf));
                     return true;
                 }
                 return false;
             case 1U << 6:
                 if (const auto iat = detail::jwt_parse_json_numeric_date(value)) {
-                    payload_value.issued_at_.emplace(jwt_numeric_date(*iat, resolved));
+                    payload_value.issued_at_.emplace(jwt_numeric_date(*iat));
                     return true;
                 }
                 return false;
@@ -807,23 +766,20 @@ bool jwt_payload_access::decode_jwt_payload_claim(jwt_payload& payload_value, st
     if (value.front() != '"') {
         return detail::skip_json_value(value, 1);
     }
-    if (auto claim_value = detail::jwt_decode_json_string_value(value, resolved)) {
-        std::pmr::string claim_name(resolved);
-        claim_name.assign(key.data(), key.size());
+    if (auto claim_value = detail::jwt_decode_json_string_value(value)) {
         payload_value.claims_.push_back(detail::jwt_payload_access::claim(
-            std::move(claim_name), std::move(*claim_value)));
+            std::string(key), std::move(*claim_value)));
         return true;
     }
     return false;
 }
 
-jwt_payload jwt_payload_access::decode_payload_json(
-    std::string_view json, std::pmr::memory_resource* resolved) {
-    jwt_payload payload_value(resolved);
+jwt_payload jwt_payload_access::decode_payload_json(std::string_view json) {
+    jwt_payload payload_value;
     std::uint8_t seen_reserved_mask = 0;
     const bool valid = detail::visit_unique_jwt_json_object_fields(
-        json, resolved, [&](std::string_view key, std::string_view& value) {
-            return decode_jwt_payload_claim(payload_value, key, value, seen_reserved_mask, resolved);
+        json, [&](std::string_view key, std::string_view& value) {
+            return decode_jwt_payload_claim(payload_value, key, value, seen_reserved_mask);
         });
     if (!valid) {
         throw jwt_error(
@@ -834,32 +790,18 @@ jwt_payload jwt_payload_access::decode_payload_json(
 
 }  // namespace detail
 
-jwt_payload::jwt_payload(std::pmr::memory_resource* resource)
-    : issuer_(pmr_resource_or_default(resource)),
-      subject_(issuer_.get_allocator().resource()),
-      audiences_(issuer_.get_allocator().resource()),
-      id_(issuer_.get_allocator().resource()),
-      claims_(issuer_.get_allocator().resource()) {}
-
-jwt_claim& jwt_claim::operator=(jwt_claim&& other) {
+jwt_claim& jwt_claim::operator=(jwt_claim&& other) noexcept {
     if (this != &other) {
-        auto* const target = name_.get_allocator().resource();
-        auto new_name = detail::rebind_owned_storage(other.name_, target, other.value_);
-        auto new_value = detail::rebind_owned_storage(other.value_, target, other.name_);
-        name_.swap(new_name);
-        value_.swap(new_value);
+        name_ = std::move(other.name_);
+        value_ = std::move(other.value_);
         other.name_.clear();
         other.value_.clear();
     }
     return *this;
 }
 
-jwt_payload& jwt_payload::operator=(jwt_payload&& other) {
-    if (this == &other) {
-        return *this;
-    }
-    auto* const target = issuer_.get_allocator().resource();
-    if (other.issuer_.get_allocator().resource() == target) {
+jwt_payload& jwt_payload::operator=(jwt_payload&& other) noexcept {
+    if (this != &other) {
         issuer_ = std::move(other.issuer_);
         subject_ = std::move(other.subject_);
         audiences_ = std::move(other.audiences_);
@@ -873,36 +815,7 @@ jwt_payload& jwt_payload::operator=(jwt_payload&& other) {
         other.audiences_.clear();
         other.id_.clear();
         other.claims_.clear();
-        return *this;
     }
-    jwt_payload rebound(target);
-    rebound.issuer_.assign(other.issuer_);
-    rebound.subject_.assign(other.subject_);
-    rebound.audiences_.assign(other.audiences_.begin(), other.audiences_.end());
-    rebound.id_.assign(other.id_);
-    const auto rebind_date = [target](std::optional<jwt_numeric_date>& destination,
-                                 const std::optional<jwt_numeric_date>& source) {
-        if (source) {
-            destination.emplace(detail::jwt_payload_access::numeric_date(source->text(), target));
-        }
-    };
-    rebind_date(rebound.expires_at_, other.expires_at_);
-    rebind_date(rebound.not_before_, other.not_before_);
-    rebind_date(rebound.issued_at_, other.issued_at_);
-    rebound.claims_.reserve(other.claims_.size());
-    for (const auto& item : other.claims_) {
-        rebound.claims_.push_back(detail::jwt_payload_access::claim(
-            std::pmr::string(item.name(), target), std::pmr::string(item.value(), target)));
-    }
-    *this = std::move(rebound);
-    other.issuer_.clear();
-    other.subject_.clear();
-    other.audiences_.clear();
-    other.id_.clear();
-    other.expires_at_.reset();
-    other.not_before_.reset();
-    other.issued_at_.reset();
-    other.claims_.clear();
     return *this;
 }
 
@@ -915,7 +828,7 @@ std::string_view jwt_payload::subject() const& noexcept {
 std::string_view jwt_payload::audience() const& noexcept {
     return audiences_.empty() ? std::string_view{} : std::string_view(audiences_.front());
 }
-std::span<const std::pmr::string> jwt_payload::audiences() const& noexcept {
+std::span<const std::string> jwt_payload::audiences() const& noexcept {
     return audiences_;
 }
 bool jwt_payload::has_audience(std::string_view audience) const noexcept {
@@ -948,7 +861,7 @@ std::optional<std::string_view> jwt_payload::claim(std::string_view name) const&
     return std::nullopt;
 }
 
-std::pmr::string jwt_sign(const jwt_sign_options& options) {
+std::string jwt_sign(const jwt_sign_options& options) {
     detail::validate_jwt_custom_claims(options.claims_);
     if ((options.expires_in_.has_value() && options.expires_in_->count() < 0) ||
         (options.not_before_delay_.has_value() && options.not_before_delay_->count() < 0)) {
@@ -957,7 +870,6 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     const auto digest = detail::jwt_hmac_digest(options.algorithm_);
     detail::validate_jwt_hmac_secret(detail::hmac_digest_size(digest), options.secret_);
     const auto encoded_header = detail::jwt_encoded_header(options.algorithm_);
-    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto now = std::chrono::system_clock::now();
 
     std::size_t payload_reserve = 64U + options.issuer_.size() + options.subject_.size() +
@@ -967,7 +879,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
     for (const auto& claim : options.claims_) {
         payload_reserve += claim.name_.size() + claim.value_.size() + 8U;
     }
-    detail::inline_text_buffer<512> payload(resolved, payload_reserve);
+    detail::inline_text_buffer<512> payload(payload_reserve);
     payload.push_back('{');
     bool first = true;
     if (!options.issuer_.empty()) {
@@ -1009,7 +921,7 @@ std::pmr::string jwt_sign(const jwt_sign_options& options) {
         throw std::length_error("JWT token is too large");
     }
     const auto signing_input_size = payload_offset + encoded_payload_size;
-    std::pmr::string token(resolved);
+    std::string token;
     token.resize(signing_input_size + 1 + signature_size);
     encoded_header.copy(token.data(), encoded_header.size());
     token[encoded_header.size()] = '.';
@@ -1028,7 +940,6 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
         options.expiration_claim_ != jwt_expiration_claim_policy::allow_missing) {
         throw std::invalid_argument("JWT expiration claim policy is invalid");
     }
-    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
     std::array<char, 88> expected_buf;
@@ -1038,12 +949,12 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
         throw jwt_error(jwt_error::code_type::signature_mismatch, "JWT signature verification failed");
     }
     if (parts.header_ != detail::jwt_encoded_header(options.algorithm_)) {
-        const detail::jwt_decoded_section header_value(parts.header_, resolved);
+        const detail::jwt_decoded_section header_value(parts.header_);
         detail::jwt_validate_jose_header(
-            header_value.view(), detail::jwt_algorithm_name(options.algorithm_), resolved);
+            header_value.view(), detail::jwt_algorithm_name(options.algorithm_));
     }
-    const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
-    auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
+    const detail::jwt_decoded_section payload_json(parts.payload_);
+    auto payload_value = detail::jwt_payload_access::decode_payload_json(payload_json.view());
     const auto* expires_at = payload_value.expires_at();
     const auto* not_before = payload_value.not_before();
     if (options.expiration_claim_ == jwt_expiration_claim_policy::require && expires_at == nullptr) {
@@ -1082,17 +993,16 @@ jwt_payload jwt_verify(const jwt_verify_options& options) {
 }
 
 jwt_payload jwt_decode_unverified(const jwt_decode_unverified_options& options) {
-    auto* resolved = pmr_resource_or_default(options.resource_);
     const auto token = options.token_.view();
     const auto parts = detail::jwt_split_token(token);
     if (parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs256) &&
         parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs384) &&
         parts.header_ != detail::jwt_encoded_header(jwt_algorithm::hs512)) {
-        const detail::jwt_decoded_section header_value(parts.header_, resolved);
-        detail::jwt_validate_jose_header(header_value.view(), std::nullopt, resolved);
+        const detail::jwt_decoded_section header_value(parts.header_);
+        detail::jwt_validate_jose_header(header_value.view(), std::nullopt);
     }
-    const detail::jwt_decoded_section payload_json(parts.payload_, resolved);
-    return detail::jwt_payload_access::decode_payload_json(payload_json.view(), resolved);
+    const detail::jwt_decoded_section payload_json(parts.payload_);
+    return detail::jwt_payload_access::decode_payload_json(payload_json.view());
 }
 
 std::optional<std::string_view> jwt_bearer_token(std::string_view authorization) noexcept {
@@ -1131,18 +1041,17 @@ std::optional<std::string_view> jwt_bearer_token(std::string_view authorization)
     return token;
 }
 
-jwt_numeric_date::jwt_numeric_date(std::string_view text, std::pmr::memory_resource* resource)
-    : text_(text, pmr_resource_or_default(resource)) {}
+jwt_numeric_date::jwt_numeric_date(std::string_view text)
+    : text_(text) {}
 
 jwt_numeric_date::jwt_numeric_date(jwt_numeric_date&& other) noexcept
     : text_(std::move(other.text_)) {
     other.text_.clear();
 }
 
-jwt_numeric_date& jwt_numeric_date::operator=(jwt_numeric_date&& other) {
+jwt_numeric_date& jwt_numeric_date::operator=(jwt_numeric_date&& other) noexcept {
     if (this != &other) {
-        auto rebound = detail::rebind_owned_storage(other.text_, text_.get_allocator().resource());
-        text_.swap(rebound);
+        text_ = std::move(other.text_);
         other.text_.clear();
     }
     return *this;
@@ -1154,7 +1063,7 @@ std::string_view jwt_numeric_date::text() const& noexcept {
 
 std::optional<std::chrono::system_clock::time_point> jwt_numeric_date::to_time_point() const noexcept {
     using clock_type = std::chrono::system_clock;
-    auto date = detail::normalize_decimal(*detail::scan_decimal(text()));
+    auto date = detail::normalize_decimal(detail::decompose_validated_decimal(text()));
     if (date.digits_.empty()) {
         return clock_type::time_point{};
     }

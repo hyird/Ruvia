@@ -108,7 +108,7 @@ void native_wake_pair::close_receiver() noexcept {
     close_descriptor(receiver_);
 }
 
-bool drain_native_receiver(native_wake_handle receiver, std::error_code& error) noexcept {
+bool drain_native_receiver(native_wake_descriptor receiver, std::error_code& error) noexcept {
 #ifdef __linux__
     std::uint64_t counter = 0;
 #else

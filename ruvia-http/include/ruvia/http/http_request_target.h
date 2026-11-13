@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -100,14 +99,12 @@ private:
 // absolute-form targets to origin-form (with "/" when the path is empty and
 // preserving any query), converts an OPTIONS target with an empty path and no
 // query to "*", and preserves all other forms verbatim.
-[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
-    std::string_view method, std::string_view target,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
-    http_known_method method, std::string_view target,
-    std::pmr::memory_resource* resource = nullptr);
-[[nodiscard]] std::pmr::string normalize_http_proxy_request_target(
-    const http_request& request, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::string normalize_http_proxy_request_target(
+    std::string_view method, std::string_view target);
+[[nodiscard]] std::string normalize_http_proxy_request_target(
+    http_known_method method, std::string_view target);
+[[nodiscard]] std::string normalize_http_proxy_request_target(
+    const http_request& request);
 
 enum class http_max_forwards_status : std::uint8_t {
     absent,
@@ -150,8 +147,7 @@ public:
         return (is_valid() && current_ > 0) ? std::optional<std::uint64_t>(current_ - 1)
                                             : std::nullopt;
     }
-    [[nodiscard]] std::pmr::string format_decremented(
-        std::pmr::memory_resource* resource = nullptr) const;
+    [[nodiscard]] std::string format_decremented() const;
 
 private:
     constexpr http_max_forwards_result(

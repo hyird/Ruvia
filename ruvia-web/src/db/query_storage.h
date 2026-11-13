@@ -1,7 +1,6 @@
 #pragma once
 
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -62,24 +61,20 @@ enum class db_source_kind : std::uint8_t { table,
     function };
 
 struct db_stored_type final {
-    explicit db_stored_type(std::pmr::memory_resource* resource)
-        : custom_name_(resource) {}
-    db_stored_type(const db_stored_type& source_value, std::pmr::memory_resource* resource)
+    db_stored_type() = default;
+    db_stored_type(const db_stored_type&) = default;
+    db_stored_type& operator=(const db_stored_type&) = default;
+    db_stored_type(db_stored_type&&) noexcept = default;
+    db_stored_type& operator=(db_stored_type&&) noexcept = default;
+    db_stored_type(const db_type_definition& source_value)
         : data_type_(source_value.data_type_),
-          custom_name_(source_value.custom_name_, resource),
-          length_(source_value.length_),
-          precision_(source_value.precision_),
-          scale_(source_value.scale_),
-          array_(source_value.array_) {}
-    db_stored_type(const db_type_definition& source_value, std::pmr::memory_resource* resource)
-        : data_type_(source_value.data_type_),
-          custom_name_(source_value.custom_name_, resource),
+          custom_name_(source_value.custom_name_),
           length_(source_value.length_),
           precision_(source_value.precision_),
           scale_(source_value.scale_),
           array_(source_value.array_) {}
     db_data_type data_type_{db_data_type::inferred};
-    std::pmr::string custom_name_;
+    std::string custom_name_;
     std::size_t length_{0};
     unsigned precision_{0};
     unsigned scale_{0};
@@ -91,41 +86,28 @@ struct db_stored_order final {
     db_nulls_order nulls_{db_nulls_order::default_value};
 };
 struct db_stored_named_argument final {
-    db_stored_named_argument(std::string_view name, std::size_t expression, std::pmr::memory_resource* resource)
-        : name_(name, resource),
+    db_stored_named_argument(std::string_view name, std::size_t expression)
+        : name_(name),
           expression_(expression) {}
-    std::pmr::string name_;
+    std::string name_;
     std::size_t expression_;
 };
 
 struct db_query_node final {
-    db_query_node(db_node_kind kind, std::pmr::memory_resource* resource)
+    db_query_node(db_node_kind kind)
         : kind_(kind),
-          value_(nullptr),
-          text_(resource),
-          qualifier_(resource),
-          args_(resource),
-          named_(resource),
-          orders_(resource),
-          type_(resource) {}
-    db_query_node(db_node_kind kind, db_value&& value, std::pmr::memory_resource* resource)
+          value_(nullptr) {}
+    db_query_node(db_node_kind kind, db_value&& value)
         : kind_(kind),
-          value_(std::move(value)),
-          text_(resource),
-          qualifier_(resource),
-          args_(resource),
-          named_(resource),
-          orders_(resource),
-          type_(resource) {}
-    db_query_node(const db_query_node& source_value, std::pmr::memory_resource* resource)
+          value_(std::move(value)) {}
+    db_query_node(const db_query_node& source_value)
         : kind_(source_value.kind_),
-          value_(clone_db_value_for_resource(source_value.value_, resource)),
-          text_(source_value.text_, resource),
-          qualifier_(source_value.qualifier_, resource),
-          args_(source_value.args_, resource),
-          named_(resource),
-          orders_(source_value.orders_, resource),
-          type_(source_value.type_, resource),
+          value_(db_value(source_value.value_)),
+          text_(source_value.text_),
+          qualifier_(source_value.qualifier_),
+          args_(source_value.args_),
+          orders_(source_value.orders_),
+          type_(source_value.type_),
           binary_(source_value.binary_),
           unary_(source_value.unary_),
           date_part_(source_value.date_part_),
@@ -137,18 +119,18 @@ struct db_query_node final {
           frame_(source_value.frame_) {
         named_.reserve(source_value.named_.size());
         for (const auto& argument : source_value.named_) {
-            named_.emplace_back(argument.name_, argument.expression_, resource);
+            named_.emplace_back(argument.name_, argument.expression_);
         }
     }
     db_query_node(db_query_node&&) noexcept = default;
     db_query_node& operator=(db_query_node&&) = delete;
     db_node_kind kind_;
     db_value value_;
-    std::pmr::string text_;
-    std::pmr::string qualifier_;
-    std::pmr::vector<std::size_t> args_;
-    std::pmr::vector<db_stored_named_argument> named_;
-    std::pmr::vector<db_stored_order> orders_;
+    std::string text_;
+    std::string qualifier_;
+    std::vector<std::size_t> args_;
+    std::vector<db_stored_named_argument> named_;
+    std::vector<db_stored_order> orders_;
     db_stored_type type_;
     db_binary_operator binary_{db_binary_operator::equal};
     db_unary_operator unary_{db_unary_operator::not_value};
@@ -164,7 +146,7 @@ struct db_query_node final {
 // by and_where/or_where or `p = std::move(p) && q`) is a single nesting level
 // for import and compilation. True when `child` continues `parent`'s chain.
 [[nodiscard]] inline bool continues_logical_chain(
-    const std::pmr::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
+    const std::vector<db_query_node>& nodes, const db_query_node& parent, std::size_t child) noexcept {
     if (parent.kind_ != db_node_kind::binary || child == no_db_node ||
         (parent.binary_ != db_binary_operator::and_value && parent.binary_ != db_binary_operator::or_value)) {
         return false;
@@ -173,42 +155,30 @@ struct db_query_node final {
     return node.kind_ == db_node_kind::binary && node.binary_ == parent.binary_;
 }
 struct db_stored_source_column final {
-    db_stored_source_column(const db_source_column& source_value, std::pmr::memory_resource* resource)
-        : name_(source_value.name_, resource),
-          type_(source_value.type_, resource) {}
-    db_stored_source_column(const db_stored_source_column& source_value, std::pmr::memory_resource* resource)
-        : name_(source_value.name_, resource),
-          type_(source_value.type_, resource) {}
-    std::pmr::string name_;
+    db_stored_source_column(const db_source_column& source_value)
+        : name_(source_value.name_),
+          type_(source_value.type_) {}
+    db_stored_source_column(const db_stored_source_column&) = default;
+    db_stored_source_column& operator=(const db_stored_source_column&) = default;
+    db_stored_source_column(db_stored_source_column&&) noexcept = default;
+    db_stored_source_column& operator=(db_stored_source_column&&) noexcept = default;
+    std::string name_;
     db_stored_type type_;
 };
 struct db_query_source final {
-    explicit db_query_source(std::pmr::memory_resource* resource)
-        : name_(resource),
-          alias_(resource),
-          columns_(resource) {}
-    db_query_source(const db_query_source& source_value, std::pmr::memory_resource* resource)
-        : kind_(source_value.kind_),
-          name_(source_value.name_, resource),
-          alias_(source_value.alias_, resource),
-          expression_(source_value.expression_),
-          query_(source_value.query_),
-          lateral_(source_value.lateral_),
-          ordinality_(source_value.ordinality_),
-          columns_(resource) {
-        columns_.reserve(source_value.columns_.size());
-        for (const auto& column : source_value.columns_) {
-            columns_.emplace_back(column, resource);
-        }
-    }
+    db_query_source() = default;
+    db_query_source(const db_query_source&) = default;
+    db_query_source& operator=(const db_query_source&) = default;
+    db_query_source(db_query_source&&) noexcept = default;
+    db_query_source& operator=(db_query_source&&) noexcept = default;
     db_source_kind kind_{db_source_kind::table};
-    std::pmr::string name_;
-    std::pmr::string alias_;
+    std::string name_;
+    std::string alias_;
     std::size_t expression_{no_db_node};
     std::size_t query_{no_db_node};
     bool lateral_{false};
     bool ordinality_{false};
-    std::pmr::vector<db_stored_source_column> columns_;
+    std::vector<db_stored_source_column> columns_;
 };
 // Whether a FROM item binds `name`: its alias when present, otherwise its
 // table name or, for a schema-qualified table, any dot-aligned suffix of it.
@@ -221,144 +191,111 @@ struct db_query_source final {
            (table.size() > name.size() && table.ends_with(name) && table[table.size() - name.size() - 1] == '.');
 }
 struct db_stored_join final {
-    db_stored_join(db_join_type type, db_query_source source_value, std::size_t on, std::pmr::memory_resource* resource)
+    db_stored_join(db_join_type type, db_query_source source_value, std::size_t on)
         : type_(type),
           source_(std::move(source_value)),
-          on_(on),
-          using_columns_(resource) {}
-    db_stored_join(const db_stored_join& source_value, std::pmr::memory_resource* resource)
+          on_(on) {}
+    db_stored_join(const db_stored_join& source_value)
         : type_(source_value.type_),
-          source_(source_value.source_, resource),
+          source_(source_value.source_),
           on_(source_value.on_),
-          using_columns_(source_value.using_columns_, resource) {}
+          using_columns_(source_value.using_columns_) {}
     db_join_type type_;
     db_query_source source_;
     std::size_t on_{no_db_node};
-    std::pmr::vector<std::pmr::string> using_columns_;
+    std::vector<std::string> using_columns_;
 };
 struct db_stored_assignment final {
-    db_stored_assignment(std::string_view column, std::size_t expression, std::pmr::memory_resource* resource)
-        : column_(column, resource),
+    db_stored_assignment(std::string_view column, std::size_t expression)
+        : column_(column),
           expression_(expression) {}
-    std::pmr::string column_;
+    std::string column_;
     std::size_t expression_;
 };
 struct db_stored_cte final {
     template <class column_range>
     db_stored_cte(std::string_view name, std::size_t query, bool recursive, db_materialization materialization,
-        const column_range& columns, std::pmr::memory_resource* resource)
-        : name_(name, resource),
+        const column_range& columns)
+        : name_(name),
           query_(query),
           recursive_(recursive),
-          materialization_(materialization),
-          columns_(resource) {
+          materialization_(materialization) {
         columns_.reserve(std::ranges::size(columns));
         for (const auto& column : columns) {
             columns_.emplace_back(std::string_view(column));
         }
     }
-    db_stored_cte(const db_stored_cte& source_value, std::pmr::memory_resource* resource)
-        : name_(source_value.name_, resource),
+    db_stored_cte(const db_stored_cte& source_value)
+        : name_(source_value.name_),
           query_(source_value.query_),
           recursive_(source_value.recursive_),
           materialization_(source_value.materialization_),
-          columns_(source_value.columns_, resource) {}
-    std::pmr::string name_;
+          columns_(source_value.columns_) {}
+    std::string name_;
     std::size_t query_;
     bool recursive_{false};
     db_materialization materialization_{db_materialization::default_value};
-    std::pmr::vector<std::pmr::string> columns_;
+    std::vector<std::string> columns_;
 };
 struct db_stored_set_operation final {
     db_set_operation operation_;
     std::size_t query_;
 };
 struct db_stored_conflict final {
-    explicit db_stored_conflict(std::pmr::memory_resource* resource)
-        : columns_(resource),
-          constraint_(resource),
-          assignments_(resource) {}
-    db_stored_conflict(const db_stored_conflict& source_value, std::pmr::memory_resource* resource)
-        : columns_(source_value.columns_, resource),
-          constraint_(source_value.constraint_, resource),
-          target_where_(source_value.target_where_),
-          assignments_(resource),
-          update_where_(source_value.update_where_),
-          do_nothing_(source_value.do_nothing_),
-          any_unique_key_(source_value.any_unique_key_) {
-        assignments_.reserve(source_value.assignments_.size());
-        for (const auto& assignment : source_value.assignments_) {
-            assignments_.emplace_back(assignment.column_, assignment.expression_, resource);
-        }
-    }
-    std::pmr::vector<std::pmr::string> columns_;
-    std::pmr::string constraint_;
+    db_stored_conflict() = default;
+    db_stored_conflict(const db_stored_conflict&) = default;
+    db_stored_conflict& operator=(const db_stored_conflict&) = default;
+    db_stored_conflict(db_stored_conflict&&) noexcept = default;
+    db_stored_conflict& operator=(db_stored_conflict&&) noexcept = default;
+    std::vector<std::string> columns_;
+    std::string constraint_;
     std::size_t target_where_{no_db_node};
-    std::pmr::vector<db_stored_assignment> assignments_;
+    std::vector<db_stored_assignment> assignments_;
     std::size_t update_where_{no_db_node};
     bool do_nothing_{false};
     bool any_unique_key_{false};
 };
 struct db_stored_lock final {
-    db_stored_lock(const db_lock_options& source_value, std::pmr::memory_resource* resource)
+    db_stored_lock(const db_lock_options& source_value)
         : mode_(source_value.mode_),
           nowait_(source_value.nowait_),
-          skip_locked_(source_value.skip_locked_),
-          tables_(resource) {
+          skip_locked_(source_value.skip_locked_) {
         tables_.reserve(source_value.tables_.size());
         for (const auto& table : source_value.tables_) {
             tables_.emplace_back(table);
         }
     }
-    db_stored_lock(const db_stored_lock& source_value, std::pmr::memory_resource* resource)
-        : mode_(source_value.mode_),
-          nowait_(source_value.nowait_),
-          skip_locked_(source_value.skip_locked_),
-          tables_(source_value.tables_, resource) {}
+    db_stored_lock(const db_stored_lock&) = default;
+    db_stored_lock& operator=(const db_stored_lock&) = default;
+    db_stored_lock(db_stored_lock&&) noexcept = default;
+    db_stored_lock& operator=(db_stored_lock&&) noexcept = default;
     db_row_lock mode_;
     bool nowait_{false};
     bool skip_locked_{false};
-    std::pmr::vector<std::pmr::string> tables_;
+    std::vector<std::string> tables_;
 };
 
 class db_query_storage final {
 public:
-    explicit db_query_storage(std::pmr::memory_resource* resource)
-        : resource_(resource),
-          nodes_(resource),
-          queries_(resource),
-          target_(resource),
-          target_alias_(resource),
-          columns_(resource),
-          projections_(resource),
-          groups_(resource),
-          orders_(resource),
-          distinct_on_(resource),
-          returning_(resource),
-          joins_(resource),
-          rows_(resource),
-          assignments_(resource),
-          ctes_(resource),
-          set_operations_(resource),
-          cache_id_(resource) {}
+    db_query_storage() = default;
+    db_query_storage(const db_query_storage& source);
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<db_query_node> nodes_;
-    std::pmr::vector<db_query> queries_;
+    std::vector<db_query_node> nodes_;
+    std::vector<db_query> queries_;
     db_query_kind kind_{db_query_kind::select};
-    std::pmr::string target_;
-    std::pmr::string target_alias_;
-    std::pmr::vector<std::pmr::string> columns_;
-    std::pmr::vector<std::size_t> projections_;
-    std::pmr::vector<std::size_t> groups_;
-    std::pmr::vector<db_stored_order> orders_;
+    std::string target_;
+    std::string target_alias_;
+    std::vector<std::string> columns_;
+    std::vector<std::size_t> projections_;
+    std::vector<std::size_t> groups_;
+    std::vector<db_stored_order> orders_;
     bool distinct_{false};
-    std::pmr::vector<std::size_t> distinct_on_;
-    std::pmr::vector<std::size_t> returning_;
+    std::vector<std::size_t> distinct_on_;
+    std::vector<std::size_t> returning_;
     std::optional<db_query_source> source_{};
-    std::pmr::vector<db_stored_join> joins_;
-    std::pmr::vector<std::pmr::vector<std::size_t>> rows_;
-    std::pmr::vector<db_stored_assignment> assignments_;
+    std::vector<db_stored_join> joins_;
+    std::vector<std::vector<std::size_t>> rows_;
+    std::vector<db_stored_assignment> assignments_;
     std::size_t insert_query_{no_db_node};
     std::size_t predicate_{no_db_node};
     std::size_t having_{no_db_node};
@@ -366,12 +303,12 @@ public:
     std::optional<std::uint64_t> offset_{};
     std::optional<db_stored_conflict> conflict_{};
     std::optional<db_stored_lock> lock_{};
-    std::pmr::vector<db_stored_cte> ctes_;
-    std::pmr::vector<db_stored_set_operation> set_operations_;
+    std::vector<db_stored_cte> ctes_;
+    std::vector<db_stored_set_operation> set_operations_;
 
     std::optional<bool> cache_enabled_{};
     std::optional<std::chrono::milliseconds> cache_duration_{};
-    std::pmr::string cache_id_;
+    std::string cache_id_;
     // The result shape a repository builder derived this query as; with
     // cache_id_ it names the id-keyed entry.
     db_cache_shape cache_shape_{db_cache_shape::rows};

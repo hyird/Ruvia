@@ -40,7 +40,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
         const auto server = ruvia::app().stats();
-        std::pmr::string text(c.arena());
+        std::string text;
         text.append("connections=").append(std::to_string(server.active_connections_));
         text.append(" refused=").append(std::to_string(server.connections_refused_));
         text.append(" failures=").append(std::to_string(server.connection_failures_));
@@ -50,7 +50,7 @@ private:
 
     ruvia::task<ruvia::http_response> peer(ruvia::context& c) {
         const auto connection = c.conn();
-        std::pmr::string text(c.arena());
+        std::string text;
         text.append("proxy=").append(connection.via_trusted_proxy() ? "trusted" : "none");
         // scheme() describes the client's connection, including an explicitly
         // trusted proxy. tls() describes only the transport to this server.

@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <deque>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 
@@ -14,15 +13,15 @@ namespace ruvia::test {
 // Replaces `into` with every pending outbound frame through the public batch
 // drain. A single unbounded batch moves the whole buffer; on copy failure the
 // connection keeps its bytes and the exception propagates.
-inline void drain_output(ruvia::http2_connection& connection, std::pmr::string& into) {
+inline void drain_output(ruvia::http2_connection& connection, std::string& into) {
     into.clear();
     (void)connection.take_output_batch(std::numeric_limits<std::size_t>::max(), into);
 }
 
 // Collects every pending outbound frame into an owning string so a test can
 // feed, parse or compare the wire bytes.
-inline std::pmr::string drain_output(ruvia::http2_connection& connection) {
-    std::pmr::string batch;
+inline std::string drain_output(ruvia::http2_connection& connection) {
+    std::string batch;
     drain_output(connection, batch);
     return batch;
 }
@@ -45,7 +44,7 @@ public:
     }
 
 private:
-    std::pmr::deque<std::pmr::string> retained_;
+    std::deque<std::string> retained_;
 };
 
 }  // namespace ruvia::test

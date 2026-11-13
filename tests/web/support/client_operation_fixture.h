@@ -4,7 +4,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -59,7 +58,7 @@ public:
         co_return context.text("held");
     }
     ruvia::task<ruvia::http_response> echo_upload(ruvia::context& context) {
-        std::pmr::string echoed("echo:", context.arena());
+        std::string echoed("echo:");
         auto& reader = context.req().body_reader();
         while (auto chunk = co_await reader.text()) {
             echoed.append(*chunk);
@@ -92,7 +91,7 @@ template <typename value_type>
     co_return std::nullopt;
 }
 
-[[nodiscard]] inline ruvia::task<void> stop_after(const ruvia::worker_handle& worker, ruvia::stop_source& stop) {
+[[nodiscard]] inline ruvia::task<void> stop_after(const ruvia::worker_ref& worker, ruvia::stop_source& stop) {
     (void)co_await ruvia::sleep_for(worker, interruption);
     stop.request_stop();
 }
@@ -100,7 +99,7 @@ template <typename value_type>
 inline const auto timed_out = std::make_error_code(std::errc::timed_out);
 inline const auto cancelled = std::make_error_code(std::errc::operation_canceled);
 
-inline void append(std::pmr::string& target, const std::optional<std::span<const std::byte>>& chunk) {
+inline void append(std::string& target, const std::optional<std::span<const std::byte>>& chunk) {
     if (chunk) {
         target.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
     }
@@ -108,9 +107,9 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 
 // A read timeout, a stop request and an already-stopped token each end only
 // their own wait: the stalled remainder still arrives intact afterwards.
-[[nodiscard]] inline ruvia::task<void> check_body_reads(ruvia::http_client_handle client, const ruvia::worker_handle& worker) {
+[[nodiscard]] inline ruvia::task<void> check_body_reads(ruvia::http_client_ref client, const ruvia::worker_ref& worker) {
     auto response = co_await client.get("/operation/stalled-body").send();
-    std::pmr::string body(ruvia::process_resource());
+    std::string body;
     append(body, co_await response.read());
     EXPECT_EQ(body, "first-");
     EXPECT_TRUE(co_await failure_of(response.read({.timeout_ = interruption})) == timed_out);
@@ -128,7 +127,7 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 }
 
 // An interrupted collection keeps what it received for the next one.
-[[nodiscard]] inline ruvia::task<void> check_body_collection(ruvia::http_client_handle client) {
+[[nodiscard]] inline ruvia::task<void> check_body_collection(ruvia::http_client_ref client) {
     auto response = co_await client.get("/operation/stalled-body").send();
     EXPECT_TRUE(co_await failure_of(response.bytes(ruvia::default_max_buffered_body_bytes, {.timeout_ = interruption})) == timed_out);
     const auto rest = co_await response.bytes();
@@ -138,7 +137,7 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 // An upload write that cannot complete in time, or is stopped, aborts the
 // exchange: no further content is accepted and no response follows.
 [[nodiscard]] inline ruvia::task<void> check_upload_abort(
-    ruvia::http_client_handle client, const ruvia::worker_handle& worker, bool cancel) {
+    ruvia::http_client_ref client, const ruvia::worker_ref& worker, bool cancel) {
     auto exchange = co_await client.post("/operation/held-upload")
                         .upload({.expectation_ = ruvia::http_client_request_expectation::continue_value,
                             .continue_timeout_ = 10s});
@@ -156,7 +155,7 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 }
 
 // An already-stopped token sends nothing and leaves the upload usable.
-[[nodiscard]] inline ruvia::task<void> check_stopped_upload(ruvia::http_client_handle client) {
+[[nodiscard]] inline ruvia::task<void> check_stopped_upload(ruvia::http_client_ref client) {
     ruvia::stop_source stop;
     stop.request_stop();
     auto exchange = co_await client.post("/operation/echo-upload").upload({});
@@ -171,7 +170,7 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 }
 
 // Waiting for the final head is a read: its timeout ends only that wait.
-[[nodiscard]] inline ruvia::task<void> check_response_wait(ruvia::http_client_handle client) {
+[[nodiscard]] inline ruvia::task<void> check_response_wait(ruvia::http_client_ref client) {
     auto exchange = co_await client.post("/operation/late-head").upload({});
     co_await exchange.body().end();
     EXPECT_TRUE(co_await failure_of(exchange.response({.timeout_ = interruption})) == timed_out);
@@ -181,7 +180,7 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
 }
 
 // A tunnel read timeout keeps the tunnel; stopped output sends nothing.
-[[nodiscard]] inline ruvia::task<void> check_tunnel(ruvia::http_client_handle client) {
+[[nodiscard]] inline ruvia::task<void> check_tunnel(ruvia::http_client_ref client) {
     auto opened = co_await client.connect("operation.test:443").open();
     auto* tunnel = opened.tunnel();
     EXPECT_TRUE(tunnel != nullptr);
@@ -196,14 +195,14 @@ inline void append(std::pmr::string& target, const std::optional<std::span<const
     EXPECT_THROW((void)tunnel->text({.timeout_ = 0ms}), std::invalid_argument);
     co_await tunnel->write("ping");
     co_await tunnel->finish();
-    std::pmr::string echoed(ruvia::process_resource());
+    std::string echoed;
     while (auto chunk = co_await tunnel->text()) {
         echoed.append(*chunk);
     }
     EXPECT_EQ(echoed, "ping");
 }
 
-[[nodiscard]] inline ruvia::task<void> exercise(ruvia::http_client_handle client, const ruvia::worker_handle& worker) {
+[[nodiscard]] inline ruvia::task<void> exercise(ruvia::http_client_ref client, const ruvia::worker_ref& worker) {
     co_await check_body_reads(client, worker);
     co_await check_body_collection(client);
     co_await check_upload_abort(client, worker, false);

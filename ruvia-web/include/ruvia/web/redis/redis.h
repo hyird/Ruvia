@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #include "ruvia/web/redis/redis_types.h"
 
 #ifdef RUVIA_ENABLE_REDIS

@@ -121,7 +121,7 @@ ruvia::task<void> read_operation_to_end(ruvia::task<std::optional<ruvia::websock
 
 // Reads interrupted by their own deadline or stop request keep the session;
 // close(4001) then completes the handshake under a pending read.
-ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ruvia::worker_handle& worker) {
+ruvia::task<void> close_under_pending_read(ruvia::websocket& websocket, const ruvia::worker_ref& worker) {
     const auto start = co_await websocket.read();
     EXPECT_TRUE(start && start->payload() == "start");
     bool timed_out = false;
@@ -225,8 +225,8 @@ ruvia::task<std::string> receive_fragmented(auto& peer, bool compressed, std::si
     if (!compressed) {
         co_return payload;
     }
-    ruvia::websocket_deflate_codecs codecs(ruvia::process_resource());
-    std::pmr::string inflated(ruvia::process_resource());
+    ruvia::websocket_deflate_codecs codecs;
+    std::string inflated;
     EXPECT_TRUE(codecs.inflate_message(payload, inflated, ruvia::protocol_byte_limit::unlimited()) ==
                 ruvia::websocket_inflate_result::ok);
     co_return std::string(inflated);
@@ -612,7 +612,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         }
         stream.next_layer().connect(destination.endpoint_);
         stream.handshake(asio::ssl::stream_base::client);
-        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        std::string wire(ruvia::http2_client_preface);
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
         asio::write(stream, asio::buffer(wire));
         const auto deadline = std::chrono::steady_clock::now() + 3s;
@@ -625,7 +625,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         }
         wire.clear();
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 1, 0, {});
-        std::pmr::string block(ruvia::process_resource());
+        std::string block;
         for (const auto& field : std::array<std::pair<std::string_view, std::string_view>, 7>{{{":method", "CONNECT"}, {":protocol", "websocket"}, {":scheme", "https"},
                  {":authority", destination.authority_}, {":path", "/invalid-version"},
                  {"sec-websocket-version", "12"}, {"sec-websocket-protocol", "standalone.v1"}}}) {
@@ -634,7 +634,7 @@ void reject_invalid_extended_connect(const target& destination, const std::files
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, 1, block);
         asio::write(stream, asio::buffer(wire));
         block.clear();
-        ruvia::hpack_decoder decoder({.resource_ = ruvia::process_resource()});
+        ruvia::hpack_decoder decoder;
         bool ended = false;
         for (;;) {
             const auto frame = ruvia::test::read_frame(stream, deadline);
@@ -707,12 +707,12 @@ ruvia::task<void> exercise(ruvia::http_client& client, const target& destination
         observed.scenario_ = "/limit";
         wire_peer peer(io);
         co_await peer.open(client, destination, "/limit");
-        ruvia::websocket_deflate_codecs codecs(ruvia::process_resource());
+        ruvia::websocket_deflate_codecs codecs;
         const auto message_frame = [&](std::string_view payload, bool compressed) {
             if (!compressed) {
                 return masked_frame(1, payload);
             }
-            std::pmr::string encoded(ruvia::process_resource());
+            std::string encoded;
             if (!codecs.deflate_message(payload, encoded, 6, 15)) {
                 throw std::runtime_error("test message compression failed");
             }

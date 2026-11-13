@@ -29,14 +29,14 @@ int main() {
 
 | 方法签名 | 说明 |
 | --- | --- |
-| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限、请求 Arena 参数及响应压缩与 CORS 策略 |
+| `application& server(server_config config)` | 配置业务 worker 数量、超时、连接数/请求数上限、入站缓冲预算及响应压缩与 CORS 策略 |
 | `application& listen(listen_config config)` | 注册监听端点（支持可多次调用监听多个地址/端口，重复端点会报错拒绝；TLS 证书在调用时立即加载校验；`inherited_sockets_` 接管已绑定的 socket） |
-| `task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config)` | 异步替换 HTTPS 监听器及其 HTTP/3 服务的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `task<void> add_listener(worker_handle caller, listen_config config)` | 异步新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
-| `task<prepared_listener> prepare_listener(worker_handle caller, listen_config config)` / `prepare_listeners(caller, span<const listen_config>)` | 先准备单项或整批监听，再由调用方开放接入，见下方“监听准备与激活” |
-| `task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {})` | 停止新准入；`close_connections_` 可同时断开该监听器的既有连接 |
-| `task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const` | 仅 POSIX：异步复制全部 worker 的监听 socket，供 exec 热升级交接 |
-| `task<bool> close_connection(worker_handle caller, std::uint64_t id)` | 异步按 ID 请求断开整条连接，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
+| `task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config)` | 异步替换 HTTPS 监听器及其 HTTP/3 服务的身份集合，之后的新握手使用新集合，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
+| `task<void> add_listener(worker_ref caller, listen_config config)` | 异步新增监听器：全部 worker 准备成功后统一开放接入，任一失败全部回滚，见 [1.2](#ruvialisten_config-与-ruviatls_config) |
+| `task<prepared_listener> prepare_listener(worker_ref caller, listen_config config)` / `prepare_listeners(caller, span<const listen_config>)` | 先准备单项或整批监听，再由调用方开放接入，见下方“监听准备与激活” |
+| `task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {})` | 停止新准入；`close_connections_` 可同时断开该监听器的既有连接 |
+| `task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const` | 仅 POSIX：异步复制全部 worker 的监听 socket，供 exec 热升级交接 |
+| `task<bool> close_connection(worker_ref caller, std::uint64_t id)` | 异步按 ID 请求断开整条连接，返回值契约见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `on_connection_admission(...)` / `on_connection_open(...)` / `on_connection_close(...)` | 配置传输准入、生命周期与连接附加状态，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `on_http2_frame(...)` / `on_http2_headers(...)` / `on_http3_frame(...)` / `on_http3_field(...)` | 启用 HTTP/2 结构化帧与 HPACK 字段观察（需 `RUVIA_ENABLE_HTTP2`）及 HTTP/3 帧与 QPACK 字段观察（需 `RUVIA_ENABLE_HTTP3`），见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `template <middleware M, typename... Args> application& use(Args&&... args)` | 注册全局中间件（每个 worker 独立构造一份实例） |
@@ -64,8 +64,8 @@ int main() {
 | `void stop()` | 线程安全地请求停机，直接断连、不设排空阶段：停止接入（取消待决 accept 与 QUIC 接收）→ 立即关闭全部连接（HTTP/1、HTTP/2、WebSocket、隧道不发送响应、`GOAWAY` 或关闭握手；HTTP/3 立即发送 `CONNECTION_CLOSE(H3_NO_ERROR)`），在途处理器观察到 `c.stop_token()` → 先停 I/O 再 join 后台操作 |
 | `http_server_stats stats() const` | 线程安全地汇总所有 worker 的连接与故障统计 |
 | `blocking_pool_stats blocking_pool_stats() const` | 线程安全地读取阻塞线程池统计 |
-| `std::pmr::vector<web_worker_handle> workers() const` | 获取全部业务 worker 的跨线程派发句柄；结果绑定 `process_resource()` |
-| `web_worker_handle worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 句柄 |
+| `std::vector<web_worker_ref> workers() const` | 获取全部业务 worker 的跨线程派发引用 |
+| `web_worker_ref worker_for(std::uint64_t key) const` / `worker_for(std::string_view key) const` | 按哈希键确定性选择单个业务 worker 引用 |
 
 应用公开回调统一使用 `move_only_function`，签名中的 `noexcept` 在构造期受编译器约束；所有权与退役规则见 [core 可调用包装器](core-and-http.md)。
 
@@ -98,7 +98,6 @@ int main() {
 | `max_inbound_buffer_bytes_per_connection_` | `std::size_t`（默认 `64 MiB`） | 单连接入站缓冲字节上限 |
 | `max_stream_body_bytes_` | `std::optional<std::size_t>`（默认无上限） | 流式路由请求体总字节上限 |
 | `max_websocket_message_bytes_` | `std::size_t`（默认 `default_max_websocket_message_bytes`） | WebSocket 单条消息最大字节数 |
-| `request_arena_initial_bytes_` | `std::size_t`（默认 4 KiB） | 请求 Arena 初始字节数，须大于零；内存归属与回收见 [core 内存资源契约](core-and-http.md#4-跨线程通道单次交付信号与内存资源) |
 | `compression_` | `std::optional<compression_config>`（默认不启用） | 宿主级响应内容协商压缩（gzip / deflate / br / zstd）与预压缩静态变体协商，见下文“压缩、CORS 与可信代理配置” |
 | `cors_` | `std::optional<http_cors_policy_config>`（默认不启用） | 宿主级 CORS 策略（复用 `ruvia::http_cors_policy`），含路由引擎 `OPTIONS` 预检回答 |
 
@@ -298,7 +297,7 @@ ruvia::app().listen({
   - `on_not_found` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c)`。
   - 支持通过 `{.prefix_ = "/api", .handler_ = &api_error}` 注册前缀作用域处理器，按最长完整路径段匹配（例如 `"/api"` 匹配 `"/api/users"` 但不匹配 `"/apix"`）。等价前缀重复注册或前缀 `"/"`（全局只用无前缀形式）抛出 `std::invalid_argument`。
 - **异常文本格式化**：
-  - `std::pmr::string ruvia::exception_text(const std::exception_ptr& exception)`：将任意捕获的异常安全格式化为 UTF-8 描述文本；结果绑定 `process_resource()`。
+  - `std::string ruvia::exception_text(const std::exception_ptr& exception)`：将任意捕获的异常安全格式化为 UTF-8 描述文本。
 
 ---
 
@@ -414,7 +413,7 @@ ruvia::app()
 | `local()` / `remote()` | 本端与对端地址端口（`ip_endpoint`，地址为拥有字节的 `ip_address`，文本经 `to_string()` 获取） |
 | `tls()` | 明文监听器为 `nullptr`；否则为 `tls_connection_transport`（`alpn()`、`server_name()`、`client_certificate_subject()`） |
 | `stop_token()` | 应用停机时请求停止 |
-| `worker()` | 所属核心 `worker_handle`；可组合 `sleep_for`、`task_scope` 与 `run_blocking`，不会切换连接线程 |
+| `worker()` | 所属核心 `worker_ref`；可组合 `sleep_for`、`task_scope` 与 `run_blocking`，不会切换连接线程 |
 | `connection_state()` | 连接打开回调返回的附加对象，见 [1.6](#16-连接观察钩子ruviawebserver_observationh) |
 | `co_await read(operation = {})` | 下一段至多 4 KiB 的入站字节；视图有效到下一次 `read()` 开始；对端结束发送方向（TCP FIN、TLS `close_notify`，或 TLS 对端未发 `close_notify` 直接关闭 TCP）后返回 `std::nullopt`，此后重复返回 |
 | `co_await write(bytes, operation = {})` | 发送字节；调用时即复制输入 |
@@ -475,7 +474,7 @@ ruvia::app()
 | `worker()` / `worker_state<T>()` | 所属核心 worker 与其注册状态，不依赖路由分发 |
 | `run_blocking(...)` | 绑定请求取消的阻塞卸载；参数及结果契约同 `context::run_blocking()` |
 | `client(alias)` / `db(alias)` / `redis(alias)` | 借用当前 worker 注册的出站能力（`router::dispatch()` 期间为该 router 借入的客户端）；支持无参默认别名，后两者受构建特性控制 |
-| `arena()` / `pool()` / `env()` | 请求内存、进程 PMR 与宿主环境视图 |
+| `env()` | 宿主环境只读视图 |
 | `draft()` | 编辑下一次文件工厂、流式提交或隧道/WebSocket 接受使用的响应元数据 |
 | `response()` | 流式响应（`response_stream_writer`）：提交、写正文、以可选 Trailer 结束 |
 | `co_await file(options)` / `static_file(root, options)` | 复用 `context` 文件工厂，返回完整 `http_response`；选项在调用返回前拥有化，静态根借用至任务完成，禁止传入临时根 |
@@ -590,12 +589,12 @@ int main() {
         .dispatch_ = ruvia::listener_dispatch::request_stream});
     runtime.start();
     const auto startup = [&]() -> ruvia::task<void> {
-        co_await server.start(loops[0].handle());
+        co_await server.start(loops[0].worker());
     };
     loops[0].start(startup()).get();
     std::cin.get();  // 仅外部控制线程阻塞；worker 不调用 get()。
     const auto shutdown = [&]() -> ruvia::task<void> {
-        co_await server.shutdown(loops[0].handle());
+        co_await server.shutdown(loops[0].worker());
     };
     loops[0].start(shutdown()).get();
     runtime.join();
@@ -614,7 +613,7 @@ int main() {
 | `connect_timeout_` / `read_timeout_` / `write_timeout_` | 连接与读写独立期限；`operation_options` 只能收紧配置期限并附加取消，从实际等待时起计 |
 | `co_await connect(options = {})` | 在所属循环建立一次连接 |
 | `co_await read(options = {})` | 至多 4 KiB；仅 `nullopt` 为 EOF，字节借用至下一次读取或关闭。EOF 不结束写方向 |
-| `co_await write(bytes, options = {})` | 写完全部输入；返回冷任务前拥有化输入，同 `process_resource()` 的精确 PMR 右值零拷贝接管，其他资源同步重绑 |
+| `co_await write(bytes, options = {})` | 写完全部输入；返回冷任务前拥有化输入，`std::string&&` 右值零拷贝接管 |
 | `close()` / `co_await shutdown()` | 前者任意线程取消整条连接，后者在所属循环等待回收；不是半关闭或 TLS 优雅关闭 |
 | `worker()` | 借用所属核心 worker |
 
@@ -623,7 +622,7 @@ int main() {
 
 ### 1.11 显式路由组合（`"ruvia/web/router.h"`）
 
-`router(worker_handle)` 直接复用路由编译与分发引擎，不依赖 `application`、控制器宏或全局注册表。
+`router(worker_ref)` 直接复用路由编译与分发引擎，不依赖 `application`、控制器宏或全局注册表。
 
 | 入口 | 契约 |
 | --- | --- |
@@ -644,7 +643,7 @@ int main() {
 ```cpp
 #include "ruvia/web/context.h"
 #include "ruvia/web/http_server.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #include "ruvia/web/router.h"
 #include "ruvia/web/session.h"
 
@@ -652,7 +651,7 @@ int main() {
 ruvia::redis_client redis(loop, {.host_ = "127.0.0.1", .port_ = 6379,
     .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}});
 co_await redis.connect();
-ruvia::router routes(loop.handle());
+ruvia::router routes(loop.worker());
 routes.bind_redis("default", redis)
     .rate_limit({.rule_ = {.max_requests_ = 100, .window_ = std::chrono::seconds(1)}});
 routes.use<ruvia::session_middleware>();
@@ -728,7 +727,7 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 - **命名参数段**：`/api/users/:id`（通过 `c.req().param("id")` 读取）
 - **尾部通配符**：`/api/files/*`（匹配余下路径，通过 `c.req().param("*")` 读取）
 - **路径等价**：请求路径与注册模式按同一规范形式比较：以字面 `/` 切分路径段，段内按百分号解码后的字节比较。因此 `/users/%61dmin`、`/users/adm%69n` 与 `/users/admin` 命中同一路由（十六进制大小写不影响匹配，如 `caf%c3%a9` 与 `caf%C3%A9`），而 `%2F` 始终留在所在段内，不作为路径分隔符。该形式与路径参数的解码结果、`use_at` 前缀作用域中间件以及前缀错误/404 处理器的匹配规则一致；比 RFC 3986 的等价规则更宽，`%3A` 与 `:` 这类保留字符的编码与字面形式也视为同一路径。同一方法下仅拼写不同的两个模式（如 `/a` 与 `/%61`）属于重复注册，启动时抛出 `std::invalid_argument`。重复判定逐段进行，参数段与通配符段只与同类段相同：以 `:` 开头的字面段或字面 `*` 只能编码书写（`%3Aid`、`%2A`），与同位置的 `:id` 参数或 `*` 通配符是不同路由，可同时注册。
-- **反向路由生成**：`c.url_for("/api/users/:id", {"42"})` 返回经过百分号编码的 `std::pmr::string`（若传入未注册的路由模式则直接抛异常，防止生成死链）。
+- **反向路由生成**：`c.url_for("/api/users/:id", {"42"})` 返回经过百分号编码的 `std::string`（若传入未注册的路由模式则直接抛异常，防止生成死链）。
 
 ---
 
@@ -751,7 +750,7 @@ WebSocket 处理器通过 `c.websocket()` 获取连接（`"ruvia/web/websocket.h
 | `c.req().negotiate(type, supported)` | 在候选列表中按 `Accept*` 权重协商最佳匹配（单候选时 `has_value()` 即表示客户端接受该值） |
 | `co_await c.req().text(operation = {})` / `co_await c.req().bytes(operation = {})` | 读取完整缓冲请求体视图（`std::string_view` / `std::span<const std::byte>`） |
 | `co_await c.req().discard_body(operation = {})` | 丢弃剩余请求体字节 |
-| `co_await c.req().multipart(operation = {})` | 解析缓冲式 `multipart/form-data`，返回 `std::pmr::vector<multipart_part>` |
+| `co_await c.req().multipart(operation = {})` | 解析缓冲式 `multipart/form-data`，返回 `std::vector<multipart_part>` |
 | `c.req().validated<T>()` | 获取由校验中间件（`json_body<T>` 等）已完成解析和校验的模型常量引用 |
 | `co_await c.req().json_if<T>(operation = {})` / `co_await c.req().form_if<T>(operation = {})` | 按需结构化解析并校验 JSON 或 Form 为 `std::optional<T>`（仅当 `Content-Type` 不匹配时返回 `std::nullopt`） |
 | `c.conn().remote()` / `c.conn().client()` | 直连对端 `ip_endpoint`（`.address()` 返回拥有字节的 `ip_address`，`.port()` 返回端口）与经过 `trusted_proxies` 解析后的真实客户端文本地址 |
@@ -768,7 +767,7 @@ HTTP/1 定长正文已完整预读且无需内容解码时，缓冲读取直接�
 - **HTTP/1 惰性正文终态**：读取成功后复用缓冲，丢弃不清除已缓冲内容；完成丢弃后拒绝读取，原始正文消费失败后拒绝读取与丢弃，均抛 `std::logic_error`。
 
 - **Cookie 缓存**：首次枚举时单遍解析全部 `Cookie` 首部；后续读取复用完整结果，分配失败不发布部分列表。
-- **Cookie 借用**：描述符使用 `process_resource()` 并随 Context 销毁；名称和值借用请求首部，不得逃逸请求生命周期。
+- **Cookie 借用**：描述符随 Context 销毁；名称和值借用请求首部，不得逃逸请求生命周期。
 
 ### 3.2 构造响应与设置响应元数据
 
@@ -788,9 +787,8 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
     // 1. 静态字面量零拷贝响应：
     // co_return c.text(ruvia::static_text("created\n"));
 
-    // 2. 使用请求 Arena 构造 PMR 字符串并移动返回：
-    std::pmr::string body(c.allocator<char>());
-    body.append("created\n");
+    // 2. 构造动态字符串并零拷贝移动返回：
+    std::string body("created\n");
     co_return c.text(std::move(body));
 }
 ```
@@ -800,7 +798,7 @@ ruvia::task<ruvia::http_response> handler(ruvia::context& c) {
 | `c.draft()` / `c.edit_response()` / `c.policy()` | 返回显式元数据 editor：分别编辑下一次构造的草稿、已选定的缓冲响应、跨替换的请求级响应策略 |
 | `editor.status(code)` / `header(name, value, options = {})` / `remove_header(name)` / `priority(fields)` | 设置 `200..599` 状态、响应头或 RFC 9218 优先级；头默认替换，可指定 `http_response_header_mode::append` |
 | `editor.set_cookie(options)` / `set_signed_cookie(options)` / `delete_cookie(options)` | 设置普通/HMAC 签名 Cookie 或用过去的 `Expires` 使其过期；`max_age_ = 0s` 同样使用过去的 `Expires`，并覆盖同时设置的 `expires_` |
-| `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::pmr::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
+| `http_response text(...)` / `html(...)` / `body(...)` | 构造 `text/plain; charset=utf-8`、`text/html; charset=utf-8` 或原始响应体（支持字符串字面量、`std::string_view`、`std::string&&`、`std::span<const std::byte>`、`ruvia::static_text`） |
 | `template <typename T> http_response json(const T& value)` | 将 `RUVIA_MODEL` 或模型数组（`ruvia::array<T>` / `boxed_array<T>`）序列化为 `application/json` 响应 |
 | `http_response redirect(redirect_response_options options)` | 构造重定向响应（默认 `302 Found`）；绝对或 `//` 开头的 Location authority 含 `\` 时抛 `std::invalid_argument`，避免浏览器把反斜杠当路径分隔符而改变主机 |
 | `task<http_response> file(file_response_options options)` | 在阻塞池上打开磁盘文件并构造响应（`co_return co_await c.file(...)`），支持 Range 与条件请求；任务完成时状态、校验器、长度与打开的句柄均已确定 |
@@ -831,7 +829,7 @@ auto sub = co_await c.dispatch({
 阻塞任务在 worker 事件循环借用的应用阻塞池上执行（默认启用，可通过 `app().blocking_pool({...})` 调整；`blocking_pool(nullptr)` 禁用后返回 `blocking_status::unavailable`）。在请求中卸载耗时同步计算：
 
 ```cpp
-std::pmr::string input_copy(c.req().query("data").value_or(""), ruvia::process_resource());
+std::string input_copy(c.req().query("data").value_or(""));
 auto result = co_await c.run_blocking(
     [owned = std::move(input_copy)]() {
         return compute_expensive_digest(owned);
@@ -856,13 +854,12 @@ auto digest = std::move(result).take_value();
 
 ### 4.1 自定义中间件（`"ruvia/web/middleware.h"`）
 
-任何声明为 `final`、不继承基类，且提供 `ruvia::task<void> handle(ruvia::context&, ruvia::next&)` 的类均满足 `ruvia::middleware` 概念；中间件自行产生响应时在返回前调用 `c.respond(...)`：
+任何声明为 `final`、不继承基类，且提供 `ruvia::task<void> invoke(ruvia::context&, ruvia::next&)` 的类均满足 `ruvia::middleware` 概念；中间件自行产生响应时在返回前调用 `c.respond(...)`：
 
 ```cpp
 class timing_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
-        // 跨替换保留的策略在 next 前或后声明含义相同。
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         c.policy().header("X-Policy", "retained");
         co_await next_value();
         // 仅对当前缓冲响应后处理；不能修改已经提交的流式响应。
@@ -884,7 +881,7 @@ struct current_user {
 
 class auth_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         current_user user{.id_ = "u_100"};
         auto binding = c.bind_request_state(user);
         co_await next_value();
@@ -1018,14 +1015,14 @@ ruvia::task<ruvia::http_response> create_user(ruvia::context& c) {
 
 - **JSON / Form 编解码**：
   - `T ruvia::from_json<T>(std::string_view json, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，模型字段校验失败抛携带 issues 的 `ruvia::http_error`）
-  - `std::pmr::string ruvia::to_json(const T& value, model_options options = {})`（无短转义形式的控制字符输出为小写 `\u00xx`）
+  - `std::string ruvia::to_json(const T& value)`（无短转义形式的控制字符输出为小写 `\u00xx`）
   - `T ruvia::from_form<T>(std::string_view form, model_parse_options options = {})`（解析失败抛 `std::invalid_argument`，字段校验失败抛携带 issues 的 `ruvia::http_error`）
-- **数值与布尔 JSON 输出**：`to_json()` 不按标量类型的长度上界预分配；短输出复用返回字符串的内联存储，超出容量时才使用指定 PMR 分配。
+- **数值与布尔 JSON 输出**：`to_json()` 不按标量类型的长度上界预分配；短输出复用返回字符串的内联存储。
 - **零拷贝动态 JSON 视图（`"ruvia/web/model.h"`）**：
   - `ruvia::json_object::parse(std::string_view body, model_parse_options options = {})` / `ruvia::json_value::parse(std::string_view body, model_parse_options options = {})`（直接返回值，语法非法抛 `std::invalid_argument`）
   - 支持 `obj.get<ruvia::string>("key")`、`obj.get<ruvia::int64>("count")`、`obj.for_each_field([](std::string_view key, const ruvia::json_value& val) { ... })`、`val.for_each_element([](const ruvia::json_value& item) { ... })`。`get<T>()` / `get<T>("key")` 的结果可能借用 token 字节，因此只能在左值 token 上调用，右值 token 上调用编译失败。
   - `get<T>()` 把整个 token 转换为 `T`，返回 `std::optional<T>`。`get<T>("key")` 是成员查找，返回 `ruvia::json_field_lookup<T>`：`status()` 为 `ruvia::unique_lookup_status::absent`（无此成员，非对象 token 一律为此）、`found`（恰好一个成员名按转义解码后等于 `key`）或 `repeated`（同名成员出现两次及以上；RFC 8259 §4 未定义重复名语义，因此不选取任何一次出现，与模型类型化解析拒绝重复字段一致，扫描在第二次出现处立即停止）。`value()` 仅在 `found` 且成员值能转换为 `T`（模型类型还须通过字段校验）时有值；`found` 而 `value()` 为空表示成员存在但不是合法的 `T`。左值查找结果的 `value()` 返回引用，右值查找结果的 `value()` 按值移出 `std::optional<T>`（如 `if (auto port = obj.get<ruvia::uint32>("port").value())`），值同样不能比被查询的 token 活得久。
-  - 移动构造保留 token 的借用/拥有方式；移动赋值保留目标 PMR 并拥有化结果。成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，源 PMR 不变，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；跨资源拥有化失败时两端原值均保留。移动后重新取得借用视图，不继续使用旧视图。
+  - 成功移动或右值字段转移后，源 `json_value` 恢复为 `null`，源 `json_object` 恢复为 `{}`，仍可查询、赋值或作为模型成员序列化；重置本身不分配。自移动赋值保持原值；移动后重新取得借用视图，不继续使用旧视图。
 - **命令式校验器 `ruvia::validator`（`"ruvia/web/validation.h"`）**：
   - 提供 `.required(opt, field)`、`.min_length(opt, field, n)`、`.max_length(opt, field, n)`、`.range(opt, field, low, high)`、`.one_of(opt, field, list)`、`.add(field, code, message)`，最后调用 `.throw_if_invalid(validation_failure_options = {})` 抛出携带 issues 的 `ruvia::http_error`（默认 400 / `validation_failed`）。
 

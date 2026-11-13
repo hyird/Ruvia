@@ -13,18 +13,18 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/integration/worker_context_capabilities.h"
 
 namespace ruvia {
 
-class http_client_handle;
+class http_client_ref;
 #ifdef RUVIA_ENABLE_DATABASE
-class db_handle;
+class db_session;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-class redis_handle;
+class redis_session;
 #endif
 
 namespace detail {
@@ -39,8 +39,8 @@ public:
     web_worker_context(web_worker_context&&) = delete;
     web_worker_context& operator=(web_worker_context&&) = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
     [[nodiscard]] ::ruvia::stop_token stop_token() const noexcept;
 
     template <typename state_type>
@@ -61,27 +61,27 @@ public:
     }
 
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_handle db() const;
-    [[nodiscard]] db_handle db(std::string_view alias) const;
+    [[nodiscard]] db_session db() const;
+    [[nodiscard]] db_session db(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_handle redis() const;
-    [[nodiscard]] redis_handle redis(std::string_view alias) const;
+    [[nodiscard]] redis_session redis() const;
+    [[nodiscard]] redis_session redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] http_client_handle client() const;
-    [[nodiscard]] http_client_handle client(std::string_view alias) const;
+    [[nodiscard]] http_client_ref client() const;
+    [[nodiscard]] http_client_ref client(std::string_view alias) const;
 
 private:
     friend class detail::web_worker_dispatch;
 
-    web_worker_context(const worker_handle& worker_value,
+    web_worker_context(const worker_ref& worker_value,
         const detail::worker_client_registry_view& client_registries,
         const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept;
-    web_worker_context(worker_handle&&, const detail::worker_client_registry_view&,
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, const ::ruvia::stop_token&) = delete;
-    web_worker_context(const worker_handle&, const detail::worker_client_registry_view&,
+    web_worker_context(const worker_ref&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
-    web_worker_context(worker_handle&&, const detail::worker_client_registry_view&,
+    web_worker_context(worker_ref&&, const detail::worker_client_registry_view&,
         const detail::worker_state_registry*, ::ruvia::stop_token&&) = delete;
 
     // The server worker owns these values and joins every posted job before
@@ -105,9 +105,9 @@ struct web_worker_stats final {
     std::size_t outstanding_{0};
 };
 
-class web_worker_handle final {
+class web_worker_ref final {
 public:
-    web_worker_handle() noexcept = default;
+    web_worker_ref() noexcept = default;
 
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
@@ -126,7 +126,7 @@ public:
 private:
     friend class detail::web_worker_dispatch;
 
-    web_worker_handle(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
+    web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept;
 
     [[nodiscard]] web_worker_post_result post_task(
         move_only_function<task<void>(web_worker_context&)> task) const;

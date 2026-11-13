@@ -1,14 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
 // Internal startup-time middleware descriptor.
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/detail/router/route_handlers.h"
 #include "ruvia/web/middleware.h"
@@ -162,7 +160,7 @@ public:
     }
 
 private:
-    std::pmr::string prefix_{process_resource()};
+    std::string prefix_{};
     controller_middleware_descriptor descriptor_;
     release_args_type release_args_{nullptr};
 };

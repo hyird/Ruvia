@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <utility>
 
 #include "ruvia/http/borrowed_text.h"

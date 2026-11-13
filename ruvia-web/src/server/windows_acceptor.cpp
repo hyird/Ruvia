@@ -29,7 +29,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 
 #include "server/connection_count.h"
@@ -238,7 +237,7 @@ struct windows_acceptor::udp_transport final {
 
     asio::ip::udp::socket socket_;
     std::size_t listeners_{0};
-    std::pmr::vector<std::byte> receive_buffer_{http3_max_udp_payload_bytes, process_resource()};
+    std::vector<std::byte> receive_buffer_{http3_max_udp_payload_bytes};
     bool receiving_{false};
     LPFN_WSARECVMSG receive_message_{nullptr};
     LPFN_WSASENDMSG send_message_{nullptr};
@@ -293,13 +292,13 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
       io_(runtime_.io_context()),
       failure_sink_(failure),
       finalize_signal_(runtime_.handle()),
-      tasks_(runtime_.handle(), {.resource_ = process_resource()}),
-      workers_(process_resource()),
-      tcp_listeners_(process_resource())
+      tasks_(runtime_.handle()),
+      workers_(),
+      tcp_listeners_()
 #if defined(RUVIA_ENABLE_HTTP3)
       ,
       directory_(directory),
-      udp_listeners_(process_resource())
+      udp_listeners_()
 #endif
 {
     if (worker_count == 0) {
@@ -307,7 +306,7 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
     }
     workers_.reserve(worker_count);
     for (std::size_t index = 0; index < worker_count; ++index) {
-        workers_.push_back(make_pmr_object<worker_slot>(process_resource()));
+        workers_.push_back(std::make_unique<worker_slot>());
     }
     tcp_listeners_.reserve(listeners.size());
     for (std::size_t index = 0; index < listeners.size(); ++index) {
@@ -319,25 +318,21 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
                 throw std::logic_error("Windows HTTP/3 acceptor requires the worker directory and a secret");
             }
             http3_index = udp_listeners_.size();
-            udp_listeners_.push_back(make_pmr_object<udp_listener>(process_resource(), io_,
-                asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_),
-                definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_));
+            udp_listeners_.push_back(std::make_unique<udp_listener>(io_, asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_), definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_));
         }
 #endif
-        tcp_listeners_.push_back(make_pmr_object<tcp_listener>(
-            process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_));
+        tcp_listeners_.push_back(std::make_unique<tcp_listener>(io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_));
     }
     runtime_.configure({
         .startup_ = [this] {
             // Startup runs before the context does; the task starts in its first turn.
             asio::post(io_, [this] {
                 ruvia::async_start(run(),
-                    asio::bind_executor(io_, asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()),
-                                                 [this](std::exception_ptr failure) noexcept {
+                    asio::bind_executor(io_, [this](std::exception_ptr failure) noexcept {
                                                      if (failure) {
                                                          (void)runtime_.fail(failure);
                                                      }
-                                                 })));
+                                                 }));
             }); },
         .serve_ = [this] { serve_on_context(); complete_phase(false); },
         .stop_admission_ = [this] {
@@ -407,7 +402,7 @@ void windows_acceptor::complete_phase(bool startup, std::exception_ptr failure) 
     }
 }
 
-task<void> windows_acceptor::start(worker_handle caller) {
+task<void> windows_acceptor::start(worker_ref caller) {
     runtime_control_completion completion(caller);
     {
         std::lock_guard lock(phase_mutex_);
@@ -434,7 +429,7 @@ task<void> windows_acceptor::start(worker_handle caller) {
     }
 }
 
-task<void> windows_acceptor::serve(worker_handle caller) {
+task<void> windows_acceptor::serve(worker_ref caller) {
     runtime_control_completion completion(caller);
     {
         std::lock_guard lock(phase_mutex_);
@@ -457,7 +452,7 @@ task<void> windows_acceptor::serve(worker_handle caller) {
     }
 }
 
-task<void> windows_acceptor::join(worker_handle caller, asio::io_context& caller_io) {
+task<void> windows_acceptor::join(worker_ref caller, asio::io_context& caller_io) {
     if (!caller.is_current()) {
         throw std::logic_error("acceptor join must run on its caller worker");
     }
@@ -578,11 +573,10 @@ void windows_acceptor::open_udp_listener(udp_listener& listener) {
             }
         }
     }
-    auto transport = std::allocate_shared<udp_transport>(
-        std::pmr::polymorphic_allocator<udp_transport>(process_resource()), io_);
+    auto transport = std::make_shared<udp_transport>(io_);
     auto& socket = transport->socket_;
     const auto inherited = listener.inherited_ != nullptr ? listener.inherited_->claim_udp()
-                                                          : std::pmr::vector<native_socket>(process_resource());
+                                                          : std::vector<native_socket>();
     listener.inherited_.reset();
     if (!inherited.empty()) {
         // listen() admitted exactly one, bound to this endpoint.
@@ -665,11 +659,10 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
     if (tcp_listeners_.size() <= index) {
         tcp_listeners_.resize(index + 1);
     }
-    auto tcp = make_pmr_object<tcp_listener>(
-        process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_);
+    auto tcp = std::make_unique<tcp_listener>(io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_);
 #if defined(RUVIA_ENABLE_HTTP3)
-    std::unique_ptr<udp_listener, pmr_object_deleter<udp_listener>> udp(
-        nullptr, pmr_object_deleter<udp_listener>{process_resource()});
+    std::unique_ptr<udp_listener> udp(
+        nullptr, pmr_object_deleter<udp_listener>{});
     if (http3_index.has_value()) {
         if (udp_listeners_.size() <= *http3_index) {
             udp_listeners_.resize(*http3_index + 1);
@@ -678,9 +671,7 @@ void windows_acceptor::prepare_listener(std::size_t index, [[maybe_unused]] std:
         if (directory_ == nullptr) {
             directory_ = directory;
         }
-        udp = make_pmr_object<udp_listener>(process_resource(), io_,
-            asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_),
-            definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_);
+        udp = std::make_unique<udp_listener>(io_, asio::ip::udp::endpoint(definition.endpoint_.address(), definition.http3_->port_), definition.http3_->secret_, *http3_index, definition.inherited_sockets_, definition.ipv6_only_);
     }
 #endif
     open_tcp_listener(*tcp);
@@ -992,7 +983,7 @@ bool windows_acceptor::transmit(std::size_t worker_index, std::size_t http3_list
     }
     try {
         const auto status = runtime_.handle().post_factory([&]() -> move_only_function<void()> {
-            std::pmr::vector<std::byte> owned(bytes.begin(), bytes.end(), process_resource());
+            std::vector<std::byte> owned(bytes.begin(), bytes.end());
             return [this, http3_listener_index, remote, local, interface_index, owned = std::move(owned),
                        token = std::move(token)]() mutable noexcept {
                 send_datagram(http3_listener_index, remote, owned, local, interface_index);

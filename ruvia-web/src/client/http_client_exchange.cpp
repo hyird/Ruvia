@@ -9,12 +9,11 @@
 #include "client/http_client_output_operation.h"
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
+#include "integration/operation_lane_lease.h"
 namespace ruvia::detail {
 struct http_client_upload_end_input final {
     http_client_response pin_;
-    std::pmr::vector<http_header> fields_;
+    std::vector<http_header> fields_;
 };
 
 task<http_client_response> http_client_response_handoff::receive(
@@ -147,9 +146,9 @@ task<void> http_client_request_body_writer::write(std::string_view bytes_value, 
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::pmr::string(bytes_value, state_->resource_), std::move(operation)}));
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::string(bytes_value), std::move(operation)}));
 }
-task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes_value, operation_options operation) {
+task<void> http_client_request_body_writer::write_owned(std::string&& bytes_value, operation_options operation) {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
@@ -158,14 +157,14 @@ task<void> http_client_request_body_writer::write_owned(std::pmr::string&& bytes
         throw std::length_error("HTTP upload chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_->upload_->output_.output_scope_,
-        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), detail::rebind_owned_storage(bytes_value, state_->resource_), std::move(operation)}));
+        detail::write_client_output<upload_output_policy>(state_, detail::http_client_output_write_input{http_client_response(state_), std::move(bytes_value), std::move(operation)}));
 }
 task<void> http_client_request_body_writer::end(std::span<const http_header_view> fields_value, operation_options operation) & {
     if (state_ == nullptr) {
         throw std::logic_error("HTTP request exchange is empty");
     }
     require_writable(*state_);
-    http_request_trailers validation(state_->resource_);
+    http_request_trailers validation;
     if (validation.append(fields_value).has_value()) {
         throw std::invalid_argument("invalid request trailer section");
     }

@@ -1,6 +1,5 @@
 #include "server/http_server_listener.h"
 
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <type_traits>
@@ -10,13 +9,13 @@ namespace {
 
 // The identity set is immutable and shared, not copied.
 http_server_listener_definition::tls clone_tls(
-    const http_server_listener_definition::tls& source_value, std::pmr::memory_resource* resource) {
+    const http_server_listener_definition::tls& source_value) {
     http_server_listener_definition::tls result_value(source_value.identities_);
     if (const auto& policy = source_value.client_certificates_; policy.has_value()) {
         result_value.client_certificates_.emplace(http_server_listener_definition::tls_client_certificate_policy{
             .requirement_ = policy->requirement_,
             .client_ca_ = policy->client_ca_,
-            .ca_file_ = tls_file_name(policy->ca_file_, resource),
+            .ca_file_ = tls_file_name(policy->ca_file_),
         });
     }
     result_value.max_outgoing_records_ = source_value.max_outgoing_records_;
@@ -27,12 +26,12 @@ http_server_listener_definition::tls clone_tls(
 }
 
 http_server_listener_definition::transport_type clone_transport(
-    const http_server_listener_definition::transport_type& source_value, std::pmr::memory_resource* resource) {
+    const http_server_listener_definition::transport_type& source_value) {
     return std::visit(
-        [resource]<typename transport_type>(
+        []<typename transport_type>(
             const transport_type& transport) -> http_server_listener_definition::transport_type {
             if constexpr (std::is_same_v<transport_type, http_server_listener_definition::tls>) {
-                return clone_tls(transport, resource);
+                return clone_tls(transport);
             } else {
                 return transport;
             }
@@ -41,21 +40,20 @@ http_server_listener_definition::transport_type clone_transport(
 }
 
 std::optional<http_server_listener_definition::connection_dispatch> clone_connection_dispatch(
-    const std::optional<http_server_listener_definition::connection_dispatch>& source_value,
-    std::pmr::memory_resource* resource) {
+    const std::optional<http_server_listener_definition::connection_dispatch>& source_value) {
     std::optional<http_server_listener_definition::connection_dispatch> result_value;
     if (source_value.has_value()) {
-        result_value.emplace(source_value->alpn_, resource);
+        result_value.emplace(source_value->alpn_);
     }
     return result_value;
 }
 
 }  // namespace
 
-http_server_listener_definition http_server_listener_definition::clone(std::pmr::memory_resource* resource) const {
+http_server_listener_definition http_server_listener_definition::clone() const {
     http_server_listener_definition result_value(
-        endpoint_, clone_transport(transport_, pmr_resource_or_default(resource)), http3_);
-    result_value.connection_ = clone_connection_dispatch(connection_, resource);
+        endpoint_, clone_transport(transport_), http3_);
+    result_value.connection_ = clone_connection_dispatch(connection_);
     result_value.inherited_sockets_ = inherited_sockets_;
     result_value.ipv6_only_ = ipv6_only_;
     result_value.proxy_protocol_ = proxy_protocol_;
@@ -64,14 +62,13 @@ http_server_listener_definition http_server_listener_definition::clone(std::pmr:
 }
 
 http_server_session_config::http_server_session_config(
-    const http_server_listener_definition& definition, std::pmr::memory_resource* resource)
-    : transport_(clone_transport(definition.transport_, pmr_resource_or_default(resource))),
+    const http_server_listener_definition& definition)
+    : transport_(clone_transport(definition.transport_)),
       ipv6_only_(definition.ipv6_only_),
       proxy_protocol_(definition.proxy_protocol_),
       http3_(definition.http3_),
-      connection_(clone_connection_dispatch(definition.connection_, resource)),
-      request_stream_(definition.request_stream_),
-      alternative_service_(pmr_resource_or_default(resource)) {
+      connection_(clone_connection_dispatch(definition.connection_)),
+      request_stream_(definition.request_stream_) {
     if (http3_.has_value()) {
         // RFC 7838 §3: alt-authority with an empty host names this origin's
         // host on the UDP port; "ma" bounds how long clients cache it.

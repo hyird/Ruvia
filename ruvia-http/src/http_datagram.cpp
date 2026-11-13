@@ -4,7 +4,7 @@
 #include <stdexcept>
 
 #include "field/http_structured_fields.h"
-#include "util/quic_varint.h"
+#include "wire/quic_varint.h"
 
 namespace ruvia {
 namespace {

@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,6 +12,7 @@
 #include <vector>
 
 #include "ruvia/http/cookies.h"
+#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_byte_range.h"
 #include "ruvia/http/http_cache.h"
@@ -97,7 +97,7 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
 
     // Actual response header rewrite: strips upstream Access-Control-* headers,
     // writes policy headers, and merges Origin into Vary without duplicates.
-    std::pmr::vector<ruvia::http_header> response_headers;
+    std::vector<ruvia::http_header> response_headers;
     response_headers.emplace_back("Content-Type", "application/json");
     response_headers.emplace_back("Access-Control-Allow-Origin", "*");
     response_headers.emplace_back("Access-Control-Allow-Methods", "DELETE");
@@ -114,6 +114,59 @@ TEST(RuviaHttpPublicApi, cors_policy_preflight_and_response_rewrite) {
     EXPECT_FALSE(find_header(response_headers, "Access-Control-Allow-Methods").has_value());
     EXPECT_EQ(find_header(response_headers, "Vary"),
         std::optional<std::string_view>("Accept-Encoding, Origin"));
+
+    // Server-side apply_response_headers emits Vary tokens before rejecting disallowed Origin/method/headers.
+    {
+        const std::array<ruvia::http_header_view, 1> bad_origin_headers{
+            ruvia::http_header_view{"Origin", "https://untrusted.example"},
+        };
+        const auto get_bad_origin =
+            ruvia::make_parsed_http_request("GET", "/resource", bad_origin_headers, {});
+        ruvia::http_response get_resp;
+        EXPECT_FALSE(policy.apply_response_headers(get_bad_origin, get_resp));
+        EXPECT_FALSE(get_resp.header("Access-Control-Allow-Origin").has_value());
+        EXPECT_EQ(get_resp.header("Vary"), std::optional<std::string_view>("Origin"));
+
+        const std::array<ruvia::http_header_view, 3> bad_options_headers{
+            ruvia::http_header_view{"Origin", "https://untrusted.example"},
+            ruvia::http_header_view{"Access-Control-Request-Method", "DELETE"},
+            ruvia::http_header_view{"Access-Control-Request-Headers", "X-Forbidden"},
+        };
+        const auto opts_bad =
+            ruvia::make_parsed_http_request("OPTIONS", "/resource", bad_options_headers, {});
+        ruvia::http_response opts_resp;
+        EXPECT_FALSE(policy.apply_response_headers(opts_bad, opts_resp));
+        EXPECT_FALSE(opts_resp.header("Access-Control-Allow-Origin").has_value());
+        EXPECT_EQ(opts_resp.header("Vary"),
+            std::optional<std::string_view>("Origin, Access-Control-Request-Method"));
+
+        ruvia::http_cors_policy reflecting_policy(ruvia::http_cors_policy_config{
+            .allowed_origins_ = {"https://app.example.com"},
+            .reflect_request_headers_ = true,
+        });
+        ruvia::http_response reflect_opts_resp;
+        EXPECT_FALSE(reflecting_policy.apply_response_headers(opts_bad, reflect_opts_resp));
+        EXPECT_EQ(reflect_opts_resp.header("Vary"),
+            std::optional<std::string_view>(
+                "Origin, Access-Control-Request-Method, Access-Control-Request-Headers"));
+    }
+
+    // Vary and Connection use non-quoted comma-token scanning (unclosed quote does not hide later tokens).
+    {
+        std::vector<ruvia::http_header> vary_list;
+        vary_list.emplace_back("Vary", "\"unclosed, Origin");
+        ruvia::merge_http_vary_token(vary_list, "Origin");
+        EXPECT_EQ(vary_list.size(), 1U);
+        EXPECT_EQ(vary_list[0].value(), "\"unclosed, Origin");
+
+        const auto parsed_vary = ruvia::parse_http_vary("\"unclosed, Accept-Encoding, *");
+        EXPECT_TRUE(parsed_vary.is_wildcard());
+
+        const auto parsed_conn =
+            ruvia::parse_http_connection_nominated_fields("\"unclosed, close, X-Custom-Hop");
+        EXPECT_TRUE(parsed_conn.has_close());
+        EXPECT_TRUE(parsed_conn.contains("x-custom-hop"));
+    }
 }
 
 // Item 2: Accept-Encoding candidate order, Cache-Control no-transform, and bounded streaming transcoder
@@ -149,34 +202,31 @@ TEST(RuviaHttpPublicApi, accept_encoding_candidate_order_and_transcoder) {
     EXPECT_TRUE(ruvia::http_cache_control_has_no_transform(
         "public, ext=\"a, b\", no-transform, max-age=60"));
 
-    // Multi-coding streaming transcoding (gzip + br -> zstd) with shared PMR budget.
-    ruvia::http_memory_budget_resource budget(8 * 1024 * 1024);
+    // Multi-coding streaming transcoding (gzip + br -> zstd) with native codec memory cap.
     const std::string original(4096, 'R');
     const std::array source_stack{
         ruvia::http_content_coding::gzip, ruvia::http_content_coding::brotli};
     const auto double_encoded = ruvia::encode_http_content(
-        source_stack, original, {.max_encoded_bytes_ = 65536, .resource_ = &budget});
+        source_stack, original, {.max_encoded_bytes_ = 65536});
     ASSERT_TRUE(double_encoded.has_value());
 
     ruvia::http_content_transcoder transcoder(source_stack, ruvia::http_content_coding::zstd,
-        {.resource_ = &budget, .max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192});
-    std::pmr::string transcoded(&budget);
+        {.max_decoded_bytes_ = 8192, .max_encoded_bytes_ = 8192, .max_memory_bytes_ = 8 * 1024 * 1024});
+    std::string transcoded;
     for (std::size_t pos = 0; pos < double_encoded->size(); pos += 17) {
         transcoder.write(
             std::string_view(*double_encoded).substr(pos, 17), transcoded, false);
     }
     transcoder.finish(transcoded);
-    EXPECT_GT(budget.peak_bytes(), 0U);
 
     const auto final_decoded = ruvia::decode_http_content(ruvia::http_content_coding::zstd,
-        transcoded, {.max_decoded_bytes_ = 8192, .resource_ = &budget});
-    ASSERT_TRUE(std::holds_alternative<std::pmr::string>(final_decoded));
-    EXPECT_EQ(std::string_view(std::get<std::pmr::string>(final_decoded)), original);
+        transcoded, {.max_decoded_bytes_ = 8192});
+    ASSERT_TRUE(std::holds_alternative<std::string>(final_decoded));
+    EXPECT_EQ(std::string_view(std::get<std::string>(final_decoded)), original);
 
-    // Exhausted PMR budget throws std::bad_alloc.
-    ruvia::http_memory_budget_resource tiny_budget(64);
+    // Exhausted native codec memory cap throws std::bad_alloc.
     EXPECT_THROW(
-        (void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, &tiny_budget),
+        (void)ruvia::http_content_encoder(ruvia::http_content_coding::gzip, {.max_memory_bytes_ = 64}),
         std::bad_alloc);
 }
 
@@ -228,8 +278,8 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     constexpr std::string_view payload = "0123456789abcdefghijklmnopqrstuvwxyz";
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=2-5, 10-14, 30-35", payload.size());
     const auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, payload.size(), "text/plain", "slice_boundary", std::pmr::get_default_resource());
-    std::pmr::string expected;
+        ranges, payload.size(), "text/plain", "slice_boundary");
+    std::string expected;
     for (const auto& seg : plan.segments()) {
         if (seg.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::metadata) {
             expected.append(plan.metadata().substr(seg.metadata_offset_, seg.metadata_length_));
@@ -245,7 +295,7 @@ TEST(RuviaHttpPublicApi, strict_byte_ranges_content_range_and_streaming_slicer) 
     EXPECT_TRUE(slicer.multipart());
     EXPECT_EQ(slicer.content_length(), expected.size());
 
-    std::pmr::string sliced;
+    std::string sliced;
     // Feed starting from offset 2 in two partial segments, skipping the gap 15..29!
     slicer.write(2, payload.substr(2, 13), sliced);
     EXPECT_FALSE(slicer.complete());
@@ -332,7 +382,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     EXPECT_EQ(cc.stale_while_revalidate(), std::optional<std::uint64_t>(30));
     EXPECT_EQ(cc.stale_if_error(), std::optional<std::uint64_t>(600));
 
-    std::pmr::vector<ruvia::http_header> resp_headers;
+    std::vector<ruvia::http_header> resp_headers;
     resp_headers.emplace_back("Cache-Control", "public, s-maxage=300, max-age=120, must-revalidate");
     resp_headers.emplace_back("Expires", "Wed, 21 Oct 2015 07:28:00 GMT");
     ruvia::rewrite_http_response_cache_max_age(resp_headers, 45);
@@ -382,7 +432,7 @@ TEST(RuviaHttpPublicApi, rfc9111_shared_cache_primitives) {
     EXPECT_FALSE(ruvia::is_http_304_forbidden_header("ETag"));
     EXPECT_FALSE(ruvia::is_http_304_forbidden_header("Cache-Control"));
 
-    std::pmr::vector<ruvia::http_header> cached;
+    std::vector<ruvia::http_header> cached;
     cached.emplace_back("Content-Type", "text/plain");
     cached.emplace_back("Content-Length", "1024");
     cached.emplace_back("ETag", "\"v1\"");
@@ -648,24 +698,24 @@ TEST(RuviaHttpPublicApi, media_type_compressibility_worker_codecs_cookie_jar_eta
     ruvia::http_worker_codecs codecs;
     {
         auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
-        std::pmr::string out;
+        std::string out;
         lease.encoder().write("streamed payload", out, true);
         lease.encoder().finish(out);
         const auto decoded = ruvia::decode_http_content(
             ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
-        ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
-        EXPECT_EQ(std::get<std::pmr::string>(decoded), "streamed payload");
+        ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
+        EXPECT_EQ(std::get<std::string>(decoded), "streamed payload");
     }
     {
         // Second lease reuses the reset encoder from the pool.
         auto lease = codecs.acquire_stream_encoder(ruvia::http_content_coding::gzip);
-        std::pmr::string out;
+        std::string out;
         lease.encoder().write("reused encoder payload", out);
         lease.encoder().finish(out);
         const auto decoded = ruvia::decode_http_content(
             ruvia::http_content_coding::gzip, out, {.max_decoded_bytes_ = 4096});
-        ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
-        EXPECT_EQ(std::get<std::pmr::string>(decoded), "reused encoder payload");
+        ASSERT_TRUE(std::holds_alternative<std::string>(decoded));
+        EXPECT_EQ(std::get<std::string>(decoded), "reused encoder payload");
     }
 
     // 3. Sans-I/O http_cookie_jar
@@ -778,7 +828,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_EQ(field_priv.no_cache_field_count(), 1U);
     EXPECT_TRUE(field_priv.has_no_cache_field("x-auth-state"));
 
-    std::pmr::vector<ruvia::http_header> strip_headers;
+    std::vector<ruvia::http_header> strip_headers;
     strip_headers.emplace_back("Content-Type", "application/json");
     strip_headers.emplace_back("Set-Cookie", "sid=123");
     strip_headers.emplace_back("X-User-Secret", "top-secret");
@@ -796,7 +846,7 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_FALSE(ruvia::strip_http_cache_private_headers(strip_headers, unqual_priv));
 
     // 3. Staged content transcoder for unknown-length (chunked) responses with [min_bytes, max_bytes]
-    std::pmr::string payload;
+    std::string payload;
     for (int i = 0; i < 32; ++i) {
         payload.append("chunked-response-staging-compressible-line-0123456789\n");
     }
@@ -817,8 +867,8 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     EXPECT_EQ(res_in_range.decoded_bytes(), payload.size());
     const auto decoded_zstd = ruvia::decode_http_content(
         ruvia::http_content_coding::zstd, res_in_range.bytes(), {.max_decoded_bytes_ = 8192});
-    ASSERT_TRUE(std::holds_alternative<std::pmr::string>(decoded_zstd));
-    EXPECT_EQ(std::get<std::pmr::string>(decoded_zstd), payload);
+    ASSERT_TRUE(std::holds_alternative<std::string>(decoded_zstd));
+    EXPECT_EQ(std::get<std::string>(decoded_zstd), payload);
 
     // Case B: Decoded size < min_bytes -> falls back to original untransformed stream!
     ruvia::http_staged_content_transcoder too_small(
@@ -834,14 +884,14 @@ TEST(RuviaHttpPublicApi, targeted_cache_control_field_qualified_private_and_stag
     ruvia::http_staged_content_transcoder too_large(
         ruvia::http_content_coding::gzip, ruvia::http_content_coding::zstd,
         {.min_bytes_ = 16, .max_bytes_ = 256});
-    std::pmr::string passthrough_stream;
+    std::string passthrough_stream;
     for (std::size_t pos = 0; pos < gzipped->size(); pos += 13) {
         (void)too_large.write(std::string_view(*gzipped).substr(pos, 13), passthrough_stream);
     }
     EXPECT_TRUE(too_large.passthrough());
     auto res_large = too_large.finish();
     EXPECT_FALSE(res_large.transformed());
-    EXPECT_EQ(passthrough_stream + std::pmr::string(res_large.bytes()), *gzipped);
+    EXPECT_EQ(passthrough_stream + std::string(res_large.bytes()), *gzipped);
 }
 
 }  // namespace

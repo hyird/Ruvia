@@ -10,7 +10,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>

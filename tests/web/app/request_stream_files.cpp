@@ -322,12 +322,12 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
         const auto target = stream.request().path();
         if (target == "/stream-first") {
             (void)co_await stream.response().commit();
-            ruvia::http_response rejected(stream.arena());
+            ruvia::http_response rejected;
             EXPECT_THROW(stream.respond(std::move(rejected)), std::logic_error);
             co_await stream.response().write(std::string_view("streamed"));
             co_return;
         }
-        ruvia::http_response response(stream.arena());
+        ruvia::http_response response;
         response.status(ruvia::http_status::conflict);
         response.header("x-selected", "retained");
         response.body("buffered");
@@ -347,7 +347,7 @@ TEST(Ruvia, independent_request_stream_response_forms_are_mutually_exclusive_and
             } else if (target == "/websocket") {
                 (void)co_await stream.accept_websocket();
             } else {
-                ruvia::http_response second(stream.arena());
+                ruvia::http_response second;
                 stream.respond(std::move(second));
             }
         } catch (const std::logic_error&) {
@@ -392,7 +392,7 @@ TEST(Ruvia, independent_request_stream_retires_unstarted_file_and_accept_tasks_w
         files[1].emplace(stream.static_file(root, {.relative_path_ = "cold.bin"}));
         tunnel.emplace(stream.accept_tunnel());
         websocket.emplace(stream.accept_websocket());
-        ruvia::http_response response(stream.arena());
+        ruvia::http_response response;
         response.body("no cold operation started");
         stream.respond(std::move(response));
         co_return; }, [&](ruvia::http_client& client, ruvia::http_server&) -> ruvia::task<void> {
@@ -431,7 +431,7 @@ TEST(Ruvia, independent_request_stream_retires_unstarted_file_and_accept_tasks_w
 #ifndef _WIN32
 namespace request_stream_files_test {
 int releases{};
-void release_counted_file(ruvia::http_response_file_handle::native_type native) noexcept {
+void release_counted_file(ruvia::http_response_file_descriptor::native_type native) noexcept {
     ++releases;
     ::close(static_cast<int>(native));
 }
@@ -441,8 +441,8 @@ ruvia::http_response counted_file(ruvia::request_stream& stream, const fs::path&
     if (native < 0) {
         throw std::runtime_error("cannot open counted response file");
     }
-    ruvia::http_response_file_handle opened(static_cast<std::uintptr_t>(native), &release_counted_file);
-    ruvia::http_response response(stream.arena());
+    ruvia::http_response_file_descriptor opened(static_cast<std::uintptr_t>(native), &release_counted_file);
+    ruvia::http_response response;
     response.file_body(path.native(), ruvia::http_content_length(4), ruvia::http_content_length(0),
         ruvia::http_content_length(4), ruvia::http_response_file_identity::unchecked(), std::move(opened));
     return response;
@@ -458,7 +458,7 @@ TEST(Ruvia, independent_request_stream_releases_selected_file_exactly_once_on_er
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto worker = attachment.loop().handle();
+        const auto worker = attachment.loop().worker();
         ruvia::worker_signal selected(worker);
         ruvia::http_server server(attachment.loop(), {.request_stream_ = [&](ruvia::request_stream& stream) -> ruvia::task<void> {
             stream.respond(counted_file(stream, path));

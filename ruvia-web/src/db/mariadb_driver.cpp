@@ -8,7 +8,6 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -19,8 +18,7 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_io_buffer.h"
 
 #include "db/db_pipeline_impl.h"
 #include "db/db_pool.h"
@@ -110,7 +108,7 @@ struct mysql_wait_deadline final {
 }
 
 [[nodiscard]] db_error mysql_socket_error(std::string_view operation, std::error_code error) {
-    std::pmr::string message(operation, process_resource());
+    std::string message(operation);
     if (error) {
         message.append(": ");
         message.append(error_code_text(error));
@@ -278,14 +276,13 @@ task<const MARIADB_CHARSET_INFO*> query_mysql_charset(
 // Nothing else runs on the connection, so the session is current for an
 // interpolation that depends on it.
 task<void> run_mysql_statement(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    const mariadb_statement_classification& classification, std::span<const db_value> params,
-    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
+    const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
     auto& connection = *pool.slot(index).connection_;
     auto& statements = pool.slot(index).session_.statements_;
     if (classification.names_session_tracking_) {
         statements.untrack();
     }
-    std::pmr::string interpolated_sql(pmr_resource_or_default(resource));
+    std::string interpolated_sql;
     if (!params.empty()) {
         const auto param_traits = inspect_mariadb_parameters(params);
         const MARIADB_CHARSET_INFO* charset = nullptr;
@@ -361,7 +358,7 @@ task<bool> finish_mysql_results(mariadb_pool& pool, std::size_t index, const ope
 }
 
 // Points the rows of a result `output` already owns at its fields.
-void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result, std::pmr::memory_resource* resource) {
+void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result) {
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(&raw_result));
     const auto row_count = static_cast<std::size_t>(mysql_num_rows(&raw_result));
     auto& result_fields = db_result_access::fields(output);
@@ -376,10 +373,10 @@ void materialize_mysql_rows(db_rows& output, MYSQL_RES& raw_result, std::pmr::me
         const auto row_start = result_fields.size();
         for (std::size_t i = 0; i < field_count; ++i) {
             if (row[i] == nullptr) {
-                result_fields.push_back(db_result_access::null_field(resource));
+                result_fields.push_back(db_result_access::null_field());
                 continue;
             }
-            result_fields.push_back(db_result_access::borrowed_field(std::string_view(row[i], lengths[i]), resource));
+            result_fields.push_back(db_result_access::borrowed_field(std::string_view(row[i], lengths[i])));
         }
         db_result_access::append_row(output, row_start, field_count);
     }
@@ -405,17 +402,17 @@ using mariadb_group = db_pipeline_group<mariadb_pipeline_io>;
 
 // Records an operation just started: finished at once, or suspended with the
 // wait mask exchange() continues it with.
-void start_mysql_operation(mariadb_pipeline_io::group_data& data, mariadb_operation operation, int status) noexcept {
-    data.operation_ = operation;
-    data.status_ = status;
-    data.done_ = status == 0;
+void start_mysql_operation(mariadb_pipeline_io::group_state& state_value, mariadb_operation operation, int status) noexcept {
+    state_value.operation_ = operation;
+    state_value.status_ = status;
+    state_value.done_ = status == 0;
 }
 
-void start_mysql_store(mariadb_pipeline_io::group_data& data, MYSQL& connection) noexcept {
+void start_mysql_store(mariadb_pipeline_io::group_state& state_value, MYSQL& connection) noexcept {
     MYSQL_RES* stored = nullptr;
     const int status = mysql_store_result_start(&stored, &connection);
-    data.stored_ = stored;
-    start_mysql_operation(data, mariadb_operation::store, status);
+    state_value.stored_ = stored;
+    start_mysql_operation(state_value, mariadb_operation::store, status);
 }
 
 // After a response of the head statement: its row set, its next result, or
@@ -522,7 +519,7 @@ void take_mysql_row_set(mariadb_group& group, MYSQL_RES* stored) {
     auto& output = *member->rows_;
     db_result_access::own_raw_result(output, stored, &free_stored_result);
     try {
-        materialize_mysql_rows(output, *stored, member->resource_);
+        materialize_mysql_rows(output, *stored);
     } catch (...) {
         db_result_access::clear(output);
         data.head_output_failure_ = std::current_exception();
@@ -548,7 +545,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
             const auto size_limit = std::numeric_limits<std::size_t>::max();
             const auto amortized_bytes =
                 record.flight_.size_ <= size_limit / 4 ? record.flight_.size_ * 4 : size_limit;
-            http_clear_pmr_string_retaining_small(
+            http_clear_string_retaining_small(
                 data.send_buffer_, std::max(mariadb_pipeline_send_budget, amortized_bytes));
             return;
         }
@@ -634,7 +631,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
                 }
             } else if (run.step_ == mariadb_prepared_run::step::rows) {
                 take_mariadb_prepared_rows(
-                    run, member == nullptr ? nullptr : member->rows_, member == nullptr ? nullptr : member->resource_);
+                    run, member == nullptr ? nullptr : member->rows_);
                 start_mysql_operation(data, mariadb_operation::prepared, resume_mariadb_prepared(connection, run, 0));
                 return;
             }
@@ -657,7 +654,7 @@ void finish_mysql_operation(mariadb_pipeline_io::state_type& state, std::size_t 
 
 }  // namespace
 
-void mariadb_pipeline_io::group_data::reset() noexcept {
+void mariadb_pipeline_io::group_state::reset() noexcept {
     if (stored_ != nullptr) {
         free_stored_result(std::exchange(stored_, nullptr));
     }
@@ -682,7 +679,7 @@ mariadb_pipeline_io::statement_type mariadb_pipeline_io::prepare(
     const auto classification = classify_mariadb_statement(sql);
     const auto param_traits = params.empty() ? mariadb_parameter_traits{} : inspect_mariadb_parameters(params);
     const bool deferred = !params.empty() && (classification.has_backslash_ || param_traits.has_backslash_);
-    return {sql, params, std::pmr::string(process_resource()), classification, deferred,
+    return {sql, params, std::string(), classification, deferred,
         param_traits.has_ambiguous_backslash_};
 }
 
@@ -767,7 +764,7 @@ bool mariadb_pipeline_io::advance(state_type& state, std::size_t index, member_t
             // Each statement counts as one use, however often the reader
             // comes back to it (a character set read first, the send budget
             // full, a prepared run that fell back to text).
-            std::optional<mariadb_statement_cache::handle> found;
+            std::optional<mariadb_statement_cache::entry_ref> found;
             if (!record.flight_.exclusive_ && !record.flight_.counted_) {
                 record.flight_.counted_ = true;
                 found = statements.find(record.flight_.statement_sql_, record.flight_.params_, alone);
@@ -934,7 +931,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     auto& slot = pool.slot(index);
     slot.session_.statements_.clear();
     auto resolved_hosts =
-        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value), process_resource());
+        make_mariadb_resolved_host_list(co_await pool.resolve_host(index, deadline_value));
 
     ensure_mysql_thread_initialized();
     slot.connection_ = mysql_init(nullptr);
@@ -971,6 +968,10 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
     const my_bool reconnect = 0;
     if (mysql_optionsv(&initialized, MYSQL_OPT_RECONNECT, &reconnect) != 0) {
         throw mysql_error(initialized, "disabling MariaDB automatic reconnect", db_error::code_type::connect_failed);
+    }
+    const unsigned int local_infile = 0;
+    if (mysql_optionsv(&initialized, MYSQL_OPT_LOCAL_INFILE, &local_infile) != 0) {
+        throw mysql_error(initialized, "disabling MariaDB LOCAL INFILE", db_error::code_type::connect_failed);
     }
 
     const bool use_tls = config.tls_.mode_ == client_tls_mode::verify_identity;
@@ -1018,7 +1019,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
             &connected, &initialized, ready);
         tls_scope.rethrow_failure();
     }
-    std::pmr::string(resolved_hosts.get_allocator().resource()).swap(resolved_hosts);
+    std::string(resolved_hosts).swap(resolved_hosts);
     if (connected == nullptr) {
         throw mysql_error(initialized, "mysql_real_connect", db_error::code_type::connect_failed);
     }
@@ -1086,14 +1087,13 @@ namespace {
 // result, or what mariadb_statement_failure() makes of its responses.
 template <typename result_type>
 task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    const mariadb_statement_classification& classification, std::span<const db_value> params,
-    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
+    const mariadb_statement_classification& classification, std::span<const db_value> params, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
-    co_await run_mysql_statement(pool, index, sql, classification, params, resource, deadline_value);
+    co_await run_mysql_statement(pool, index, sql, classification, params, deadline_value);
     auto& connection = *pool.slot(index).connection_;
     const auto affected_rows = static_cast<std::uint64_t>(mysql_affected_rows(&connection));
     const auto insert_id = static_cast<std::uint64_t>(mysql_insert_id(&connection));
-    auto output = db_result_access::make_result(resource);
+    auto output = db_result_access::make_result();
     auto* raw_result = co_await store_mysql_result(pool, index, deadline_value);
     // A lost connection also yields no result, and libmariadb resets the
     // field count when it drops the connection, so only mysql_errno() tells a
@@ -1114,7 +1114,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
         std::rethrow_exception(failure);
     }
     if constexpr (returns_rows) {
-        materialize_mysql_rows(output, *raw_result, resource);
+        materialize_mysql_rows(output, *raw_result);
         co_return output;
     } else {
         co_return make_mysql_exec_result(affected_rows, insert_id);
@@ -1128,7 +1128,7 @@ task<result_type> run_mysql_text(mariadb_pool& pool, std::size_t index, std::str
 // decides what follows.
 template <typename result_type>
 task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
+    std::span<const db_value> params, const operation_deadline& deadline_value) {
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
     auto& slot = pool.slot(index);
     auto& statements = slot.session_.statements_;
@@ -1142,11 +1142,11 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
             break;
         }
         auto& connection = *slot.connection_;
-        auto output = db_result_access::make_result(resource);
+        auto output = db_result_access::make_result();
         auto run = start_mariadb_prepared(statements, *found, params);
         while (run.step_ != mariadb_prepared_run::step::done) {
             if (run.step_ == mariadb_prepared_run::step::rows) {
-                take_mariadb_prepared_rows(run, returns_rows ? &output : nullptr, resource);
+                take_mariadb_prepared_rows(run, returns_rows ? &output : nullptr);
                 continue;
             }
             int status = resume_mariadb_prepared(connection, run, 0);
@@ -1171,25 +1171,25 @@ task<result_type> run_mysql_cached(mariadb_pool& pool, std::size_t index, std::s
             co_return make_mysql_exec_result(run.affected_rows_, run.insert_id_);
         }
     }
-    co_return co_await run_mysql_text<result_type>(pool, index, sql, classification, params, resource, deadline_value);
+    co_return co_await run_mysql_text<result_type>(pool, index, sql, classification, params, deadline_value);
 }
 
 }  // namespace
 
 task<db_rows> mariadb_driver::query(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
-    return run_mysql_cached<db_rows>(pool, index, sql, params, resource, deadline_value);
+    std::span<const db_value> params, const operation_deadline& deadline_value) {
+    return run_mysql_cached<db_rows>(pool, index, sql, params, deadline_value);
 }
 
 task<db_exec_result> mariadb_driver::execute(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
-    return run_mysql_cached<db_exec_result>(pool, index, sql, params, resource, deadline_value);
+    std::span<const db_value> params, const operation_deadline& deadline_value) {
+    return run_mysql_cached<db_exec_result>(pool, index, sql, params, deadline_value);
 }
 
 task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t index, std::string_view sql,
-    std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
+    std::span<const db_value> params, const operation_deadline& deadline_value) {
     co_await run_mysql_statement(
-        pool, index, sql, classify_mariadb_statement(sql), params, resource, deadline_value);
+        pool, index, sql, classify_mariadb_statement(sql), params, deadline_value);
     auto& connection = *pool.slot(index).connection_;
     std::unique_ptr<MYSQL_RES, decltype(&discard_unbuffered_result)> result(
         mysql_use_result(&connection), &discard_unbuffered_result);
@@ -1197,11 +1197,11 @@ task<db_stream_start> mariadb_driver::start_stream(pool_type& pool, std::size_t 
         if (mysql_field_count(&connection) != 0 || mysql_errno(&connection) != 0) {
             throw mysql_error(connection, "mysql_use_result", db_error::code_type::statement_failed);
         }
-        db_stream_start empty(resource);
+        db_stream_start empty;
         empty.returns_rows_ = false;
         co_return empty;
     }
-    db_stream_start start(resource);
+    db_stream_start start;
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(result.get()));
     const auto* fields_value = mysql_fetch_fields(result.get());
     start.column_names_.reserve(field_count);
@@ -1252,8 +1252,7 @@ task<void> finish_mysql_stream(
 }  // namespace
 
 task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_t index, void*& result_value,
-    std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-    std::pmr::memory_resource* resource, const operation_deadline& deadline_value) {
+    std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline_value) {
     auto* raw_result = static_cast<MYSQL_RES*>(result_value);
     MYSQL_ROW row = nullptr;
     int status = mysql_fetch_row_start(&row, raw_result);
@@ -1273,7 +1272,7 @@ task<db_stream_step> mariadb_driver::read_stream_row(pool_type& pool, std::size_
     const auto field_count = static_cast<std::size_t>(mysql_num_fields(raw_result));
     const auto* lengths = mysql_fetch_lengths(raw_result);
     co_return db_result_access::materialize_stream_row(
-        fields, column_names, field_count, resource, [&](std::size_t i) -> std::optional<std::string_view> {
+        fields, column_names, field_count, [&](std::size_t i) -> std::optional<std::string_view> {
             return row[i] == nullptr ? std::nullopt : std::optional<std::string_view>(std::string_view(row[i], lengths[i]));
         });
 }

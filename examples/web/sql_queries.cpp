@@ -8,7 +8,6 @@
 #include <array>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_schema.h"
@@ -16,14 +15,13 @@
 
 namespace {
 
-void print_query(const ruvia::db_query& query, ruvia::db_driver driver,
-    std::pmr::memory_resource* memory) {
-    const auto statement = query.compile(driver, memory);
+void print_query(const ruvia::db_query& query, ruvia::db_driver driver) {
+    const auto statement = query.compile(driver);
     std::cout << statement.sql() << "\nparameters=" << statement.params().size() << "\n\n";
 }
 
-void portable_queries(std::pmr::memory_resource* memory) {
-    ruvia::db_query query(memory);
+void portable_queries() {
+    ruvia::db_query query;
     const auto total = query.aggregate("sum", {query.column("amount", "o")});
     query.select({query.column("name", "u"), query.alias(total, "total")})
         .from("users", "u")
@@ -37,34 +35,34 @@ void portable_queries(std::pmr::memory_resource* memory) {
         .offset(0);
     // Values become parameters; identifier quoting and placeholders follow the
     // selected driver. Never concatenate untrusted input into sql() syntax.
-    print_query(query, ruvia::db_driver::postgresql, memory);
-    print_query(query, ruvia::db_driver::mariadb, memory);
+    print_query(query, ruvia::db_driver::postgresql);
+    print_query(query, ruvia::db_driver::mariadb);
 
-    ruvia::db_query insert(memory);
+    ruvia::db_query insert;
     insert.insert_into("users", {"id", "name"}).values({insert.value(7), insert.value("Ada")});
-    print_query(insert, ruvia::db_driver::postgresql, memory);
-    ruvia::db_query update(memory);
+    print_query(insert, ruvia::db_driver::postgresql);
+    ruvia::db_query update;
     update.update("users").set("name", update.value("Grace")).where(update.binary(update.column("id"), ruvia::db_binary_operator::equal, update.value(7)));
-    print_query(update, ruvia::db_driver::mariadb, memory);
-    ruvia::db_query remove(memory);
+    print_query(update, ruvia::db_driver::mariadb);
+    ruvia::db_query remove;
     remove.delete_from("users")
         .where(remove.binary(remove.column("id"), ruvia::db_binary_operator::equal, remove.value(7)));
-    print_query(remove, ruvia::db_driver::postgresql, memory);
+    print_query(remove, ruvia::db_driver::postgresql);
 }
 
-void postgres_queries(std::pmr::memory_resource* memory) {
-    ruvia::db_query candidates(memory);
+void postgres_queries() {
+    ruvia::db_query candidates;
     candidates.select(candidates.column("id")).from("jobs").where(candidates.binary(candidates.column("state"), ruvia::db_binary_operator::equal, candidates.value("ready"))).order_by(candidates.column("id")).limit(5).lock({.mode_ = ruvia::db_row_lock::update, .skip_locked_ = true});
-    ruvia::db_query claim(memory);
+    ruvia::db_query claim;
     claim.with("candidates", candidates)
         .update("jobs", "j")
         .set("state", claim.value("running"))
         .update_from("candidates", "c")
         .where(claim.binary(claim.column("id", "j"), ruvia::db_binary_operator::equal, claim.column("id", "c")))
         .returning({claim.column("id", "j")});
-    print_query(claim, ruvia::db_driver::postgresql, memory);
+    print_query(claim, ruvia::db_driver::postgresql);
 
-    ruvia::db_query ranked(memory);
+    ruvia::db_query ranked;
     const ruvia::db_expr partitions[]{ranked.column("state")};
     const ruvia::db_order_term window_order[]{{ranked.column("id")}};
     ranked.select({ranked.column("id"),
@@ -72,14 +70,14 @@ void postgres_queries(std::pmr::memory_resource* memory) {
                                        {.partition_by_ = partitions, .order_by_ = window_order}),
                           "rank")})
         .from("jobs");
-    print_query(ranked, ruvia::db_driver::postgresql, memory);
+    print_query(ranked, ruvia::db_driver::postgresql);
     // Expressions borrow their query. Use import_expression() when composing
-    // expressions from a different owner, and keep the PMR alive through results.
+    // expressions from a different query.
 }
 
-void migrations(std::pmr::memory_resource* memory) {
-    ruvia::db_query expressions(memory);
-    ruvia::db_schema schema({.driver_ = ruvia::db_driver::postgresql, .resource_ = memory});
+void migrations() {
+    ruvia::db_query expressions;
+    ruvia::db_schema schema({.driver_ = ruvia::db_driver::postgresql});
     const std::array<std::string_view, 3> quality{"raw", "checked", "invalid"};
     schema.create_enum("sample_quality", quality);
     schema.create_table({.name_ = "samples",
@@ -98,18 +96,18 @@ void migrations(std::pmr::memory_resource* memory) {
 
     // Procedural migration blocks own their emitted SQL. Application values
     // still enter through value(); sql() below contains only trusted literals.
-    ruvia::db_procedure procedure(memory);
+    ruvia::db_procedure procedure;
     procedure.declare_variable({.name_ = "revision", .type_ = {.data_type_ = ruvia::db_data_type::integer}, .default_value_ = expressions.value(1)});
     procedure.begin_if(expressions.binary(expressions.column("revision"), ruvia::db_binary_operator::less, expressions.value(2)));
     procedure.assign("revision", expressions.value(2));
     procedure.otherwise();
     procedure.raise_exception("unexpected revision");
     procedure.end_if();
-    std::cout << procedure.body(memory) << '\n';
+    std::cout << procedure.body() << '\n';
 
     // These migrations additionally require the TimescaleDB server extension
     // and privileges to install it. Generation itself has no server dependency.
-    ruvia::db_schema timescale({.driver_ = ruvia::db_driver::postgresql, .resource_ = memory});
+    ruvia::db_schema timescale({.driver_ = ruvia::db_driver::postgresql});
     timescale.create_extension("timescaledb");
     timescale.create_hypertable({.table_ = "samples", .time_column_ = "recorded_at", .chunk_interval_ = expressions.sql("INTERVAL '1 day'"), .if_not_exists_ = true});
     timescale.set_compression("samples", {.segment_by_ = {"device"}, .order_by_ = {{.column_ = "recorded_at", .direction_ = ruvia::db_order_direction::desc}}});
@@ -125,10 +123,9 @@ void migrations(std::pmr::memory_resource* memory) {
 
 int main() {
     try {
-        std::pmr::unsynchronized_pool_resource memory;
-        portable_queries(&memory);
-        postgres_queries(&memory);
-        migrations(&memory);
+        portable_queries();
+        postgres_queries();
+        migrations();
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

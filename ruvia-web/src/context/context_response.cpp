@@ -10,7 +10,7 @@
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/context.h"
-#include "ruvia/web/detail/json/json_escape.h"
+#include "ruvia/web/detail/json/json_scan.h"
 #include "ruvia/web/session.h"
 
 #include "auth/cookie_signature.h"
@@ -18,10 +18,10 @@
 #include "context/context_response_state.h"
 #include "context/context_services.h"
 #include "http/http_error_response.h"
+#include "http/inline_text_concat.h"
 #include "http/session_access.h"
 #include "router/route_table.h"
 #include "server/http_alternative_service.h"
-#include "util/inline_text_concat.h"
 namespace ruvia {
 
 namespace {
@@ -80,15 +80,15 @@ void context_response_editor::status(http_status_code status_code) {
     }
 }
 
-std::pmr::string context::url_for(
+std::string context::url_for(
     std::string_view pattern, std::span<const std::string_view> values) const {
     if (services().routes() == nullptr) {
         throw std::logic_error("url_for requires a route table bound to this context");
     }
-    return services().routes()->url_for(pattern, values, arena());
+    return services().routes()->url_for(pattern, values);
 }
 
-std::pmr::string context::url_for(
+std::string context::url_for(
     std::string_view pattern, std::initializer_list<std::string_view> values) const {
     return url_for(pattern, std::span<const std::string_view>(values.begin(), values.size()));
 }
@@ -121,7 +121,7 @@ http_response context::body(std::string_view body) {
     return response;
 }
 
-http_response context::body_owned(std::pmr::string&& body) {
+http_response context::body_owned(std::string&& body) {
     auto response = response_state().take_draft_or_new();
     response.owned_body(std::move(body));
     return response;
@@ -146,7 +146,7 @@ http_response context::text(std::string_view body) {
     return response;
 }
 
-http_response context::text_owned(std::pmr::string&& body) {
+http_response context::text_owned(std::string&& body) {
     auto response = response_state().take_draft_or_new();
     mark_plain_text_defaults(response);
     response.owned_body(std::move(body));
@@ -168,7 +168,7 @@ response_stream_writer& context::stream_text() {
     return writer;
 }
 
-http_response context::json_serialized(std::pmr::string& body) {
+http_response context::json_serialized(std::string& body) {
     auto response = response_state().take_draft_or_new();
     set_default_content_type(response, http_content_type::application_json);
     response.owned_body(std::move(body));
@@ -182,7 +182,7 @@ http_response context::html(std::string_view body) {
     return response;
 }
 
-http_response context::html_owned(std::pmr::string&& body) {
+http_response context::html_owned(std::string&& body) {
     auto response = response_state().take_draft_or_new();
     set_default_content_type(response, http_content_type::text_html_utf8);
     response.owned_body(std::move(body));
@@ -201,7 +201,7 @@ http_response context::error(http_error_info_options options) const {
 }
 
 http_response context::error(const http_error_info& info) const {
-    auto response = detail::make_default_error_response(arena(), info);
+    auto response = detail::make_default_error_response(info);
     return response;
 }
 
@@ -219,7 +219,7 @@ task<http_response> context::not_found_task() {
         co_return co_await handler(*this);
     }
 
-    co_return detail::make_route_not_found_response(arena());
+    co_return detail::make_route_not_found_response();
 }
 
 http_response context::streaming_head() {
@@ -318,11 +318,11 @@ void context_response_editor::set_signed_cookie(set_signed_cookie_options option
     const auto prefix = options.attributes_.prefix_
                             ? std::string_view(ruvia::http_cookie_prefix_text(*options.attributes_.prefix_))
                             : std::string_view{};
-    const detail::inline_text_concat<128> wire_name({prefix, name}, ruvia::process_resource());
+    const detail::inline_text_concat<128> wire_name({prefix, name});
     char signature[detail::cookie_signature_size];
-    detail::write_cookie_signature(signature, secret, wire_name.view(), value, ruvia::process_resource());
+    detail::write_cookie_signature(signature, secret, wire_name.view(), value);
     const detail::inline_text_concat<256> signed_value(
-        {value, ".", std::string_view(signature, sizeof(signature))}, ruvia::process_resource());
+        {value, ".", std::string_view(signature, sizeof(signature))});
     write_cookie(target(), name, signed_value.view(), options.attributes_);
 }
 
@@ -344,9 +344,9 @@ http_response context::redirect(redirect_response_options options) {
     if (redirect_authority_contains_backslash(location)) {
         throw std::invalid_argument("redirect location authority must not contain a backslash");
     }
-    http_response response(arena());
+    http_response response;
     apply_response_state(response, status_code);
-    std::pmr::string encoded_location(ruvia::process_resource());
+    std::string encoded_location;
     response.header("Location", percent_encode_uri_reference(location, encoded_location));
     response_state().reset_draft();
     return response;
@@ -375,7 +375,7 @@ http_response make_readiness_response(context& context_value, readiness_response
     }
 
     static constexpr std::string_view prefix = R"({"status":"not_ready","reason":)";
-    std::pmr::string body(context_value.arena());
+    std::string body;
     body.reserve(prefix.size() + detail::json_string_size_hint(reason) + 1U);
     body.append(prefix);
     detail::append_json_string(body, reason);

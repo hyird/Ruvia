@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_server_semantics.h"
 #include "ruvia/http/http_ascii.h"
@@ -20,7 +19,7 @@
 #include "parser/http_header_descriptor_storage.h"
 #include "parser/http_request_target.h"
 #include "response/http_response_header_state.h"
-#include "util/http_wire_sink.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia::detail {
 
@@ -30,7 +29,7 @@ struct http1_client_request_prepare_result_access final {
 
     [[nodiscard]] static http1_client_exchange_state exchange_state(http_known_method method,
         http1_close_policy close_policy, http1_client_initial_content_state content_state,
-        std::pmr::string offered_upgrade_protocols) noexcept {
+        std::string offered_upgrade_protocols) noexcept {
         return http1_client_exchange_state(
             method, close_policy, content_state, std::move(offered_upgrade_protocols));
     }
@@ -171,16 +170,15 @@ struct request_head_write_plan final {
     return false;
 }
 
-[[nodiscard]] std::pmr::string own_offered_upgrade_protocols(
-    std::span<const http_header_view> headers, const detail::http1_client_request_field_facts& facts,
-    std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string own_offered_upgrade_protocols(
+    std::span<const http_header_view> headers, const detail::http1_client_request_field_facts& facts) {
     if (facts.upgrade_field_count_ == 0) {
-        return std::pmr::string(resource);
+        return {};
     }
     if (facts.upgrade_field_count_ == 1) {
-        return std::pmr::string(facts.first_upgrade_value_, resource);
+        return std::string(facts.first_upgrade_value_);
     }
-    std::pmr::string result(resource);
+    std::string result;
     result.reserve(facts.upgrade_value_bytes_);
     for (const auto& header : headers) {
         if (!http_ascii_equals_ignore_case(header.name(), "Upgrade")) {
@@ -239,7 +237,7 @@ struct request_head_write_plan final {
     std::string_view method, http_known_method known_method, std::string_view target,
     std::span<const http_header_view> headers, http_client_request_content_view content,
     std::span<char> head_buffer, http1_client_request_wire_policy policy,
-    std::pmr::memory_resource* resource, const http1_client_request_head_view* streaming = nullptr,
+    const http1_client_request_head_view* streaming = nullptr,
     std::span<const http_header_view> connect_udp_headers = {}) {
     if (!detail::is_valid_http_request_field_source(policy.field_source_)) {
         return detail::http1_client_request_prepare_result_access::failure(
@@ -359,8 +357,8 @@ struct request_head_write_plan final {
     // fixed-size value. Own it before mutating the caller's output buffer so an
     // allocation failure leaves request preparation transactional.
     auto offered_upgrade_protocols = header_facts.upgrade_protocols_.has_protocol()
-                                         ? own_offered_upgrade_protocols(headers, header_facts, resource)
-                                         : std::pmr::string(resource);
+                                         ? own_offered_upgrade_protocols(headers, header_facts)
+                                         : std::string();
 
     const auto content_state = expect_continue
                                    ? detail::http1_client_initial_content_state::awaiting_continue
@@ -400,7 +398,7 @@ struct request_head_write_plan final {
 // invalid; port 0 is never a tunnel target), emitted in authority-form.
 [[nodiscard]] detail::http1_client_request_prepare_result_access::result_type prepare_connect_request(
     const http_origin_view* tunnel_origin, std::span<const http_header_view> headers, std::span<char> head_buffer,
-    http1_client_request_wire_policy policy, std::pmr::memory_resource* resource) {
+    http1_client_request_wire_policy policy) {
     if (const auto error = validate_wire_policy(policy, true)) {
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
@@ -409,7 +407,7 @@ struct request_head_write_plan final {
             http1_client_request_prepare_error::invalid_connect_origin);
     }
     return prepare_request(*tunnel_origin, "CONNECT", http_known_method::connect, {}, headers,
-        http_client_request_content_view::none(), head_buffer, policy, resource);
+        http_client_request_content_view::none(), head_buffer, policy);
 }
 
 }  // namespace
@@ -463,9 +461,6 @@ std::string_view http1_client_request_prepare_error_message(
     return "invalid HTTP/1 client request";
 }
 
-http1_client_request_writer::http1_client_request_writer(std::pmr::memory_resource* resource) noexcept
-    : resource_(detail::http_pmr_resource_or_default(resource)) {}
-
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
     http1_client_request_prepare_error>
 http1_client_request_writer::prepare(const http_origin_view& origin,
@@ -478,7 +473,7 @@ http1_client_request_writer::prepare(const http_origin_view& origin,
     }
     return prepare_request(origin, request.method_, known_method, request.target_,
         static_cast<std::span<const http_header_view>>(request.headers_), request.content_, head_buffer,
-        policy, resource_);
+        policy);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
@@ -492,7 +487,7 @@ http1_client_request_writer::prepare_streaming(const http_origin_view& origin,
         return detail::http1_client_request_prepare_result_access::failure(*error);
     }
     return prepare_request(origin, request.method_, known_method, request.target_, request.headers_,
-        http_client_request_content_view::none(), head_buffer, policy, resource_, &request);
+        http_client_request_content_view::none(), head_buffer, policy, &request);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
@@ -514,7 +509,7 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
                 http1_client_request_prepare_error::invalid_upgrade);
         }
     }
-    detail::http_header_descriptor_storage<http_header_view> staged_fields(resource_);
+    detail::http_header_descriptor_storage<http_header_view> staged_fields;
     staged_fields.reserve(headers.size() + 3U);
     for (const auto& field : headers) {
         staged_fields.append(field);
@@ -526,7 +521,7 @@ http1_client_request_writer::prepare_connect_udp(const http_origin_view& origin,
     const auto all_fields = staged_fields.view();
     const auto emitted_headers = all_fields.first(all_fields.size() - 1U);
     return prepare_request(origin, "GET", known_method, target.view(), emitted_headers,
-        http_client_request_content_view::none(), head_buffer, policy, resource_, nullptr, all_fields);
+        http_client_request_content_view::none(), head_buffer, policy, nullptr, all_fields);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
@@ -534,7 +529,7 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
 http1_client_request_writer::prepare_connect(
     const http_origin_view& tunnel_origin, std::span<const http_header_view> headers,
     std::span<char> head_buffer, http1_client_request_wire_policy policy) const {
-    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy, resource_);
+    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
 }
 
 std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
@@ -545,11 +540,11 @@ http1_client_request_writer::prepare_connect(borrowed_text authority,
     // and port zero is rejected by prepare_connect_request.
     const auto parsed_value = parse_http_authority(authority);
     if (!parsed_value || parsed_value->port_kind() != http_authority_port_kind::value) {
-        return prepare_connect_request(nullptr, headers, head_buffer, policy, resource_);
+        return prepare_connect_request(nullptr, headers, head_buffer, policy);
     }
     const auto tunnel_origin =
         http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
-    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy, resource_);
+    return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
 }
 
 http1_response_head_plan prepare_http1_connect_response_head(

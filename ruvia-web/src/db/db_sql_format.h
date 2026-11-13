@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cmath>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -51,7 +50,7 @@ inline void validate_db_identifier(std::string_view name, db_driver driver) {
     }
 }
 
-inline void append_db_identifier(std::pmr::string& output, std::string_view name, db_driver driver) {
+inline void append_db_identifier(std::string& output, std::string_view name, db_driver driver) {
     validate_db_identifier(name, driver);
     const char quote = driver == db_driver::postgresql ? '"' : '`';
     output.push_back(quote);
@@ -64,7 +63,7 @@ inline void append_db_identifier(std::pmr::string& output, std::string_view name
     output.push_back(quote);
 }
 
-inline void append_db_qualified_identifier(std::pmr::string& output, std::string_view name, db_driver driver) {
+inline void append_db_qualified_identifier(std::string& output, std::string_view name, db_driver driver) {
     while (true) {
         const auto dot = name.find('.');
         append_db_identifier(output, name.substr(0, dot), driver);
@@ -76,7 +75,7 @@ inline void append_db_qualified_identifier(std::pmr::string& output, std::string
     }
 }
 
-inline void append_db_string_literal(std::pmr::string& output, std::string_view value, db_driver driver) {
+inline void append_db_string_literal(std::string& output, std::string_view value, db_driver driver) {
     require_db_dialect(driver);
     if (value.find('\0') != std::string_view::npos) {
         throw std::invalid_argument("database text cannot contain NUL");
@@ -108,7 +107,7 @@ inline void append_db_string_literal(std::pmr::string& output, std::string_view 
 // cast of a quoted constant (valid in DEFAULT, CHECK, generated columns and
 // views, and immune to a preceding '-' forming a comment); MariaDB reads any
 // literal with an exponent as DOUBLE.
-inline void append_db_double_literal(std::pmr::string& output, double value, db_driver driver) {
+inline void append_db_double_literal(std::string& output, double value, db_driver driver) {
     require_db_dialect(driver);
     if (driver == db_driver::postgresql) {
         output += "CAST('";
@@ -123,7 +122,7 @@ inline void append_db_double_literal(std::pmr::string& output, double value, db_
     }
 }
 
-inline void append_db_literal(std::pmr::string& output, const db_value& value, db_driver driver) {
+inline void append_db_literal(std::string& output, const db_value& value, db_driver driver) {
     require_db_dialect(driver);
     switch (value.type()) {
         case db_value_type::null:
@@ -151,7 +150,7 @@ inline void append_db_literal(std::pmr::string& output, const db_value& value, d
 enum class db_sql_type_usage : std::uint8_t { column,
     cast };
 
-void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver);
+void append_db_expression(std::string& output, db_expression expression, db_driver driver);
 
 template <typename contains_fn_type>
 [[nodiscard]] inline std::string_view select_db_dollar_delimiter(
@@ -170,7 +169,7 @@ template <typename contains_fn_type>
     return delimiter;
 }
 
-inline void append_db_dollar_body(std::pmr::string& output, std::string_view body) {
+inline void append_db_dollar_body(std::string& output, std::string_view body) {
     std::array<char, 32> delimiter_buf;
     const auto delimiter = select_db_dollar_delimiter(
         delimiter_buf, [body](std::string_view candidate) noexcept {
@@ -205,7 +204,7 @@ inline void append_db_dollar_body(std::pmr::string& output, std::string_view bod
 }
 
 // PostgreSQL statements emitted both as migration steps and inside PL/pgSQL bodies.
-inline void append_db_lock_table_statement(std::pmr::string& output, std::string_view table, db_table_lock_mode mode, bool nowait) {
+inline void append_db_lock_table_statement(std::string& output, std::string_view table, db_table_lock_mode mode, bool nowait) {
     const auto mode_name = table_lock_mode_name(mode);
     output.append("LOCK TABLE ");
     append_db_qualified_identifier(output, table, db_driver::postgresql);
@@ -216,12 +215,12 @@ inline void append_db_lock_table_statement(std::pmr::string& output, std::string
         output.append(" NOWAIT");
     }
 }
-inline void append_db_perform_statement(std::pmr::string& output, db_expression expression) {
+inline void append_db_perform_statement(std::string& output, db_expression expression) {
     output.append("PERFORM ");
     append_db_expression(output, expression, db_driver::postgresql);
 }
 
-inline void append_db_type_name(std::pmr::string& output, db_data_type type,
+inline void append_db_type_name(std::string& output, db_data_type type,
     std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale,
     bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {
     require_db_dialect(driver);

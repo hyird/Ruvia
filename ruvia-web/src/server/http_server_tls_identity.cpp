@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -19,7 +18,6 @@
 #include <openssl/ocsp.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/http/http_ascii.h"
 
@@ -63,7 +61,7 @@ void validate_ocsp_response(std::span<const std::byte> bytes) {
         throw std::invalid_argument("TLS OCSP response must be a DER OCSPResponse");
     }
     // d2i also accepts BER; require the canonical DER encoding we advertise.
-    std::pmr::vector<std::byte> canonical(bytes.size(), process_resource());
+    std::vector<std::byte> canonical(bytes.size());
     auto* output = reinterpret_cast<unsigned char*>(canonical.data());
     if (i2d_OCSP_RESPONSE(response.get(), &output) != size ||
         !std::equal(bytes.begin(), bytes.end(), canonical.begin())) {
@@ -79,7 +77,7 @@ struct tls_identity_source final {
 };
 
 [[nodiscard]] tls_identity_source make_tls_identity_source(
-    const tls_identity_config& identity, std::pmr::memory_resource* resource,
+    const tls_identity_config& identity,
     std::span<const std::byte> ocsp_response = {}) {
     validate_ocsp_response(ocsp_response);
     const bool files = !identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty();
@@ -89,7 +87,7 @@ struct tls_identity_source final {
     }
     if (!pem) {
         // Both names are required: an empty one throws.
-        return {.location_ = make_tls_identity_files(identity, resource),
+        return {.location_ = make_tls_identity_files(identity),
             .private_key_password_ = identity.private_key_password_,
             .ocsp_response_ = ocsp_response};
     }
@@ -111,8 +109,8 @@ struct tls_identity_source final {
 }
 
 [[nodiscard]] http_server_tls_identities::identity load_fixed_tls_identity(
-    const tls_identity_source& source, std::pmr::memory_resource* resource) {
-    return {load_tls_identity(source), source.ocsp_response_, resource};
+    const tls_identity_source& source) {
+    return {load_tls_identity(source), source.ocsp_response_};
 }
 
 // RFC 6066 §3 HostName: an ASCII DNS name, without the trailing dot.
@@ -150,14 +148,14 @@ struct tls_identity_source final {
 // Every identity setting of one tls_config, validated before anything is read.
 class tls_identity_plan final {
 public:
-    tls_identity_plan(const tls_config& config, std::pmr::memory_resource* resource);
+    tls_identity_plan(const tls_config& config);
 
-    [[nodiscard]] std::shared_ptr<const http_server_tls_identities> load(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] std::shared_ptr<const http_server_tls_identities> load() const;
 
 private:
     struct named_source final {
         // ASCII lowercase; a wildcard keeps the parent domain after its "*.".
-        std::pmr::string name_;
+        std::string name_;
         bool wildcard_;
         tls_identity_source source_;
     };
@@ -171,13 +169,11 @@ private:
     std::shared_ptr<tls_certificate_store> store_;
     std::shared_ptr<const tls_certificate_selector> selector_;
     tls_certificate_id default_certificate_{};
-    std::pmr::vector<named_source> names_;
-    std::pmr::vector<addressed_source> addresses_;
+    std::vector<named_source> names_;
+    std::vector<addressed_source> addresses_;
 };
 
-tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_resource* resource)
-    : names_(resource),
-      addresses_(resource) {
+tls_identity_plan::tls_identity_plan(const tls_config& config) {
     if (config.certificate_store_) {
         const auto& identity = config.identity_;
         if (!identity.certificate_chain_file_.empty() || !identity.private_key_file_.empty() ||
@@ -197,7 +193,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
     if (config.select_certificate_ || config.default_certificate_ != 0) {
         throw std::invalid_argument("TLS certificate selection requires a certificate library");
     }
-    primary_.emplace(make_tls_identity_source(config.identity_, resource, config.ocsp_response_));
+    primary_.emplace(make_tls_identity_source(config.identity_, config.ocsp_response_));
     names_.reserve(config.sni_.size());
     for (const auto& sni : config.sni_) {
         if (sni.host_.empty()) {
@@ -209,7 +205,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         if (!is_valid_sni_host(host)) {
             throw std::invalid_argument("SNI host is invalid");
         }
-        std::pmr::string name(host, resource);
+        std::string name(host);
         for (auto& byte : name) {
             byte = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(byte)));
         }
@@ -221,7 +217,7 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         names_.push_back(named_source{
             .name_ = std::move(name),
             .wildcard_ = wildcard,
-            .source_ = make_tls_identity_source(sni.identity_, resource, sni.ocsp_response_),
+            .source_ = make_tls_identity_source(sni.identity_, sni.ocsp_response_),
         });
     }
     addresses_.reserve(config.local_addresses_.size());
@@ -234,31 +230,29 @@ tls_identity_plan::tls_identity_plan(const tls_config& config, std::pmr::memory_
         }
         addresses_.push_back(addressed_source{
             .address_ = address,
-            .source_ = make_tls_identity_source(local.identity_, resource, local.ocsp_response_),
+            .source_ = make_tls_identity_source(local.identity_, local.ocsp_response_),
         });
     }
 }
 
-std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::pmr::memory_resource* resource) const {
+std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load() const {
     if (store_) {
-        auto identities = std::allocate_shared<http_server_tls_identities>(
-            std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), resource);
+        auto identities = std::make_shared<http_server_tls_identities>();
         identities->certificate_store_ = store_;
         identities->select_certificate_ = selector_;
         identities->default_certificate_ = default_certificate_;
         return identities;
     }
-    auto identities = std::allocate_shared<http_server_tls_identities>(
-        std::pmr::polymorphic_allocator<http_server_tls_identities>(resource), load_fixed_tls_identity(*primary_, resource), resource);
+    auto identities = std::make_shared<http_server_tls_identities>(load_fixed_tls_identity(*primary_));
     for (const auto& named : names_) {
         auto& target = named.wildcard_ ? identities->wildcard_names_ : identities->exact_names_;
-        target.emplace_back(named.name_, load_fixed_tls_identity(named.source_, resource), resource);
+        target.emplace_back(named.name_, load_fixed_tls_identity(named.source_));
     }
     identities->local_addresses_.reserve(addresses_.size());
     for (const auto& addressed : addresses_) {
         identities->local_addresses_.push_back(http_server_tls_identities::addressed_identity{
             .address_ = addressed.address_,
-            .value_ = load_fixed_tls_identity(addressed.source_, resource),
+            .value_ = load_fixed_tls_identity(addressed.source_),
         });
     }
     return identities;
@@ -276,7 +270,7 @@ std::shared_ptr<const http_server_tls_identities> tls_identity_plan::load(std::p
 }  // namespace
 
 tls_certificate load_server_tls_certificate(const tls_identity_config& identity) {
-    return load_tls_identity(make_tls_identity_source(identity, process_resource()));
+    return load_tls_identity(make_tls_identity_source(identity));
 }
 
 const http_server_tls_identities::identity& http_server_tls_identities::select(
@@ -309,11 +303,10 @@ const http_server_tls_identities::identity& http_server_tls_identities::select(
 }
 
 http_server_listener_definition::tls load_http_server_tls(
-    const tls_config& config, std::pmr::memory_resource* resource) {
-    auto* const target_resource = pmr_resource_or_default(resource);
+    const tls_config& config) {
     validate_tls_record_limit(config.max_outgoing_records_);
     // Every setting is validated before any credential is read.
-    const tls_identity_plan identities(config, target_resource);
+    const tls_identity_plan identities(config);
     const auto& client = config.client_certificates_;
     std::optional<tls_file_name> client_ca;
     if (client.ca_file_.has_value() || client.requirement_ != tls_client_certificate_requirement::optional) {
@@ -327,10 +320,10 @@ http_server_listener_definition::tls load_http_server_tls(
         if (!client.ca_file_.has_value()) {
             throw std::invalid_argument("TLS client certificates require a CA bundle");
         }
-        client_ca.emplace(make_tls_file_name(*client.ca_file_, target_resource));
+        client_ca.emplace(make_tls_file_name(*client.ca_file_));
     }
 
-    http_server_listener_definition::tls tls(identities.load(target_resource));
+    http_server_listener_definition::tls tls(identities.load());
     tls.max_outgoing_records_ = config.max_outgoing_records_;
     if (client_ca.has_value()) {
         auto trust_store = load_tls_trust_store(*client_ca);
@@ -344,9 +337,8 @@ http_server_listener_definition::tls load_http_server_tls(
 }
 
 std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
-    const tls_config& config, std::pmr::memory_resource* resource) {
-    auto* const target_resource = pmr_resource_or_default(resource);
-    return tls_identity_plan(config, target_resource).load(target_resource);
+    const tls_config& config) {
+    return tls_identity_plan(config).load();
 }
 
 void ensure_same_http_server_tls_policy(const http_server_listener_definition::tls& current, const tls_config& config) {
@@ -357,7 +349,7 @@ void ensure_same_http_server_tls_policy(const http_server_listener_definition::t
     const auto& policy = current.client_certificates_;
     const bool same = policy.has_value()
                           ? client.requirement_ == policy->requirement_ && client.ca_file_.has_value() &&
-                                make_tls_file_name(*client.ca_file_, process_resource()) == policy->ca_file_
+                                make_tls_file_name(*client.ca_file_) == policy->ca_file_
                           : client.requirement_ == tls_client_certificate_requirement::optional &&
                                 !client.ca_file_.has_value();
     if (!same) {

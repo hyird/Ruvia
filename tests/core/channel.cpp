@@ -7,7 +7,6 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
@@ -23,7 +22,6 @@
 #include "ruvia/core/event_loop_pool.h"
 #include "ruvia/core/task_scope.h"
 
-#include "failing_memory_resource.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::channel_tests {
@@ -79,11 +77,10 @@ struct rejection_payload final {
 bool test_rejected_payload_moves_can_close_the_channel() {
     bool success = true;
     for (const auto expected : {channel_send_status::closed, channel_send_status::full, channel_send_status::worker_stopping}) {
-        failing_memory_resource resource;
         asio::io_context io_context;
         auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
         {
-            auto [sender, receiver] = make_channel<rejection_payload>(attachment.loop().handle(), {.capacity_ = 1, .resource_ = &resource});
+            auto [sender, receiver] = make_channel<rejection_payload>(attachment.loop().worker(), {.capacity_ = 1});
             if (expected == channel_send_status::closed) {
                 sender.close();
             } else if (expected == channel_send_status::full) {
@@ -112,7 +109,6 @@ bool test_rejected_payload_moves_can_close_the_channel() {
             success = state.destroyed_ == 1 && success;
             receiver.close();
         }
-        success = resource.live_allocations() == 0 && success;
     }
     return success;
 }
@@ -204,7 +200,7 @@ ruvia::task<void> receive_until_closed(ruvia::channel_receiver<int>& receiver, b
 }
 
 ruvia::channel_receiver<int>::receive_operation make_cold_receive_after_receiver_close(
-    ruvia::worker_handle worker_value, bool timed, bool buffered = false) {
+    ruvia::worker_ref worker_value, bool timed, bool buffered = false) {
     auto [sender, receiver] = ruvia::make_channel<int>(std::move(worker_value), {.capacity_ = 1});
     if (buffered && !sender.send(42).accepted()) {
         throw std::logic_error("could not queue the cold receive input");
@@ -223,7 +219,7 @@ ruvia::task<void> verify_cold_receive_operations(ruvia::channel_receiver<int>::r
               timed_cold_closed.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<void> verify_channel_side_closure(ruvia::worker_handle worker_value, bool& success) {
+ruvia::task<void> verify_channel_side_closure(ruvia::worker_ref worker_value, bool& success) {
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     if (!sender.send(42).accepted()) {
         co_return;
@@ -255,7 +251,7 @@ ruvia::task<void> verify_channel_side_closure(ruvia::worker_handle worker_value,
 
 ruvia::task<void> verify_receiver_retirement_after_worker_stop(
     ruvia::event_loop_attachment& attachment, bool& success) {
-    auto [sender, receiver] = ruvia::make_channel<int>(attachment.loop().handle(), {.capacity_ = 1});
+    auto [sender, receiver] = ruvia::make_channel<int>(attachment.loop().worker(), {.capacity_ = 1});
     if (!sender.send(9).accepted()) {
         co_return;
     }
@@ -271,8 +267,8 @@ ruvia::task<void> verify_receiver_retirement_after_worker_stop(
 }
 
 struct buffered_payload final {
-    buffered_payload(std::pmr::memory_resource* resource, int& destructions)
-        : bytes_(1024, 'x', resource),
+    explicit buffered_payload(int& destructions)
+        : bytes_(1024, 'x'),
           destructions_(&destructions) {}
     buffered_payload(const buffered_payload&) = delete;
     buffered_payload& operator=(const buffered_payload&) = delete;
@@ -285,7 +281,7 @@ struct buffered_payload final {
         }
     }
 
-    std::pmr::string bytes_;
+    std::string bytes_;
     int* destructions_;
 };
 
@@ -301,15 +297,14 @@ bool test_retired_receiver_storage_is_released() {
         completed };
     bool success = true;
     for (const auto retirement : {cold_operation_retirement::absent, cold_operation_retirement::discarded, cold_operation_retirement::completed}) {
-        failing_memory_resource resource;
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
         int destructions = 0;
         std::optional<ruvia::channel_receiver<buffered_payload>::receive_operation> cold_receive;
         {
             auto [sender, receiver] = ruvia::make_channel<buffered_payload>(
-                attachment.loop().handle(), {.capacity_ = 1, .resource_ = &resource});
-            success = sender.send(buffered_payload(&resource, destructions)).accepted() && success;
+                attachment.loop().worker(), {.capacity_ = 1});
+            success = sender.send(buffered_payload(destructions)).accepted() && success;
             if (retirement != cold_operation_retirement::absent) {
                 cold_receive.emplace(receiver.receive());
             }
@@ -319,7 +314,6 @@ bool test_retired_receiver_storage_is_released() {
             success = destructions == 1 && success;
         }
         if (cold_receive) {
-            success = resource.live_allocations() != 0 && success;
             if (retirement == cold_operation_retirement::completed) {
                 bool closed = false;
                 ruvia::test::run_worker_tasks(attachment, verify_retired_payload_receive(std::move(*cold_receive), closed));
@@ -327,7 +321,7 @@ bool test_retired_receiver_storage_is_released() {
             }
             cold_receive.reset();
         }
-        success = destructions == 1 && resource.live_allocations() == 0 && success;
+        success = destructions == 1 && success;
     }
     return success;
 }
@@ -375,14 +369,13 @@ struct teardown_payload final {
 bool test_retired_payload_destructors_can_tear_down_the_channel() {
     bool success = true;
     for (const bool release_endpoints : {false, true}) {
-        failing_memory_resource resource;
         asio::io_context io_context;
         auto attachment = attach_event_loop(io_context, {.queue_capacity_ = 8});
         {
             teardown_endpoints endpoints;
             endpoints.release_endpoints_ = release_endpoints;
             auto [sender, receiver] =
-                make_channel<teardown_payload>(attachment.loop().handle(), {.capacity_ = 2, .resource_ = &resource});
+                make_channel<teardown_payload>(attachment.loop().worker(), {.capacity_ = 2});
             endpoints.sender_ = std::make_unique<channel_sender<teardown_payload>>(std::move(sender));
             endpoints.receiver_ = std::make_unique<channel_receiver<teardown_payload>>(std::move(receiver));
             success = endpoints.sender_->send(teardown_payload(endpoints)).accepted() &&
@@ -392,18 +385,17 @@ bool test_retired_payload_destructors_can_tear_down_the_channel() {
             success = endpoints.armed_destructions_ == 2 && success;
             endpoints.armed_ = false;
             if (release_endpoints) {
-                success = !endpoints.sender_ && !endpoints.receiver_ && resource.live_allocations() == 0 && success;
+                success = !endpoints.sender_ && !endpoints.receiver_ && success;
             } else {
                 success = endpoints.sender_->send(teardown_payload(endpoints)).status() == channel_send_status::closed &&
                           success;
             }
         }
-        success = resource.live_allocations() == 0 && success;
     }
     return success;
 }
 
-ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
+ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     {
         ruvia::stop_source source;
         auto [cancel_sender, cancel_receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
@@ -649,7 +641,7 @@ bool test_reentrant_payload_moves_and_destruction() {
     auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
     bool success = true;
     {
-        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().handle(), {.capacity_ = 1});
+        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().worker(), {.capacity_ = 1});
         bounded_reentrant_close move_close([&] { sender.close(); });
         std::function<void()> on_move = [&] { move_close.invoke(); };
         std::function<void()> on_destroy;
@@ -660,7 +652,7 @@ bool test_reentrant_payload_moves_and_destruction() {
         receiver.close();
     }
     {
-        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().handle(), {.capacity_ = 2});
+        auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().worker(), {.capacity_ = 2});
         bounded_reentrant_close move_close([&] { sender.close(); });
         bounded_reentrant_close destroy_close([&] { sender.close(); });
         std::function<void()> on_move;
@@ -688,7 +680,7 @@ ruvia::task<void> verify_commit_order(
 bool test_send_reservation_does_not_block_other_producers() {
     asio::io_context io;
     auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
-    auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().handle(), {.capacity_ = 2});
+    auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(attachment.loop().worker(), {.capacity_ = 2});
     std::binary_semaphore entered{0};
     std::binary_semaphore proceed{0};
     std::binary_semaphore second_completed{0};
@@ -719,7 +711,7 @@ bool test_send_reservation_does_not_block_other_producers() {
     return first_sent && second_sent && concurrent && ordered;
 }
 
-ruvia::task<void> verify_send_wait_admission(ruvia::worker_handle worker_value, bool& success) {
+ruvia::task<void> verify_send_wait_admission(ruvia::worker_ref worker_value, bool& success) {
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     if (!(co_await sender.send_wait(1)).accepted() || sender.send(9).status() != ruvia::channel_send_status::full) {
         co_return;
@@ -747,7 +739,7 @@ ruvia::task<void> verify_send_wait_admission(ruvia::worker_handle worker_value, 
               third == ruvia::channel_send_status::sent;
 }
 
-ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_handle worker_value, bool& success) {
+ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_ref worker_value, bool& success) {
     using value_type = std::unique_ptr<int>;
     using ruvia::channel_send_status;
     const auto returned = [](ruvia::channel_send_result<value_type>& result, channel_send_status status, int expected) {
@@ -784,7 +776,7 @@ ruvia::task<void> verify_send_wait_returns_undelivered_values(ruvia::worker_hand
 }
 
 ruvia::task<void> verify_send_wait_observes_worker_stop(ruvia::event_loop_attachment& attachment,
-    ruvia::worker_handle worker_value, bool& success) {
+    ruvia::worker_ref worker_value, bool& success) {
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     if (!sender.send(0).accepted()) {
         co_return;
@@ -806,7 +798,7 @@ TEST(Ruvia, ChannelLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto cold_receive = make_cold_receive_after_receiver_close(worker_value, false);
         auto timed_cold_receive = make_cold_receive_after_receiver_close(worker_value, true);
         auto buffered_cold_receive = make_cold_receive_after_receiver_close(worker_value, false, true);
@@ -831,7 +823,7 @@ TEST(Ruvia, ChannelLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
         ruvia::channel_sender<int> empty_sender;
         ASSERT_FALSE(empty_sender.valid());
@@ -855,7 +847,7 @@ TEST(Ruvia, ChannelLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto [sender, receiver] = ruvia::make_channel<throwing_move>(worker_value, {.capacity_ = 1});
         std::binary_semaphore receiver_scheduled{0};
         asio::post(io_context, [&receiver_scheduled] { receiver_scheduled.release(); });
@@ -879,7 +871,7 @@ TEST(Ruvia, ChannelLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        auto [sender, receiver] = ruvia::make_channel<throwing_move>(attachment.loop().handle(), {.capacity_ = 2});
+        auto [sender, receiver] = ruvia::make_channel<throwing_move>(attachment.loop().worker(), {.capacity_ = 2});
         ASSERT_TRUE(sender.send(throwing_move(1)).accepted());
         ASSERT_TRUE(sender.send(throwing_move(2)).accepted());
         ruvia::test::run_worker_tasks(
@@ -905,17 +897,15 @@ TEST(Ruvia, ChannelSendPinsStateDuringReentrantRebinding) {
         SCOPED_TRACE(fail_move);
         asio::io_context io;
         auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
-        ruvia::test::failing_memory_resource resource;
         auto [sender, receiver] = ruvia::make_channel<reentrant_payload>(
-            attachment.loop().handle(), {.capacity_ = 1, .resource_ = &resource});
+            attachment.loop().worker(), {.capacity_ = 1});
         std::optional<ruvia::channel_receiver<reentrant_payload>> owner(std::move(receiver));
         owner->close();
-        const auto live_allocations = resource.live_allocations();
         bool state_pinned = false;
         std::function<void()> on_move = [&] {
             owner.reset();
             sender = {};
-            state_pinned = resource.live_allocations() == live_allocations;
+            state_pinned = !owner.has_value() && !sender.valid();
             if (fail_move) {
                 throw std::runtime_error("requested move failure");
             }
@@ -933,7 +923,6 @@ TEST(Ruvia, ChannelSendPinsStateDuringReentrantRebinding) {
         }
         EXPECT_TRUE(state_pinned);
         EXPECT_FALSE(sender.valid());
-        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
     }
 }
 
@@ -960,7 +949,7 @@ TEST(Ruvia, ChannelSendReservationDoesNotBlockOtherProducers) {
 TEST(Ruvia, ChannelSendWaitWaitsForSpaceAndReturnsUndeliveredValues) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 16});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     {
         // Off a worker thread, awaiting is rejected before anything is queued.
         auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
@@ -979,7 +968,7 @@ TEST(Ruvia, ChannelSendWaitWaitsForSpaceAndReturnsUndeliveredValues) {
 TEST(Ruvia, ChannelSendWaitObservesWorkerStop) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 16});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     bool success = false;
     ruvia::test::run_worker_tasks(
         attachment, ruvia::test::channel_tests::verify_send_wait_observes_worker_stop(attachment, worker_value, success));
@@ -990,9 +979,9 @@ TEST(Ruvia, ChannelSendWaitResumesOnTheAwaitingWorker) {
     ruvia::event_loop_pool loops({.loop_count_ = 2, .queue_capacity_ = 16});
     const auto receiving = loops.loop(0);
     const auto sending = loops.loop(1);
-    auto [sender, receiver] = ruvia::make_channel<int>(receiving.handle(), {.capacity_ = 1});
+    auto [sender, receiver] = ruvia::make_channel<int>(receiving.worker(), {.capacity_ = 1});
     loops.start();
-    auto produced = sending.start([](ruvia::channel_sender<int> s, ruvia::worker_handle self) -> ruvia::task<bool> {
+    auto produced = sending.start([](ruvia::channel_sender<int> s, ruvia::worker_ref self) -> ruvia::task<bool> {
         bool on_sender = true;
         bool delivered = true;
         for (int value = 1; value <= 3; ++value) {
@@ -1001,7 +990,7 @@ TEST(Ruvia, ChannelSendWaitResumesOnTheAwaitingWorker) {
         }
         const bool resumed_on_sender = delivered && on_sender;
         co_return resumed_on_sender;
-    }(sender, sending.handle()));
+    }(sender, sending.worker()));
     auto consumed = receiving.start([](ruvia::channel_receiver<int>& r) -> ruvia::task<int> {
         int sum = 0;
         for (int i = 0; i < 3; ++i) {

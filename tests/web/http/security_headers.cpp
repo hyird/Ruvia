@@ -4,12 +4,11 @@
 
 #include <bit>
 #include <cstdint>
-#include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/context.h"
 
 #include "context_request_fixture.h"
@@ -131,11 +130,10 @@ TEST(Ruvia, security_headers_emit_configured_policies) {
 }
 
 TEST(Ruvia, security_headers_apply_custom_headers) {
-    const std::pmr::vector<ruvia::security_header> custom_value({
-                                                                    {"X-Custom-Security", "value-1"},
-                                                                    {"X-Report-To", "endpoint"},
-                                                                },
-        ruvia::process_resource());
+    const std::vector<ruvia::security_header> custom_value({
+        {"X-Custom-Security", "value-1"},
+        {"X-Report-To", "endpoint"},
+    });
     security_headers_config options;
     options.custom_headers_ = custom_value;
     const auto response = security_response(options);

@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -135,10 +134,10 @@ public:
     void advertise_origins(std::span<const std::string_view> origins);
     void advertise_alternative_service(std::string_view value);
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return context_.worker();
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     template <typename state_type>
     [[nodiscard]] state_type& worker_state() const {
@@ -152,24 +151,18 @@ public:
         return context_.run_blocking(std::move(callable), std::move(options));
     }
 
-    [[nodiscard]] std::pmr::memory_resource* arena() const noexcept {
-        return context_.arena();
-    }
-    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
-        return context_.pool();
-    }
     [[nodiscard]] const ruvia::env& env() const noexcept {
         return context_.env();
     }
-    [[nodiscard]] http_client_handle client() const;
-    [[nodiscard]] http_client_handle client(std::string_view alias) const;
+    [[nodiscard]] http_client_ref client() const;
+    [[nodiscard]] http_client_ref client(std::string_view alias) const;
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_handle db() const;
-    [[nodiscard]] db_handle db(std::string_view alias) const;
+    [[nodiscard]] db_session db() const;
+    [[nodiscard]] db_session db(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_handle redis() const;
-    [[nodiscard]] redis_handle redis(std::string_view alias) const;
+    [[nodiscard]] redis_session redis() const;
+    [[nodiscard]] redis_session redis(std::string_view alias) const;
 #endif
 
     // Edits the next file/static_file response or the head response().commit()

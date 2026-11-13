@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -11,8 +10,8 @@ namespace ruvia::test {
 
 // A multipart/form-data Content-Type whose boundary parameter is `value` as a
 // quoted-string, so every byte reaches the boundary rule unchanged.
-[[nodiscard]] inline std::pmr::string multipart_boundary_content_type(std::string_view value) {
-    std::pmr::string content_type("multipart/form-data; boundary=\"");
+[[nodiscard]] inline std::string multipart_boundary_content_type(std::string_view value) {
+    std::string content_type("multipart/form-data; boundary=\"");
     for (const char byte : value) {
         if (byte == '"' || byte == '\\') {
             content_type.push_back('\\');

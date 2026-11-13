@@ -1,7 +1,6 @@
 #pragma once
 #include <chrono>
 #include <cstddef>
-#include <memory_resource>
 #include <span>
 #include <vector>
 
@@ -18,7 +17,7 @@ namespace ruvia::detail {
 
 // Owns every inherited socket and cleanses every TLS secret, including when
 // configuration validation or allocation fails.
-[[nodiscard]] std::pmr::vector<http_server_listener_definition> load_server_listeners(
+[[nodiscard]] std::vector<http_server_listener_definition> load_server_listeners(
     std::span<const listen_config> configs);
 
 // Rejects collisions in their separate TCP and HTTP/3 UDP endpoint namespaces.
@@ -34,8 +33,7 @@ void validate_server_limits(const server_config& config);
 // listener the run cannot serve, including a connection or request_stream
 // listener whose application callback `options` lacks.
 [[nodiscard]] http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
-    const http_server_options& options, std::chrono::steady_clock::time_point key_origin,
-    std::pmr::memory_resource* resource);
+    const http_server_options& options, std::chrono::steady_clock::time_point key_origin);
 
 class validated_http_server_configuration final {
 public:
@@ -67,7 +65,7 @@ private:
     friend validated_http_server_configuration validate_http_server_configuration(
         std::span<const http_server_listener_definition> listeners, http_server_options&& options);
 
-    std::pmr::vector<http_server_listener_definition> listeners_;
+    std::vector<http_server_listener_definition> listeners_;
     http_server_options options_;
     std::chrono::steady_clock::time_point tls_key_origin_;
 };

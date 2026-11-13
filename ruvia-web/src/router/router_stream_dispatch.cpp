@@ -6,7 +6,6 @@
 
 #include "context/context_access.h"
 #include "http/session_access.h"
-#include "http/streaming_access.h"
 #include "router/route_table.h"
 
 // Running a route that streams its response: binding the writer to the context
@@ -38,11 +37,11 @@ private:
 }  // namespace
 
 task<std::optional<http_response>> detail::route_table::dispatch_stream_route(
-    const http_request& request, const resolved_route& resolved, request_memory& memory,
+    const http_request& request, const resolved_route& resolved,
     route_stream_handler handler, const context_services& services,
     response_stream_writer* response_stream) const {
     const auto& route = resolved.route();
-    auto context_value = make_route_context(memory, request, resolved, services);
+    auto context_value = make_route_context(request, resolved, services);
     auto& context_services_value = detail::context_access::services(context_value);
     context_services_value.bind_routes(*this);
     context_services_value.bind_route_body_limit(route.max_request_body_bytes());

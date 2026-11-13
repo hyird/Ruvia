@@ -8,13 +8,13 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <random>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/rate_limit.h"
@@ -373,8 +373,7 @@ void validate_rate_limit_config(const rate_limit_config& config) {
 
 rate_limiter::rate_limiter(std::optional<rate_limit_rule> default_rule_per_worker,
     route_rate_limit_presence route_rules, std::size_t capacity_value)
-    : default_rule_per_worker_(default_rule_per_worker),
-      slots_(process_resource()) {
+    : default_rule_per_worker_(default_rule_per_worker) {
     // http_server_options::set_rate_limit, the only writer of the rule and the
     // capacity, validated both; the capacity is a power of two for the mask.
     if (default_rule_per_worker_.has_value() || route_rules == route_rate_limit_presence::present) {
@@ -565,22 +564,17 @@ struct sliding_window_rate_limiter::impl_type final {
     detail::rate_limiter limiter_;
 };
 
-sliding_window_rate_limiter::sliding_window_rate_limiter(
-    const rate_limit_config& config, std::pmr::memory_resource* resource) {
+sliding_window_rate_limiter::sliding_window_rate_limiter(const rate_limit_config& config) {
     detail::validate_rate_limit_config(config);
-    impl_ = make_pmr_object<impl_type>(
-        pmr_resource_or_default(resource), config.rule_, config.capacity_per_worker_);
+    impl_ = std::make_unique<impl_type>(config.rule_, config.capacity_per_worker_);
 }
 
-sliding_window_rate_limiter::sliding_window_rate_limiter(
-    std::size_t capacity_per_worker, std::pmr::memory_resource* resource) {
+sliding_window_rate_limiter::sliding_window_rate_limiter(std::size_t capacity_per_worker) {
     if (!std::has_single_bit(capacity_per_worker)) {
         throw std::invalid_argument("rate-limit capacity per worker must be a power of two");
     }
-    impl_ = make_pmr_object<impl_type>(
-        pmr_resource_or_default(resource), std::nullopt, capacity_per_worker);
+    impl_ = std::make_unique<impl_type>(std::nullopt, capacity_per_worker);
 }
-
 sliding_window_rate_limiter::sliding_window_rate_limiter(
     sliding_window_rate_limiter&&) noexcept = default;
 sliding_window_rate_limiter& sliding_window_rate_limiter::operator=(

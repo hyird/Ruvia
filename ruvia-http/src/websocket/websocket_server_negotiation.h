@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -19,7 +18,7 @@ namespace ruvia::detail {
 // and RFC 8441 consume this same immutable value for their response head, and the
 // subsequent ws_connection consumes its exact deflate alternative. This prevents
 // response metadata and frame RSV1 semantics from being configured separately.
-// The selected subprotocol is copied into caller-selected PMR storage so this
+// The selected subprotocol is copied into owned storage so this
 // committed value never borrows mutable route configuration.
 class websocket_server_negotiation final {
 public:
@@ -47,30 +46,29 @@ public:
     }
     std::span<const http_header> response_headers() const&& = delete;
 
-    [[nodiscard]] std::pmr::string take_subprotocol() && noexcept {
+    [[nodiscard]] std::string take_subprotocol() && noexcept {
         return std::move(subprotocol_);
     }
 
-    [[nodiscard]] std::pmr::vector<http_header> take_response_headers() && noexcept {
+    [[nodiscard]] std::vector<http_header> take_response_headers() && noexcept {
         return std::move(response_headers_);
     }
 
 private:
     friend websocket_server_negotiation make_websocket_server_negotiation(
-        const http_request&, const websocket_server_handshake_options&, std::pmr::memory_resource*);
+        const http_request&, const websocket_server_handshake_options&);
 
     websocket_server_negotiation(std::string_view subprotocol, websocket_compression compression,
-        std::span<const http_header_view> response_headers_value, std::pmr::memory_resource* resource);
+        std::span<const http_header_view> response_headers_value);
 
-    std::pmr::string subprotocol_;
+    std::string subprotocol_;
     websocket_compression compression_;
     websocket_compression_extension extensions_;
-    std::pmr::vector<http_header> response_headers_;
+    std::vector<http_header> response_headers_;
 };
 
-// Copies the selected subprotocol and response fields into `resource` (nullptr
-// selects the default resource).
+// Copies the selected subprotocol and response fields.
 [[nodiscard]] websocket_server_negotiation make_websocket_server_negotiation(
-    const http_request& request, const websocket_server_handshake_options& options, std::pmr::memory_resource* resource);
+    const http_request& request, const websocket_server_handshake_options& options);
 
 }  // namespace ruvia::detail

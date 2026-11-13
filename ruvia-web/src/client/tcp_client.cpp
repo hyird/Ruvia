@@ -16,14 +16,13 @@
 #include "client/client_lifecycle.h"
 #include "client/client_tcp_transport.h"
 #include "client/client_tls.h"
-#include "util/config_validation.h"
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
+#include "integration/operation_lane_lease.h"
+#include "server/config_validation.h"
 
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::pmr::string owned_host(const tcp_client_config& config) {
+[[nodiscard]] std::string owned_host(const tcp_client_config& config) {
     validate_client_origin_host(config.host_, "TCP host must not be empty", "TCP host is invalid");
     if (config.port_.value() == 0) {
         throw std::invalid_argument("TCP port must not be zero");
@@ -36,10 +35,10 @@ namespace {
             static_cast<void>(operation_timeout(*timeout));
         }
     }
-    return std::pmr::string(config.host_, process_resource());
+    return std::string(config.host_);
 }
 
-[[nodiscard]] std::pmr::vector<unsigned char> owned_alpn(const tcp_client_config& config) {
+[[nodiscard]] std::vector<unsigned char> owned_alpn(const tcp_client_config& config) {
     if (!config.alpn_.empty() && config.tls_.mode_ == client_tls_mode::disabled) {
         throw std::invalid_argument("TCP ALPN requires TLS");
     }
@@ -53,7 +52,7 @@ namespace {
         }
         size += protocol.size() + 1;
     }
-    std::pmr::vector<unsigned char> wire(process_resource());
+    std::vector<unsigned char> wire;
     wire.reserve(size);
     for (const auto& protocol : config.alpn_) {
         wire.push_back(static_cast<unsigned char>(protocol.size()));
@@ -86,10 +85,10 @@ namespace {
 
 class tcp_client_backend final {
 public:
-    tcp_client_backend(event_loop& loop, const worker_handle& worker, const tcp_client_config& config)
+    tcp_client_backend(event_loop& loop, const worker_ref& worker, const tcp_client_config& config)
         : host_(owned_host(config)),
           alpn_(owned_alpn(config)),
-          tls_config_(config.tls_, client_tls_files::parse, process_resource()),
+          tls_config_(config.tls_, client_tls_files::parse),
           tls_context_(make_tls_context(tls_config_)),
           transport_(loop.io_context(), tls_context_, worker,
               {host_, config.port_.value(), tls_config_.mode_ == client_tls_mode::disabled ? nullptr : &tls_config_, config.tcp_, alpn_}, counters_),
@@ -133,7 +132,7 @@ public:
         co_return as_bytes(std::string_view(buffer_.data(), result.bytes_));
     }
 
-    [[nodiscard]] task<void> write(std::pmr::string bytes, operation_options options) {
+    [[nodiscard]] task<void> write(std::string bytes, operation_options options) {
         auto lease = claim_operation_lane(write_active_, "TCP client write already in progress");
         operation_deadline timeout(override_operation_options({.timeout_ = write_timeout_}, options).timeout_);
         worker_cancellation_registration cancellation(cancellation_, write_id_);
@@ -173,8 +172,8 @@ private:
         }
     }
 
-    std::pmr::string host_;
-    std::pmr::vector<unsigned char> alpn_;
+    std::string host_;
+    std::vector<unsigned char> alpn_;
     client_tls_config_storage tls_config_;
     asio::ssl::context tls_context_;
     client_wire_counters counters_;
@@ -196,7 +195,7 @@ class tcp_client_state final : public std::enable_shared_from_this<tcp_client_st
 public:
     tcp_client_state(event_loop loop, const tcp_client_config& config)
         : loop_(client_lifecycle<tcp_client_state>::require_loop(std::move(loop))),
-          worker_(loop_.handle()),
+          worker_(loop_.worker()),
           backend_(loop_, worker_, config),
           lifecycle_(*this, loop_, worker_) {}
 
@@ -214,7 +213,7 @@ public:
         lifecycle_.require_ready();
         return make_scoped_operation(lifecycle_.operation_scope(), read_owned(shared_from_this(), std::move(options)));
     }
-    [[nodiscard]] task<void> write(std::pmr::string bytes, operation_options options) {
+    [[nodiscard]] task<void> write(std::string bytes, operation_options options) {
         lifecycle_.require_ready();
         return make_scoped_operation(lifecycle_.operation_scope(), write_owned(shared_from_this(), std::move(bytes), std::move(options)));
     }
@@ -224,7 +223,7 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -257,7 +256,7 @@ private:
         }
     }
     [[nodiscard]] static task<void> write_owned(std::shared_ptr<tcp_client_state> state,
-        std::pmr::string bytes, operation_options options) {
+        std::string bytes, operation_options options) {
         state->lifecycle_.require_ready();
         try {
             co_await state->backend_.write(std::move(bytes), std::move(options));
@@ -268,7 +267,7 @@ private:
     }
 
     event_loop loop_;
-    worker_handle worker_;
+    worker_ref worker_;
     tcp_client_backend backend_;
     bool connecting_{};
     client_lifecycle<tcp_client_state> lifecycle_;
@@ -279,8 +278,7 @@ private:
 namespace ruvia {
 
 tcp_client::tcp_client(event_loop loop, const tcp_client_config& config)
-    : state_(std::allocate_shared<detail::tcp_client_state>(
-          std::pmr::polymorphic_allocator<detail::tcp_client_state>(process_resource()), std::move(loop), config)) {
+    : state_(std::make_shared<detail::tcp_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 
@@ -300,15 +298,15 @@ task<std::optional<std::span<const std::byte>>> tcp_client::read(operation_optio
 }
 
 task<void> tcp_client::write(std::span<const std::byte> bytes, operation_options options) & {
-    return write_owned(std::pmr::string(as_chars(bytes), process_resource()), std::move(options));
+    return write_owned(std::string(as_chars(bytes)), std::move(options));
 }
 
 task<void> tcp_client::write(std::string_view bytes, operation_options options) & {
-    return write_owned(std::pmr::string(bytes, process_resource()), std::move(options));
+    return write_owned(std::string(bytes), std::move(options));
 }
 
-task<void> tcp_client::write_owned(std::pmr::string bytes, operation_options options) {
-    return state_->write(detail::rebind_owned_storage(bytes, process_resource()), std::move(options));
+task<void> tcp_client::write_owned(std::string bytes, operation_options options) {
+    return state_->write(std::move(bytes), std::move(options));
 }
 
 void tcp_client::close() noexcept {
@@ -319,7 +317,7 @@ task<void> tcp_client::shutdown() & {
     return state_->shutdown();
 }
 
-const worker_handle& tcp_client::worker() const& noexcept {
+const worker_ref& tcp_client::worker() const& noexcept {
     return state_->worker();
 }
 

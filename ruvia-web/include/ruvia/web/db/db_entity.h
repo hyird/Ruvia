@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -209,8 +208,8 @@ struct db_entity_type_traits<double> {
     static constexpr db_data_type data_type = db_data_type::double_value;
 };
 template <>
-struct db_entity_type_traits<std::pmr::string> {
-    using value_type = std::pmr::string;
+struct db_entity_type_traits<std::string> {
+    using value_type = std::string;
     static constexpr db_data_type data_type = db_data_type::text;
 };
 template <>
@@ -224,8 +223,8 @@ struct db_entity_type_traits<std::optional<t_type>> {
     static constexpr db_data_type data_type = db_entity_type_traits<t_type>::data_type;
 };
 template <typename t_type>
-struct db_entity_type_traits<std::pmr::vector<t_type>> {
-    using value_type = std::pmr::vector<t_type>;
+struct db_entity_type_traits<std::vector<t_type>> {
+    using value_type = std::vector<t_type>;
     static constexpr db_data_type data_type = db_data_type::array;
 };
 
@@ -243,7 +242,7 @@ consteval bool is_conflict_updatable_db_column() noexcept {
 }
 template <typename c_type>
 consteval bool is_numeric_db_column() noexcept {
-    return !is_pmr_vector<typename c_type::value_type>::value &&
+    return !is_std_vector<typename c_type::value_type>::value &&
            (c_type::data_type == db_data_type::small_int ||
                c_type::data_type == db_data_type::integer ||
                c_type::data_type == db_data_type::big_int ||
@@ -262,7 +261,7 @@ consteval bool is_integer_db_data_type(db_data_type type) noexcept {
 template <typename t_type>
 consteval bool valid_db_column_options(const auto& options) noexcept {
     const auto data_type = options.data_type_ == db_data_type::inferred ? db_entity_type_traits<t_type>::data_type : options.data_type_;
-    const bool integer = !is_pmr_vector<t_type>::value && is_integer_db_data_type(data_type);
+    const bool integer = !is_std_vector<t_type>::value && is_integer_db_data_type(data_type);
     const bool computed = options.generated_type_ != db_generated_type::none;
     const bool writable = !computed && !options.read_only_;
     const int lifecycle_flags = int{options.create_date_} + int{options.update_date_} + int{options.delete_date_} + int{options.version_};
@@ -285,60 +284,25 @@ constexpr std::string_view unqualified_db_name(std::string_view name) noexcept {
     return dot == std::string_view::npos ? name : name.substr(dot + 1);
 }
 
-template <typename t_type>
-struct db_relation_deleter final {
-    std::pmr::memory_resource* resource_{nullptr};
-    void operator()(t_type* value) const noexcept {
-        if (value != nullptr) {
-            std::pmr::polymorphic_allocator<t_type> allocator(resource_);
-            allocator.delete_object(value);
-        }
-    }
-};
-
 template <typename t_type, bool collection = false>
 struct db_relation_slot final {
     enum class state_type : unsigned char { unset,
         null,
         value };
     using stored_type = std::conditional_t<collection, entity_rows<t_type>, t_type>;
-    using pointer = std::unique_ptr<stored_type, db_relation_deleter<stored_type>>;
-    explicit db_relation_slot(std::pmr::memory_resource* resource)
-        : resource_(resource),
-          value_(nullptr, db_relation_deleter<stored_type>{resource}) {}
+    using pointer = std::unique_ptr<stored_type>;
+    db_relation_slot() noexcept = default;
     db_relation_slot(const db_relation_slot&) = delete;
     db_relation_slot& operator=(const db_relation_slot&) = delete;
     db_relation_slot(db_relation_slot&& other) noexcept
-        : resource_(other.resource_),
-          state_(std::exchange(other.state_, state_type::unset)),
+        : state_(std::exchange(other.state_, state_type::unset)),
           value_(std::move(other.value_)) {}
     db_relation_slot& operator=(db_relation_slot&&) = delete;
-    std::pmr::memory_resource* resource_;
     state_type state_{state_type::unset};
     pointer value_;
     void reset() noexcept {
         value_.reset();
         state_ = state_type::unset;
-    }
-    [[nodiscard]] db_relation_slot rebind(std::pmr::memory_resource* resource) const {
-        db_relation_slot copy(resource);
-        copy.state_ = state_;
-        if (state_ == state_type::value && value_) {
-            std::pmr::polymorphic_allocator<stored_type> allocator(resource);
-            if constexpr (collection) {
-                auto* target_rows = allocator.template new_object<stored_type>(resource);
-                copy.value_.reset(target_rows);
-                target_rows->reserve(value_->size());
-                for (const auto& item : *value_) {
-                    target_rows->push_back(item.rebind_for_rows(resource));
-                }
-            } else {
-                auto* target_entity = allocator.template new_object<stored_type>(
-                    value_->rebind_for_rows(resource));
-                copy.value_.reset(target_entity);
-            }
-        }
-        return copy;
     }
 };
 
@@ -359,7 +323,7 @@ using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
 }  // namespace detail
 
 // Columns and projections require db_mapped_value: all text is owned.
-// PostgreSQL arrays use std::pmr::vector of owning scalar or optional elements.
+// PostgreSQL arrays use std::vector of owning scalar or optional elements.
 // Decoding retains one-dimensional element order and discards the lower bound;
 // multidimensional arrays are rejected with db_conversion_error.
 // Option combinations that cannot hold (see valid_db_column_options) do not
@@ -422,20 +386,11 @@ class db_entity_storage final {
     template <typename r_type>
     using relation_slot_type = db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
     template <std::size_t... indexes>
-    static auto make_relation_slots(std::pmr::memory_resource* resource, std::index_sequence<indexes...>) {
-        return std::tuple<relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>...>(relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>(resource)...);
-    }
-    template <std::size_t... indexes>
-    static auto rebind_relation_slots(
-        const auto& source_slots, std::pmr::memory_resource* resource, std::index_sequence<indexes...>) {
-        return std::tuple<relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>...>(
-            std::get<indexes>(source_slots).rebind(resource)...);
+    static auto make_relation_slots(std::index_sequence<indexes...>) {
+        return std::tuple<relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>...>{};
     }
     using column_storage = typename entity_storage_from_tuple<columns_tuple_type>::type;
-    using relation_slots_type = decltype(make_relation_slots(nullptr, std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{}));
-    explicit db_entity_storage(column_storage&& columns, relation_slots_type&& relation_slots) noexcept
-        : columns_(std::move(columns)),
-          relation_slots_(std::move(relation_slots)) {}
+    using relation_slots_type = decltype(make_relation_slots(std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{}));
     template <fixed_string name>
     static consteval std::size_t relation_index() {
         constexpr auto result_value = descriptor_index<relations_tuple_type, name>();
@@ -470,15 +425,7 @@ public:
     static consteval std::string_view column_name() noexcept {
         return column_storage::template column_name<name>();
     }
-    explicit db_entity_storage(std::pmr::memory_resource* resource = nullptr)
-        : columns_(resource),
-          relation_slots_(make_relation_slots(columns_.resource(), std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{})) {}
-    template <typename owner_type>
-        requires requires(owner_type& owner) {
-            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        }
-    explicit db_entity_storage(owner_type& owner)
-        : db_entity_storage(owner.resource()) {}
+    db_entity_storage() = default;
     db_entity_storage(const db_entity_storage&) = delete;
     db_entity_storage& operator=(const db_entity_storage&) = delete;
     db_entity_storage(db_entity_storage&&) noexcept = default;
@@ -537,16 +484,6 @@ public:
             return columns_.template is_null<name>();
         }
     }
-    std::pmr::memory_resource* resource() const noexcept {
-        return columns_.resource();
-    }
-    [[nodiscard]] db_entity_storage rebind(std::pmr::memory_resource* resource) const {
-        auto* const resolved = pmr_resource_or_default(resource);
-        auto rebound_columns = columns_.rebind(resolved);
-        auto rebound_relations = rebind_relation_slots(
-            relation_slots_, resolved, std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{});
-        return db_entity_storage(std::move(rebound_columns), std::move(rebound_relations));
-    }
 
 private:
     template <typename>
@@ -564,8 +501,7 @@ struct db_entity_access final {
     static auto& emplace_relation(e_type& entity) {
         auto& slot = relation_slot<name, false>(entity);
         using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
-        std::pmr::polymorphic_allocator<stored_type> allocator(entity.resource());
-        slot.value_.reset(allocator.template new_object<stored_type>(entity.resource()));
+        slot.value_ = std::make_unique<stored_type>();
         slot.state_ = decltype(slot.state_)::value;
         return *slot.value_;
     }
@@ -575,8 +511,7 @@ struct db_entity_access final {
         auto& slot = relation_slot<name, true>(entity);
         if (slot.state_ != decltype(slot.state_)::value) {
             using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
-            std::pmr::polymorphic_allocator<stored_type> allocator(entity.resource());
-            slot.value_.reset(allocator.template new_object<stored_type>(entity.resource()));
+            slot.value_ = std::make_unique<stored_type>();
             slot.state_ = decltype(slot.state_)::value;
         }
         return *slot.value_;
@@ -620,7 +555,6 @@ concept sql_entity = requires(const entity& value) {
     requires std::same_as<entity, typename entity::sql_entity_type>;
     requires detail::sql_columns<typename entity::columns_type>;
     { entity::table_name() } -> std::convertible_to<std::string_view>;
-    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 
 template <typename projection>
@@ -629,7 +563,6 @@ concept sql_projection = requires(const projection& value) {
     typename projection::db_projection_type;
     requires std::same_as<projection, typename projection::db_projection_type>;
     requires detail::sql_columns<typename projection::columns_type>;
-    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 
 template <typename e_type, fixed_string field_name>
@@ -953,8 +886,8 @@ private:
     }
     template <typename t_type>
     db_predicate compare_array(db_binary_operator op, std::span<const t_type> values) const {
-        static_assert(detail::is_pmr_vector<typename column_type::value_type>::value, "array predicates require an array column");
-        using item_type = typename detail::is_pmr_vector<typename column_type::value_type>::value_type;
+        static_assert(detail::is_std_vector<typename column_type::value_type>::value, "array predicates require an array column");
+        using item_type = typename detail::is_std_vector<typename column_type::value_type>::value_type;
         constexpr auto type = column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array
                                   ? detail::db_entity_type_traits<item_type>::data_type
                                   : column_type::options.data_type_;

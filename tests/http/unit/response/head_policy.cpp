@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <memory_resource>
 
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http1_response_head_plan.h"
@@ -9,8 +8,7 @@
 #include "ruvia/http/http_response_stream.h"
 
 TEST(Ruvia, response_write_plan_unifies_method_status_and_body_size) {
-    std::pmr::monotonic_buffer_resource resource;
-    ruvia::http_response response(&resource);
+    ruvia::http_response response;
     response.status(ruvia::http_status::ok);
     response.body("hello");
 
@@ -114,8 +112,7 @@ TEST(Ruvia, response_stream_plan_restricts_trailers_by_status_and_method) {
 }
 
 TEST(Ruvia, response_write_plan_rejects_mutated_response_snapshot) {
-    std::pmr::monotonic_buffer_resource resource;
-    ruvia::http_response response(&resource);
+    ruvia::http_response response;
     response.status(ruvia::http_status::multi_status);
     response.body("old");
     const auto plan =
@@ -130,7 +127,7 @@ TEST(Ruvia, response_write_plan_rejects_mutated_response_snapshot) {
 }
 
 TEST(Ruvia, http1_response_head_framing_is_an_exclusive_plan) {
-    ruvia::http_response response(std::pmr::get_default_resource());
+    ruvia::http_response response;
     response.body("hello");
     const auto body_plan =
         ruvia::plan_http_response_body(ruvia::http_known_method::get, ruvia::http_status::ok);

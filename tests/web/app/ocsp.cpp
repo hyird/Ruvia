@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -95,7 +94,7 @@ ruvia::tls_identity_config files(const issued_identity& identity) {
 }
 
 // A real issuer-signed BasicOCSPResponse, with a nonce distinguishing renewals.
-std::pmr::vector<std::byte> response(const issued_identity& identity, unsigned char nonce) {
+std::vector<std::byte> response(const issued_identity& identity, unsigned char nonce) {
     const std::unique_ptr<OCSP_CERTID, decltype(&OCSP_CERTID_free)> id(
         OCSP_cert_to_id(EVP_sha256(), identity.certificate_.get(), identity.issuer_certificate_), OCSP_CERTID_free);
     const std::unique_ptr<OCSP_BASICRESP, decltype(&OCSP_BASICRESP_free)> basic(OCSP_BASICRESP_new(), OCSP_BASICRESP_free);
@@ -113,7 +112,7 @@ std::pmr::vector<std::byte> response(const issued_identity& identity, unsigned c
     if (size <= 0) {
         throw std::runtime_error("cannot encode OCSP test response");
     }
-    std::pmr::vector<std::byte> result(static_cast<std::size_t>(size), ruvia::process_resource());
+    std::vector<std::byte> result(static_cast<std::size_t>(size));
     auto* cursor = reinterpret_cast<unsigned char*>(result.data());
     if (i2d_OCSP_RESPONSE(encoded.get(), &cursor) != size) {
         throw std::runtime_error("cannot encode OCSP test response");
@@ -167,18 +166,18 @@ std::unique_ptr<tls_stream> connect(asio::io_context& io, int version,
     return stream;
 }
 
-std::pmr::vector<std::byte> received(SSL* ssl) {
+std::vector<std::byte> received(SSL* ssl) {
     const unsigned char* bytes = nullptr;
     const auto size = SSL_get_tlsext_status_ocsp_resp(ssl, &bytes);
     if (size <= 0) {
-        return std::pmr::vector<std::byte>(ruvia::process_resource());
+        return std::vector<std::byte>();
     }
     const auto* begin = reinterpret_cast<const std::byte*>(bytes);
-    return {begin, begin + size, ruvia::process_resource()};
+    return {begin, begin + size};
 }
 
 void expect_status(SSL* ssl, const issued_identity& identity,
-    const std::pmr::vector<std::byte>& expected) {
+    const std::vector<std::byte>& expected) {
     const auto bytes = received(ssl);
     ASSERT_EQ(bytes, expected);
     const std::unique_ptr<X509, decltype(&X509_free)> peer(SSL_get1_peer_certificate(ssl), X509_free);
@@ -232,7 +231,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
                 {.host_ = "empty.example.test", .identity_ = files(exact)}},
             .local_addresses_ = {{.address_ = "127.0.0.2", .identity_ = files(local), .ocsp_response_ = response(local, renewed ? 14 : 4)}}};
     };
-    ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_handle&) {
+    ruvia::http_server_group server(runtime.loops_, [](const ruvia::worker_ref&) {
         return ruvia::http_server_callbacks{.request_stream_ = [](ruvia::request_stream& stream) -> ruvia::task<void> {
             if (co_await stream.response().commit() == ruvia::stream_commit_result::body) {
                 co_await stream.response().write("ocsp");
@@ -242,7 +241,7 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     });
     const auto original = configuration(false);
     server.listen({.address_ = "0.0.0.0", .https_ = port, .tls_ = original, .dispatch_ = ruvia::listener_dispatch::request_stream});
-    caller.start(server.start(caller.handle())).get();
+    caller.start(server.start(caller.worker())).get();
     auto retained = connect(io, TLS1_3_VERSION, first, nullptr);
     expect_status(retained->native_handle(), primary, original.ocsp_response_);
     const auto check = [&](const ruvia::tls_config& config, bool renewed) {
@@ -259,34 +258,34 @@ TEST(Ruvia, ocsp_stapling_selects_identity_and_replaces_certificate_status_pairs
     };
     check(original, false);
     auto replacement = configuration(true);
-    caller.start(server.replace_tls_identities(caller.handle(), listener, replacement)).get();
+    caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
     expect_status(retained->native_handle(), primary, original.ocsp_response_);
 
     // Reject broken primary/SNI/address DER atomically, including trailing
     // bytes and BER encodings accepted by OpenSSL's permissive d2i parser.
-    const std::array<std::pmr::vector<std::byte>, 3> invalid{
-        std::pmr::vector<std::byte>{std::byte{0}},
-        std::pmr::vector<std::byte>{std::byte{0x30}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}, std::byte{0}},
-        std::pmr::vector<std::byte>{std::byte{0x30}, std::byte{0x81}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}}};
+    const std::array<std::vector<std::byte>, 3> invalid{
+        std::vector<std::byte>{std::byte{0}},
+        std::vector<std::byte>{std::byte{0x30}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}, std::byte{0}},
+        std::vector<std::byte>{std::byte{0x30}, std::byte{0x81}, std::byte{3}, std::byte{0x0a}, std::byte{1}, std::byte{3}}};
     for (const auto& bytes : invalid) {
         for (int entry = 0; entry != 3; ++entry) {
             auto rejected = replacement;
             auto& target = entry == 0 ? rejected.ocsp_response_ : entry == 1 ? rejected.sni_[0].ocsp_response_
                                                                              : rejected.local_addresses_[0].ocsp_response_;
             target = bytes;
-            EXPECT_THROW(caller.start(server.replace_tls_identities(caller.handle(), listener, std::move(rejected))).get(), std::invalid_argument);
+            EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(rejected))).get(), std::invalid_argument);
         }
     }
     auto library = std::make_shared<ruvia::tls_certificate_store>();
     ruvia::tls_config mixed{.ocsp_response_ = replacement.ocsp_response_, .certificate_store_ = library, .default_certificate_ = 1};
-    EXPECT_THROW(caller.start(server.replace_tls_identities(caller.handle(), listener, std::move(mixed))).get(), std::invalid_argument);
+    EXPECT_THROW(caller.start(server.replace_tls_identities(caller.worker(), listener, std::move(mixed))).get(), std::invalid_argument);
     check(replacement, true);
 
     replacement.ocsp_response_.clear();
     replacement.sni_[0].ocsp_response_.clear();
-    caller.start(server.replace_tls_identities(caller.handle(), listener, replacement)).get();
+    caller.start(server.replace_tls_identities(caller.worker(), listener, replacement)).get();
     check(replacement, true);
     retained.reset();
-    caller.start(server.shutdown(caller.handle())).get();
+    caller.start(server.shutdown(caller.worker())).get();
 }

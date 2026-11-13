@@ -22,7 +22,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -31,7 +30,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
@@ -49,15 +47,7 @@ class test_app;
 // test_request may be built from temporaries and reused across dispatches.
 class test_request final {
 public:
-    test_request(const test_request& other)
-        : method_(other.method_, other.method_.get_allocator()),
-          target_(other.target_, other.target_.get_allocator()),
-          headers_(other.headers_, other.headers_.get_allocator()),
-          cookies_(other.cookies_, other.cookies_.get_allocator()),
-          body_(other.body_, other.body_.get_allocator()),
-          remote_address_(other.remote_address_, other.remote_address_.get_allocator()),
-          remote_port_(other.remote_port_),
-          arrival_(other.arrival_) {}
+    test_request(const test_request&) = default;
     test_request(test_request&&) = default;
     test_request& operator=(const test_request&) = default;
     test_request& operator=(test_request&&) = default;
@@ -155,15 +145,15 @@ private:
     friend class test_app;
 
     test_request(std::string_view method_token, std::string_view target)
-        : method_(method_token, process_resource()),
-          target_(target, process_resource()) {}
+        : method_(method_token),
+          target_(target) {}
 
-    std::pmr::string method_;
-    std::pmr::string target_;
-    std::pmr::vector<std::pair<std::pmr::string, std::pmr::string>> headers_{process_resource()};
-    std::pmr::string cookies_{process_resource()};
-    std::pmr::string body_{process_resource()};
-    std::pmr::string remote_address_{"127.0.0.1", process_resource()};
+    std::string method_;
+    std::string target_;
+    std::vector<std::pair<std::string, std::string>> headers_;
+    std::string cookies_;
+    std::string body_;
+    std::string remote_address_{"127.0.0.1"};
     std::uint16_t remote_port_{0};
     std::optional<std::chrono::steady_clock::time_point> arrival_{};
 };
@@ -236,7 +226,7 @@ private:
     test_app& use_worker_state_definition(detail::worker_state_definition definition);
 
     struct impl_type;
-    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 
 }  // namespace ruvia

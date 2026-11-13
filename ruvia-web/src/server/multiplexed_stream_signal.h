@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -17,7 +16,6 @@
 #include <asio/cancellation_signal.hpp>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/timer.h"
@@ -38,15 +36,16 @@
 #include "context/http_interim_response_output.h"
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
+#include "integration/operation_interrupt.h"
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
 #include "server/http_response_stream_dispatch.h"
 #include "server/http_response_stream_state.h"
 #include "server/http_streaming_response_compression.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
 #include "server/request_stream_dispatch.h"
 #include "server/response_file_source.h"
-#include "util/operation_interrupt.h"
 
 namespace ruvia {
 class context;
@@ -115,7 +114,7 @@ public:
     }
 
     template <typename duration_type, typename expired_type, typename failure_type>
-    void arm(const worker_handle& worker_value, duration_type bound,
+    void arm(const worker_ref& worker_value, duration_type bound,
         expired_type on_expired, failure_type on_failure) noexcept {
         try {
             const auto status = worker_value.schedule_timer(timer_,
@@ -205,10 +204,10 @@ public:
         multiplexed_stream_signal& signal_;
     };
 
-    multiplexed_stream_signal(const worker_handle& worker_value, multiplexed_session_termination& termination)
+    multiplexed_stream_signal(const worker_ref& worker_value, multiplexed_session_termination& termination)
         : signal_(worker_value),
           termination_(termination) {}
-    multiplexed_stream_signal(worker_handle&&, multiplexed_session_termination&) = delete;
+    multiplexed_stream_signal(worker_ref&&, multiplexed_session_termination&) = delete;
 
     void wake() noexcept {
         signal_.notify();
@@ -279,10 +278,10 @@ public:
         return signal_.wait();
     }
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return signal_.worker();
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
 private:
     worker_signal signal_;
@@ -335,10 +334,10 @@ public:
     };
 
     explicit multiplexed_file_read_limiter(
-        const worker_handle& worker_value, std::size_t max_slots = multiplexed_file_read_slots) noexcept
+        const worker_ref& worker_value, std::size_t max_slots = multiplexed_file_read_slots) noexcept
         : released_(worker_value),
           max_slots_(max_slots) {}
-    multiplexed_file_read_limiter(worker_handle&&, std::size_t = multiplexed_file_read_slots) = delete;
+    multiplexed_file_read_limiter(worker_ref&&, std::size_t = multiplexed_file_read_slots) = delete;
     multiplexed_file_read_limiter(const multiplexed_file_read_limiter&) = delete;
     multiplexed_file_read_limiter& operator=(const multiplexed_file_read_limiter&) = delete;
 
@@ -520,15 +519,14 @@ public:
     }
 
 protected:
-    multiplexed_response_stream_sink_base(stream_type& stream, multiplexed_stream_signal& signal,
-        std::pmr::memory_resource* resource, http_known_method request_method, worker_codecs& codecs,
+    multiplexed_response_stream_sink_base(stream_type& stream, multiplexed_stream_signal& signal, http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding, const compression_config* compression,
         const http_cors_policy* cors) noexcept
         : stream_(stream),
           signal_(signal),
           request_method_(request_method),
           cors_(cors),
-          compression_(resource, codecs, response_coding, compression) {}
+          compression_(codecs, response_coding, compression) {}
 
     void throw_if_terminated() const {
         if (signal_.terminated()) {
@@ -540,6 +538,9 @@ protected:
         if (const auto& body_failure = stream_.body_failure(); body_failure.has_value()) {
             if (state_.committed()) {
                 state_.mark_aborted();
+            }
+            if (*body_failure == http_request_body_failure::buffer_limit) {
+                throw inbound_buffer_limit_error{};
             }
             throw http_request_body_protocol_error(*body_failure);
         }
@@ -655,6 +656,9 @@ private:
     }
     void throw_if_body_failed() const {
         if (const auto& failure = derived().body_failure(); failure.has_value()) {
+            if (*failure == http_request_body_failure::buffer_limit) {
+                throw inbound_buffer_limit_error{};
+            }
             throw http_request_body_protocol_error(*failure);
         }
     }
@@ -751,23 +755,14 @@ private:
     }
     return {std::move(resolution), body_mode};
 }
-inline request_memory& emplace_multiplexed_request_memory(
-    std::optional<request_memory>& storage, std::size_t initial_bytes, std::span<std::byte> initial_buffer) {
-    if (initial_bytes <= initial_buffer.size()) {
-        storage.emplace(initial_bytes, initial_buffer.first(initial_bytes));
-    } else {
-        storage.emplace(initial_bytes);
-    }
-    return *storage;
-}
 
 [[nodiscard]] inline task<http_response> respond_http_request_body_failure(const route_table& routes,
-    const http_request& request, request_memory& memory, http_request_body_failure failure,
+    const http_request& request, http_request_body_failure failure,
     const context_services& services, http_response_tail& tail) {
     tail.disable_response_coding();
-    return respond_http_request_rejection(routes, request, memory,
+    return respond_http_request_rejection(routes, request,
         http_request_rejection::error(
-            copy_http_protocol_error_info(memory.resource(), http_request_body_protocol_error(failure))),
+            [&] { const auto err = http_request_body_protocol_error(failure); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()),
         services);
 }
 
@@ -809,22 +804,21 @@ template <typename reset_type>
 template <typename stream_id_type, typename writer_type, typename reset_type>
 [[nodiscard]] task<void> finish_multiplexed_buffered_response(stream_id_type stream_id,
     const std::optional<http_request_body_failure>& body_failure, bool body_failure_handled,
-    http_response& response, const http_request& request, const route_table& routes,
-    request_memory& request_memory_value, const context_services& request_services,
+    http_response& response, const http_request& request, const route_table& routes, const context_services& request_services,
     const http_server_options& options, std::string_view remote_address,
     http_response_tail& tail, writer_type& writer, reset_type reset_stream) {
     if (body_failure.has_value() && !body_failure_handled) {
         body_failure_handled = true;
         response = co_await respond_http_request_body_failure(
-            routes, request, request_memory_value, *body_failure, request_services, tail);
+            routes, request, *body_failure, request_services, tail);
     }
     auto preparation = co_await tail.prepare_or_finish(
-        response, options, routes, request_memory_value, request_services);
+        response, options, routes, request_services);
     if (body_failure.has_value() && !body_failure_handled) {
         response = co_await respond_http_request_body_failure(
-            routes, request, request_memory_value, *body_failure, request_services, tail);
+            routes, request, *body_failure, request_services, tail);
         preparation = co_await tail.prepare_or_finish(
-            response, options, routes, request_memory_value, request_services);
+            response, options, routes, request_services);
     }
     if (request_services.get_stop_token().stop_requested()) {
         reset_stream(true);
@@ -837,9 +831,9 @@ template <typename stream_id_type, typename writer_type, typename reset_type>
         options.connection_failure_.invoke(remote_address, written.file_failure_->fault());
         tail.disable_response_coding();
         response = co_await routes.handle_exception(
-            request, request_memory_value, written.file_failure_->response_error(), request_services);
+            request, written.file_failure_->response_error(), request_services);
         preparation = co_await tail.prepare_or_finish(
-            response, options, routes, request_memory_value, request_services);
+            response, options, routes, request_services);
         written = co_await writer.write(stream_id, response, preparation.write_plan_);
         if (written.file_failure_ && !written.committed_status_) {
             reset_stream(false);

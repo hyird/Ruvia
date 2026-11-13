@@ -141,7 +141,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
                 if (client_failure) std::rethrow_exception(client_failure);
             }
             co_await server.shutdown();
-            EXPECT_TRUE(attachment.loop().handle().accepting());
+            EXPECT_TRUE(attachment.loop().worker().accepting());
             const auto delay = co_await ruvia::sleep_for(other.worker(), 1ms);
             EXPECT_EQ(delay, ruvia::timer_sleep_result::elapsed);
             const std::string origin = "http://127.0.0.1:" + std::to_string(another);
@@ -267,7 +267,7 @@ TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection)
     bool cancelled = false;
     bool token_stopped = false;
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         ruvia::worker_signal entered(worker);
         ruvia::http_server server(attachment.loop(), {.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
             entered.notify();
@@ -366,7 +366,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
     auto accepted = acceptor.accept();
     bool retired = false;
     const auto run = [&]() -> ruvia::task<void> {
-        const auto worker = attachment.loop().handle();
+        const auto worker = attachment.loop().worker();
         ruvia::worker_signal entered(worker);
         auto server = std::make_unique<ruvia::http_server>(attachment.loop(),
             ruvia::http_server_callbacks{.connection_ = [&](ruvia::server_connection& connection) -> ruvia::task<void> {
@@ -392,7 +392,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
         server.reset();
         co_await std::move(shutdown);
         EXPECT_TRUE(retired);
-        EXPECT_TRUE(attachment.loop().handle().accepting());
+        EXPECT_TRUE(attachment.loop().worker().accepting());
         attachment.stop();
     };
     auto root = attachment.loop().start(run());
@@ -404,7 +404,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
 TEST(Ruvia, independent_server_prepared_batch_cancel_and_shutdown_are_owning_transactions) {
     asio::io_context io;
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     ruvia::test::tcp_port_reservation port(io), second(io);
     unsigned calls = 0;
     bool published = false;

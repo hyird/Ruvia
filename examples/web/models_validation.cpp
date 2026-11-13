@@ -12,6 +12,7 @@
 #include <exception>
 #include <iostream>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_number_format.h"
@@ -104,7 +105,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> config(ruvia::context& c) {
         // INITIAL applies to this construction, not to JSON request parsing.
-        model_config value({.resource_ = c.arena()});
+        model_config value;
         constexpr std::uint8_t bytes_value[] = {0, 1, 2, 255};
         value.set<"payload">(std::span<const std::uint8_t>(bytes_value));
         co_return c.json(value);  // payload is the base64 string "AAEC/w==".
@@ -120,16 +121,16 @@ private:
     ruvia::task<ruvia::http_response> register_user(ruvia::context& c) {
         const auto& request = c.req().validated<register_request>();
 
-        register_response response({.resource_ = c.arena()});
+        register_response response;
         const auto& username = request.get<"username">();
         if (username) {
             response.set<"username">(username->view());
         }
         const auto& roles = request.get<"roles">();
         response.set<"role_count">(ruvia::uint32{static_cast<std::uint32_t>(roles.size())});
-        response.ensure<"tags">().emplace_back(ruvia::string("created", {.resource_ = c.arena()}));
+        response.ensure<"tags">().emplace_back(ruvia::string("created"));
         response.ensure<"tags">().emplace_back(
-            ruvia::string("validated", {.resource_ = c.arena()}));
+            ruvia::string("validated"));
         c.draft().status(ruvia::http_status::created);
         co_return c.json(response);
     }
@@ -138,7 +139,7 @@ private:
     // selected body is 400; only a different Content-Type yields nullopt.
     ruvia::task<ruvia::http_response> feedback(ruvia::context& c) {
         if (const auto json = co_await c.req().json_if<contact_form>()) {
-            std::pmr::string body(c.allocator<char>());
+            std::string body;
             body.append("json feedback from ");
             body.append(
                 json->get<"name">().has_value() ? json->get<"name">()->view() : "anonymous");
@@ -146,7 +147,7 @@ private:
             co_return c.text(std::move(body));
         }
         if (const auto form = co_await c.req().form_if<contact_form>()) {
-            std::pmr::string body(c.allocator<char>());
+            std::string body;
             body.append("form feedback from ");
             body.append(
                 form->get<"name">().has_value() ? form->get<"name">()->view() : "anonymous");
@@ -158,7 +159,7 @@ private:
 
     ruvia::task<ruvia::http_response> contact(ruvia::context& c) {
         const auto& form = c.req().validated<contact_form>();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("message from ");
         body.append(form.get<"name">() ? form.get<"name">()->view() : "anonymous");
         body.push_back('\n');
@@ -168,7 +169,7 @@ private:
     ruvia::task<ruvia::http_response> search(ruvia::context& c) {
         const auto& query = c.req().validated<search_query>();
         const auto request_query = c.req().query("q");
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("search=");
         const auto query_value = query.get<"q">().view();
         body.append(query_value);
@@ -186,7 +187,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> category(ruvia::context& c) {
-        ::category root({.resource_ = c.arena()});
+        ::category root;
         root.set<"name">("root");
         root.ensure<"children">().emplace_back().set<"name">("leaf");
         co_return c.json(root);
@@ -194,7 +195,7 @@ private:
 
     ruvia::task<ruvia::http_response> category_by_id(ruvia::context& c) {
         const auto& params = c.req().validated<category_params>();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("category=");
         body.append(params.get<"id">().view());
         body.push_back('\n');
@@ -203,7 +204,7 @@ private:
 
     ruvia::task<ruvia::http_response> headers(ruvia::context& c) {
         const auto& headers = c.req().validated<request_headers>();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("request-id=");
         body.append(headers.get<"request_id">().view());
         body.push_back('\n');
@@ -212,7 +213,7 @@ private:
 
     ruvia::task<ruvia::http_response> cookies(ruvia::context& c) {
         const auto& cookies = c.req().validated<preferences_cookie>();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("theme=");
         body.append(cookies.get<"theme">().view());
         body.push_back('\n');

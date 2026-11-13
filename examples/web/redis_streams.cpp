@@ -66,7 +66,7 @@ private:
         if (!result_value) {
             co_return c.text("no messages\n");
         }
-        std::pmr::string output(c.arena());
+        std::string output;
         for (const auto& stream : result_value->streams()) {
             for (const auto& entry : stream.entries()) {
                 output.append(entry.id()).append("\n");

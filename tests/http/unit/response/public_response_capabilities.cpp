@@ -2,7 +2,6 @@
 
 #include <array>
 #include <exception>
-#include <memory_resource>
 #include <string_view>
 
 #include "ruvia/http/cookies.h"
@@ -17,7 +16,7 @@ namespace {
 using ruvia::http_response;
 
 http_response make_response() {
-    return http_response(std::pmr::new_delete_resource());
+    return http_response();
 }
 
 }  // namespace

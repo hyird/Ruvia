@@ -5,7 +5,6 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_hex.h"
@@ -29,7 +27,7 @@
 #include "db/db_registry.h"
 #include "db/db_sql_format.h"
 #include "integration/named_capability.h"
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia {
 namespace detail {
@@ -211,16 +209,16 @@ void validate_migration_list(std::span<const db_migration> migrations, db_driver
 namespace {
 
 struct db_migrator_options_storage final {
-    db_migrator_options_storage(const db_migrator_options& source_value, std::pmr::memory_resource* resource)
-        : table_(source_value.table_, resource),
+    db_migrator_options_storage(const db_migrator_options& source_value)
+        : table_(source_value.table_),
           lock_timeout_(source_value.lock_timeout_) {}
 
     db_migrator_options_storage(
-        const db_migrator_options_storage& source_value, std::pmr::memory_resource* resource)
-        : table_(source_value.table_, resource),
+        const db_migrator_options_storage& source_value)
+        : table_(source_value.table_),
           lock_timeout_(source_value.lock_timeout_) {}
 
-    std::pmr::string table_;
+    std::string table_;
     timeout_duration lock_timeout_;
 };
 
@@ -238,10 +236,10 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     }
 }
 
-[[nodiscard]] std::pmr::string build_migration_lock_name(
-    const detail::db_config_storage& config, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string build_migration_lock_name(
+    const detail::db_config_storage& config) {
     constexpr std::string_view prefix = "ruvia:migrations:";
-    std::pmr::string name(resource);
+    std::string name;
     name.reserve(prefix.size() +
                  (!config.database_.empty() ? config.database_.size() : config.host_.size() + 1 + 10));
     name.append(prefix);
@@ -255,9 +253,9 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     return name;
 }
 
-[[nodiscard]] std::pmr::string build_create_migrations_table_sql(
-    std::string_view table_value, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(resource);
+[[nodiscard]] std::string build_create_migrations_table_sql(
+    std::string_view table_value, db_driver driver) {
+    std::string sql;
     sql.reserve(table_value.size() + 260);
     sql.append("CREATE TABLE IF NOT EXISTS ");
     detail::append_db_identifier(sql, table_value, driver);
@@ -293,9 +291,9 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
                : "SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = 'checksum'";
 }
 
-[[nodiscard]] std::pmr::string build_find_migration_sql(
-    std::string_view table_value, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(resource);
+[[nodiscard]] std::string build_find_migration_sql(
+    std::string_view table_value, db_driver driver) {
+    std::string sql;
     sql.reserve(table_value.size() + 50);
     sql.append("SELECT checksum FROM ");
     detail::append_db_identifier(sql, table_value, driver);
@@ -304,9 +302,9 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     return sql;
 }
 
-[[nodiscard]] std::pmr::string build_insert_migration_sql(
-    std::string_view table_value, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(resource);
+[[nodiscard]] std::string build_insert_migration_sql(
+    std::string_view table_value, db_driver driver) {
+    std::string sql;
     sql.reserve(table_value.size() + 40);
     sql.append("INSERT INTO ");
     detail::append_db_identifier(sql, table_value, driver);
@@ -315,17 +313,17 @@ void validate_db_migrator_options(const db_migrator_options& options, db_driver 
     return sql;
 }
 
-void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_view id) {
+void append_migration_id(std::vector<std::string>& ids, std::string_view id) {
     ids.emplace_back();
     ids.back().assign(id.data(), id.size());
 }
 
 [[nodiscard]] std::runtime_error migration_drift(
-    std::string_view id, std::pmr::memory_resource* resource) {
+    std::string_view id) {
     constexpr std::string_view prefix = "database migration '";
     constexpr std::string_view suffix =
         "' cannot be verified; its recorded checksum is missing or does not match";
-    std::pmr::string message(resource);
+    std::string message;
     message.reserve(prefix.size() + id.size() + suffix.size());
     message.append(prefix);
     message.append(id);
@@ -342,8 +340,8 @@ void append_migration_id(std::pmr::vector<std::pmr::string>& ids, std::string_vi
 // SHA-256, lowercase hex. This is drift detection, not a security boundary --
 // nobody is choosing migration text to collide with -- but a digest with no
 // known collisions costs nothing here and leaves no judgement call.
-[[nodiscard]] std::pmr::string migration_checksum(std::string_view sql, std::pmr::memory_resource* resource) {
-    std::pmr::string hex(resource);
+[[nodiscard]] std::string migration_checksum(std::string_view sql) {
+    std::string hex;
     http_append_lower_hex(hex, detail::db_sha256_of(sql));
     return hex;
 }
@@ -355,12 +353,10 @@ public:
     // Every input is owned by this frame, so the run outlives neither the
     // migrator nor the caller's migration list.
     [[nodiscard]] static task<db_migration_report> run(event_loop loop, db_config_storage config,
-        std::pmr::vector<db_migration> migrations, db_migrator_options_storage options,
-        std::pmr::memory_resource* resource, operation_options operation) {
-        if (!loop.handle().is_current()) {
+        std::vector<db_migration> migrations, db_migrator_options_storage options, operation_options operation) {
+        if (!loop.worker().is_current()) {
             throw std::logic_error("database migration must run on its bound event loop");
         }
-        auto* resolved = pmr_resource_or_default(resource);
         const auto driver = config.driver_;
 
         // The lock is held by the session, so every migration statement and
@@ -376,20 +372,19 @@ public:
         if (!config.acquire_timeout_.has_value()) {
             config.acquire_timeout_ = config.query_timeout_;
         }
-        db_migration_report report(resolved);
+        db_migration_report report;
 
-        auto lock_name = build_migration_lock_name(config, resolved);
+        auto lock_name = build_migration_lock_name(config);
         const detail::db_definition databases[] = {
-            detail::db_definition{std::pmr::string(detail::default_capability_alias.data(),
-                                      detail::default_capability_alias.size(), resolved),
+            detail::db_definition{std::string(detail::default_capability_alias),
                 std::move(config)}};
-        detail::db_registry registry(loop.io_context(), loop.handle(), databases);
+        detail::db_registry registry(loop.io_context(), loop.worker(), databases);
         // One bound for the whole run, connection included: its expiry or stop
         // request closes the dedicated connection, which also releases the lock.
         operation_interrupt_source interrupts;
         std::optional<operation_interrupt> interrupt;
         try {
-            interrupt.emplace(interrupts, loop.handle(), operation, &registry, &close_registry, "database migration");
+            interrupt.emplace(interrupts, loop.worker(), operation, &registry, &close_registry, "database migration");
         } catch (const std::system_error&) {
             throw db_error(db_error::code_type::cancelled, driver, "database migration cancelled");
         }
@@ -399,9 +394,9 @@ public:
             co_await registry.connect();
             ::ruvia::operation_scope operation_scope;
             auto handle = registry.get(operation_scope, nullptr);
-            co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_, resolved);
+            co_await acquire_lock(handle, driver, lock_name, options.lock_timeout_);
             try {
-                co_await apply_migrations(handle, driver, migrations, options, report, resolved);
+                co_await apply_migrations(handle, driver, migrations, options, report);
             } catch (...) {
                 failure = std::current_exception();
             }
@@ -437,9 +432,8 @@ private:
     // Serializes concurrent deployers. Both locks are held by the session, so
     // losing the connection releases them -- including the migration's own
     // failure path, which closes it.
-    [[nodiscard]] static task<void> acquire_lock(db_handle& handle, db_driver driver,
-        std::string_view lock_name, timeout_duration lock_timeout,
-        std::pmr::memory_resource* resource) {
+    [[nodiscard]] static task<void> acquire_lock(db_session& handle, db_driver driver,
+        std::string_view lock_name, timeout_duration lock_timeout) {
         if (driver == db_driver::mariadb) {
             // Milliseconds are already bounded by int64; rounding after
             // division by 1000 keeps the SQL integer safely in range.
@@ -461,7 +455,7 @@ private:
         // wait: migration statements run on the same session and must keep the
         // server's configured lock_timeout.
         auto set_timeout = [&] {
-            std::pmr::string timeout_sql(resource);
+            std::string timeout_sql;
             timeout_sql.reserve(48);
             timeout_sql.append("SET lock_timeout TO '");
             detail::append_db_number(timeout_sql, detail::postgres_lock_timeout_milliseconds(lock_timeout));
@@ -476,7 +470,7 @@ private:
     }
 
     [[nodiscard]] static task<void> release_lock(
-        db_handle& handle, db_driver driver, std::string_view lock_name) {
+        db_session& handle, db_driver driver, std::string_view lock_name) {
         std::array<db_value, 1> release_params{db_value{lock_name}};
         if (driver == db_driver::mariadb) {
             (void)co_await handle.execute(
@@ -487,11 +481,11 @@ private:
         }
     }
 
-    [[nodiscard]] static task<void> apply_migrations(db_handle& handle, db_driver driver,
+    [[nodiscard]] static task<void> apply_migrations(db_session& handle, db_driver driver,
         std::span<const db_migration> migrations, const db_migrator_options_storage& options,
-        db_migration_report& report, std::pmr::memory_resource* resource) {
+        db_migration_report& report) {
         auto create_table = [&] {
-            const auto sql = build_create_migrations_table_sql(options.table_, driver, resource);
+            const auto sql = build_create_migrations_table_sql(options.table_, driver);
             return handle.execute(sql);
         }();
         (void)co_await std::move(create_table);
@@ -504,16 +498,16 @@ private:
             co_return;
         }
 
-        auto find_sql = build_find_migration_sql(options.table_, driver, resource);
-        auto insert_sql = build_insert_migration_sql(options.table_, driver, resource);
+        auto find_sql = build_find_migration_sql(options.table_, driver);
+        auto insert_sql = build_insert_migration_sql(options.table_, driver);
         for (const auto& migration : migrations) {
-            const auto checksum = migration_checksum(migration.sql(), resource);
+            const auto checksum = migration_checksum(migration.sql());
             std::array<db_value, 1> find_params{db_value{migration.id()}};
             auto existing = co_await handle.query(find_sql, std::span<const db_value>(find_params));
             if (!existing.empty()) {
                 const auto value = existing[0][0].value();
                 if (!value || *value != std::string_view(checksum)) {
-                    throw migration_drift(migration.id(), resource);
+                    throw migration_drift(migration.id());
                 }
                 append_migration_id(report.skipped_, migration.id());
                 continue;
@@ -545,20 +539,18 @@ private:
 class db_migrator::storage_type final {
 public:
     storage_type(event_loop loop, detail::validated_db_config_view config_source_value,
-        const db_migrator_options& options_source, std::pmr::memory_resource* storage_resource)
+        const db_migrator_options& options_source)
         : loop_(std::move(loop)),
-          resource_(storage_resource),
-          config_(config_source_value, storage_resource),
-          options_(options_source, storage_resource) {}
+          config_(config_source_value),
+          options_(options_source) {}
 
     event_loop loop_;
-    std::pmr::memory_resource* resource_;
     detail::db_config_storage config_;
     db_migrator_options_storage options_;
 };
 
 void db_migrator::storage_deleter_type::operator()(storage_type* storage) const noexcept {
-    destroy_pmr_object(storage, resource_);
+    delete storage;
 }
 
 db_migrator::storage_owner_type db_migrator::make_storage(
@@ -566,13 +558,11 @@ db_migrator::storage_owner_type db_migrator::make_storage(
     if (!loop.valid()) {
         throw std::invalid_argument("database migrator requires a valid event loop");
     }
-    auto* resource = pmr_resource_or_default(options.resource_);
     const auto validated_config = detail::validated_db_config(config);
     validate_db_migrator_options(options, validated_config.get().driver_);
-    detail::require_client_host_lookup(validated_config.get().host_, loop.handle());
+    detail::require_client_host_lookup(validated_config.get().host_, loop.worker());
     return storage_owner_type(
-        construct_pmr_object<storage_type>(resource, std::move(loop), validated_config, options, resource),
-        storage_deleter_type{resource});
+        new storage_type(std::move(loop), validated_config, options), storage_deleter_type{});
 }
 
 db_migrator::db_migrator(event_loop loop, const db_config& config, const db_migrator_options& options)
@@ -590,10 +580,9 @@ task<db_migration_report> db_migrator::migrate(
         throw std::logic_error("database migrator has been moved from");
     }
     detail::validate_migration_list(migrations, storage_->config_.driver_);
-    auto* resource = storage_->resource_;
-    return detail::db_migration_runner::run(storage_->loop_, detail::db_config_storage(storage_->config_, resource),
-        std::pmr::vector<db_migration>(migrations.begin(), migrations.end(), resource),
-        db_migrator_options_storage(storage_->options_, resource), resource, std::move(operation));
+    return detail::db_migration_runner::run(storage_->loop_, detail::db_config_storage(storage_->config_),
+        std::vector<db_migration>(migrations.begin(), migrations.end()),
+        db_migrator_options_storage(storage_->options_), std::move(operation));
 }
 
 }  // namespace ruvia

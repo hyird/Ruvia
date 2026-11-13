@@ -43,7 +43,7 @@ private:
         // PUBLISH is an ordinary command on the pooled connections and reports
         // how many subscriber connections received the message.
         const auto receivers = co_await c.redis().publish(channel_name, body);
-        std::pmr::string output(c.arena());
+        std::string output;
         output.append("receivers=");
         ruvia::http_append_signed(output, receivers);
         output.push_back('\n');

@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -23,8 +22,8 @@ http_origin_view origin_for(
                                         : http_origin_view::http({.host_ = host, .port_ = port});
 }
 
-std::pmr::string authority_for(const http_origin_view& origin) {
-    const auto authority = make_http_origin_authority(origin, std::pmr::get_default_resource());
+std::string authority_for(const http_origin_view& origin) {
+    const auto authority = make_http_origin_authority(origin);
     return authority;
 }
 
@@ -73,22 +72,22 @@ TEST(Ruvia, http_serialized_origin_matches_fetch_wire_grammar) {
 
 TEST(Ruvia, http_origin_authority_brackets_ipv6_and_omits_default_port) {
     // The default port for the scheme is omitted: 80 for http, 443 for https.
-    EXPECT_EQ(authority_for(http_origin_view::http({.host_ = "example.com"})), std::pmr::string("example.com"));
-    EXPECT_EQ(authority_for(http_origin_view::https({.host_ = "example.com"})), std::pmr::string("example.com"));
+    EXPECT_EQ(authority_for(http_origin_view::http({.host_ = "example.com"})), std::string("example.com"));
+    EXPECT_EQ(authority_for(http_origin_view::https({.host_ = "example.com"})), std::string("example.com"));
 
     // A non-default port is appended.
-    EXPECT_EQ(authority_for(origin_for("example.com", 8080)), std::pmr::string("example.com:8080"));
+    EXPECT_EQ(authority_for(origin_for("example.com", 8080)), std::string("example.com:8080"));
 
     // The default depends on the typed scheme: 80 is not default for https, and
     // 443 is not default for http, so each is included.
-    EXPECT_EQ(authority_for(origin_for("example.com", 80, http_scheme::https)), std::pmr::string("example.com:80"));
-    EXPECT_EQ(authority_for(origin_for("example.com", 443)), std::pmr::string("example.com:443"));
+    EXPECT_EQ(authority_for(origin_for("example.com", 80, http_scheme::https)), std::string("example.com:80"));
+    EXPECT_EQ(authority_for(origin_for("example.com", 443)), std::string("example.com:443"));
 
     // uri-host already carries the brackets required for an IP-literal; the
     // serializer no longer guesses host kind by searching for a colon.
-    EXPECT_EQ(authority_for(origin_for("[::1]", 80)), std::pmr::string("[::1]"));
-    EXPECT_EQ(authority_for(origin_for("[::1]", 8080)), std::pmr::string("[::1]:8080"));
-    EXPECT_EQ(authority_for(origin_for("[2001:db8::1]", 443, http_scheme::https)), std::pmr::string("[2001:db8::1]"));
-    EXPECT_EQ(authority_for(origin_for("[v1.future]", 8080)), std::pmr::string("[v1.future]:8080"));
-    EXPECT_EQ(authority_for(origin_for("example.com", 0)), std::pmr::string("example.com:0"));
+    EXPECT_EQ(authority_for(origin_for("[::1]", 80)), std::string("[::1]"));
+    EXPECT_EQ(authority_for(origin_for("[::1]", 8080)), std::string("[::1]:8080"));
+    EXPECT_EQ(authority_for(origin_for("[2001:db8::1]", 443, http_scheme::https)), std::string("[2001:db8::1]"));
+    EXPECT_EQ(authority_for(origin_for("[v1.future]", 8080)), std::string("[v1.future]:8080"));
+    EXPECT_EQ(authority_for(origin_for("example.com", 0)), std::string("example.com:0"));
 }

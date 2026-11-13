@@ -5,31 +5,25 @@
 #include <cstddef>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-
-#include "ruvia/http/detail/util/pmr_resource.h"
-
 namespace ruvia::detail {
 
 // Borrowed field descriptors stay inline until their reserved or appended count
-// needs PMR overflow. Views are rebound after moves, never cached.
+// needs heap overflow. Views are rebound after moves, never cached.
 template <typename field_type>
 class http_header_descriptor_storage final {
     static_assert(std::is_trivially_copyable_v<field_type>);
 
 public:
-    explicit http_header_descriptor_storage(std::pmr::memory_resource* resource) noexcept
-        : resource_(http_pmr_resource_or_default(resource)) {}
+    http_header_descriptor_storage() noexcept = default;
 
     http_header_descriptor_storage(const http_header_descriptor_storage&) = delete;
     http_header_descriptor_storage& operator=(const http_header_descriptor_storage&) = delete;
     http_header_descriptor_storage(http_header_descriptor_storage&& other) noexcept
-        : resource_(other.resource_),
-          overflow_(std::exchange(other.overflow_, nullptr)),
+        : overflow_(std::exchange(other.overflow_, nullptr)),
           size_(std::exchange(other.size_, 0)),
           capacity_(std::exchange(other.capacity_, inline_capacity)) {
         if (overflow_ == nullptr) {
@@ -40,7 +34,7 @@ public:
 
     ~http_header_descriptor_storage() {
         if (overflow_ != nullptr) {
-            std::pmr::polymorphic_allocator<field_type>(resource_).deallocate(overflow_, capacity_);
+            std::allocator<field_type>{}.deallocate(overflow_, capacity_);
         }
     }
 
@@ -89,7 +83,7 @@ private:
         if (next_capacity > maximum) {
             throw std::length_error("too many HTTP header descriptors");
         }
-        std::pmr::polymorphic_allocator<field_type> allocator(resource_);
+        std::allocator<field_type> allocator;
         auto* next = allocator.allocate(next_capacity);
         // Trivial descriptors cannot throw while copying. Publish only after
         // allocation succeeds, preserving the current fields on failure.
@@ -105,7 +99,6 @@ private:
     // POD request slots stay uninitialized until appended. Every readable slot
     // is fully assigned before publication, without zeroing unused slots.
     std::array<field_type, inline_capacity> inline_;
-    std::pmr::memory_resource* resource_;
     field_type* overflow_{nullptr};
     std::size_t size_{0};
     std::size_t capacity_{inline_capacity};

@@ -12,7 +12,6 @@
 #include <future>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,7 +22,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
@@ -121,14 +119,14 @@ class http1_websocket_routes final {
     }
 
     ruvia::task<void> write_stalled(ruvia::context& context_value) {
-        co_await context_value.websocket().binary(std::pmr::string(stalled_payload_size, 'w', ruvia::process_resource()));
+        co_await context_value.websocket().binary(std::string(stalled_payload_size, 'w'));
     }
 
     ruvia::task<void> write_with_pending_read(ruvia::context& context_value) {
         auto& websocket_value = context_value.websocket();
         ruvia::task_scope writes(context_value.worker());
         const auto send = [&]() -> ruvia::task<void> {
-            co_await websocket_value.binary(std::pmr::string(stalled_payload_size, 'w', ruvia::process_resource()));
+            co_await websocket_value.binary(std::string(stalled_payload_size, 'w'));
             for (std::size_t index = 1; index != fair_handoff_messages; ++index) {
                 co_await websocket_value.text("tick");
             }
@@ -261,7 +259,7 @@ class http1_websocket_routes final {
         try {
             auto first_read = websocket_value.read();
             auto last_read = websocket_value.read();
-            std::pmr::string payload("ready", ruvia::process_resource());
+            std::string payload("ready");
             auto first_write = websocket_value.text(payload);
             auto last_write = websocket_value.text("ack");
             payload.assign("changed");
@@ -309,8 +307,8 @@ bool zero_mask(void*, ruvia::websocket_mask_key_type& key) noexcept {
 }
 
 // Compressible text that is not a single repeated byte.
-std::pmr::string sample_message(std::size_t size, unsigned seed) {
-    std::pmr::string message(size, '\0', ruvia::process_resource());
+std::string sample_message(std::size_t size, unsigned seed) {
+    std::string message(size, '\0');
     unsigned state_value = seed * 2654435761U + 7U;
     for (std::size_t i = 0; i < size; ++i) {
         state_value = state_value * 1103515245U + 12345U;
@@ -320,8 +318,8 @@ std::pmr::string sample_message(std::size_t size, unsigned seed) {
 }
 
 // Bytes DEFLATE cannot shrink.
-std::pmr::string noise_message(std::size_t size) {
-    std::pmr::string message(size, '\0', ruvia::process_resource());
+std::string noise_message(std::size_t size) {
+    std::string message(size, '\0');
     std::uint32_t state_value = 1234567;
     for (auto& byte : message) {
         state_value ^= state_value << 13;
@@ -370,20 +368,19 @@ void check_fair_handoff(bool peer_close) {
             // first message. Both are masked with the legal all-zero mask.
             constexpr std::array<char, 10> ping{'\x89', '\x84', '\0', '\0', '\0', '\0', 'f', 'a', 'i', 'r'};
             constexpr std::array<char, 8> close{'\x88', '\x82', '\0', '\0', '\0', '\0', '\x03', '\xe8'};
-            std::pmr::string upgrade(
+            std::string upgrade(
                 "GET /http1-websocket-fair-handoff HTTP/1.1\r\n"
                 "Host: 127.0.0.1\r\n"
                 "Connection: Upgrade\r\n"
                 "Upgrade: websocket\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
-                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n",
-                ruvia::process_resource());
+                "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
             upgrade.append(ping.data(), ping.size());
             if (peer_close) {
                 upgrade.append(close.data(), close.size());
             }
             co_await send(upgrade);
-            std::pmr::string head{ruvia::process_resource()};
+            std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
                 co_await receive(&byte, 1);
@@ -516,7 +513,7 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
                 "Upgrade: websocket\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-            std::pmr::string head{ruvia::process_resource()};
+            std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
                 const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
@@ -584,7 +581,7 @@ TEST(Ruvia, http1_websocket_close_excludes_reads_writes_and_another_close) {
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
     asio::write(client, asio::buffer(request));
-    std::pmr::string response{ruvia::process_resource()};
+    std::string response{};
     asio::read_until(client, asio::dynamic_buffer(response), "\r\n\r\n");
     ASSERT_TRUE(response.starts_with("HTTP/1.1 101 "));
     const auto head_end = response.find("\r\n\r\n") + 4;
@@ -628,7 +625,7 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
                 }
             };
             const auto expect = [&](std::string_view expected) -> ruvia::task<void> {
-                std::pmr::string received(expected.size(), '\0', ruvia::process_resource());
+                std::string received(expected.size(), '\0');
                 const auto result_value = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_read(client, asio::buffer(received), std::move(handler)); });
                 if (result_value.error_code()) {
                     throw std::system_error(result_value.error_code());
@@ -642,7 +639,7 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
                 "Upgrade: websocket\r\n"
                 "Sec-WebSocket-Version: 13\r\n"
                 "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n");
-            std::pmr::string head{ruvia::process_resource()};
+            std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
                 const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
@@ -719,7 +716,7 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
             if (sent.error_code()) {
                 throw std::system_error(sent.error_code());
             }
-            std::pmr::string head{ruvia::process_resource()};
+            std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
                 const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
@@ -790,7 +787,7 @@ TEST(Ruvia, http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) 
         "Sec-WebSocket-Version: 13\r\n"
         "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
     asio::write(client, asio::buffer(upgrade));
-    std::pmr::string head{ruvia::process_resource()};
+    std::string head{};
     char byte{};
     while (!head.ends_with("\r\n\r\n")) {
         asio::read(client, asio::buffer(&byte, 1));
@@ -801,7 +798,7 @@ TEST(Ruvia, http1_websocket_heartbeat_does_not_abort_an_unread_responsive_peer) 
     ruvia::websocket_connection peer(peer_input, {.role_ = ruvia::websocket_connection_role::client,
                                                      .mask_key_generator_ = &http1_websocket_test::zero_mask});
     const auto flush = [&] {
-        const std::pmr::string bytes_value(peer.output_plan().bytes(), ruvia::process_resource());
+        const std::string bytes_value(peer.output_plan().bytes());
         if (!bytes_value.empty()) {
             asio::write(client, asio::buffer(bytes_value));
         }
@@ -853,7 +850,7 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
     std::exception_ptr failure;
-    std::array<std::pmr::string, 3> heads{std::pmr::string{ruvia::process_resource()}, std::pmr::string{ruvia::process_resource()}, std::pmr::string{ruvia::process_resource()}};
+    std::array<std::string, 3> heads{std::string{}, std::string{}, std::string{}};
     auto run = [&]() -> ruvia::task<void> {
         constexpr std::array<std::string_view, 3> offers{
             "", "Sec-WebSocket-Protocol: other\r\n", "Sec-WebSocket-Protocol: other, chat.v1\r\n"};
@@ -863,16 +860,14 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
             watchdog_value.async_wait([&](std::error_code timeout) { if (!timeout) { ruvia::close_socket(client); } });
             try {
                 client.connect(server.endpoint());
-                const std::pmr::string upgrade(std::pmr::string(
-                                                   "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
-                                                   "Host: 127.0.0.1\r\n"
-                                                   "Connection: Upgrade\r\n"
-                                                   "Upgrade: websocket\r\n"
-                                                   "Sec-WebSocket-Version: 13\r\n"
-                                                   "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n",
-                                                   ruvia::process_resource()) +
-                                                   std::pmr::string(offers[index], ruvia::process_resource()) + "\r\n",
-                    ruvia::process_resource());
+                const std::string upgrade(std::string(
+                                              "GET /http1-websocket-required-subprotocol HTTP/1.1\r\n"
+                                              "Host: 127.0.0.1\r\n"
+                                              "Connection: Upgrade\r\n"
+                                              "Upgrade: websocket\r\n"
+                                              "Sec-WebSocket-Version: 13\r\n"
+                                              "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n") +
+                                          std::string(offers[index]) + "\r\n");
                 const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) { asio::async_write(client, asio::buffer(upgrade), std::move(handler)); });
                 if (sent.error_code()) {
                     throw std::system_error(sent.error_code());
@@ -905,9 +900,9 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
     }
     EXPECT_TRUE(heads[0].starts_with("HTTP/1.1 400 "));
     EXPECT_TRUE(heads[1].starts_with("HTTP/1.1 400 "));
-    EXPECT_TRUE(heads[0].find("Sec-WebSocket-Accept") == std::pmr::string::npos);
+    EXPECT_TRUE(heads[0].find("Sec-WebSocket-Accept") == std::string::npos);
     EXPECT_TRUE(heads[2].starts_with("HTTP/1.1 101 "));
-    EXPECT_TRUE(heads[2].find("\r\nSec-WebSocket-Protocol: chat.v1\r\n") != std::pmr::string::npos);
+    EXPECT_TRUE(heads[2].find("\r\nSec-WebSocket-Protocol: chat.v1\r\n") != std::string::npos);
 }
 
 // RFC 9110 section 7.8: a server that receives Upgrade together with
@@ -917,7 +912,7 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
     std::exception_ptr failure;
-    std::array<std::pmr::string, 2> heads{std::pmr::string{ruvia::process_resource()}, std::pmr::string{ruvia::process_resource()}};
+    std::array<std::string, 2> heads{std::string{}, std::string{}};
     auto run = [&]() -> ruvia::task<void> {
         asio::ip::tcp::socket client(io);
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
@@ -984,7 +979,7 @@ TEST(Ruvia, http1_websocket_handler_failure_is_reported_and_a_close_reset_is_not
             "Sec-WebSocket-Version: 13\r\n"
             "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n";
         asio::write(client, asio::buffer(upgrade));
-        std::pmr::string head{ruvia::process_resource()};
+        std::string head{};
         char byte{};
         while (!head.ends_with("\r\n\r\n")) {
             asio::read(client, asio::buffer(&byte, 1));
@@ -1020,26 +1015,25 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
     for (const bool takeover : {false, true}) {
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const std::pmr::string upgrade(std::pmr::string("GET ", ruvia::process_resource()) +
-                                           (takeover ? "/http1-websocket-deflate-takeover" : "/http1-websocket-deflate-echo") +
-                                           " HTTP/1.1\r\n"
-                                           "Host: 127.0.0.1\r\n"
-                                           "Connection: Upgrade\r\n"
-                                           "Upgrade: websocket\r\n"
-                                           "Sec-WebSocket-Version: 13\r\n"
-                                           "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
-                                           "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n",
-            ruvia::process_resource());
+        const std::string upgrade(std::string("GET ") +
+                                  (takeover ? "/http1-websocket-deflate-takeover" : "/http1-websocket-deflate-echo") +
+                                  " HTTP/1.1\r\n"
+                                  "Host: 127.0.0.1\r\n"
+                                  "Connection: Upgrade\r\n"
+                                  "Upgrade: websocket\r\n"
+                                  "Sec-WebSocket-Version: 13\r\n"
+                                  "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n"
+                                  "Sec-WebSocket-Extensions: permessage-deflate\r\n\r\n");
         asio::write(client, asio::buffer(upgrade));
-        std::pmr::string head{ruvia::process_resource()};
+        std::string head{};
         char byte{};
         while (!head.ends_with("\r\n\r\n")) {
             asio::read(client, asio::buffer(&byte, 1));
             head.push_back(byte);
         }
         EXPECT_TRUE(head.starts_with("HTTP/1.1 101 "));
-        EXPECT_TRUE(head.find("permessage-deflate") != std::pmr::string::npos);
-        EXPECT_TRUE((head.find("server_no_context_takeover") == std::pmr::string::npos) == takeover);
+        EXPECT_TRUE(head.find("permessage-deflate") != std::string::npos);
+        EXPECT_TRUE((head.find("server_no_context_takeover") == std::string::npos) == takeover);
         ruvia::http_io_buffer peer_input;
         ruvia::websocket_connection peer(peer_input, {.message_limit_ = ruvia::protocol_byte_limit::unlimited(),
                                                          .compression_ = {.enabled_ = true,
@@ -1048,12 +1042,12 @@ TEST(Ruvia, http1_websocket_deflate_echoes_with_shared_and_takeover_codecs) {
                                                          .role_ = ruvia::websocket_connection_role::client,
                                                          .mask_key_generator_ = &http1_websocket_test::zero_mask});
         const auto flush = [&] {
-            const std::pmr::string bytes_value(peer.output_plan().bytes(), ruvia::process_resource());
+            const std::string bytes_value(peer.output_plan().bytes());
             asio::write(client, asio::buffer(bytes_value));
             EXPECT_TRUE(peer.consume_output(bytes_value.size()) == ruvia::websocket_output_consume_status::drained);
         };
         // Returns the wire bytes of the echoed frame.
-        const auto echo = [&](const std::pmr::string& payload) {
+        const auto echo = [&](const std::string& payload) {
             EXPECT_TRUE(peer.submit_frame(ruvia::websocket_opcode::binary, payload) == ruvia::websocket_frame_submit_status::accepted);
             flush();
             std::size_t wire_bytes = 0;

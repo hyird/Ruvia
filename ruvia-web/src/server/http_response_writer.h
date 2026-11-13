@@ -301,7 +301,7 @@ public:
             // The framing handle stays valid across an in-place rewrite, which
             // must fail before any byte is sent.
             if (const auto error =
-                    validate_native_file(borrowed_native_file(*transmit_file_->opened_handle()), *transmit_file_)) {
+                    validate_native_file(borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_)) {
                 transmit_failure_.emplace(response_file_failure::read_failed(error));
                 co_return false;
             }
@@ -321,7 +321,7 @@ public:
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (transmit_) {
                 const auto written = co_await write_http_response_file(stream.lowest_layer(), head.view(),
-                    borrowed_native_file(*transmit_file_->opened_handle()), *transmit_file_, progress);
+                    borrowed_native_file(*transmit_file_->opened_file()), *transmit_file_, progress);
                 co_return classify_http1_buffered_response_write(response_plan, response_head_bytes,
                     written.error_, written.head_written_ ? response_head_bytes : 0);
             }
@@ -373,7 +373,7 @@ private:
         if constexpr (std::is_same_v<std::remove_cvref_t<stream_type>, inbound_socket_stream>) {
             if (!response.has_multipart_file_body()) {
                 const auto file = response.file_body();
-                if (file && file->length() > transmit_file_min_bytes && file->opened_handle() != nullptr) {
+                if (file && file->length() > transmit_file_min_bytes && file->opened_file() != nullptr) {
                     return file;
                 }
             }

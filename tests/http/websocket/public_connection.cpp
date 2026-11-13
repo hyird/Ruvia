@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -17,7 +16,6 @@
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/websocket_connection.h"
 
-#include "poisoned_retirement_resource.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -34,40 +32,12 @@ struct mask_source {
     }
 };
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t live_bytes_{0};
-    std::size_t allocations_{0};
-    std::size_t deallocations_{0};
-    bool reject_{false};
-    std::size_t reject_min_bytes_{0};
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (reject_ && bytes_value >= reject_min_bytes_) {
-            throw std::bad_alloc();
-        }
-        auto* allocation = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        ++allocations_;
-        live_bytes_ += bytes_value;
-        return allocation;
-    }
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        ++deallocations_;
-        live_bytes_ -= bytes_value;
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
 websocket_connection client(http_io_buffer& input, mask_source& source_value, protocol_byte_limit limit = protocol_byte_limit::unlimited()) {
     return websocket_connection(input, {.message_limit_ = limit, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &source_value});
 }
 
-std::pmr::string drain(websocket_connection& connection) {
-    const std::pmr::string bytes_value(connection.output_plan().bytes());
+std::string drain(websocket_connection& connection) {
+    const std::string bytes_value(connection.output_plan().bytes());
     if (connection.consume_output(bytes_value.size()) != websocket_output_consume_status::drained) {
         throw std::runtime_error("output did not drain");
     }
@@ -117,8 +87,8 @@ TEST(Ruvia, ws_public_checked_close_codes_preserve_wire_value_and_role_rules) {
     EXPECT_TRUE(sender.submit_close(websocket_close_code::from_value(1010), {}) == websocket_close_submit_status::invalid_code);
     EXPECT_TRUE(sender.submit_frame(websocket_opcode::text, "still-open") == websocket_frame_submit_status::accepted);
     EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, std::string_view("\xff", 1)) == websocket_close_submit_status::invalid_reason);
-    EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, std::pmr::string(124, 'x')) == websocket_close_submit_status::reason_too_large);
-    const std::pmr::string reason(123, 'x');
+    EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, std::string(124, 'x')) == websocket_close_submit_status::reason_too_large);
+    const std::string reason(123, 'x');
     EXPECT_TRUE(sender.submit_close(websocket_close_status::normal_closure, reason) == websocket_close_submit_status::accepted);
     mask_source source;
     http_io_buffer client_input;
@@ -129,111 +99,6 @@ TEST(Ruvia, ws_public_checked_close_codes_preserve_wire_value_and_role_rules) {
     const auto closed = receiver.next_event();
     EXPECT_TRUE(closed && closed->close() && closed->close()->close_code() == 1000);
     EXPECT_TRUE(closed && closed->close() && closed->close()->reason() == reason);
-}
-
-TEST(Ruvia, ws_public_context_takeover_mixed_messages_and_connection_lifetime) {
-    counting_resource memory;
-    {
-        mask_source mask;
-        http_io_buffer sender_input(&memory);
-        http_io_buffer receiver_input(&memory);
-        websocket_connection sender(sender_input, {.message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask, .deflater_ = {.compression_level_ = 9}});
-        websocket_connection receiver(receiver_input, {.message_limit_ = protocol_byte_limit::limited(16384), .compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = false, .client_no_context_takeover_ = false}), .deflater_ = {.compression_level_ = 9}});
-        std::pmr::string noise(1024, '\0');
-        std::uint32_t state_value = 1234567;
-        for (auto& byte : noise) {
-            state_value ^= state_value << 13;
-            state_value ^= state_value >> 17;
-            state_value ^= state_value << 5;
-            byte = static_cast<char>(state_value);
-        }
-        std::size_t stable_memory = 0;
-        for (int round = 0; round < 256; ++round) {
-            const std::pmr::string payload_value = round % 4 == 0 ? noise : std::pmr::string(8192, 'x');
-            const bool compress = round % 4 != 2;
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value, {.compress_ = compress}) == websocket_frame_submit_status::accepted);
-            const auto wire = drain(sender);
-            if (!compress || round % 4 == 0) {
-                EXPECT_TRUE((static_cast<unsigned char>(wire[0]) & 0x40U) == 0);
-            }
-            receiver_input.append(wire);
-            const auto event = receiver.next_event();
-            EXPECT_TRUE(event && event->message());
-            if (!event || !event->message()) {
-                return;
-            }
-            EXPECT_EQ(event->message()->payload(), payload_value);
-            if (round == 63) {
-                stable_memory = memory.live_bytes_;
-            }
-            if (round > 63) {
-                EXPECT_TRUE(memory.live_bytes_ <= stable_memory);
-            }
-        }
-        EXPECT_TRUE(sender.submit_frame(websocket_opcode::ping, "ping") == websocket_frame_submit_status::accepted);
-        EXPECT_TRUE((static_cast<unsigned char>(drain(sender)[0]) & 0x40U) == 0);
-        EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, std::pmr::string(16385, 'x')) == websocket_frame_submit_status::message_too_large);
-    }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-}
-
-TEST(Ruvia, ws_public_compression_recovers_after_unsent_message_failure) {
-    enum class failure_kind { allocation,
-        mask,
-        mask_with_pending_message };
-    for (const auto failure : {failure_kind::allocation, failure_kind::mask, failure_kind::mask_with_pending_message}) {
-        counting_resource memory;
-        {
-            mask_source mask;
-            const websocket_compression compression{.enabled_ = true,
-                .server_no_context_takeover_ = false,
-                .client_no_context_takeover_ = false};
-            http_io_buffer sender_input(&memory);
-            websocket_connection sender(sender_input,
-                {.compression_ = compression,
-                    .role_ = websocket_connection_role::client,
-                    .mask_key_generator_ = &mask_source::generate,
-                    .mask_key_context_ = &mask});
-            http_io_buffer receiver_input;
-            websocket_connection receiver(receiver_input, {.compression_ = compression});
-            const std::pmr::string payload(4096, 'x');
-            const std::pmr::string prefix_payload(1024, 'p');
-            if (failure == failure_kind::mask_with_pending_message) {
-                EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, prefix_payload) == websocket_frame_submit_status::accepted);
-            }
-            const std::pmr::string pending(sender.output_plan().bytes());
-
-            // The first compressed submission allocates its lazy raw codec
-            // owner before growing the already-constructed output strings.
-            memory.reject_ = failure == failure_kind::allocation;
-            mask.fail_ = failure != failure_kind::allocation;
-            EXPECT_TRUE(ruvia::test::throws_on([&] {
-                static_cast<void>(sender.submit_frame(websocket_opcode::binary, payload));
-            }));
-            memory.reject_ = false;
-            mask.fail_ = false;
-            EXPECT_EQ(sender.output_plan().bytes(), pending);
-            EXPECT_TRUE(sender.liveness_mode() == websocket_liveness_mode::open);
-
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload) == websocket_frame_submit_status::accepted);
-            const auto wire = drain(sender);
-            receiver_input.append(wire);
-            if (failure == failure_kind::mask_with_pending_message) {
-                const auto prefix_event = receiver.next_event();
-                EXPECT_TRUE(prefix_event && prefix_event->message());
-                if (prefix_event && prefix_event->message()) {
-                    EXPECT_EQ(prefix_event->message()->payload(), prefix_payload);
-                }
-            }
-            const auto event = receiver.next_event();
-            EXPECT_TRUE(event && event->message());
-            if (event && event->message()) {
-                EXPECT_EQ(event->message()->payload(), payload);
-            }
-        }
-        EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-        EXPECT_EQ(memory.allocations_, memory.deallocations_);
-    }
 }
 
 TEST(Ruvia, ws_public_compression_accepts_final_blocks_and_preserves_required_history) {
@@ -276,52 +141,6 @@ TEST(Ruvia, ws_public_compression_rejects_incomplete_empty_block_headers) {
     }
 }
 
-TEST(Ruvia, ws_public_decompression_preserves_resource_failure_and_retires_connection) {
-    constexpr std::string_view wire("\xc1\x87\x00\x00\x00\x00\xf2\x48\xcd\xc9\xc9\x07\x00", 13);
-    for (const bool reject_window : {false, true}) {
-        counting_resource memory;
-        {
-            http_io_buffer input(&memory);
-            websocket_connection connection(input, {.compression_ = websocket_compression{.enabled_ = true}});
-            input.append(wire);
-            // zlib defers its raw-inflate window until the first message.
-            // Target that codec window, not STL iterator metadata: allowing
-            // smaller protocol buffers prevents a queued Close from hiding the
-            // original window-allocation failure behind another allocation.
-            memory.reject_min_bytes_ = std::size_t{1} << MAX_WBITS;
-            memory.reject_ = reject_window;
-            bool allocation_failed = false;
-            try {
-                const auto event = connection.next_event();
-                EXPECT_TRUE(!reject_window);
-                EXPECT_TRUE(event && event->message());
-                if (event && event->message()) {
-                    EXPECT_EQ(event->message()->payload(), "Hello");
-                }
-            } catch (const std::bad_alloc&) {
-                allocation_failed = true;
-            }
-            memory.reject_ = false;
-            EXPECT_EQ(allocation_failed, reject_window);
-            if (reject_window) {
-                EXPECT_TRUE(connection.liveness_mode() == websocket_liveness_mode::inactive);
-                // The transport has not ended yet: the plan and abort() must
-                // still direct the driver to end it, exactly as after EOF.
-                EXPECT_TRUE(connection.output_plan().bytes().empty());
-                EXPECT_TRUE(connection.output_plan().disposition() == websocket_transport_disposition::end_transport);
-                EXPECT_TRUE(connection.feed(wire) == websocket_feed_status::inactive);
-                EXPECT_TRUE(connection.submit_frame(websocket_opcode::text, "after-failure") == websocket_frame_submit_status::not_open);
-                const auto terminal = connection.next_event();
-                EXPECT_TRUE(terminal && terminal->kind() == websocket_event_kind::transport_end);
-                EXPECT_TRUE(connection.abort() == websocket_abort_disposition::abort_transport);
-                EXPECT_TRUE(connection.abort() == websocket_abort_disposition::no_transport_action);
-            }
-        }
-        EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-        EXPECT_EQ(memory.allocations_, memory.deallocations_);
-    }
-}
-
 TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
     mask_source mask;
     http_io_buffer sender_input;
@@ -331,7 +150,7 @@ TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
 
     EXPECT_TRUE(sender.submit_frame(websocket_opcode::text, "hey") ==
                 websocket_frame_submit_status::accepted);
-    const std::pmr::string message_wire(sender.output_plan().bytes());
+    const std::string message_wire(sender.output_plan().bytes());
     EXPECT_TRUE(sender.consume_output(message_wire.size()) == websocket_output_consume_status::drained);
     input.append(message_wire);
     auto message = protocol.next_event();
@@ -344,7 +163,7 @@ TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
 
     EXPECT_TRUE(sender.submit_frame(websocket_opcode::ping, "p") ==
                 websocket_frame_submit_status::accepted);
-    const std::pmr::string ping_wire(sender.output_plan().bytes());
+    const std::string ping_wire(sender.output_plan().bytes());
     EXPECT_TRUE(sender.consume_output(ping_wire.size()) == websocket_output_consume_status::drained);
     input.append(ping_wire);
     auto ping = protocol.next_event();
@@ -353,65 +172,6 @@ TEST(Ruvia, ws_public_server_events_use_public_payload_types) {
     if (ping && ping->ping()) {
         EXPECT_EQ(ping->ping()->payload(), "p");
     }
-}
-
-TEST(Ruvia, ws_public_protocol_reuses_borrowed_input_and_releases_memory) {
-    counting_resource memory;
-    http_io_buffer input(&memory);
-    input.reserve(1024);
-    const auto bytes_before_protocol = memory.live_bytes_;
-    {
-        websocket_connection protocol(input);
-        mask_source mask;
-        http_io_buffer sender_input;
-        auto sender = client(sender_input, mask);
-        for (int i = 0; i < 32; ++i) {
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::text, "payload") ==
-                        websocket_frame_submit_status::accepted);
-            const std::pmr::string wire(sender.output_plan().bytes());
-            EXPECT_TRUE(sender.consume_output(wire.size()) == websocket_output_consume_status::drained);
-            input.append(wire);
-            const auto live_before_poll = memory.live_bytes_;
-            {
-                auto event = protocol.next_event();
-                EXPECT_TRUE(event && event->message());
-                if (event && event->message()) {
-                    EXPECT_EQ(event->message()->payload(), "payload");
-                    const auto payload_address = reinterpret_cast<std::uintptr_t>(
-                        event->message()->payload().data());
-                    const auto input_address = reinterpret_cast<std::uintptr_t>(input.data());
-                    EXPECT_TRUE(payload_address >= input_address);
-                    EXPECT_TRUE(payload_address + event->message()->payload().size() <=
-                                input_address + input.size());
-                }
-            }
-            // Borrowed payloads stay in input; transient debug iterator proxies
-            // must be released when the event is destroyed.
-            EXPECT_EQ(memory.live_bytes_, live_before_poll);
-        }
-        EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, "out") ==
-                    websocket_frame_submit_status::accepted);
-        auto pending = protocol.output_plan().bytes();
-        EXPECT_TRUE(protocol.consume_output(pending.size()) ==
-                    websocket_output_consume_status::drained);
-        const auto live_before_submit = memory.live_bytes_;
-        for (int i = 0; i < 32; ++i) {
-            EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, "out") ==
-                        websocket_frame_submit_status::accepted);
-            pending = protocol.output_plan().bytes();
-            EXPECT_TRUE(protocol.consume_output(pending.size()) ==
-                        websocket_output_consume_status::drained);
-        }
-        // PMR implementations may allocate a transient container proxy on each
-        // submit; those allocations must not remain live after output drains.
-        EXPECT_EQ(memory.live_bytes_, live_before_submit);
-        protocol.notify_transport_eof();
-        auto end = protocol.next_event();
-        EXPECT_TRUE(end && end->kind() == websocket_event_kind::transport_end);
-        protocol.commit_transport_end();
-        EXPECT_TRUE(protocol.abort() == websocket_abort_disposition::no_transport_action);
-    }
-    EXPECT_EQ(memory.live_bytes_, bytes_before_protocol);
 }
 
 TEST(Ruvia, ws_public_server_protocol_reports_protocol_error_as_public_value) {
@@ -429,7 +189,7 @@ TEST(Ruvia, ws_public_server_protocol_controls_permessage_deflate_per_frame) {
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                              .compression_ = websocket_compression{.enabled_ = true},
                                              .deflater_ = {.compression_level_ = 6}});
-    const std::pmr::string payload_value(200, 'x');
+    const std::string payload_value(200, 'x');
 
     EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, payload_value, {.compress_ = false}) ==
                 websocket_frame_submit_status::accepted);
@@ -526,10 +286,10 @@ TEST(Ruvia, ws_public_client_server_exchange_and_partial_output) {
     auto sender = client(sender_input, source);
     http_io_buffer receiver_input;
     websocket_connection receiver(receiver_input);
-    const std::pmr::string payload_value(65536, '\xff');
+    const std::string payload_value(65536, '\xff');
     for (unsigned round = 0; round < 3; ++round) {
         EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
-        const std::pmr::string wire(sender.output_plan().bytes());
+        const std::string wire(sender.output_plan().bytes());
         EXPECT_TRUE((static_cast<unsigned char>(wire[1]) & 0x80U) != 0);
         EXPECT_TRUE(sender.consume_output(wire.size() + 1) == websocket_output_consume_status::out_of_range);
         EXPECT_TRUE(sender.consume_output(1) == websocket_output_consume_status::pending);
@@ -565,7 +325,7 @@ TEST(Ruvia, ws_public_client_fragmented_message_with_ping_and_close) {
     http_io_buffer server_input;
     websocket_connection server(server_input);
     // A fragmented binary message with a control frame between fragments.
-    const std::pmr::string wire(
+    const std::string wire(
         "\x02\x02"
         "ab"
         "\x89\x01"
@@ -649,8 +409,8 @@ TEST(Ruvia, ws_public_client_waits_for_server_eof_after_initiating_close) {
 // A borrowed payload is a distinct parameter form: it never binds an owning
 // temporary, and a plain string never borrows implicitly.
 static_assert(!std::is_constructible_v<websocket_borrowed_payload, std::string>);
-static_assert(!std::is_constructible_v<websocket_borrowed_payload, std::pmr::string>);
-static_assert(std::is_constructible_v<websocket_borrowed_payload, const std::pmr::string&>);
+static_assert(!std::is_constructible_v<websocket_borrowed_payload, std::string>);
+static_assert(std::is_constructible_v<websocket_borrowed_payload, const std::string&>);
 static_assert(!std::is_convertible_v<std::string_view, websocket_borrowed_payload>);
 
 // RFC 6455 section 5.4: one entry sends whole messages and fragments; a frame
@@ -664,7 +424,7 @@ TEST(Ruvia, ws_public_submit_frame_sends_fragments_and_whole_messages) {
     EXPECT_EQ(sender.submit_frame(websocket_opcode::ping, "p", {.final_ = false}), websocket_frame_submit_status::invalid_opcode);
     EXPECT_EQ(sender.submit_frame(websocket_opcode::ping, "p"), websocket_frame_submit_status::accepted);
     EXPECT_EQ(sender.submit_frame(websocket_opcode::text, "\xC3", {.final_ = false}), websocket_frame_submit_status::accepted);
-    const std::pmr::string tail(
+    const std::string tail(
         "\xA9"
         "cd");
     EXPECT_EQ(sender.submit_frame(websocket_opcode::text, websocket_borrowed_payload(tail)), websocket_frame_submit_status::accepted);
@@ -700,47 +460,6 @@ TEST(Ruvia, ws_public_submit_frame_sends_fragments_and_whole_messages) {
                                                "cd");
     const auto binary = receiver.next_event();
     EXPECT_TRUE(binary && binary->message() && binary->message()->payload() == "z");
-}
-
-TEST(Ruvia, ws_public_fragmented_messages_reuse_reassembly_scratch) {
-    counting_resource memory;
-    {
-        mask_source mask;
-        http_io_buffer input(&memory);
-        websocket_connection receiver(input, {.role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
-        const std::pmr::string wire(
-            "\x01\x02"
-            "ab"
-            "\x80\x02"
-            "cd",
-            8);
-        const auto deliver = [&] {
-            input.append(wire);
-            const auto event = receiver.next_event();
-            EXPECT_TRUE(event && event->message() && event->message()->payload() == "abcd");
-        };
-        deliver();
-        deliver();
-        const auto allocations = memory.allocations_;
-        for (int i = 0; i < 64; ++i) {
-            deliver();
-        }
-        EXPECT_EQ(memory.allocations_, allocations);
-
-        // A large reassembled message is not pinned once it is delivered.
-        const std::pmr::string payload(64 * 1024, 'x');
-        std::pmr::string large("\x02\x7e\x80\x00", 4);
-        large.append(payload, 0, 32 * 1024);
-        large.append("\x80\x7e\x80\x00", 4);
-        large.append(payload, 0, 32 * 1024);
-        input.append(large);
-        const auto event = receiver.next_event();
-        EXPECT_TRUE(event && event->message() && event->message()->payload().size() == payload.size());
-        const auto pinned = memory.live_bytes_;
-        deliver();
-        EXPECT_TRUE(memory.live_bytes_ + payload.size() <= pinned);
-    }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
 }
 
 TEST(Ruvia, ws_public_client_rejects_masked_server_and_oversized_message) {
@@ -906,7 +625,7 @@ TEST(Ruvia, ws_public_wire_bytes_count_deflated_payloads) {
     websocket_connection server(server_input, {.compression_ = compression});
     http_io_buffer client_input;
     websocket_connection client_side(client_input, {.compression_ = compression, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &source});
-    const std::pmr::string payload_value(4096, 'x');
+    const std::string payload_value(4096, 'x');
     EXPECT_TRUE(server.submit_frame(websocket_opcode::text, payload_value) == websocket_frame_submit_status::accepted);
     const auto wire = drain(server);
     EXPECT_TRUE(wire.size() < payload_value.size());
@@ -917,186 +636,10 @@ TEST(Ruvia, ws_public_wire_bytes_count_deflated_payloads) {
     EXPECT_EQ(client_side.bytes_received(), wire.size());
 }
 
-TEST(Ruvia, ws_public_connection_reuses_buffers_and_releases_owned_memory) {
-    counting_resource resource;
-    mask_source source;
-    {
-        http_io_buffer input(&resource);
-        websocket_connection connection(input,
-            {.role_ = websocket_connection_role::client,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &source});
-        http_io_buffer server_input;
-        websocket_connection server(server_input);
-        const std::pmr::string payload_value(8192, 'x');
-        EXPECT_TRUE(server.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
-        const auto wire = drain(server);
-        std::size_t warmed_bytes = 0;
-        for (unsigned i = 0; i < 100; ++i) {
-            input.append(wire);
-            const auto event = connection.next_event();
-            EXPECT_TRUE(event && event->message());
-            if (!event || !event->message()) {
-                return;
-            }
-            EXPECT_TRUE(connection.submit_frame(websocket_opcode::binary, event->message()->payload()) == websocket_frame_submit_status::accepted);
-            (void)drain(connection);
-            EXPECT_TRUE(!connection.next_event());
-            if (i == 2) {
-                warmed_bytes = resource.live_bytes_;
-            }
-            if (i > 2) {
-                EXPECT_EQ(resource.live_bytes_, warmed_bytes);
-            }
-        }
-        EXPECT_TRUE(resource.live_bytes_ > 0);
-        (void)connection.abort();
-    }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
-}
-
-TEST(Ruvia, ws_public_connection_moves_keep_event_and_output_storage_stable) {
-    counting_resource source_memory;
-    counting_resource replaced_memory;
-    mask_source mask;
-    const std::pmr::string payload_value(1024, 'x');
-    {
-        http_io_buffer source_input(&source_memory);
-        websocket_connection source_value(source_input,
-            {.role_ = websocket_connection_role::client,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-        http_io_buffer server_input;
-        websocket_connection server(server_input);
-        EXPECT_TRUE(server.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
-        const auto wire = drain(server);
-        source_input.append(wire);
-        const auto event = source_value.next_event();
-        EXPECT_TRUE(event && event->message());
-        if (!event || !event->message()) {
-            return;
-        }
-        const auto retained_payload = event->message()->payload();
-        EXPECT_TRUE(source_value.submit_frame(websocket_opcode::binary, retained_payload) == websocket_frame_submit_status::accepted);
-        const auto retained_output = source_value.output_plan().bytes();
-        const auto live_before_move = source_memory.live_bytes_;
-        const auto allocations_before_move = source_memory.allocations_;
-        websocket_connection moved(std::move(source_value));
-        // The replaced connection reads its own buffer; move assignment
-        // releases its implementation, and the result keeps reading the
-        // moved connection's buffer.
-        http_io_buffer replaced_input(&replaced_memory);
-        websocket_connection replacement(replaced_input);
-        EXPECT_TRUE(replaced_memory.live_bytes_ > 0);
-        replacement = std::move(moved);
-        EXPECT_EQ(replaced_memory.live_bytes_, std::size_t{0});
-        EXPECT_EQ(source_memory.live_bytes_, live_before_move);
-        EXPECT_EQ(source_memory.allocations_, allocations_before_move);
-        EXPECT_EQ(retained_payload, payload_value);
-        EXPECT_TRUE(replacement.output_plan().bytes().data() == retained_output.data());
-        EXPECT_EQ(replacement.output_plan().bytes(), retained_output);
-        server_input.append(retained_output);
-        const auto echoed = server.next_event();
-        EXPECT_TRUE(echoed && echoed->message() && echoed->message()->payload() == payload_value);
-        // EOF/abort discard logical output without invalidating a transport's
-        // outstanding write borrow. Only destruction releases the backing bytes.
-        const std::pmr::string saved_output(retained_output);
-        replacement.notify_transport_eof();
-        EXPECT_TRUE(replacement.abort() == websocket_abort_disposition::abort_transport);
-        EXPECT_EQ(retained_output, saved_output);
-        EXPECT_EQ(source_memory.live_bytes_, live_before_move);
-    }
-    EXPECT_EQ(source_memory.live_bytes_, std::size_t{0});
-    EXPECT_EQ(source_memory.allocations_, source_memory.deallocations_);
-    EXPECT_EQ(replaced_memory.allocations_, replaced_memory.deallocations_);
-}
-
-TEST(Ruvia, ws_public_driver_releases_owned_memory_after_construction_failures) {
-    counting_resource memory;
-    {
-        websocket_connection unused({.resource_ = &memory});
-        EXPECT_TRUE(memory.live_bytes_ > 0);
-    }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    EXPECT_TRUE(ruvia::test::throws_on([&] {
-        websocket_connection invalid({.resource_ = &memory, .role_ = websocket_connection_role::client});
-    }));
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    EXPECT_TRUE(ruvia::test::throws_on([&] {
-        websocket_connection invalid({.resource_ = &memory, .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
-    }));
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    {
-        http_io_buffer input(&memory);
-        const auto input_bytes = memory.live_bytes_;
-        {
-            websocket_connection unused(input);
-            EXPECT_TRUE(memory.live_bytes_ > input_bytes);
-        }
-        EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::test::throws_on([&] {
-            websocket_connection invalid(input, {.role_ = websocket_connection_role::client});
-        }));
-        EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::test::throws_on([&] {
-            websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
-                                                    .compression_ = websocket_compression{.enabled_ = true, .server_max_window_bits_ = 7}});
-        }));
-        EXPECT_EQ(memory.live_bytes_, input_bytes);
-        EXPECT_TRUE(ruvia::test::throws_on([&] {
-            websocket_connection invalid(input, {.message_limit_ = protocol_byte_limit::unlimited(),
-                                                    .deflater_ = {.compression_level_ = 10}});
-        }));
-        EXPECT_EQ(memory.live_bytes_, input_bytes);
-    }
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    // http_io_buffer itself does not allocate. The rejected request is the raw
-    // connection implementation storage, before its STL members are constructed.
-    memory.reject_ = true;
-    EXPECT_TRUE(ruvia::test::throws_on([&] {
-        http_io_buffer input(&memory);
-        websocket_connection rejected(input);
-    }));
-    EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    EXPECT_EQ(memory.allocations_, memory.deallocations_);
-}
-
-TEST(Ruvia, ws_server_protocol_reuses_drained_input_for_repeated_large_messages) {
-    counting_resource memory;
-    mask_source mask;
-    http_io_buffer sender_input;
-    auto sender = client(sender_input, mask);
-    http_io_buffer input(&memory);
-    websocket_connection protocol(input);
-    const auto deliver = [&](std::size_t payload_bytes) {
-        const std::pmr::string payload_value(payload_bytes, 'x');
-        EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
-        input.append(drain(sender));
-        const auto event = protocol.next_event();
-        EXPECT_TRUE(event && event->message() && event->message()->payload() == payload_value);
-        EXPECT_TRUE(!protocol.next_event().has_value());
-    };
-    // Steady traffic within the retention bound allocates input storage
-    // once, not once per message.
-    const auto retained_payload_bytes = websocket_retained_buffer_bytes - 16;
-    deliver(retained_payload_bytes);
-    const auto allocations = memory.allocations_;
-    const auto steady_live_bytes = memory.live_bytes_;
-    for (int round = 0; round < 8; ++round) {
-        deliver(retained_payload_bytes);
-    }
-    EXPECT_EQ(memory.allocations_, allocations);
-    // A drained larger message does not stay pinned to the connection.
-    deliver(64 * 1024);
-    EXPECT_TRUE(memory.live_bytes_ <= steady_live_bytes);
-    deliver(1024 * 1024);
-    EXPECT_TRUE(memory.live_bytes_ <= steady_live_bytes);
-}
-
 TEST(Ruvia, ws_default_message_limit_rejects_oversized_declared_frame_before_payload) {
     // A masked binary frame declaring 16 MiB + 1 bytes requires no payload to
     // establish that it cannot fit the finite default message policy.
-    const std::pmr::string header_value("\x82\xff\x00\x00\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00", 14);
+    const std::string header_value("\x82\xff\x00\x00\x00\x00\x01\x00\x00\x01\x00\x00\x00\x00", 14);
     websocket_connection connection;
     EXPECT_TRUE(connection.feed(header_value) == websocket_feed_status::accepted);
     const auto event = connection.next_event();
@@ -1110,28 +653,10 @@ TEST(Ruvia, ws_default_message_limit_rejects_oversized_declared_frame_before_pay
     EXPECT_EQ(borrowed_event->protocol_error()->close_code(), std::uint16_t{1009});
 }
 
-TEST(Ruvia, ws_owned_input_backpressure_does_not_copy_rejected_bytes) {
-    counting_resource resource;
-    websocket_connection connection({.resource_ = &resource, .max_buffered_input_bytes_ = 16});
-    const auto baseline = resource.live_bytes_;
-    const std::pmr::string oversized(17, 'x');
-    EXPECT_TRUE(connection.feed(oversized) == websocket_feed_status::backpressured);
-    EXPECT_EQ(resource.live_bytes_, baseline);
-    const std::pmr::string ping("\x89\x81\x00\x00\x00\x00p", 7);
-    EXPECT_TRUE(connection.feed(ping) == websocket_feed_status::accepted);
-    const auto event = connection.next_event();
-    EXPECT_TRUE(event && event->ping());
-    EXPECT_EQ(event->ping()->payload(), "p");
-    (void)connection.consume_output(connection.output_plan().bytes().size());
-    EXPECT_TRUE(!connection.next_event());
-    EXPECT_TRUE(connection.feed(ping) == websocket_feed_status::accepted);
-    EXPECT_TRUE(connection.next_event()->ping() != nullptr);
-}
-
 TEST(Ruvia, ws_owned_input_bound_excludes_parsed_prefix) {
     websocket_connection connection({.max_buffered_input_bytes_ = 32});
-    const std::pmr::string ping("\x89\x81\x00\x00\x00\x00p", 7);
-    std::pmr::string binary("\x82\x94\x00\x00\x00\x00", 6);
+    const std::string ping("\x89\x81\x00\x00\x00\x00p", 7);
+    std::string binary("\x82\x94\x00\x00\x00\x00", 6);
     binary.append(20, 'b');
     const auto first_chunk = ping + binary.substr(0, 10);
     EXPECT_TRUE(connection.feed(first_chunk) == websocket_feed_status::accepted);
@@ -1145,14 +670,14 @@ TEST(Ruvia, ws_owned_input_bound_excludes_parsed_prefix) {
     const auto message_event = connection.next_event();
     EXPECT_TRUE(message_event && message_event->message());
     if (message_event && message_event->message()) {
-        EXPECT_EQ(message_event->message()->payload(), std::pmr::string(20, 'b'));
+        EXPECT_EQ(message_event->message()->payload(), std::string(20, 'b'));
     }
 }
 
 TEST(Ruvia, ws_owned_input_accepts_message_payload_during_compaction) {
     for (const bool following_frame : {false, true}) {
-        const std::pmr::string nested_frame("\x82\x01x", 3);
-        std::pmr::string wire("\x82\x03", 2);
+        const std::string nested_frame("\x82\x01x", 3);
+        std::string wire("\x82\x03", 2);
         wire += nested_frame;
         if (following_frame) {
             wire.append(
@@ -1195,100 +720,10 @@ TEST(Ruvia, ws_owned_input_accepts_message_payload_during_compaction) {
     }
 }
 
-TEST(Ruvia, ws_owned_input_accepts_message_payload_when_storage_grows) {
-    ruvia::test::poisoned_retirement_resource resource;
-    {
-        const std::pmr::string payload(8000, 'x');
-        std::pmr::string nested_frame("\x82\x7e\x1f\x40", 4);
-        nested_frame += payload;
-        std::pmr::string wire("\x82\x7e\x1f\x44", 4);
-        wire += nested_frame;
-        mask_source mask;
-        websocket_connection connection({.resource_ = &resource,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask,
-            .max_buffered_input_bytes_ = wire.size() * 2});
-        EXPECT_TRUE(connection.feed(wire) == websocket_feed_status::accepted);
-        const auto wrapper = connection.next_event();
-        EXPECT_TRUE(wrapper && wrapper->message());
-        if (!wrapper || !wrapper->message()) {
-            return;
-        }
-        const auto borrowed = wrapper->message()->payload();
-        EXPECT_EQ(borrowed, nested_frame);
-        const auto* original_storage = borrowed.data() - 4;
-
-        // Appending the nested frame exceeds the first allocation. Poisoning
-        // retired storage exposes a copy made after its source was invalidated.
-        EXPECT_TRUE(connection.feed(borrowed) == websocket_feed_status::accepted);
-        EXPECT_TRUE(resource.retired(original_storage));
-        const auto nested = connection.next_event();
-        EXPECT_TRUE(nested && nested->message());
-        if (nested && nested->message()) {
-            EXPECT_EQ(nested->message()->payload(), payload);
-        }
-        EXPECT_TRUE(!connection.next_event());
-        EXPECT_TRUE(connection.liveness_mode() == websocket_liveness_mode::open);
-    }
-    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
-}
-
-TEST(Ruvia, ws_owned_input_retries_after_borrowed_payload_copy_failure) {
-    counting_resource resource;
-    {
-        const std::pmr::string payload(40, 'x');
-        const std::pmr::string nested_frame = std::pmr::string("\x82\x28", 2) + payload;
-        const std::pmr::string wire = std::pmr::string("\x82\x2a", 2) + nested_frame +
-                                      std::pmr::string(
-                                          "\x82\x08"
-                                          "abcdefgh",
-                                          10);
-        mask_source mask;
-        websocket_connection connection({.resource_ = &resource,
-            .role_ = websocket_connection_role::client,
-            .mask_key_generator_ = &mask_source::generate,
-            .mask_key_context_ = &mask,
-            .max_buffered_input_bytes_ = wire.size()});
-        EXPECT_TRUE(connection.feed(wire) == websocket_feed_status::accepted);
-        const auto wrapper = connection.next_event();
-        EXPECT_TRUE(wrapper && wrapper->message());
-        if (!wrapper || !wrapper->message()) {
-            return;
-        }
-        const auto borrowed = wrapper->message()->payload();
-        // Borrowed input grows through http_io_buffer's raw allocation path;
-        // no STL container is constructed or moved while rejection is armed.
-        resource.reject_ = true;
-        bool threw = false;
-        try {
-            (void)connection.feed(borrowed);
-        } catch (const std::bad_alloc&) {
-            threw = true;
-        }
-        EXPECT_TRUE(threw);
-        EXPECT_EQ(borrowed, nested_frame);
-        resource.reject_ = false;
-        EXPECT_TRUE(connection.feed(borrowed) == websocket_feed_status::accepted);
-        const auto following = connection.next_event();
-        EXPECT_TRUE(following && following->message());
-        if (following && following->message()) {
-            EXPECT_EQ(following->message()->payload(), "abcdefgh");
-        }
-        const auto nested = connection.next_event();
-        EXPECT_TRUE(nested && nested->message());
-        if (nested && nested->message()) {
-            EXPECT_EQ(nested->message()->payload(), payload);
-        }
-        EXPECT_TRUE(!connection.next_event());
-    }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
-}
-
 TEST(Ruvia, ws_input_accepts_borrowed_message_payload_during_compaction) {
     for (const bool following_frame : {false, true}) {
-        const std::pmr::string nested_frame("\x82\x01x", 3);
-        std::pmr::string wire("\x82\x03", 2);
+        const std::string nested_frame("\x82\x01x", 3);
+        std::string wire("\x82\x03", 2);
         wire += nested_frame;
         if (following_frame) {
             wire.append(
@@ -1332,95 +767,6 @@ TEST(Ruvia, ws_input_accepts_borrowed_message_payload_during_compaction) {
     }
 }
 
-TEST(Ruvia, ws_input_accepts_borrowed_message_payload_when_storage_grows) {
-    ruvia::test::poisoned_retirement_resource resource;
-    {
-        const std::pmr::string payload(8000, 'x');
-        std::pmr::string nested_frame("\x82\x7e\x1f\x40", 4);
-        nested_frame += payload;
-        std::pmr::string wire("\x82\x7e\x1f\x44", 4);
-        wire += nested_frame;
-        mask_source mask;
-        http_io_buffer input(&resource);
-        websocket_connection connection(input,
-            {.role_ = websocket_connection_role::client,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-        input.append(wire);
-        const auto wrapper = connection.next_event();
-        EXPECT_TRUE(wrapper && wrapper->message());
-        if (!wrapper || !wrapper->message()) {
-            return;
-        }
-        const auto borrowed = wrapper->message()->payload();
-        EXPECT_EQ(borrowed, nested_frame);
-        const auto* original_storage = borrowed.data() - 4;
-
-        // Appending the nested frame exceeds the first allocation. Poisoning
-        // retired storage exposes a copy made after its source was invalidated.
-        input.append(borrowed);
-        EXPECT_TRUE(resource.retired(original_storage));
-        const auto nested = connection.next_event();
-        EXPECT_TRUE(nested && nested->message());
-        if (nested && nested->message()) {
-            EXPECT_EQ(nested->message()->payload(), payload);
-        }
-        EXPECT_TRUE(!connection.next_event());
-        EXPECT_TRUE(connection.liveness_mode() == websocket_liveness_mode::open);
-    }
-    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
-}
-
-TEST(Ruvia, ws_input_retries_after_borrowed_payload_copy_failure) {
-    counting_resource resource;
-    {
-        const std::pmr::string payload(40, 'x');
-        const std::pmr::string nested_frame = std::pmr::string("\x82\x28", 2) + payload;
-        const std::pmr::string wire = std::pmr::string("\x82\x2a", 2) + nested_frame +
-                                      std::pmr::string(
-                                          "\x82\x08"
-                                          "abcdefgh",
-                                          10);
-        mask_source mask;
-        http_io_buffer input(&resource);
-        websocket_connection connection(input,
-            {.role_ = websocket_connection_role::client,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-        input.append(wire);
-        const auto wrapper = connection.next_event();
-        EXPECT_TRUE(wrapper && wrapper->message());
-        if (!wrapper || !wrapper->message()) {
-            return;
-        }
-        const auto borrowed = wrapper->message()->payload();
-        // This append grows raw http_io_buffer storage, not STL metadata.
-        resource.reject_ = true;
-        bool threw = false;
-        try {
-            input.append(borrowed);
-        } catch (const std::bad_alloc&) {
-            threw = true;
-        }
-        EXPECT_TRUE(threw);
-        EXPECT_EQ(borrowed, nested_frame);
-        resource.reject_ = false;
-        input.append(borrowed);
-        const auto following = connection.next_event();
-        EXPECT_TRUE(following && following->message());
-        if (following && following->message()) {
-            EXPECT_EQ(following->message()->payload(), "abcdefgh");
-        }
-        const auto nested = connection.next_event();
-        EXPECT_TRUE(nested && nested->message());
-        if (nested && nested->message()) {
-            EXPECT_EQ(nested->message()->payload(), payload);
-        }
-        EXPECT_TRUE(!connection.next_event());
-    }
-    EXPECT_EQ(resource.live_bytes_, std::size_t{0});
-}
-
 TEST(Ruvia, ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
     mask_source mask;
     http_io_buffer sender_input;
@@ -1431,14 +777,14 @@ TEST(Ruvia, ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
              std::size_t{5}, std::size_t{7}, std::size_t{8}, std::size_t{9}, std::size_t{15}, std::size_t{16},
              std::size_t{17}, std::size_t{31}, std::size_t{33}, std::size_t{125}, std::size_t{126},
              std::size_t{127}, std::size_t{1021}, std::size_t{65535}, std::size_t{65537}}) {
-        std::pmr::string payload_value(length, '\0');
+        std::string payload_value(length, '\0');
         for (std::size_t i = 0; i < length; ++i) {
             payload_value[i] = static_cast<char>((i * 31U + length) & 0xFFU);
         }
         // A leading frame of `offset` bytes moves where the payload lands in
         // the receiver's input, so every alignment is unmasked in place.
         for (std::size_t offset = 0; offset < 8; ++offset) {
-            const std::pmr::string leading(offset, 'L');
+            const std::string leading(offset, 'L');
             EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, leading) == websocket_frame_submit_status::accepted);
             const auto leading_wire = drain(sender);
             EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, payload_value) == websocket_frame_submit_status::accepted);
@@ -1474,80 +820,10 @@ TEST(Ruvia, ws_public_masking_round_trips_over_odd_lengths_and_offsets) {
     }
 }
 
-TEST(Ruvia, ws_output_retries_growth_and_aliased_submission_after_partial_write) {
-    for (const auto role : {websocket_connection_role::server, websocket_connection_role::client}) {
-        counting_resource memory;
-        {
-            mask_source mask;
-            websocket_connection sender({.resource_ = &memory,
-                .message_limit_ = protocol_byte_limit::unlimited(),
-                .role_ = role,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-            const std::pmr::string first(128 * 1024, 'a');
-            const std::pmr::string second(64 * 1024, 'b');
-            const std::pmr::string large(512 * 1024, 'c');
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, first, {.compress_ = false}) == websocket_frame_submit_status::accepted);
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, second, {.compress_ = false}) == websocket_frame_submit_status::accepted);
-            const std::pmr::string initial(sender.output_plan().bytes());
-            const auto consumed = initial.size() - 32 * 1024;
-            std::pmr::string wire = initial.substr(0, consumed);
-            EXPECT_TRUE(sender.consume_output(consumed) == websocket_output_consume_status::pending);
-            const std::pmr::string pending(sender.output_plan().bytes());
-
-            // Reject payload storage without rejecting STL debug bookkeeping.
-            memory.reject_min_bytes_ = 1024;
-            memory.reject_ = true;
-            bool growth_rejected = false;
-            try {
-                (void)sender.submit_frame(websocket_opcode::binary, large, {.compress_ = false});
-            } catch (const std::bad_alloc&) {
-                growth_rejected = true;
-            }
-            memory.reject_ = false;
-            EXPECT_TRUE(growth_rejected);
-            EXPECT_EQ(sender.output_plan().bytes(), pending);
-            EXPECT_TRUE(sender.liveness_mode() == websocket_liveness_mode::open);
-
-            const auto alias = sender.output_plan().bytes();
-            const std::pmr::string alias_value(alias);
-            memory.reject_ = true;
-            bool alias_rejected = false;
-            try {
-                (void)sender.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(alias), {.compress_ = false});
-            } catch (const std::bad_alloc&) {
-                alias_rejected = true;
-            }
-            memory.reject_ = false;
-            EXPECT_TRUE(alias_rejected);
-            EXPECT_EQ(alias, alias_value);
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(alias), {.compress_ = false}) == websocket_frame_submit_status::accepted);
-            EXPECT_TRUE(sender.output_plan().borrowed_bytes().empty());
-            EXPECT_TRUE(sender.submit_frame(websocket_opcode::binary, large, {.compress_ = false}) == websocket_frame_submit_status::accepted);
-            wire.append(drain(sender));
-
-            websocket_connection receiver({.message_limit_ = protocol_byte_limit::unlimited(),
-                .role_ = role == websocket_connection_role::server ? websocket_connection_role::client : websocket_connection_role::server,
-                .mask_key_generator_ = &mask_source::generate,
-                .mask_key_context_ = &mask});
-            EXPECT_TRUE(receiver.feed(wire) == websocket_feed_status::accepted);
-            for (const auto* expected : {&first, &second, &alias_value, &large}) {
-                const auto event = receiver.next_event();
-                EXPECT_TRUE(event && event->message());
-                if (event && event->message()) {
-                    EXPECT_EQ(event->message()->payload(), *expected);
-                }
-            }
-            EXPECT_TRUE(!receiver.next_event());
-        }
-        EXPECT_EQ(memory.live_bytes_, std::size_t{0});
-    }
-}
-
 TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited()});
-    const std::pmr::string payload_value(300, 'b');
+    const std::string payload_value(300, 'b');
     EXPECT_TRUE(protocol.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(payload_value)) == websocket_frame_submit_status::accepted);
     auto plan = protocol.output_plan();
     EXPECT_EQ(plan.bytes().size(), std::size_t{4});
@@ -1566,7 +842,7 @@ TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
 
     // Output queued behind a borrowed payload copies it first, so the wire
     // keeps submission order and no longer depends on the caller's bytes.
-    std::pmr::string message_value("hello");
+    std::string message_value("hello");
     EXPECT_TRUE(protocol.submit_frame(websocket_opcode::text, websocket_borrowed_payload(message_value)) == websocket_frame_submit_status::accepted);
     mask_source mask;
     http_io_buffer peer_input;
@@ -1578,7 +854,7 @@ TEST(Ruvia, ws_server_borrowed_frame_follows_pending_output_until_drained) {
     message_value[0] = 'X';
     plan = protocol.output_plan();
     EXPECT_TRUE(plan.borrowed_bytes().empty());
-    const std::pmr::string wire(plan.bytes());
+    const std::string wire(plan.bytes());
     EXPECT_TRUE(protocol.consume_output(wire.size()) == websocket_output_consume_status::drained);
     peer_input.append(wire);
     const auto message = peer.next_event();
@@ -1597,7 +873,7 @@ TEST(Ruvia, ws_server_borrowed_frame_owns_compressed_output) {
     http_io_buffer input;
     websocket_connection protocol(input, {.message_limit_ = protocol_byte_limit::unlimited(),
                                              .compression_ = websocket_compression{.enabled_ = true}});
-    const std::pmr::string payload_value(4096, 'x');
+    const std::string payload_value(4096, 'x');
     EXPECT_TRUE(protocol.submit_frame(websocket_opcode::binary, websocket_borrowed_payload(payload_value)) == websocket_frame_submit_status::accepted);
     const auto plan = protocol.output_plan();
     EXPECT_TRUE(plan.borrowed_bytes().empty());
@@ -1613,7 +889,7 @@ TEST(Ruvia, ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_st
     // inflater consults that window only for history produced by earlier
     // output passes, so the incompressible prefix ends just past the 8 KiB
     // inflate pass and the 300-byte repeat refers back across that boundary.
-    std::pmr::string message(8192 + 10, '\0');
+    std::string message(8192 + 10, '\0');
     std::uint64_t random = 0x9e3779b97f4a7c15ULL;
     for (auto& byte : message) {
         random ^= random << 13;
@@ -1624,7 +900,7 @@ TEST(Ruvia, ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_st
     message += message.substr(message.size() - 300, 300);
     z_stream stream{};
     EXPECT_TRUE(deflateInit2(&stream, 6, Z_DEFLATED, -9, 8, Z_DEFAULT_STRATEGY) == Z_OK);
-    std::pmr::string compressed(message.size() + 256, '\0');
+    std::string compressed(message.size() + 256, '\0');
     stream.next_in = reinterpret_cast<Bytef*>(message.data());
     stream.avail_in = static_cast<uInt>(message.size());
     stream.next_out = reinterpret_cast<Bytef*>(compressed.data());
@@ -1639,7 +915,7 @@ TEST(Ruvia, ws_public_eight_bit_receive_window_accepts_zlib_nine_bit_deflater_st
         mask_source mask;
         http_io_buffer input;
         websocket_connection receiver(input, {.compression_ = (websocket_compression{.enabled_ = true, .server_no_context_takeover_ = no_takeover, .server_max_window_bits_ = 8}), .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_source::generate, .mask_key_context_ = &mask});
-        std::pmr::string wire("\xc2\x7e", 2);
+        std::string wire("\xc2\x7e", 2);
         wire.push_back(static_cast<char>(compressed.size() >> 8));
         wire.push_back(static_cast<char>(compressed.size() & 0xff));
         wire += compressed;
@@ -1653,9 +929,9 @@ TEST(Ruvia, ws_public_receiver_accepts_non_minimal_payload_length_forms) {
     // RFC 6455 section 5.2 makes the minimal length form a sender obligation;
     // the longer forms still delimit the frame exactly, so a receiver reads
     // them instead of failing the connection.
-    const std::pmr::string sixteen_bit("\x81\xfe\x00\x05\x00\x00\x00\x00hello", 13);
-    const std::pmr::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 19);
-    const std::pmr::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 10);
+    const std::string sixteen_bit("\x81\xfe\x00\x05\x00\x00\x00\x00hello", 13);
+    const std::string sixty_four_bit("\x81\xff\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x00hello", 19);
+    const std::string control_sixteen_bit("\x89\xfe\x00\x02\x00\x00\x00\x00hi", 10);
     for (const auto& wire : {sixteen_bit, sixty_four_bit}) {
         http_io_buffer input;
         websocket_connection server(input);
@@ -1708,4 +984,34 @@ TEST(Ruvia, ws_receive_ceiling_is_early_directional_and_only_tightens) {
     const auto failure = receiver.next_event();
     ASSERT_TRUE(failure && failure->protocol_error());
     EXPECT_EQ(failure->protocol_error()->close_code(), 1009);
+}
+
+TEST(Ruvia, ws_fragmented_deflate_enforces_uncompressed_message_limit) {
+    {
+        websocket_connection sender({.message_limit_ = protocol_byte_limit::limited(1000),
+            .compression_ = websocket_compression{.enabled_ = true}});
+        const std::string first_chunk(600, 'a');
+        const std::string second_chunk(500, 'a');
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, first_chunk, {.final_ = false, .compress_ = true}),
+            websocket_frame_submit_status::accepted);
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, second_chunk, {.final_ = true, .compress_ = true}),
+            websocket_frame_submit_status::message_too_large);
+    }
+    {
+        websocket_connection sender({.message_limit_ = protocol_byte_limit::limited(64),
+            .compression_ = websocket_compression{.enabled_ = true}});
+        std::string incompressible(64, '\0');
+        std::uint64_t rng = 0x517cc1b727220a95ULL;
+        for (char& ch : incompressible) {
+            rng ^= rng << 13U;
+            rng ^= rng >> 7U;
+            rng ^= rng << 17U;
+            ch = static_cast<char>(rng & 0xffU);
+        }
+        const std::string_view view(incompressible);
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, view.substr(0, 32), {.final_ = false, .compress_ = true}),
+            websocket_frame_submit_status::accepted);
+        EXPECT_EQ(sender.submit_frame(websocket_opcode::binary, view.substr(32, 32), {.final_ = true, .compress_ = true}),
+            websocket_frame_submit_status::accepted);
+    }
 }

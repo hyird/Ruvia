@@ -1,19 +1,22 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_pmr_string.h"
 
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 
 namespace ruvia::detail {
+
+enum class http2_body_queue_store_status : std::uint8_t {
+    stored,
+    backlog_overflow,
+    buffer_limit,
+};
 
 // Web-owned storage for body/tunnel bytes that have already crossed the
 // http2_connection event boundary. The HTTP/2 core owns framing and flow-control
@@ -23,9 +26,9 @@ namespace ruvia::detail {
 // invalidate the borrowed view.
 class http2_sans_io_body_queue final {
 public:
-    explicit http2_sans_io_body_queue(std::pmr::memory_resource* resource = nullptr)
-        : queued_chunk_(pmr_resource_or_default(resource)),
-          active_chunk_(pmr_resource_or_default(resource)) {}
+    explicit http2_sans_io_body_queue(inbound_buffer_account* inbound = nullptr) noexcept
+        : queued_reservation_(inbound),
+          active_reservation_(inbound) {}
 
     void enqueue(std::string_view data, http2_received_data_credit&& credit) {
         if (data.empty()) {
@@ -33,7 +36,7 @@ public:
         }
         // Transfer credit only after append succeeds; allocation failure leaves
         // the incoming token with its owner for unwinding.
-        queued_chunk_.append(data.data(), data.size());
+        inbound_append(queued_chunk_, queued_reservation_, data);
         if (!credit.valid()) {
             return;
         }
@@ -44,18 +47,18 @@ public:
         queued_credit_->merge(std::move(credit));
     }
 
-    [[nodiscard]] bool enqueue_bounded(std::string_view data,
+    [[nodiscard]] http2_body_queue_store_status enqueue_bounded(std::string_view data,
         http2_received_data_credit&& credit, std::size_t backlog_limit) {
         const auto queued_bytes = queued_chunk_.size();
         if (queued_bytes > backlog_limit || data.size() > backlog_limit - queued_bytes) {
-            return false;
+            return http2_body_queue_store_status::backlog_overflow;
         }
         try {
             enqueue(data, std::move(credit));
         } catch (const inbound_buffer_limit_error&) {
-            return false;
+            return http2_body_queue_store_status::buffer_limit;
         }
-        return true;
+        return http2_body_queue_store_status::stored;
     }
 
     // Release credits only after the consumer has copied/finished the active view.
@@ -80,24 +83,25 @@ public:
 
     // The returned view remains valid until the next pop().
     [[nodiscard]] std::string_view pop() & {
-        http_clear_pmr_string_retaining_small(active_chunk_);
+        inbound_clear_retaining_small(active_chunk_, active_reservation_);
         release_active_credits();
         if (queued_chunk_.empty()) {
             return {};
         }
         active_chunk_.swap(queued_chunk_);
+        active_reservation_.swap(queued_reservation_);
         if (queued_credit_.has_value()) {
             active_credit_.emplace(std::move(*queued_credit_));
             queued_credit_.reset();
         }
-        http_clear_pmr_string_retaining_small(queued_chunk_);
+        inbound_clear_retaining_small(queued_chunk_, queued_reservation_);
         return std::string_view(active_chunk_);
     }
     std::string_view pop() && = delete;
 
     void discard() noexcept {
-        std::pmr::string(queued_chunk_.get_allocator()).swap(queued_chunk_);
-        std::pmr::string(active_chunk_.get_allocator()).swap(active_chunk_);
+        inbound_discard(queued_chunk_, queued_reservation_);
+        inbound_discard(active_chunk_, active_reservation_);
         queued_credit_.reset();
         active_credit_.reset();
     }
@@ -107,8 +111,10 @@ private:
     // effects cannot outlive the copied data they account for.
     std::optional<http2_received_data_credit> queued_credit_;
     std::optional<http2_received_data_credit> active_credit_;
-    std::pmr::string queued_chunk_;
-    std::pmr::string active_chunk_;
+    std::string queued_chunk_;
+    inbound_buffer_reservation queued_reservation_;
+    std::string active_chunk_;
+    inbound_buffer_reservation active_reservation_;
     bool ended_{false};
 };
 

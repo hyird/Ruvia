@@ -4,7 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
 
@@ -80,6 +80,23 @@ template <typename visitor_type>
 inline void http_visit_comma_separated_quoted(std::string_view value, visitor_type&& visitor) {
     http_visit_comma_separated_quoted_field_items(
         value, [&visitor](std::string_view item) { return item.empty() || visitor(item); });
+}
+
+// Plain comma-delimited token scan for fields whose grammar never permits
+// quoted-string (such as Connection and Vary). Empty segments are skipped.
+template <typename visitor_type>
+inline void http_visit_comma_separated_tokens(std::string_view value, visitor_type&& visitor) {
+    for (;;) {
+        const auto comma = value.find(',');
+        const auto item = http_trim_ows(value.substr(0, comma));
+        if (!item.empty() && !visitor(item)) {
+            return;
+        }
+        if (comma == std::string_view::npos) {
+            return;
+        }
+        value.remove_prefix(comma + 1);
+    }
 }
 
 // True when `predicate` accepts every ';'-separated parameter that follows a

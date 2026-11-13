@@ -9,7 +9,6 @@
 #include <new>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 
 #include "coding/http_content_codec.h"
@@ -58,8 +57,11 @@ inline constexpr std::size_t brotli_decoder_table_allowance = 3U * 1024U * 1024U
 }
 }  // namespace
 
-brotli_decoder_stream::brotli_decoder_stream(std::pmr::memory_resource* resource, std::size_t max_decoded_bytes)
-    : allocation_(resource, brotli_decoder_native_budget(max_decoded_bytes)),
+brotli_decoder_stream::brotli_decoder_stream(
+    std::size_t max_decoded_bytes, std::size_t max_memory_bytes)
+    : allocation_(
+          (std::min)(brotli_decoder_native_budget(max_decoded_bytes), max_memory_bytes),
+          max_memory_bytes < brotli_decoder_native_budget(max_decoded_bytes)),
       state_(BrotliDecoderCreateInstance(
           &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
     if (state_ == nullptr) {
@@ -73,8 +75,8 @@ brotli_decoder_stream::~brotli_decoder_stream() {
     }
 }
 
-brotli_encoder_stream::brotli_encoder_stream(std::pmr::memory_resource* resource, int window_bits)
-    : allocation_(resource),
+brotli_encoder_stream::brotli_encoder_stream(int window_bits, std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
       state_(BrotliEncoderCreateInstance(
           &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_)) {
     if (state_ != nullptr &&
@@ -94,7 +96,7 @@ brotli_encoder_stream::~brotli_encoder_stream() {
     }
 }
 
-bool brotli_encoder_stream::encode(std::string_view input, std::pmr::string& output,
+bool brotli_encoder_stream::encode(std::string_view input, std::string& output,
     BrotliEncoderOperation operation, std::size_t max_encoded_bytes) {
     std::size_t available_input = input.size();
     const auto* next_input = reinterpret_cast<const std::uint8_t*>(input.data());
@@ -130,10 +132,10 @@ bool brotli_encoder_stream::encode(std::string_view input, std::pmr::string& out
     }
 }
 
-std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
-    std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output("", http_pmr_resource_or_default(resource));
-    brotli_decoder_stream decoder(output.get_allocator().resource(), max_decoded_bytes);
+std::variant<std::string, http_content_decode_error> decode_brotli_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    std::string output;
+    brotli_decoder_stream decoder(max_decoded_bytes);
     if (!decoder.initialized()) {
         throw http_content_codec_error("brotli decoder initialization failed");
     }
@@ -186,17 +188,17 @@ std::variant<std::pmr::string, http_content_decode_error> decode_brotli_content(
     }
 }
 
-std::optional<std::pmr::string> encode_brotli_content(
+std::optional<std::string> encode_brotli_content(
     brotli_encoder_stream& encoder, std::string_view input,
-    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
+    std::size_t max_encoded_bytes) {
     return encode_whole_content_with_stream(
-        encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes, output_resource);
+        encoder, BROTLI_OPERATION_FINISH, input, max_encoded_bytes);
 }
 
-std::optional<std::pmr::string> encode_brotli_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+std::optional<std::string> encode_brotli_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content<brotli_encoder_stream>("brotli encoder initialization failed",
-        BROTLI_OPERATION_FINISH, input, max_encoded_bytes, resource, brotli_whole_buffer_window_bits);
+        BROTLI_OPERATION_FINISH, input, max_encoded_bytes, brotli_whole_buffer_window_bits);
 }
 
 }  // namespace ruvia::detail

@@ -3,16 +3,14 @@
 #include <algorithm>
 #include <coroutine>
 #include <cstddef>
-#include <memory_resource>
 #include <thread>
 #include <vector>
 
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "worker_task_fixture.h"
 
@@ -22,8 +20,8 @@ namespace worker_resume_test {
 // itself or from a foreign thread. The step is recorded negated once the
 // request returned, which is before the resumption when it is never inline.
 struct deferred_resume final {
-    const ruvia::worker_handle& worker_;
-    std::pmr::vector<int>& order_;
+    const ruvia::worker_ref& worker_;
+    std::vector<int>& order_;
     int step_;
     bool foreign_{false};
 
@@ -41,7 +39,7 @@ struct deferred_resume final {
     void await_resume() const noexcept {}
 };
 
-ruvia::task<void> resume_twice(const ruvia::worker_handle& worker, std::pmr::vector<int>& order, int first, bool& on_worker) {
+ruvia::task<void> resume_twice(const ruvia::worker_ref& worker, std::vector<int>& order, int first, bool& on_worker) {
     order.push_back(first);
     co_await deferred_resume{worker, order, first};
     on_worker = on_worker && worker.is_current();
@@ -51,7 +49,7 @@ ruvia::task<void> resume_twice(const ruvia::worker_handle& worker, std::pmr::vec
     order.push_back(first + 3);
 }
 
-[[nodiscard]] bool before(const std::pmr::vector<int>& order, int first, int second) {
+[[nodiscard]] bool before(const std::vector<int>& order, int first, int second) {
     const auto left = std::ranges::find(order, first);
     const auto right = std::ranges::find(order, second);
     return left != order.end() && right != order.end() && left < right;
@@ -63,13 +61,13 @@ ruvia::task<void> resume_twice(const ruvia::worker_handle& worker, std::pmr::vec
 // request, whether it was asked on the worker or from another thread, and
 // requests from the worker's own thread resume in request order -- under the
 // default event loop and the single-owner one production workers use.
-TEST(Ruvia, worker_handle_defers_resumption_to_its_worker) {
+TEST(Ruvia, worker_ref_defers_resumption_to_its_worker) {
     using worker_resume_test::before;
     for (const int hint : {ASIO_CONCURRENCY_HINT_DEFAULT, ASIO_CONCURRENCY_HINT_UNSAFE_IO}) {
         asio::io_context context(hint);
         auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 1});
-        const auto worker_value = attachment.loop().handle();
-        std::pmr::vector<int> order(ruvia::process_resource());
+        const auto worker_value = attachment.loop().worker();
+        std::vector<int> order;
         bool on_worker = true;
         ruvia::test::run_worker_tasks(attachment,
             worker_resume_test::resume_twice(worker_value, order, 10, on_worker),

@@ -12,7 +12,7 @@
 
 class decorate_response final {
 public:
-    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
         context_value.draft().header("X-Before", "set");
         // next() is a single-shot continuation. Await it exactly once; do not
         // store it, detach it, or attempt to restart the downstream handler.
@@ -23,7 +23,7 @@ public:
 
 class require_demo_key final {
 public:
-    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
         if (context_value.req().header("X-Demo-Key") != "example") {
             // An early response skips this branch. Outer middleware still
             // resumes after its own awaited next(). A 401 must carry a

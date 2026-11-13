@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -19,7 +18,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_hex.h"
@@ -96,7 +94,7 @@ consteval redis_column_kind redis_number_kind() {
 template <typename t_type>
 consteval redis_column_kind redis_column_value_kind() {
     using value_type = std::remove_cvref_t<t_type>;
-    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::pmr::string>) {
+    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::string>) {
         return redis_column_kind::text;
     } else if constexpr (std::is_same_v<value_type, bool>) {
         return redis_column_kind::bool_value;
@@ -151,7 +149,7 @@ template <typename t_type>
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
         return value.view();
-    } else if constexpr (std::is_same_v<scalar_type, std::pmr::string> ||
+    } else if constexpr (std::is_same_v<scalar_type, std::string> ||
                          std::is_same_v<scalar_type, std::string> ||
                          std::is_same_v<scalar_type, std::string_view>) {
         return value;
@@ -166,15 +164,14 @@ template <typename t_type>
 
 template <typename t_type>
 [[nodiscard]] t_type decode_redis_scalar(
-    std::string_view value, std::pmr::memory_resource* resource) {
-    auto* const memory_resource = pmr_resource_or_default(resource);
+    std::string_view value) {
     using scalar_type = std::remove_cvref_t<t_type>;
     if constexpr (std::is_same_v<scalar_type, string>) {
-        string result_value(model_options{.resource_ = memory_resource});
+        string result_value;
         result_value.assign_owned(value);
         return result_value;
-    } else if constexpr (std::is_same_v<scalar_type, std::pmr::string>) {
-        return std::pmr::string(value.data(), value.size(), memory_resource);
+    } else if constexpr (std::is_same_v<scalar_type, std::string>) {
+        return std::string(value.data(), value.size());
     } else if constexpr (std::is_same_v<scalar_type, bool>) {
         if (value == "0") {
             return false;
@@ -184,7 +181,7 @@ template <typename t_type>
         }
         throw_invalid_redis_scalar("malformed Redis boolean scalar");
     } else if constexpr (is_redis_entity_native_number<scalar_type>) {
-        const auto parsed = parse_text_scalar<scalar_type>(value, memory_resource);
+        const auto parsed = parse_text_scalar<scalar_type>(value);
         if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
             throw_invalid_redis_scalar("malformed Redis scalar");
         }
@@ -197,10 +194,9 @@ template <typename t_type>
 // Every ORM entity key is `redis_entity_key_root + lower-hex(prefix) + ':' + id`.
 inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
 
-[[nodiscard]] inline std::pmr::string redis_entity_storage_prefix(
-    std::string_view prefix, std::pmr::memory_resource* resource) {
-    resource = pmr_resource_or_default(resource);
-    std::pmr::string result(resource);
+[[nodiscard]] inline std::string redis_entity_storage_prefix(
+    std::string_view prefix) {
+    std::string result;
     result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U);
     result.append(redis_entity_key_root);
     http_append_lower_hex(result, prefix);
@@ -208,12 +204,12 @@ inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
     return result;
 }
 
-[[nodiscard]] inline std::pmr::string redis_entity_key(
-    std::string_view storage_prefix, std::string_view id, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::string redis_entity_key(
+    std::string_view storage_prefix, std::string_view id) {
     if (id.empty()) {
         throw std::invalid_argument("Redis entity ID must not be empty");
     }
-    std::pmr::string key(pmr_resource_or_default(resource));
+    std::string key;
     key.reserve(storage_prefix.size() + id.size());
     key.append(storage_prefix);
     key.append(id);
@@ -274,22 +270,22 @@ enum class redis_literal_kind : std::uint8_t { null,
 // Literals own their text immediately. Only Redis scalar values are accepted;
 // SQL expressions, statements and backend parameter types cannot enter this AST.
 class redis_literal final {
-    using storage_type = std::variant<std::monostate, std::pmr::string, std::int64_t, std::uint64_t, float, double, bool>;
+    using storage_type = std::variant<std::monostate, std::string, std::int64_t, std::uint64_t, float, double, bool>;
 
 public:
-    explicit redis_literal(std::pmr::memory_resource*) noexcept {}
-    redis_literal(std::nullptr_t, std::pmr::memory_resource*) noexcept {}
-    redis_literal(std::string_view value, std::pmr::memory_resource* resource)
-        : storage_(std::in_place_type<std::pmr::string>, value, resource) {}
-    redis_literal(const char* value, std::pmr::memory_resource* resource)
-        : redis_literal(value ? std::string_view(value) : throw std::invalid_argument("Redis predicate text must not be null"), resource) {}
+    redis_literal() noexcept = default;
+    explicit redis_literal(std::nullptr_t) noexcept {}
+    explicit redis_literal(std::string_view value)
+        : storage_(std::in_place_type<std::string>, value) {}
+    explicit redis_literal(const char* value)
+        : redis_literal(value ? std::string_view(value) : throw std::invalid_argument("Redis predicate text must not be null")) {}
     template <typename value_type>
         requires std::is_same_v<value_type, bool>
-    redis_literal(value_type value, std::pmr::memory_resource*)
+    explicit redis_literal(value_type value)
         : storage_(value) {}
     template <typename value_type>
         requires is_model_integer<value_type>
-    redis_literal(value_type value, std::pmr::memory_resource*) {
+    explicit redis_literal(value_type value) {
         if constexpr (std::is_signed_v<value_type>) {
             storage_.emplace<std::int64_t>(value);
         } else {
@@ -298,35 +294,25 @@ public:
     }
     template <typename value_type>
         requires std::is_floating_point_v<value_type>
-    redis_literal(value_type value, std::pmr::memory_resource*) {
+    explicit redis_literal(value_type value) {
         if constexpr (std::is_same_v<value_type, float>) {
             storage_.emplace<float>(value);
         } else {
             storage_.emplace<double>(checked_model_float<double>(value));
         }
     }
-    redis_literal(const string& value, std::pmr::memory_resource* resource)
-        : redis_literal(value.view(), resource) {}
+    explicit redis_literal(const string& value)
+        : redis_literal(value.view()) {}
     redis_literal(redis_literal&&) noexcept = default;
     redis_literal& operator=(redis_literal&&) = delete;
-    redis_literal(const redis_literal&) = delete;
+    redis_literal(const redis_literal&) = default;
     redis_literal& operator=(const redis_literal&) = delete;
-    redis_literal(const redis_literal& other, std::pmr::memory_resource* resource)
-        : storage_(std::visit([resource](const auto& value) -> storage_type {
-              using value_type = std::remove_cvref_t<decltype(value)>;
-              if constexpr (std::is_same_v<value_type, std::pmr::string>) {
-                  return storage_type(std::in_place_type<std::pmr::string>, value, resource);
-              } else {
-                  return storage_type(value);
-              }
-          },
-              other.storage_)) {}
 
     redis_literal_kind kind() const noexcept {
         return static_cast<redis_literal_kind>(storage_.index());
     }
     std::string_view text() const noexcept {
-        return std::get<std::pmr::string>(storage_);
+        return std::get<std::string>(storage_);
     }
     std::int64_t signed_value() const noexcept {
         return std::get<std::int64_t>(storage_);
@@ -349,8 +335,8 @@ private:
 };
 
 template <typename value_type>
-concept redis_predicate_argument = requires(value_type&& value, std::pmr::memory_resource* resource) {
-    redis_literal(std::forward<value_type>(value), resource);
+concept redis_predicate_argument = requires(value_type&& value) {
+    redis_literal(std::forward<value_type>(value));
 };
 
 // Only redis_field_reference creates leaves, and only redis_predicate combines
@@ -365,72 +351,55 @@ struct redis_predicate_node final {
         list,
         logical_not };
 
-    explicit redis_predicate_node(kind_type kind, std::pmr::memory_resource* resource)
-        : kind_(kind),
-          literal_(resource),
-          operands_(resource) {}
-    redis_predicate_node(redis_literal&& value, std::pmr::memory_resource* resource)
+    explicit redis_predicate_node(kind_type kind) noexcept
+        : kind_(kind) {}
+    explicit redis_predicate_node(redis_literal&& value) noexcept
         : kind_(kind_type::literal),
-          literal_(std::move(value)),
-          operands_(resource) {}
-    redis_predicate_node(const redis_predicate_node& other, std::pmr::memory_resource* resource, std::size_t offset = 0)
+          literal_(std::move(value)) {}
+    redis_predicate_node(const redis_predicate_node& other, std::size_t offset = 0)
         : kind_(other.kind_),
           binary_(other.binary_),
           field_(other.field_),
           entity_prefix_(other.entity_prefix_),
-          literal_(other.literal_, resource),
-          operands_(other.operands_, resource) {
-        if (offset != 0) {
-            for (auto& operand : operands_) {
-                operand += offset;
-            }
+          literal_(other.literal_),
+          operands_(other.operands_) {
+        for (auto& operand : operands_) {
+            operand += offset;
         }
     }
     redis_predicate_node(redis_predicate_node&&) noexcept = default;
     redis_predicate_node& operator=(redis_predicate_node&&) = delete;
-    redis_predicate_node(const redis_predicate_node&) = delete;
     redis_predicate_node& operator=(const redis_predicate_node&) = delete;
     kind_type kind_;
     redis_binary_operator binary_{redis_binary_operator::equal};
     std::string_view field_{};
     std::string_view entity_prefix_{};
     redis_literal literal_;
-    std::pmr::vector<std::size_t> operands_;
+    std::vector<std::size_t> operands_;
 };
 
 struct redis_predicate_storage final {
-    explicit redis_predicate_storage(std::pmr::memory_resource* resource, std::size_t initial_capacity = 0)
-        : resource_(resource),
-          nodes_(resource) {
+    explicit redis_predicate_storage(std::size_t initial_capacity = 0) {
         if (initial_capacity != 0) {
             nodes_.reserve(initial_capacity);
         }
     }
-    redis_predicate_storage(const redis_predicate_storage& other, std::pmr::memory_resource* resource)
-        : resource_(resource),
-          nodes_(resource),
-          root_(other.root_) {
-        nodes_.reserve(other.nodes_.size());
-        for (const auto& node : other.nodes_) {
-            nodes_.emplace_back(node, resource);
-        }
-    }
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<redis_predicate_node> nodes_;
+    redis_predicate_storage(const redis_predicate_storage&) = default;
+    std::vector<redis_predicate_node> nodes_;
     std::size_t root_{};
     std::size_t add(redis_predicate_node::kind_type kind) {
-        nodes_.emplace_back(kind, resource_);
+        nodes_.emplace_back(kind);
         return nodes_.size() - 1;
     }
     template <redis_predicate_argument value_type>
     std::size_t add_value(value_type&& value) {
-        redis_literal literal(std::forward<value_type>(value), resource_);
-        nodes_.emplace_back(std::move(literal), resource_);
+        redis_literal literal(std::forward<value_type>(value));
+        nodes_.emplace_back(std::move(literal));
         return nodes_.size() - 1;
     }
 };
 
-using redis_orm_arguments_type = std::pmr::vector<std::pmr::string>;
+using redis_orm_arguments_type = std::vector<std::string>;
 
 // An ORM Lua script and the lowercase hex SHA1 Redis caches it under.
 struct redis_orm_script final {
@@ -443,22 +412,20 @@ struct redis_orm_script final {
 
 // Both argument lists start with EVALSHA and the script digest.
 [[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id,
-    std::string_view mode, redis_write_options options, std::size_t extra_arguments,
-    std::pmr::memory_resource* resource);
+    std::string_view mode, redis_write_options options, std::size_t extra_arguments);
 [[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(
-    std::string_view storage_prefix, std::string_view id, std::pmr::memory_resource* resource);
+    std::string_view storage_prefix, std::string_view id);
 // Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
 // through EVAL once within the same operation. `io_metrics` is the request's
 // counter block, or null outside a request.
 [[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options,
-    std::pmr::memory_resource* resource);
-[[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource* resource);
-[[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply, std::pmr::memory_resource* resource);
-void redis_orm_status_result(redis_value&& reply, std::pmr::memory_resource* resource);
+    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
+[[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply);
+[[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply);
+void redis_orm_status_result(redis_value&& reply);
 [[nodiscard]] std::uint64_t redis_orm_count(const redis_value& reply);
-[[nodiscard]] std::uint64_t redis_orm_count_result(redis_value&& reply, std::pmr::memory_resource* resource);
-[[nodiscard]] bool redis_orm_exists_result(redis_value&& reply, std::pmr::memory_resource* resource);
+[[nodiscard]] std::uint64_t redis_orm_count_result(redis_value&& reply);
+[[nodiscard]] bool redis_orm_exists_result(redis_value&& reply);
 
 // What the RediSearch compiler needs to know about one entity column.
 struct redis_column_info final {
@@ -479,7 +446,7 @@ inline constexpr auto redis_query_columns = [] {
 }();
 
 struct redis_index_definition final {
-    std::pmr::string column_;
+    std::string column_;
     redis_index_kind kind_{};
     bool sortable_{false};
 };
@@ -495,11 +462,11 @@ struct redis_index_definition final {
 // column is not indexed), so writes address it by descriptor index.
 struct redis_mapping final {
     std::span<const redis_column_info> columns_;
-    std::pmr::string entity_prefix_;
-    std::pmr::string prefix_;
-    std::pmr::string storage_prefix_;
-    std::pmr::vector<redis_index_definition> indexes_;
-    std::pmr::vector<redis_index_kind> column_index_kinds_;
+    std::string entity_prefix_;
+    std::string prefix_;
+    std::string storage_prefix_;
+    std::vector<redis_index_definition> indexes_;
+    std::vector<redis_index_kind> column_index_kinds_;
 
     [[nodiscard]] redis_index_kind index_kind(std::string_view column) const noexcept {
         for (const auto& index : indexes_) {
@@ -521,12 +488,12 @@ struct redis_mapping final {
 
 // `columns` must be the entity's static descriptor table.
 [[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns,
-    std::string_view entity_prefix, const redis_repository_config& config, std::pmr::memory_resource* resource);
+    std::string_view entity_prefix, const redis_repository_config& config);
 
 // A TAG value is kept in a shadow hash field. The leading x makes an empty
 // value distinct from a missing field, and hexadecimal encoding keeps every
 // byte outside RediSearch's TAG grammar.
-[[nodiscard]] std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resource* resource);
+[[nodiscard]] std::string encode_redis_tag(std::string_view value);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
 [[nodiscard]] std::optional<std::string_view> redis_primary_key(
@@ -537,11 +504,10 @@ struct redis_mapping final {
 // deletion when absent), its presence marker and, for TAG-encodable columns,
 // its TAG shadow. A value in a NUMERIC index must be exactly representable.
 void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field,
-    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow, std::pmr::memory_resource* resource);
+    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow);
 
 template <typename entity_type>
-entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key,
-    std::pmr::memory_resource* resource, std::string_view storage_prefix) {
+entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::string_view key, std::string_view storage_prefix) {
     if (fields_value.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "invalid entity hash reply");
     }
@@ -573,11 +539,11 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
     if (!marker) {
         throw redis_error(redis_error::code_type::protocol_error, "entity storage marker missing");
     }
-    entity_type entity(resource);
+    entity_type entity;
     for_each_descriptor<typename entity_type::columns_type>([&]<typename field_type, std::size_t index> {
         if (values[index].has_value()) {
             entity.template set<field_type::name>(
-                decode_redis_scalar<typename field_type::value_type>(*values[index], resource));
+                decode_redis_scalar<typename field_type::value_type>(*values[index]));
         } else if constexpr (field_type::options.nullable_) {
             entity.template set_null<field_type::name>();
         } else {
@@ -596,22 +562,21 @@ entity_type decode_redis_entity(std::span<const redis_value> fields_value, std::
 }
 
 template <typename entity_type>
-entity_type decode_redis_entity(const redis_value& reply, std::string_view key,
-    std::pmr::memory_resource* resource, std::string_view storage_prefix) {
-    return decode_redis_entity<entity_type>(redis_value_array(reply), key, resource, storage_prefix);
+entity_type decode_redis_entity(const redis_value& reply, std::string_view key, std::string_view storage_prefix) {
+    return decode_redis_entity<entity_type>(redis_value_array(reply), key, storage_prefix);
 }
 
 template <typename entity_type>
 struct redis_map_one final {
-    std::pmr::string key_;
+    std::string key_;
     std::size_t storage_prefix_size_{0};
-    std::optional<entity_type> operator()(redis_value&& reply, std::pmr::memory_resource* resource) const {
+    std::optional<entity_type> operator()(redis_value&& reply) const {
         const auto fields_value = redis_value_array(reply);
         if (fields_value.empty()) {
             return std::nullopt;
         }
         return decode_redis_entity<entity_type>(
-            fields_value, key_, resource, std::string_view(key_).substr(0, storage_prefix_size_));
+            fields_value, key_, std::string_view(key_).substr(0, storage_prefix_size_));
     }
 };
 
@@ -619,7 +584,7 @@ template <typename entity_type>
 struct redis_map_search final {
     std::string_view storage_prefix_;
     std::pair<entity_rows<entity_type>, std::uint64_t> decode(
-        std::span<const redis_value> values, std::pmr::memory_resource* resource) const {
+        std::span<const redis_value> values) const {
         if (values.empty() || values.size() % 2 != 1) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search reply");
         }
@@ -628,7 +593,7 @@ struct redis_map_search final {
         if (count < documents) {
             throw redis_error(redis_error::code_type::protocol_error, "invalid entity search count");
         }
-        entity_rows<entity_type> rows(resource);
+        entity_rows<entity_type> rows;
         rows.reserve(documents);
         for (std::size_t i = 1; i < values.size(); i += 2) {
             const auto key = redis_value_string(values[i]);
@@ -636,13 +601,13 @@ struct redis_map_search final {
             if (values[i + 1].null()) {
                 continue;
             }
-            rows.push_back(decode_redis_entity<entity_type>(values[i + 1], key, resource, storage_prefix_));
+            rows.push_back(decode_redis_entity<entity_type>(values[i + 1], key, storage_prefix_));
         }
         return {std::move(rows), count};
     }
     std::pair<entity_rows<entity_type>, std::uint64_t> operator()(
-        redis_value&& reply, std::pmr::memory_resource* resource) const {
-        return decode(redis_value_array(reply), resource);
+        redis_value&& reply) const {
+        return decode(redis_value_array(reply));
     }
 };
 
@@ -653,10 +618,10 @@ struct redis_map_many final {
     // match after this skip, or find() would silently truncate.
     std::optional<std::uint64_t> unpaged_skip_;
     entity_rows<entity_type> operator()(
-        redis_value&& reply, std::pmr::memory_resource* resource) const {
+        redis_value&& reply) const {
         const auto values = redis_value_array(reply);
         const auto documents = values.size() / 2;
-        auto [rows, count] = search_.decode(values, resource);
+        auto [rows, count] = search_.decode(values);
         if (unpaged_skip_.has_value() && count > *unpaged_skip_ && count - *unpaged_skip_ > documents) {
             throw redis_error(redis_error::code_type::command_error,
                 "redis find() matched more entities than one default page; set take_ to page the results");
@@ -668,8 +633,8 @@ struct redis_map_many final {
 template <typename entity_type>
 struct redis_map_first final {
     redis_map_search<entity_type> search_;
-    std::optional<entity_type> operator()(redis_value&& reply, std::pmr::memory_resource* resource) const {
-        auto result_value = search_(std::move(reply), resource);
+    std::optional<entity_type> operator()(redis_value&& reply) const {
+        auto result_value = search_(std::move(reply));
         if (result_value.first.empty()) {
             return std::nullopt;
         }

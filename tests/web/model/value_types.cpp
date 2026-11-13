@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 
@@ -251,10 +250,8 @@ TEST(Ruvia, model_bytes_own_and_compare_without_allocator_identity) {
     std::byte input[] = {std::byte{0x01}, std::byte{0x02}};
     const auto bytes_value = std::span<const std::uint8_t>(
         reinterpret_cast<const std::uint8_t*>(input), 2);
-    std::pmr::monotonic_buffer_resource first_resource;
-    std::pmr::monotonic_buffer_resource second_resource;
-    ruvia::bytes first(bytes_value, {.resource_ = &first_resource});
-    ruvia::bytes second(bytes_value, {.resource_ = &second_resource});
+    ruvia::bytes first(bytes_value);
+    ruvia::bytes second(bytes_value);
 
     EXPECT_TRUE(first == second);
     first.assign_owned(std::span<const std::uint8_t>{});

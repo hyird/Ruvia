@@ -8,7 +8,7 @@
 
 #include "field/http_connection_fields.h"
 #include "field/http_interim_response_validation.h"
-#include "util/http_wire_sink.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia {
 namespace {

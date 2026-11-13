@@ -7,12 +7,12 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
 // Intrusive, allocation-free wake primitive for one worker. Every operation
-// which touches its waiter list is worker-affine; the worker_handle is therefore
+// which touches its waiter list is worker-affine; the worker_ref is therefore
 // the dispatch target and the affinity capability, not an optional fast path.
 class worker_signal final {
     enum class await_state_type : std::uint8_t {
@@ -93,10 +93,10 @@ private:
     using awaiter_type = wait_operation;
 
 public:
-    explicit worker_signal(const worker_handle& worker_value)
+    explicit worker_signal(const worker_ref& worker_value)
         : worker_(require_worker(worker_value)) {}
-    worker_signal(worker_handle&&) = delete;
-    worker_signal(const worker_handle&&) = delete;
+    worker_signal(worker_ref&&) = delete;
+    worker_signal(const worker_ref&&) = delete;
 
     ~worker_signal() {
         if (waiters_ != nullptr || scheduled_waiters_ != 0 || reserved_waits_ != 0) {
@@ -115,10 +115,10 @@ public:
     }
     wait_operation wait() && = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept {
         return worker_;
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     // Wakes every waiter, or leaves one pending wake when none waits. Like
     // wait(), it must run on the bound worker and throws std::logic_error
@@ -127,7 +127,7 @@ public:
     void notify();
 
 private:
-    [[nodiscard]] static const worker_handle& require_worker(const worker_handle& worker_value) {
+    [[nodiscard]] static const worker_ref& require_worker(const worker_ref& worker_value) {
         if (!worker_value.valid()) {
             throw std::invalid_argument("worker signal requires a valid worker");
         }
@@ -142,9 +142,9 @@ private:
 
     void resume_scheduled(awaiter_type* waiter, std::coroutine_handle<> continuation) noexcept;
 
-    // The owning session/connection keeps its stable worker handle alive until
+    // The owning session/connection keeps its stable worker_ref alive until
     // every signal waiter and scheduled resumption has joined.
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     awaiter_type* waiters_{nullptr};
     std::size_t scheduled_waiters_{0};
     std::size_t reserved_waits_{0};
@@ -169,7 +169,7 @@ inline void worker_signal::notify() {
         // A detached intrusive node has no recoverable owner. Dispatch failure
         // is terminal instead of silently stranding the continuation. On the
         // worker's own thread this small fixed callable is posted directly.
-        detail::worker_handle_access::defer_or_terminate(
+        detail::worker_ref_access::defer_or_terminate(
             worker_, [this, waiter, continuation] { resume_scheduled(waiter, continuation); });
         waiter = next_value;
     }

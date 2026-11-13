@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -34,9 +33,6 @@ namespace ruvia {
 enum class http2_server_request_release_status : std::uint8_t { released,
     closed };
 struct http2_connection_options final {
-    // The resource must outlive the connection and any escaped events or
-    // credits, including their owned heads and trailers.
-    std::pmr::memory_resource* resource_{nullptr};
     // Client-only: http2_connection::server throws std::invalid_argument when set.
     bool enable_push_{false};
     // Client-only, like enable_push_.
@@ -92,8 +88,7 @@ struct http2_extended_connect_request_head_view final {
 // until every event produced by that call has been taken and every event-derived
 // byte view has expired. Calling feed() again may invalidate those views; owning
 // string temporaries are rejected at compile time.
-// The event queue capacity grows geometrically and is retained for reuse; all
-// storage, nghttp2's own allocations included, uses the connection's PMR resource.
+// The event queue capacity grows geometrically and is retained for reuse.
 // Receive-field text growth reserves the whole name/value pair before copying.
 // Request field capacity includes synthesized Host and coalesced Cookie. A head
 // that cannot fit the public request view resets its stream before publication.
@@ -164,15 +159,15 @@ public:
     http2_feed_result feed(input_type&&) = delete;
     [[nodiscard]] std::optional<http2_event> next_event();
     // Appends whole frame boundaries (the first frame may exceed max_bytes).
-    // A complete unconsumed batch swaps storage when output is empty and its
-    // allocator matches the connection; all other cases copy the selected bytes.
+    // A complete unconsumed batch swaps storage when output is empty;
+    // all other cases copy the selected bytes.
     // On copy failure the output cursor and observer are untouched. The cursor
     // always rests on a frame boundary; an unbounded max_bytes drains every pending frame.
     // The cursor is committed before DATA observations. An observer may
     // submit or drain more output; those frames remain independent of this batch.
     // A client preface is treated as one indivisible segment.
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
-        std::pmr::string& output, http2_data_output_observer_type observer = nullptr,
+        std::string& output, http2_data_output_observer_type observer = nullptr,
         void* observer_context = nullptr);
     [[nodiscard]] bool wants_write() const noexcept;
 

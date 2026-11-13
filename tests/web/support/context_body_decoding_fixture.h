@@ -1,14 +1,12 @@
 #pragma once
 
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/error.h"
 
 #include "content_decoding_fixture.h"
@@ -17,7 +15,7 @@
 namespace ruvia::test {
 
 struct context_body_read_observation final {
-    std::pmr::string body_{ruvia::process_resource()};
+    std::string body_{};
     std::optional<ruvia::http_status_code> error_status_;
 };
 

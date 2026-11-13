@@ -1,4 +1,4 @@
-#include "ruvia/core/memory/request_memory.h"
+#include "ruvia/core/memory.h"
 
 #if defined(__SANITIZE_ADDRESS__) || defined(__SANITIZE_THREAD__)
 #define RUVIA_SANITIZER_ALLOCATOR 1
@@ -22,12 +22,10 @@
 #endif
 
 #include <algorithm>
-#include <memory_resource>
+#include <cstddef>
 #include <new>
-#include <stdexcept>
 
 #include "ruvia/core/detail/task/task_promise.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -68,36 +66,9 @@ void free_mimalloc(void* block) noexcept {
 #endif
 }
 
-class mimalloc_memory_resource final : public std::pmr::memory_resource {
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        return allocate_mimalloc(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* block, std::size_t, std::size_t) noexcept override {
-        free_mimalloc(block);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
 }  // namespace
 
-std::pmr::memory_resource* process_resource() noexcept {
-    // The adapter has process lifetime without a C++ static destructor:
-    // detached blocking work may release completion state during teardown.
-    // mimalloc owns its thread heaps and supports freeing on another thread,
-    // including after the allocating thread exits. No shared pool is layered
-    // over it, and the default PMR resource object is not replaced.
-    alignas(mimalloc_memory_resource) static std::byte storage[sizeof(mimalloc_memory_resource)];
-    static auto* const resource = ::new (storage) mimalloc_memory_resource;
-    return resource;
-}
-
 namespace detail {
-
 void* task_frame_allocate(std::size_t bytes_value) {
     return allocate_mimalloc(bytes_value, alignof(std::max_align_t));
 }
@@ -119,36 +90,4 @@ void collect_thread_heap() noexcept {
     mi_collect(true);
 #endif
 }
-
-namespace {
-
-[[nodiscard]] std::size_t validated_request_initial_bytes(std::size_t initial_bytes) {
-    if (initial_bytes == 0) {
-        throw std::invalid_argument("request arena initial buffer size must be greater than zero");
-    }
-    return initial_bytes;
-}
-
-}  // namespace
-
-request_memory::request_memory(std::size_t initial_bytes)
-    : arena_(validated_request_initial_bytes(initial_bytes), process_resource()),
-      initial_bytes_(initial_bytes) {}
-
-request_memory::request_memory(std::size_t initial_bytes, std::span<std::byte> initial_buffer)
-    : arena_(initial_buffer.data(), initial_buffer.size(), process_resource()),
-      initial_bytes_(validated_request_initial_bytes(initial_bytes)) {}
-
-request_memory request_memory::fork() const& {
-    return request_memory(initial_bytes_);
-}
-
-std::pmr::memory_resource* request_memory::resource() & noexcept {
-    return &arena_;
-}
-
-std::pmr::memory_resource* request_memory::resource() const& noexcept {
-    return &arena_;
-}
-
 }  // namespace ruvia

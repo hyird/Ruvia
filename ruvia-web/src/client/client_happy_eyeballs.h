@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <system_error>
 #include <type_traits>
@@ -13,7 +12,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 
@@ -93,9 +92,9 @@ struct client_happy_eyeballs_result final {
 // success or cancellation.
 class client_happy_eyeballs final {
 public:
-    client_happy_eyeballs(const worker_handle& worker, const asio::ip::tcp::socket::executor_type& executor,
+    client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor,
         const asio::ip::tcp::resolver::results_type& addresses);
-    client_happy_eyeballs(worker_handle&&, const asio::ip::tcp::socket::executor_type&,
+    client_happy_eyeballs(worker_ref&&, const asio::ip::tcp::socket::executor_type&,
         const asio::ip::tcp::resolver::results_type&) = delete;
     ~client_happy_eyeballs();
     client_happy_eyeballs(const client_happy_eyeballs&) = delete;
@@ -127,9 +126,9 @@ private:
     void close_active() noexcept;
     static void close_socket(asio::ip::tcp::socket& socket) noexcept;
 
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     worker_signal changed_;
-    std::pmr::vector<attempt> attempts_;
+    std::vector<attempt> attempts_;
     std::size_t next_{0};
     std::size_t active_{0};
     std::optional<std::size_t> winner_;

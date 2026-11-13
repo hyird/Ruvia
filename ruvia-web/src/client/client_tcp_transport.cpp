@@ -23,7 +23,7 @@ bool is_tls_error(const std::error_code& error) noexcept {
 }
 
 client_tcp_transport::client_tcp_transport(asio::io_context& io, asio::ssl::context& tls,
-    const worker_handle& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)
+    const worker_ref& worker_value, client_tcp_endpoint endpoint, client_wire_counters& counters)
     : worker_(worker_value),
       tls_(tls),
       endpoint_(endpoint),

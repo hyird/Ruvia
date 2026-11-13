@@ -3,28 +3,23 @@
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 #include <variant>
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
-
-struct task_scope_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
 
 class task_scope final {
 public:
     // The worker is borrowed: the scope must not outlive the caller's
-    // address-stable handle, matching the borrow-only hot-path rule.
-    explicit task_scope(const worker_handle& worker_value, task_scope_options options = {});
-    task_scope(worker_handle&&, task_scope_options = {}) = delete;
-    task_scope(const worker_handle&&, task_scope_options = {}) = delete;
+    // address-stable worker_ref, matching the borrow-only hot-path rule.
+    explicit task_scope(const worker_ref& worker_value);
+    task_scope(worker_ref&&) = delete;
+    task_scope(const worker_ref&&) = delete;
     // Destruction requires that no child is active and no join is pending;
     // violating that is a lifecycle contract violation and terminates. A
     // scope whose children all completed may be destroyed without a join; a
@@ -118,8 +113,7 @@ private:
 
     using lifecycle_type = std::variant<task_scope_open_type, task_scope_joining_type, task_scope_joined_type>;
 
-    const worker_handle& worker_;
-    std::pmr::memory_resource* resource_;
+    const worker_ref& worker_;
     stop_source stop_source_;
     std::size_t active_{0};
     retiring_guard* retiring_{nullptr};

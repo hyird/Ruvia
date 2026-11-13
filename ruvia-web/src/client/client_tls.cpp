@@ -17,7 +17,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "tls/tls_protocol_policy.h"
 
@@ -27,18 +26,18 @@ namespace {
 struct client_tls_preparation final {
     explicit client_tls_preparation(client_tls_config_storage config)
         : config_(std::move(config)),
-          password_(process_resource()) {}
+          password_() {}
     ~client_tls_preparation() {
         if (!password_.empty()) {
             OPENSSL_cleanse(password_.data(), password_.size());
         }
     }
     client_tls_config_storage config_;
-    std::pmr::string password_;
+    std::string password_;
 };
 
-task<client_tls_config_storage> prepare_client_tls_owned(worker_handle worker,
-    std::unique_ptr<client_tls_preparation, pmr_object_deleter<client_tls_preparation>> input,
+task<client_tls_config_storage> prepare_client_tls_owned(worker_ref worker,
+    std::unique_ptr<client_tls_preparation> input,
     stop_token stop) {
     auto result = co_await run_blocking(std::move(worker),
         [input = std::move(input), stop = std::move(stop)]() mutable {
@@ -137,19 +136,18 @@ public:
 }
 
 client_tls_config_storage::client_tls_config_storage(
-    const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource)
+    const client_tls_config& source_value, client_tls_files files)
     : mode_(source_value.mode_),
       minimum_version_(source_value.minimum_version_),
       max_outgoing_records_(source_value.max_outgoing_records_) {
-    auto* const target = pmr_resource_or_default(resource);
     if (source_value.ca_file_.has_value()) {
-        ca_file_.emplace(make_tls_file_name(*source_value.ca_file_, target));
+        ca_file_.emplace(make_tls_file_name(*source_value.ca_file_));
     }
     if (source_value.identity_.has_value()) {
-        identity_.emplace(make_tls_identity_files(*source_value.identity_, target));
+        identity_.emplace(make_tls_identity_files(*source_value.identity_));
     }
     if (source_value.server_name_.has_value()) {
-        server_name_.emplace(*source_value.server_name_, target);
+        server_name_.emplace(*source_value.server_name_);
     }
     if (files != client_tls_files::parse || mode_ == client_tls_mode::disabled) {
         return;
@@ -168,9 +166,9 @@ void client_tls_config_storage::parse_files(std::string_view private_key_passwor
 }
 
 task<client_tls_config_storage> prepare_client_tls_config(
-    worker_handle worker, client_tls_config_storage config,
+    worker_ref worker, client_tls_config_storage config,
     std::string_view private_key_password, stop_token stop) {
-    auto input = make_pmr_object<client_tls_preparation>(process_resource(), std::move(config));
+    auto input = std::make_unique<client_tls_preparation>(std::move(config));
     // Keep the secret at one stable address: moving an SSO string can leave
     // uncleansed bytes behind in an abandoned coroutine or callable frame.
     input->password_.assign(private_key_password);
@@ -178,21 +176,20 @@ task<client_tls_config_storage> prepare_client_tls_config(
 }
 
 client_tls_config_storage::client_tls_config_storage(
-    const client_tls_config_storage& source_value, std::pmr::memory_resource* resource)
+    const client_tls_config_storage& source_value)
     : mode_(source_value.mode_),
       minimum_version_(source_value.minimum_version_),
       max_outgoing_records_(source_value.max_outgoing_records_),
       trust_store_(source_value.trust_store_),
       certificate_(source_value.certificate_) {
-    auto* const target = pmr_resource_or_default(resource);
     if (source_value.ca_file_.has_value()) {
-        ca_file_.emplace(*source_value.ca_file_, target);
+        ca_file_.emplace(*source_value.ca_file_);
     }
     if (source_value.identity_.has_value()) {
-        identity_.emplace(copy_tls_identity_files(*source_value.identity_, target));
+        identity_.emplace(copy_tls_identity_files(*source_value.identity_));
     }
     if (source_value.server_name_.has_value()) {
-        server_name_.emplace(*source_value.server_name_, target);
+        server_name_.emplace(*source_value.server_name_);
     }
 }
 

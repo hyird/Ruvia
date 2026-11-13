@@ -48,7 +48,7 @@ template <typename client_fn_type>
 peer_observation exchange(std::string_view wire, client_fn_type&& exercise) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto& worker = attachment.loop().handle();
+    const auto& worker = attachment.loop().worker();
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     ruvia::worker_signal peer_finished(worker);
     peer_observation observed;
@@ -126,7 +126,7 @@ TEST(Ruvia, http1_client_generic_upgrade_preserves_early_binary_bytes_and_caller
         constexpr std::string_view outgoing("client\0bytes", 12);
         wire.append(early);
         const auto observed = client_upgrade_tests::exchange(wire,
-            [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+            [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
                 unsigned informational_count = 0;
                 auto request = client.client().get("/generic");
                 request.header("Connection", "Upgrade")
@@ -167,7 +167,7 @@ TEST(Ruvia, http1_client_generic_upgrade_preserves_early_binary_bytes_and_caller
 TEST(Ruvia, http1_client_generic_upgrade_rejection_is_an_ordinary_response) {
     client_upgrade_tests::exchange(
         "HTTP/1.1 426 Upgrade Required\r\nContent-Length: 6\r\nX-Rejected: yes\r\n\r\ndenied",
-        [](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+        [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
             auto request = client.client().get("/rejected");
             request.header("Connection", "Upgrade").header("Upgrade", "chat/7");
             auto result = co_await request.upgrade();
@@ -196,7 +196,7 @@ TEST(Ruvia, http1_client_generic_upgrade_rejects_invalid_switch_agreement) {
         wire.append(fields);
         wire.append("\r\nnot-a-tunnel");
         client_upgrade_tests::exchange(wire,
-            [](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+            [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
                 auto request = client.client().get("/invalid-switch");
                 request.header("Connection", "Upgrade").header("Upgrade", "chat/7");
                 bool rejected = false;
@@ -218,7 +218,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
         "HTTP/1.1 103 Early Hints\r\nX-Order: first\r\n\r\n"
         "HTTP/1.1 102 Processing\r\nX-Order: second\r\n\r\n"
         "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok",
-        [](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+        [](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
             ruvia::worker_signal entered(worker);
             ruvia::worker_signal release(worker);
             std::vector<unsigned> statuses;
@@ -272,7 +272,7 @@ TEST(Ruvia, http1_client_informational_callbacks_backpressure_coalesced_heads) {
 TEST(Ruvia, http1_client_informational_callback_failure_terminates_exchange) {
     client_upgrade_tests::exchange(
         "HTTP/1.1 103 Early Hints\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
-        [](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+        [](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
             auto request = client.client().get("/callback-failure");
             request.configure({.informational_ = [](ruvia::http_status_code, std::span<const ruvia::http_header>,
                                                      ruvia::stop_token) -> ruvia::task<void> {
@@ -311,7 +311,7 @@ TEST(Ruvia, http1_client_response_framing_comes_from_parser_precedence) {
     for (const auto& scenario : cases) {
         SCOPED_TRACE(scenario.wire_);
         client_upgrade_tests::exchange(scenario.wire_,
-            [&](ruvia::http_client& client, const ruvia::worker_handle&) -> ruvia::task<void> {
+            [&](ruvia::http_client& client, const ruvia::worker_ref&) -> ruvia::task<void> {
                 auto response = co_await client.client().request(scenario.method_, "/framing").send();
                 EXPECT_EQ(response.framing(), scenario.framing_);
                 EXPECT_EQ(response.content_length(), scenario.length_);
@@ -328,7 +328,7 @@ TEST(Ruvia, http1_client_informational_callback_observes_deadline_and_explicit_s
         SCOPED_TRACE(deadline);
         client_upgrade_tests::exchange(
             "HTTP/1.1 103 Early Hints\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n",
-            [&](ruvia::http_client& client, const ruvia::worker_handle& worker) -> ruvia::task<void> {
+            [&](ruvia::http_client& client, const ruvia::worker_ref& worker) -> ruvia::task<void> {
                 ruvia::stop_source stop;
                 ruvia::worker_signal entered(worker);
                 const auto handle = client.client().with_options(
@@ -388,7 +388,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
         SCOPED_TRACE(static_cast<int>(expected));
         auto& io = ruvia::test::new_test_io_context();
         auto attachment = ruvia::attach_event_loop(io);
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
         asio::ip::tcp::socket socket(io);
         asio::steady_timer drain_gate(io);
@@ -529,7 +529,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
 TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_read) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto& worker = attachment.loop().handle();
+    const auto& worker = attachment.loop().worker();
     asio::ip::tcp::acceptor peer(io, {asio::ip::make_address("127.0.0.1"), 0});
     asio::ip::tcp::socket socket(io);
     asio::steady_timer tail_gate(io);

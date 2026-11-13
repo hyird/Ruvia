@@ -1,7 +1,6 @@
 #pragma once
 
 #include <algorithm>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -18,6 +17,7 @@
 #include "http/http_stream_end.h"
 #include "http/tls_tunnel_output.h"
 #include "server/connection_scanner.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
 
 namespace ruvia::detail {
@@ -43,22 +43,31 @@ public:
     // Appends up to 4096 bytes read from the stream to `bytes_value`. A caller
     // that clears and reuses one string reads without allocating after its
     // first read.
-    [[nodiscard]] task<bool> read_more(std::pmr::string& bytes_value) {
-        return read_more(bytes_value, []() noexcept {}, asio::cancellation_slot{});
+    [[nodiscard]] task<bool> read_more(std::string& bytes_value, inbound_buffer_reservation* reservation = nullptr) {
+        return read_more(bytes_value, []() noexcept {}, asio::cancellation_slot{}, reservation);
     }
 
     // A cancellation emitted on `slot` ends only this transport read and
     // appends nothing, after which `check` may throw to abandon it.
     template <typename check_type>
-    [[nodiscard]] task<bool> read_more(std::pmr::string& bytes_value, check_type check, asio::cancellation_slot slot) {
+    [[nodiscard]] task<bool> read_more(std::string& bytes_value, check_type check, asio::cancellation_slot slot,
+        inbound_buffer_reservation* reservation = nullptr) {
         constexpr std::size_t read_bytes = 4096;
         const auto old_size = bytes_value.size();
-        bytes_value.resize(old_size + read_bytes);
+        if (reservation != nullptr) {
+            inbound_resize(bytes_value, *reservation, old_size + read_bytes);
+        } else {
+            bytes_value.resize(old_size + read_bytes);
+        }
         const auto result_value = co_await async_asio<std::size_t>([&](auto handler) {
             stream_.async_read_some(asio::buffer(bytes_value.data() + old_size, read_bytes),
                 asio::bind_cancellation_slot(slot, std::move(handler)));
         });
-        bytes_value.resize(old_size + result_value.result());
+        if (reservation != nullptr) {
+            inbound_resize(bytes_value, *reservation, old_size + result_value.result());
+        } else {
+            bytes_value.resize(old_size + result_value.result());
+        }
         // A TLS peer that closed TCP without close_notify ends the tunnel byte
         // stream exactly like an orderly FIN or close_notify.
         if (is_stream_read_end(result_value.error_code())) {
@@ -77,8 +86,9 @@ public:
     // stream shields its record writes), after which `check` may throw to
     // abandon it.
     template <typename check_type>
-    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot) {
-        const auto writable = bytes.prepare(4096);
+    [[nodiscard]] task<bool> read_more(http_io_buffer& bytes, check_type check, asio::cancellation_slot slot,
+        inbound_buffer_reservation* reservation = nullptr) {
+        const auto writable = reservation != nullptr ? inbound_prepare(bytes, *reservation, 4096) : bytes.prepare(4096);
         const auto result = co_await async_asio<std::size_t>([&](auto completion) {
             stream_.async_read_some(asio::buffer(writable.data(), writable.size()),
                 asio::bind_cancellation_slot(slot, std::move(completion)));

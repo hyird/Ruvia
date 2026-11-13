@@ -18,7 +18,7 @@
 #include "response/http_framed_response_head_plan.h"
 #include "response/http_response_header_state.h"
 #include "response/http_response_header_storage.h"
-#include "util/http_wire_sink.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia::detail {
 
@@ -88,7 +88,7 @@ __declspec(noinline)
 #elif defined(__GNUC__) || defined(__clang__)
 __attribute__((noinline))
 #endif
-void append_response_trailer_snapshot(std::pmr::string& output,
+void append_response_trailer_snapshot(std::string& output,
     std::span<const http_header_view> fields, std::size_t bytes) {
     std::array<char, max_http_header_bytes> scratch;
     http_raw_wire_sink sink(scratch.data());
@@ -203,7 +203,7 @@ void append_http1_response_head(
 }
 
 void append_http1_response_trailers(
-    std::pmr::string& output, const http_response_trailer_section& trailers) {
+    std::string& output, const http_response_trailer_section& trailers) {
     const auto fields = trailers.fields();
     if (fields.empty()) {
         return;

@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,10 +12,9 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
 #include "ruvia/web/client_tcp_config.h"
@@ -32,13 +30,13 @@ class tcp_client_state;
 struct tcp_client_config final {
     // An unbracketed IP literal or ASCII DNS name. DNS requires a blocking pool
     // on the bound event loop. Configuration is owned before construction returns.
-    std::pmr::string host_{process_resource()};
+    std::string host_;
     port_number port_{};
     client_tls_config tls_{};
     client_tcp_config tcp_{};
     // RFC 7301 opaque protocol names, in preference order: 1..255 bytes each,
     // at most 65535 encoded bytes in total. Non-empty offers require TLS.
-    std::pmr::vector<std::pmr::string> alpn_{process_resource()};
+    std::vector<std::string> alpn_;
     std::optional<timeout_duration> connect_timeout_{std::chrono::seconds(30)};
     std::optional<timeout_duration> read_timeout_{};
     std::optional<timeout_duration> write_timeout_{};
@@ -81,15 +79,14 @@ public:
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::string_view bytes, operation_options options = {}) &;
     task<void> write(std::string_view, operation_options = {}) && = delete;
-    // Exact PMR rvalues transfer storage only from process_resource(). Other
-    // resources are rebound before returning, so source arenas may die at once.
+    // Exact std::string rvalues transfer storage directly without copying.
     template <typename string_type>
-        requires std::same_as<string_type, std::pmr::string>
+        requires std::same_as<string_type, std::string>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options options = {}) & {
         return write_owned(std::move(bytes), std::move(options));
     }
     template <typename string_type>
-        requires std::same_as<string_type, std::pmr::string>
+        requires std::same_as<string_type, std::string>
     task<void> write(string_type&&, operation_options = {}) && = delete;
 
     // Immediate whole-connection cancellation, not a send half-close. TLS uses
@@ -99,11 +96,11 @@ public:
     // is not a TLS graceful shutdown or a send half-close. Run on worker().
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
 
 private:
-    [[nodiscard]] task<void> write_owned(std::pmr::string bytes, operation_options options);
+    [[nodiscard]] task<void> write_owned(std::string bytes, operation_options options);
     std::shared_ptr<detail::tcp_client_state> state_;
 };
 

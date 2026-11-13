@@ -8,6 +8,7 @@
 #include <array>
 #include <cstddef>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -15,55 +16,36 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 
+#include "coding/codec_slot.h"
 #include "coding/http_brotli_stream.h"
 #include "coding/http_content_codec.h"
 #include "coding/http_zlib_stream.h"
 #include "coding/http_zstd_stream.h"
-#include "coding/pmr_codec_slot.h"
-#include "util/http_address_overlap.h"
+#include "memory/http_address_overlap.h"
 namespace ruvia {
-
-void* http_memory_budget_resource::do_allocate(std::size_t bytes, std::size_t alignment) {
-    if (bytes > max_bytes_ - used_bytes_) {
-        throw std::bad_alloc();
-    }
-    void* const pointer = upstream_->allocate(bytes, alignment);
-    used_bytes_ += bytes;
-    if (used_bytes_ > peak_bytes_) {
-        peak_bytes_ = used_bytes_;
-    }
-    return pointer;
-}
-
-void http_memory_budget_resource::do_deallocate(
-    void* pointer, std::size_t bytes, std::size_t alignment) {
-    upstream_->deallocate(pointer, bytes, alignment);
-    used_bytes_ = bytes <= used_bytes_ ? used_bytes_ - bytes : 0;
-}
 
 namespace {
 
 using encoder_stream = std::variant<detail::zlib_deflate_stream, detail::brotli_encoder_stream, detail::zstd_encoder_stream>;
 
 void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_coding coding,
-    std::pmr::memory_resource* resource) {
+    std::size_t max_memory_bytes) {
     switch (coding) {
         case http_content_coding::gzip:
         case http_content_coding::deflate:
-            target.emplace(std::in_place_type<detail::zlib_deflate_stream>, resource,
+            target.emplace(std::in_place_type<detail::zlib_deflate_stream>,
                 coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
-                                                    : detail::zlib_content_format::deflate);
+                                                    : detail::zlib_content_format::deflate,
+                max_memory_bytes);
             return;
         case http_content_coding::brotli:
-            target.emplace(std::in_place_type<detail::brotli_encoder_stream>, resource,
-                detail::brotli_stream_window_bits);
+            target.emplace(std::in_place_type<detail::brotli_encoder_stream>,
+                detail::brotli_stream_window_bits, max_memory_bytes);
             return;
         case http_content_coding::zstd:
-            target.emplace(std::in_place_type<detail::zstd_encoder_stream>, resource);
+            target.emplace(std::in_place_type<detail::zstd_encoder_stream>, max_memory_bytes);
             return;
         case http_content_coding::identity:
             break;
@@ -84,21 +66,21 @@ void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_
 }
 
 [[nodiscard]] bool encode_stream(detail::zlib_deflate_stream& deflater, std::string_view input,
-    std::pmr::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
     const int operation = finish_value ? Z_FINISH : flush ? Z_SYNC_FLUSH
                                                           : Z_NO_FLUSH;
     return deflater.encode(input, output, operation, max_encoded_bytes);
 }
 
 [[nodiscard]] bool encode_stream(detail::brotli_encoder_stream& encoder, std::string_view input,
-    std::pmr::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
     const auto operation = finish_value ? BROTLI_OPERATION_FINISH : flush ? BROTLI_OPERATION_FLUSH
                                                                           : BROTLI_OPERATION_PROCESS;
     return encoder.encode(input, output, operation, max_encoded_bytes);
 }
 
 [[nodiscard]] bool encode_stream(detail::zstd_encoder_stream& encoder, std::string_view input,
-    std::pmr::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
+    std::string& output, bool flush, bool finish_value, std::size_t max_encoded_bytes) {
     const auto operation = finish_value ? ZSTD_e_end : flush ? ZSTD_e_flush
                                                              : ZSTD_e_continue;
     return encoder.encode(input, output, operation, max_encoded_bytes);
@@ -110,16 +92,12 @@ void emplace_encoder_stream(std::optional<encoder_stream>& target, http_content_
 // unwinds through the stream destructor, including an exception captured at
 // the C ABI.
 struct http_content_encoder::impl_type final {
-    impl_type(http_content_coding coding, http_content_encoder_options options,
-        std::pmr::memory_resource* upstream_resource)
-        : budget_(options.max_memory_bytes_, upstream_resource),
-          effective_resource_(options.max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()
-                                  ? upstream_resource
-                                  : &budget_),
-          max_encoded_bytes_(options.max_encoded_bytes_),
+    impl_type(http_content_coding coding, http_content_encoder_options options)
+        : max_encoded_bytes_(options.max_encoded_bytes_),
+          max_memory_bytes_(options.max_memory_bytes_),
           coding_(coding) {
         if (coding_ != http_content_coding::identity) {
-            emplace_encoder_stream(stream_, coding_, effective_resource_);
+            emplace_encoder_stream(stream_, coding_, max_memory_bytes_);
             std::visit(
                 [](const auto& stream) {
                     if (!stream.initialized()) {
@@ -130,7 +108,7 @@ struct http_content_encoder::impl_type final {
         }
     }
 
-    void encode(std::string_view input, std::pmr::string& output, bool flush, bool finish_value) {
+    void encode(std::string_view input, std::string& output, bool flush, bool finish_value) {
         const auto before_size = output.size();
         if (!stream_.has_value()) {
             if (!input.empty()) {
@@ -157,8 +135,8 @@ struct http_content_encoder::impl_type final {
         produced_bytes_ += output.size() - before_size;
     }
 
-    // Reuse native working memory where supported. Brotli rebuilds from the
-    // same resource. A failed rebuild leaves the variant valueless, which the
+    // Reuse native working memory where supported. Brotli rebuilds.
+    // A failed rebuild leaves the variant valueless, which the
     // owner never touches again until another explicit reset().
     void reset() {
         produced_bytes_ = 0;
@@ -175,45 +153,38 @@ struct http_content_encoder::impl_type final {
             }
         } else {
             const auto& rebuilt = stream_->emplace<detail::brotli_encoder_stream>(
-                effective_resource_, detail::brotli_stream_window_bits);
+                detail::brotli_stream_window_bits, max_memory_bytes_);
             if (!rebuilt.initialized()) {
                 throw http_content_codec_error(initialization_failure(rebuilt));
             }
         }
     }
 
-    http_memory_budget_resource budget_;
-    std::pmr::memory_resource* effective_resource_;
     std::optional<encoder_stream> stream_;
     std::size_t max_encoded_bytes_;
+    std::size_t max_memory_bytes_;
     std::size_t produced_bytes_{0};
     http_content_coding coding_;
 };
 
 http_content_encoder::http_content_encoder(
-    http_content_coding coding, std::pmr::memory_resource* resource)
-    : http_content_encoder(coding, http_content_encoder_options{.resource_ = resource}) {}
-
-http_content_encoder::http_content_encoder(
     http_content_coding coding, http_content_encoder_options options)
-    : coding_(coding),
-      resource_(detail::http_pmr_resource_or_default(options.resource_)) {
+    : coding_(coding) {
     if (coding_ != http_content_coding::identity ||
         options.max_encoded_bytes_ != (std::numeric_limits<std::size_t>::max)() ||
         options.max_memory_bytes_ != (std::numeric_limits<std::size_t>::max)()) {
         if (http_content_coding_token(coding_).empty()) {
             throw std::invalid_argument("unsupported HTTP content coding");
         }
-        impl_ = detail::construct_http_pmr_object<impl_type>(
-            resource_, coding_, options, resource_);
+        impl_ = new impl_type(coding_, options);
     }
 }
 
 http_content_encoder::~http_content_encoder() {
-    detail::destroy_http_pmr_object(impl_, resource_);
+    delete impl_;
 }
 
-void http_content_encoder::write(std::string_view input, std::pmr::string& output, bool flush) {
+void http_content_encoder::write(std::string_view input, std::string& output, bool flush) {
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP content encoder is no longer writable");
     }
@@ -227,7 +198,7 @@ void http_content_encoder::write(std::string_view input, std::pmr::string& outpu
                 // Appending codec output can reallocate the caller's string
                 // before all input has been consumed. Own only this aliasing
                 // case; independent input keeps the direct encoding path.
-                const std::pmr::string owned_input(input, impl_->effective_resource_);
+                const std::string owned_input(input);
                 impl_->encode(owned_input, output, flush, false);
             } else {
                 impl_->encode(input, output, flush, false);
@@ -239,7 +210,7 @@ void http_content_encoder::write(std::string_view input, std::pmr::string& outpu
     }
 }
 
-void http_content_encoder::finish(std::pmr::string& output) {
+void http_content_encoder::finish(std::string& output) {
     if (phase_ == phase::finished) {
         return;
     }
@@ -269,12 +240,12 @@ void http_content_encoder::reset() {
     phase_ = phase::active;
 }
 // The kept state of a resettable coding. The native libraries retain its
-// address, so it lives in one stable allocation from the context resource.
+// address, so it lives in one stable allocation.
 struct http_content_encode_context::impl_type final {
     using stream_type = std::variant<detail::zlib_deflate_stream, detail::zstd_encoder_stream>;
 
-    impl_type(http_content_coding coding, std::pmr::memory_resource* resource)
-        : stream_(make_stream(coding, resource)) {}
+    explicit impl_type(http_content_coding coding)
+        : stream_(make_stream(coding)) {}
 
     [[nodiscard]] bool initialized() const noexcept {
         return std::visit([](const auto& stream) { return stream.initialized(); }, stream_);
@@ -284,38 +255,37 @@ struct http_content_encode_context::impl_type final {
         return std::visit([](auto& stream) { return stream.reset(); }, stream_);
     }
 
-    [[nodiscard]] std::optional<std::pmr::string> encode(
+    [[nodiscard]] std::optional<std::string> encode(
         std::string_view input, http_content_encode_options options) {
         if (auto* deflater = std::get_if<detail::zlib_deflate_stream>(&stream_)) {
-            return detail::encode_zlib_content(*deflater, input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_zlib_content(*deflater, input, options.max_encoded_bytes_);
         }
         return detail::encode_zstd_content(
-            std::get<detail::zstd_encoder_stream>(stream_), input, options.max_encoded_bytes_, options.resource_);
+            std::get<detail::zstd_encoder_stream>(stream_), input, options.max_encoded_bytes_);
     }
 
     stream_type stream_;
 
 private:
-    [[nodiscard]] static stream_type make_stream(http_content_coding coding, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static stream_type make_stream(http_content_coding coding) {
         if (coding == http_content_coding::zstd) {
-            return stream_type(std::in_place_type<detail::zstd_encoder_stream>, resource);
+            return stream_type(std::in_place_type<detail::zstd_encoder_stream>);
         }
-        return stream_type(std::in_place_type<detail::zlib_deflate_stream>, resource,
+        return stream_type(std::in_place_type<detail::zlib_deflate_stream>,
             coding == http_content_coding::gzip ? detail::zlib_content_format::gzip
                                                 : detail::zlib_content_format::deflate);
     }
 };
 
 http_content_encode_context::http_content_encode_context(
-    http_content_coding coding, std::pmr::memory_resource* state_resource) noexcept
-    : coding_(coding),
-      resource_(detail::http_pmr_resource_or_default(state_resource)) {}
+    http_content_coding coding) noexcept
+    : coding_(coding) {}
 
 http_content_encode_context::~http_content_encode_context() {
-    detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, impl_, resource_);
+    delete impl_;
 }
 
-std::optional<std::pmr::string> http_content_encode_context::encode(
+std::optional<std::string> http_content_encode_context::encode(
     std::string_view input, http_content_encode_options options) {
     switch (coding_) {
         case http_content_coding::gzip:
@@ -323,21 +293,21 @@ std::optional<std::pmr::string> http_content_encode_context::encode(
         case http_content_coding::zstd:
             break;
         case http_content_coding::brotli: {
-            detail::brotli_encoder_stream encoder(resource_, detail::brotli_whole_buffer_window_bits);
+            detail::brotli_encoder_stream encoder(detail::brotli_whole_buffer_window_bits);
             if (!encoder.initialized()) {
                 throw http_content_codec_error("brotli encoder initialization failed");
             }
-            return detail::encode_brotli_content(encoder, input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_brotli_content(encoder, input, options.max_encoded_bytes_);
         }
         default:
             // identity and unknown values keep the one-shot facade's contract.
             return encode_http_content(coding_, input, options);
     }
 
-    if (detail::acquire_pmr_codec(impl_, resource_, coding_, resource_) == nullptr) {
+    if (detail::acquire_codec(impl_, coding_) == nullptr) {
         throw http_content_codec_error("content encoder initialization failed");
     }
-    const detail::pmr_codec_reset_guard reset_guard(impl_, resource_);
+    const detail::codec_reset_guard reset_guard(impl_);
     return impl_->encode(input, options);
 }
 
@@ -345,16 +315,16 @@ namespace {
 
 class streaming_decode_stage final {
 public:
-    streaming_decode_stage(http_content_coding coding, std::pmr::memory_resource* resource,
-        std::size_t max_decoded_bytes)
+    streaming_decode_stage(http_content_coding coding,
+        std::size_t max_decoded_bytes, std::size_t max_memory_bytes)
         : coding_(coding),
           max_decoded_bytes_(max_decoded_bytes) {
-        emplace_decoder_stream(coding, resource, max_decoded_bytes);
+        emplace_decoder_stream(coding, max_decoded_bytes, max_memory_bytes);
     }
     streaming_decode_stage(const streaming_decode_stage&) = delete;
     streaming_decode_stage& operator=(const streaming_decode_stage&) = delete;
 
-    void write(std::string_view input, std::pmr::string& output) {
+    void write(std::string_view input, std::string& output) {
         if (input.empty()) {
             return;
         }
@@ -380,14 +350,14 @@ private:
         detail::zstd_decoder_stream>;
 
     void emplace_decoder_stream(http_content_coding coding,
-        std::pmr::memory_resource* resource, std::size_t max_decoded_bytes) {
+        std::size_t max_decoded_bytes, std::size_t max_memory_bytes) {
         switch (coding) {
             case http_content_coding::gzip:
             case http_content_coding::deflate: {
                 auto& var = stream_.emplace(std::in_place_type<detail::zlib_inflate_stream>,
-                    resource,
                     coding == http_content_coding::gzip ? detail::zlib_gzip_window_bits
-                                                        : detail::zlib_deflate_window_bits);
+                                                        : detail::zlib_deflate_window_bits,
+                    max_memory_bytes);
                 if (!std::get<detail::zlib_inflate_stream>(var).initialized()) {
                     throw http_content_codec_error("failed to initialize zlib content decoder");
                 }
@@ -395,7 +365,7 @@ private:
             }
             case http_content_coding::brotli: {
                 auto& var = stream_.emplace(std::in_place_type<detail::brotli_decoder_stream>,
-                    resource, max_decoded_bytes);
+                    max_decoded_bytes, max_memory_bytes);
                 const auto& decoder = std::get<detail::brotli_decoder_stream>(var);
                 if (!decoder.initialized()) {
                     if (decoder.native_budget_exceeded()) {
@@ -409,7 +379,7 @@ private:
             }
             case http_content_coding::zstd: {
                 auto& var =
-                    stream_.emplace(std::in_place_type<detail::zstd_decoder_stream>, resource);
+                    stream_.emplace(std::in_place_type<detail::zstd_decoder_stream>, max_memory_bytes);
                 if (!std::get<detail::zstd_decoder_stream>(var).initialized()) {
                     throw http_content_codec_error("failed to initialize Zstd content decoder");
                 }
@@ -421,7 +391,7 @@ private:
         throw std::invalid_argument("unsupported HTTP content coding for decode stage");
     }
 
-    void append_checked(std::pmr::string& output, const char* data, std::size_t size) {
+    void append_checked(std::string& output, const char* data, std::size_t size) {
         if (size > max_decoded_bytes_ - decoded_bytes_) {
             throw http_content_transcode_error(
                 http_content_decode_error::decoded_size_exceeded,
@@ -432,7 +402,7 @@ private:
     }
 
     void write_zlib(
-        detail::zlib_inflate_stream& inflater, std::string_view input, std::pmr::string& output) {
+        detail::zlib_inflate_stream& inflater, std::string_view input, std::string& output) {
         const bool allow_concatenated = coding_ == http_content_coding::gzip;
         const int window_bits =
             allow_concatenated ? detail::zlib_gzip_window_bits : detail::zlib_deflate_window_bits;
@@ -505,7 +475,7 @@ private:
     }
 
     void write_brotli(
-        detail::brotli_decoder_stream& decoder, std::string_view input, std::pmr::string& output) {
+        detail::brotli_decoder_stream& decoder, std::string_view input, std::string& output) {
         if (at_frame_end_) {
             throw http_content_transcode_error(
                 http_content_decode_error::invalid_content, "trailing bytes after Brotli stream");
@@ -556,7 +526,7 @@ private:
     }
 
     void write_zstd(
-        detail::zstd_decoder_stream& decoder, std::string_view input, std::pmr::string& output) {
+        detail::zstd_decoder_stream& decoder, std::string_view input, std::string& output) {
         auto* const stream = decoder.native();
         ZSTD_inBuffer in{input.data(), input.size(), 0};
         std::array<char, 16384> buffer;
@@ -602,27 +572,16 @@ private:
 }  // namespace
 
 struct http_content_transcoder::impl_type final {
-    using stage_ptr =
-        std::unique_ptr<streaming_decode_stage, detail::http_pmr_object_deleter<streaming_decode_stage>>;
+    using stage_ptr = std::unique_ptr<streaming_decode_stage>;
 
     impl_type(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_content_transcoder_options options,
-        std::pmr::memory_resource* upstream_resource)
-        : budget_(options.max_memory_bytes_, upstream_resource),
-          effective_resource_(options.max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()
-                                  ? upstream_resource
-                                  : &budget_),
-          source_codings_(effective_resource_),
-          stages_(effective_resource_),
-          scratch_a_(effective_resource_),
-          scratch_b_(effective_resource_),
-          options_(options),
+        http_content_coding target_coding, http_content_transcoder_options options)
+        : options_(options),
           target_coding_(target_coding),
           encoder_(target_coding,
               http_content_encoder_options{
-                  .resource_ = effective_resource_,
                   .max_encoded_bytes_ = options.max_encoded_bytes_,
-                  .max_memory_bytes_ = (std::numeric_limits<std::size_t>::max)()}) {
+                  .max_memory_bytes_ = options.max_memory_bytes_}) {
         if (http_content_coding_token(target_coding).empty()) {
             throw std::invalid_argument("unsupported target HTTP content coding");
         }
@@ -641,13 +600,13 @@ struct http_content_transcoder::impl_type final {
         stages_.clear();
         stages_.reserve(source_codings_.size());
         for (const auto coding : source_codings_) {
-            stages_.push_back(detail::make_http_pmr_object<streaming_decode_stage>(
-                effective_resource_, coding, effective_resource_, options_.max_decoded_bytes_));
+            stages_.push_back(std::make_unique<streaming_decode_stage>(
+                coding, options_.max_decoded_bytes_, options_.max_memory_bytes_));
         }
         identity_decoded_bytes_ = 0;
     }
 
-    void write(std::string_view input, std::pmr::string& output, bool flush) {
+    void write(std::string_view input, std::string& output, bool flush) {
         if (stages_.empty()) {
             if (input.size() > options_.max_decoded_bytes_ - identity_decoded_bytes_) {
                 throw http_content_transcode_error(
@@ -666,8 +625,8 @@ struct http_content_transcoder::impl_type final {
         }
         scratch_a_.clear();
         stages_.front()->write(input, scratch_a_);
-        std::pmr::string* current = &scratch_a_;
-        std::pmr::string* next = &scratch_b_;
+        std::string* current = &scratch_a_;
+        std::string* next = &scratch_b_;
         for (std::size_t index = 1; index < stages_.size(); ++index) {
             next->clear();
             stages_[index]->write(*current, *next);
@@ -678,7 +637,7 @@ struct http_content_transcoder::impl_type final {
         }
     }
 
-    void finish(std::pmr::string& output) {
+    void finish(std::string& output) {
         for (const auto& stage : stages_) {
             stage->finish();
         }
@@ -692,22 +651,15 @@ struct http_content_transcoder::impl_type final {
         encoder_.reset();
     }
 
-    http_memory_budget_resource budget_;
-    std::pmr::memory_resource* effective_resource_;
-    std::pmr::vector<http_content_coding> source_codings_;
-    std::pmr::vector<stage_ptr> stages_;
-    std::pmr::string scratch_a_;
-    std::pmr::string scratch_b_;
+    std::vector<http_content_coding> source_codings_;
+    std::vector<stage_ptr> stages_;
+    std::string scratch_a_;
+    std::string scratch_b_;
     http_content_transcoder_options options_;
     std::size_t identity_decoded_bytes_{0};
     http_content_coding target_coding_;
     http_content_encoder encoder_;
 };
-
-http_content_transcoder::http_content_transcoder(http_content_coding source_coding,
-    http_content_coding target_coding, std::pmr::memory_resource* resource)
-    : http_content_transcoder(std::span<const http_content_coding>(&source_coding, 1),
-          target_coding, http_content_transcoder_options{.resource_ = resource}) {}
 
 http_content_transcoder::http_content_transcoder(http_content_coding source_coding,
     http_content_coding target_coding, http_content_transcoder_options options)
@@ -716,24 +668,16 @@ http_content_transcoder::http_content_transcoder(http_content_coding source_codi
 
 http_content_transcoder::http_content_transcoder(
     std::span<const http_content_coding> source_codings, http_content_coding target_coding,
-    std::pmr::memory_resource* resource)
-    : http_content_transcoder(
-          source_codings, target_coding, http_content_transcoder_options{.resource_ = resource}) {}
-
-http_content_transcoder::http_content_transcoder(
-    std::span<const http_content_coding> source_codings, http_content_coding target_coding,
     http_content_transcoder_options options)
     : target_coding_(target_coding),
-      resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      impl_(detail::construct_http_pmr_object<impl_type>(
-          resource_, source_codings, target_coding, options, resource_)) {}
+      impl_(new impl_type(source_codings, target_coding, options)) {}
 
 http_content_transcoder::~http_content_transcoder() {
-    detail::destroy_http_pmr_object(impl_, resource_);
+    delete impl_;
 }
 
 void http_content_transcoder::write(
-    std::string_view input, std::pmr::string& output, bool flush) {
+    std::string_view input, std::string& output, bool flush) {
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP content transcoder is no longer writable");
     }
@@ -745,7 +689,7 @@ void http_content_transcoder::write(
     }
 }
 
-void http_content_transcoder::finish(std::pmr::string& output) {
+void http_content_transcoder::finish(std::string& output) {
     if (phase_ == phase::finished) {
         return;
     }
@@ -773,18 +717,10 @@ void http_content_transcoder::reset() {
 
 struct http_staged_content_transcoder::impl_type final {
     impl_type(std::span<const http_content_coding> source_codings,
-        http_content_coding target_coding, http_staged_transcode_options options,
-        std::pmr::memory_resource* upstream)
-        : budget_(options.max_memory_bytes_, upstream),
-          effective_resource_(
-              options.max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()
-                  ? upstream
-                  : &budget_),
-          source_codings_(effective_resource_),
-          staged_raw_(effective_resource_),
-          staged_decoded_(effective_resource_),
-          min_bytes_(options.min_bytes_),
+        http_content_coding target_coding, http_staged_transcode_options options)
+        : min_bytes_(options.min_bytes_),
           max_bytes_(options.max_bytes_),
+          max_memory_bytes_(options.max_memory_bytes_),
           target_coding_(target_coding),
           require_smaller_(options.require_smaller_than_source_) {
         if (min_bytes_ > max_bytes_) {
@@ -807,8 +743,8 @@ struct http_staged_content_transcoder::impl_type final {
                 max_bytes_ == (std::numeric_limits<std::size_t>::max)() ? max_bytes_ : max_bytes_ + 1U;
             decoder_.emplace(source_codings_, http_content_coding::identity,
                 http_content_transcoder_options{
-                    .resource_ = effective_resource_,
                     .max_decoded_bytes_ = decode_cap,
+                    .max_memory_bytes_ = max_memory_bytes_,
                 });
         }
     }
@@ -816,16 +752,16 @@ struct http_staged_content_transcoder::impl_type final {
     void switch_to_passthrough() noexcept {
         passthrough_ = true;
         decoder_.reset();
-        std::pmr::string(effective_resource_).swap(staged_decoded_);
+        std::string().swap(staged_decoded_);
     }
 
-    bool write(std::string_view input, std::pmr::string* passthrough_out) {
+    bool write(std::string_view input, std::string* passthrough_out) {
         if (passthrough_) {
             if (!input.empty()) {
                 if (passthrough_out != nullptr) {
                     if (!staged_raw_.empty()) {
                         passthrough_out->append(staged_raw_);
-                        std::pmr::string(effective_resource_).swap(staged_raw_);
+                        std::string().swap(staged_raw_);
                     }
                     passthrough_out->append(input);
                 } else {
@@ -833,7 +769,7 @@ struct http_staged_content_transcoder::impl_type final {
                 }
             } else if (passthrough_out != nullptr && !staged_raw_.empty()) {
                 passthrough_out->append(staged_raw_);
-                std::pmr::string(effective_resource_).swap(staged_raw_);
+                std::string().swap(staged_raw_);
             }
             return false;
         }
@@ -843,7 +779,7 @@ struct http_staged_content_transcoder::impl_type final {
             if (passthrough_out != nullptr) {
                 if (!staged_raw_.empty()) {
                     passthrough_out->append(staged_raw_);
-                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                    std::string().swap(staged_raw_);
                 }
                 passthrough_out->append(input);
             } else {
@@ -852,6 +788,9 @@ struct http_staged_content_transcoder::impl_type final {
             return false;
         }
 
+        if (input.size() > max_memory_bytes_ - staged_raw_.size()) {
+            throw std::bad_alloc();
+        }
         staged_raw_.append(input);
         if (source_codings_.empty()) {
             decoded_bytes_ = staged_raw_.size();
@@ -865,7 +804,7 @@ struct http_staged_content_transcoder::impl_type final {
                 switch_to_passthrough();
                 if (passthrough_out != nullptr && !staged_raw_.empty()) {
                     passthrough_out->append(staged_raw_);
-                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                    std::string().swap(staged_raw_);
                 }
                 return false;
             }
@@ -874,7 +813,7 @@ struct http_staged_content_transcoder::impl_type final {
                 switch_to_passthrough();
                 if (passthrough_out != nullptr && !staged_raw_.empty()) {
                     passthrough_out->append(staged_raw_);
-                    std::pmr::string(effective_resource_).swap(staged_raw_);
+                    std::string().swap(staged_raw_);
                 }
                 return false;
             }
@@ -927,11 +866,48 @@ struct http_staged_content_transcoder::impl_type final {
             require_smaller_
                 ? (staged_raw_.empty() ? 0U : staged_raw_.size() - 1U)
                 : (std::numeric_limits<std::size_t>::max)();
-        auto encoded = encode_http_content(target_coding_, plain_view,
-            http_content_encode_options{
-                .max_encoded_bytes_ = max_encoded,
-                .resource_ = effective_resource_,
-            });
+        std::optional<std::string> encoded;
+        if (max_memory_bytes_ == (std::numeric_limits<std::size_t>::max)()) {
+            encoded = encode_http_content(target_coding_, plain_view,
+                http_content_encode_options{
+                    .max_encoded_bytes_ = max_encoded,
+                });
+        } else {
+            switch (target_coding_) {
+                case http_content_coding::gzip:
+                case http_content_coding::deflate: {
+                    detail::zlib_deflate_stream deflater(
+                        target_coding_ == http_content_coding::gzip
+                            ? detail::zlib_content_format::gzip
+                            : detail::zlib_content_format::deflate,
+                        max_memory_bytes_);
+                    if (!deflater.initialized()) {
+                        throw http_content_codec_error("zlib encoder initialization failed");
+                    }
+                    encoded = detail::encode_zlib_content(deflater, plain_view, max_encoded);
+                    break;
+                }
+                case http_content_coding::brotli: {
+                    detail::brotli_encoder_stream encoder(
+                        detail::brotli_whole_buffer_window_bits, max_memory_bytes_);
+                    if (!encoder.initialized()) {
+                        throw http_content_codec_error("brotli encoder initialization failed");
+                    }
+                    encoded = detail::encode_brotli_content(encoder, plain_view, max_encoded);
+                    break;
+                }
+                case http_content_coding::zstd: {
+                    detail::zstd_encoder_stream encoder(max_memory_bytes_);
+                    if (!encoder.initialized()) {
+                        throw http_content_codec_error("zstd encoder initialization failed");
+                    }
+                    encoded = detail::encode_zstd_content(encoder, plain_view, max_encoded);
+                    break;
+                }
+                case http_content_coding::identity:
+                    break;
+            }
+        }
         if (!encoded.has_value()) {
             return http_staged_transcode_result(
                 false, fallback_coding, plain_view.size(), std::move(staged_raw_));
@@ -953,8 +929,8 @@ struct http_staged_content_transcoder::impl_type final {
             } else {
                 decoder_.emplace(source_codings_, http_content_coding::identity,
                     http_content_transcoder_options{
-                        .resource_ = effective_resource_,
                         .max_decoded_bytes_ = decode_cap,
+                        .max_memory_bytes_ = max_memory_bytes_,
                     });
             }
         } else {
@@ -962,14 +938,13 @@ struct http_staged_content_transcoder::impl_type final {
         }
     }
 
-    http_memory_budget_resource budget_;
-    std::pmr::memory_resource* effective_resource_;
-    std::pmr::vector<http_content_coding> source_codings_;
+    std::vector<http_content_coding> source_codings_;
     std::optional<http_content_transcoder> decoder_;
-    std::pmr::string staged_raw_;
-    std::pmr::string staged_decoded_;
+    std::string staged_raw_;
+    std::string staged_decoded_;
     std::size_t min_bytes_;
     std::size_t max_bytes_;
+    std::size_t max_memory_bytes_;
     std::size_t decoded_bytes_{0};
     http_content_coding target_coding_;
     bool require_smaller_{false};
@@ -986,13 +961,10 @@ http_staged_content_transcoder::http_staged_content_transcoder(
     std::span<const http_content_coding> source_codings, http_content_coding target_coding,
     http_staged_transcode_options options)
     : target_coding_(target_coding),
-      resource_(detail::http_pmr_resource_or_default(options.resource_)) {
-    impl_ = detail::construct_http_pmr_object<impl_type>(
-        resource_, source_codings, target_coding, options, resource_);
-}
+      impl_(new impl_type(source_codings, target_coding, options)) {}
 
 http_staged_content_transcoder::~http_staged_content_transcoder() {
-    detail::destroy_http_pmr_object(impl_, resource_);
+    delete impl_;
 }
 
 bool http_staged_content_transcoder::passthrough() const noexcept {
@@ -1020,13 +992,13 @@ bool http_staged_content_transcoder::write(std::string_view input) {
 }
 
 bool http_staged_content_transcoder::write(
-    std::string_view input, std::pmr::string& passthrough_output) {
+    std::string_view input, std::string& passthrough_output) {
     if (phase_ != phase::active) {
         throw std::logic_error("HTTP staged content transcoder is no longer writable");
     }
     try {
         if (detail::http_text_aliases_string(input, passthrough_output)) {
-            const std::pmr::string owned(input, impl_->effective_resource_);
+            const std::string owned(input);
             return impl_->write(owned, &passthrough_output);
         }
         return impl_->write(input, &passthrough_output);
@@ -1060,12 +1032,11 @@ void http_staged_content_transcoder::reset() {
     phase_ = phase::active;
 }
 
-http_worker_codecs::http_worker_codecs(std::pmr::memory_resource* resource) noexcept
-    : resource_(detail::http_pmr_resource_or_default(resource)),
-      gzip_(http_content_coding::gzip, resource_),
-      deflate_(http_content_coding::deflate, resource_),
-      brotli_(http_content_coding::brotli, resource_),
-      zstd_(http_content_coding::zstd, resource_) {}
+http_worker_codecs::http_worker_codecs() noexcept
+    : gzip_(http_content_coding::gzip),
+      deflate_(http_content_coding::deflate),
+      brotli_(http_content_coding::brotli),
+      zstd_(http_content_coding::zstd) {}
 
 http_worker_codecs::~http_worker_codecs() {
     for (auto* pool : {&gzip_.streaming_, &deflate_.streaming_, &brotli_.streaming_, &zstd_.streaming_}) {
@@ -1101,9 +1072,7 @@ http_stream_encoder_lease http_worker_codecs::acquire_stream_encoder(http_conten
     if (pool.count_ != 0) {
         return http_stream_encoder_lease(*this, *pool.free_[--pool.count_]);
     }
-    return http_stream_encoder_lease(
-        *this, *detail::construct_http_pmr_object<http_content_encoder>(
-                   resource_, coding, resource_));
+    return http_stream_encoder_lease(*this, *(new http_content_encoder(coding)));
 }
 
 void http_worker_codecs::release_stream_encoder(http_content_encoder& encoder) noexcept {
@@ -1120,7 +1089,6 @@ void http_worker_codecs::release_stream_encoder(http_content_encoder& encoder) n
 }
 
 void http_worker_codecs::destroy_stream_encoder(http_content_encoder& encoder) noexcept {
-    detail::destroy_http_pmr_object(&encoder, resource_);
+    delete &encoder;
 }
-
 }  // namespace ruvia

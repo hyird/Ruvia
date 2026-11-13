@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -10,10 +9,8 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 RUVIA_MODEL(json_object_child, RUVIA_REQUIRED_FIELD(name, ruvia::string));
@@ -58,27 +55,23 @@ static_assert(!lookup_offers_value<const string_lookup>);
 using lookup_status = ruvia::unique_lookup_status;
 
 TEST(Ruvia, json_token_moves_preserve_complete_tokens_and_reset_sources) {
-    const std::pmr::string input("{\"payload\":\"" + std::pmr::string(160, 'x', ruvia::process_resource()) + "\"}", ruvia::process_resource());
+    const std::string input("{\"payload\":\"" + std::string(160, 'x') + "\"}");
     const auto check = [&]<typename token_type>(std::string_view empty) {
-        ruvia::test::counting_memory_resource source_resource;
-        ruvia::test::counting_memory_resource target_resource;
         {
             for (const bool owning : {false, true}) {
-                auto source = token_type::parse(input, {.resource_ = &source_resource});
+                auto source = token_type::parse(input);
                 if (owning) {
-                    token_type owned({.resource_ = &source_resource});
+                    token_type owned;
                     owned = std::move(source);
                     source = std::move(owned);
                 }
                 token_type moved(std::move(source));
                 EXPECT_EQ(moved.view(), std::string_view(input));
                 EXPECT_EQ(source.view(), empty);
-                EXPECT_TRUE(source.resource() == &source_resource);
-                token_type target({.resource_ = &target_resource});
+                token_type target;
                 target = std::move(moved);
                 EXPECT_EQ(target.view(), std::string_view(input));
                 EXPECT_EQ(moved.view(), empty);
-                EXPECT_TRUE(target.resource() == &target_resource);
                 auto* const self = &target;
                 target = std::move(*self);
                 EXPECT_EQ(target.view(), std::string_view(input));
@@ -87,8 +80,6 @@ TEST(Ruvia, json_token_moves_preserve_complete_tokens_and_reset_sources) {
                 EXPECT_EQ(target.view(), empty);
             }
         }
-        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
-        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
     };
     check.template operator()<ruvia::json_value>("null");
     check.template operator()<ruvia::json_object>("{}");
@@ -153,8 +144,7 @@ TEST(Ruvia, json_object_default_represents_an_empty_object) {
 }
 
 TEST(Ruvia, json_object_get_reports_a_repeated_field_name_without_a_value) {
-    const auto json = ruvia::json_object::parse(R"({"name":"first","other":"x","name":"second"})",
-        {.resource_ = std::pmr::get_default_resource()});
+    const auto json = ruvia::json_object::parse(R"({"name":"first","other":"x","name":"second"})");
     const auto name = json.get<ruvia::string>("name");
     EXPECT_TRUE(name.status() == lookup_status::repeated);
     EXPECT_TRUE(!name.value().has_value());
@@ -325,9 +315,8 @@ TEST(Ruvia, json_value_get_reads_root_scalars_and_arrays_and_models) {
     EXPECT_TRUE(!bad.value().has_value());
 }
 TEST(Ruvia, json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
-    ruvia::test::counting_memory_resource resource;
-    std::pmr::string body("{\"" + std::pmr::string(256, 'k', ruvia::process_resource()) + "\\u0061\":1}", ruvia::process_resource());
-    const auto json = ruvia::json_value::parse(body, {.resource_ = &resource});
+    std::string body("{\"" + std::string(256, 'k') + "\\u0061\":1}");
+    const auto json = ruvia::json_value::parse(body);
     bool thrown = false;
     try {
         // The throw depends on the visited key, as in a real visitor: one that
@@ -343,12 +332,11 @@ TEST(Ruvia, json_value_dynamic_traversal_reclaims_decoded_key_on_exception) {
         thrown = true;
     }
     EXPECT_TRUE(thrown);
-    EXPECT_EQ(resource.live_allocations(), 0U);
 }
 
 TEST(Ruvia, json_value_get_reads_object_fields_and_rejects_non_objects) {
     auto json =
-        ruvia::json_value::parse(R"({"name":"ada","age":2})", {.resource_ = std::pmr::get_default_resource()});
+        ruvia::json_value::parse(R"({"name":"ada","age":2})");
     const auto age = json.get<ruvia::int32>("age");
     EXPECT_TRUE(age.status() == lookup_status::found);
     EXPECT_TRUE(age.value().has_value());
@@ -382,7 +370,7 @@ TEST(Ruvia, json_dynamic_parse_enforces_cumulative_array_element_budget) {
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)ruvia::json_object::parse("[]"); }));
 
     const auto elements = [](std::size_t count) {
-        std::pmr::string body(R"({"a":[)", ruvia::process_resource());
+        std::string body(R"({"a":[)");
         for (std::size_t index = 0; index != count; ++index) {
             body.append(index == 0 ? "0" : ",0");
         }

@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -73,9 +72,9 @@ public:
 
     // Views in the request borrow this head; it must outlive the request.
     [[nodiscard]] http_request build_request(
-        std::pmr::memory_resource* resource, borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+        borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
     http_request build_request(
-        std::pmr::memory_resource* resource, borrowed_text body = {}) const&& = delete;
+        borrowed_text body = {}) const&& = delete;
 
 private:
     friend class http3_connection;
@@ -84,19 +83,19 @@ private:
         detail::http_field_kind kind_;
     };
 
-    http3_request_head(std::int64_t stream_id, std::pmr::vector<http_header> fields, bool stream_ended,
-        bool early_data, std::pmr::memory_resource* resource);
+    http3_request_head(std::int64_t stream_id, std::vector<http_header> fields, bool stream_ended,
+        bool early_data);
     // nullopt: the head is malformed (RFC 9114 §4.1.2).
     [[nodiscard]] static std::optional<http3_request_head> try_create(std::int64_t stream_id,
-        std::pmr::vector<http_header> fields, bool stream_ended, bool early_data, std::pmr::memory_resource* resource);
+        std::vector<http_header> fields, bool stream_ended, bool early_data);
     [[nodiscard]] bool validate();
     [[nodiscard]] std::string_view field_value(std::uint32_t index) const noexcept;
 
     static constexpr std::uint32_t absent = 0xffffffffU;
 
-    std::pmr::vector<http_header> fields_;
-    std::pmr::vector<regular_field> regular_;
-    std::pmr::string cookie_;
+    std::vector<http_header> fields_;
+    std::vector<regular_field> regular_;
+    std::string cookie_;
     std::int64_t stream_id_{-1};
     std::uint32_t method_{absent};
     std::uint32_t scheme_{absent};

@@ -9,7 +9,6 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -28,9 +27,8 @@
 
 namespace {
 
-ruvia::task<void> follow_redirect(const ruvia::http_client_handle& origin) {
-    std::pmr::unsynchronized_pool_resource memory;
-    std::pmr::string target("/features/redirect", &memory);
+ruvia::task<void> follow_redirect(const ruvia::http_client_ref& origin) {
+    std::string target("/features/redirect");
     for (unsigned hop = 0; hop != 4; ++hop) {
         // Disable the fluent client's automatic redirects to inspect each hop.
         auto response = co_await origin.get(target).redirects(0).send();
@@ -44,7 +42,7 @@ ruvia::task<void> follow_redirect(const ruvia::http_client_handle& origin) {
             throw std::runtime_error("redirect has no Location");
         }
         auto destination = ruvia::resolve_http_client_redirect_target(origin.origin(),
-            {.current_target_ = target, .location_ = *location, .resource_ = &memory});
+            {.current_target_ = target, .location_ = *location});
         const auto* resolved = std::get_if<ruvia::http_client_resolved_redirect>(&destination);
         if (!resolved || resolved->cross_origin()) {
             // Origins are fixed at startup. Following another origin requires

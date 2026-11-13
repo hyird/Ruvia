@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -74,10 +73,10 @@ struct postgresql_params final {
     std::array<char, inline_capacity * numeric_slot_size> inline_encoded_;
     std::array<const char*, inline_capacity> inline_values_;
     std::array<unsigned int, inline_capacity> inline_types_;
-    std::pmr::vector<std::array<char, numeric_slot_size>> heap_encoded_;
-    std::pmr::vector<const char*> heap_values_;
+    std::vector<std::array<char, numeric_slot_size>> heap_encoded_;
+    std::vector<const char*> heap_values_;
     // libpq's Oid is unsigned int; 0 leaves the type to the server.
-    std::pmr::vector<unsigned int> heap_types_;
+    std::vector<unsigned int> heap_types_;
 };
 
 [[nodiscard]] std::uint64_t postgresql_affected_rows(const pg_result& result_value) noexcept;
@@ -108,7 +107,7 @@ struct postgresql_driver;
 // statement. A Sync ends the flight.
 struct postgresql_flight final {
     // The cache entry of a named statement.
-    std::optional<postgresql_statement_cache::handle> statement_{};
+    std::optional<postgresql_statement_cache::entry_ref> statement_{};
     // Commands queued ahead of the statement.
     std::size_t setup_commands_{0};
     bool parses_{false};
@@ -143,7 +142,7 @@ struct postgresql_pipeline_io final {
     using member_type = db_pipeline_member<postgresql_pipeline_io>;
     using flight_type = postgresql_flight;
 
-    struct group_data final {
+    struct group_state final {
         postgresql_flight_results head_results_{};
         // libpq holds output the socket has not accepted yet.
         bool flush_pending_{false};

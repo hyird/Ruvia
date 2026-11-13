@@ -12,7 +12,7 @@
 namespace ruvia {
 
 class scoped_capability_registration;
-class worker_handle;
+class worker_ref;
 
 namespace detail {
 class scoped_operation_registration;
@@ -46,17 +46,17 @@ public:
     [[nodiscard]] bool has_pending_operations() const noexcept {
         return head_ != nullptr;
     }
-    // Borrows the worker handle, which must outlive this scope (the same rule
+    // Borrows the worker_ref, which must outlive this scope (the same rule
     // as task_scope). Bind once, before any operation is registered.
-    void bind_worker(const worker_handle& worker) & noexcept {
+    void bind_worker(const worker_ref& worker) & noexcept {
         if (worker_ != nullptr || head_ != nullptr || capability_head_ != nullptr || !active_) {
             std::terminate();
         }
         worker_ = &worker;
     }
-    void bind_worker(const worker_handle&) && = delete;
-    void bind_worker(worker_handle&&) = delete;
-    void bind_worker(const worker_handle&&) = delete;
+    void bind_worker(const worker_ref&) && = delete;
+    void bind_worker(worker_ref&&) = delete;
+    void bind_worker(const worker_ref&&) = delete;
 
 private:
     friend class detail::scoped_operation_registration;
@@ -73,7 +73,7 @@ private:
 
     detail::scoped_operation_registration* head_{nullptr};
     scoped_capability_registration* capability_head_{nullptr};
-    const worker_handle* worker_{nullptr};
+    const worker_ref* worker_{nullptr};
     std::coroutine_handle<> join_continuation_{};
     bool active_{true};
     bool expiring_capabilities_{false};

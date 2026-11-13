@@ -4,7 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,7 +20,7 @@
 
 namespace {
 
-void append_frame(std::pmr::string& wire, ruvia::http2_frame_type type,
+void append_frame(std::string& wire, ruvia::http2_frame_type type,
     std::uint8_t flags, std::uint32_t stream_id, std::string_view payload) {
     std::array<char, ruvia::http2_frame_header_bytes> header{};
     if (!ruvia::encode_http2_frame_header(
@@ -64,8 +63,8 @@ std::size_t advertised_receive_window(std::string_view output) {
     return std::min(connection_window, stream_window);
 }
 
-void append_body(std::pmr::string& wire, std::size_t bytes) {
-    const std::pmr::string chunk(16384, 'x');
+void append_body(std::string& wire, std::size_t bytes) {
+    const std::string chunk(16384, 'x');
     while (bytes != 0) {
         const auto count = std::min(bytes, chunk.size());
         append_frame(wire, ruvia::http2_frame_type::data, 0, 1,
@@ -79,8 +78,7 @@ void append_body(std::pmr::string& wire, std::size_t bytes) {
 // Acknowledging a credit for the whole advertised receive window restores
 // exactly one window on the connection and on the stream.
 TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
-    std::pmr::unsynchronized_pool_resource resource;
-    auto client = ruvia::http2_connection::client({.resource_ = &resource});
+    auto client = ruvia::http2_connection::client({});
     const auto receive_window = advertised_receive_window(ruvia::test::drain_output(client));
     EXPECT_TRUE(receive_window != 0);
     const auto submitted = client.submit_request_head(
@@ -88,11 +86,11 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
     EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
     (void)ruvia::test::drain_output(client);
 
-    std::pmr::string wire(&resource);
+    std::string wire;
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     // The client's advertised stream window applies once the peer ACKs it.
     append_frame(wire, ruvia::http2_frame_type::settings, 0x1, 0, {});
-    std::pmr::string block(&resource);
+    std::string block;
     ruvia::hpack_encoder::encode_header(block, ":status", "200");
     append_frame(wire, ruvia::http2_frame_type::headers, 0x4, 1, block);
     append_body(wire, receive_window);
@@ -113,7 +111,7 @@ TEST(Ruvia, http2_public_receive_credit_restores_exact_window) {
         return;
     }
     // Received bytes are credited only once their credit is destroyed.
-    std::pmr::string prefix(&resource);
+    std::string prefix;
     append_frame(prefix, ruvia::http2_frame_type::settings, 0x1, 0, {});
     EXPECT_TRUE(ruvia::test::drain_output(client) == std::string_view(prefix));
     credit.reset();

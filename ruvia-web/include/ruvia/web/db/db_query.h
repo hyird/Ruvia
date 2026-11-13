@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <ranges>
 #include <span>
@@ -342,10 +341,9 @@ public:
     }
 
 private:
-    using tree_deleter_type = pmr_object_deleter<db_expr_tree>;
-    using tree_owner_type = std::unique_ptr<db_expr_tree, tree_deleter_type>;
+    using tree_owner_type = std::unique_ptr<db_expr_tree>;
 
-    [[nodiscard]] static tree_owner_type allocate_tree(std::pmr::memory_resource* resource = nullptr);
+    [[nodiscard]] static tree_owner_type allocate_tree();
     [[nodiscard]] static db_owned_expression from_tree(tree_owner_type tree) noexcept;
     [[nodiscard]] static db_owned_expression make_variadic(
         db_node_kind kind, std::span<const db_expr> args, std::string_view function);
@@ -1034,23 +1032,20 @@ public:
     [[nodiscard]] bool returns_rows() const noexcept {
         return returns_rows_;
     }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return sql_.get_allocator().resource();
-    }
 
 private:
     friend class db_query;
-    friend class db_handle;
+    friend class db_session;
     friend class db_transaction;
     friend struct detail::db_query_plan;
     template <typename, typename>
     friend class db_query_builder;
-    db_statement(std::pmr::string sql, std::pmr::vector<db_value> params, bool rows)
+    db_statement(std::string sql, std::vector<db_value> params, bool rows)
         : sql_(std::move(sql)),
           params_(std::move(params)),
           returns_rows_(rows) {}
-    std::pmr::string sql_;
-    std::pmr::vector<db_value> params_;
+    std::string sql_;
+    std::vector<db_value> params_;
     bool returns_rows_{false};
 };
 
@@ -1064,15 +1059,14 @@ private:
 
 class db_query final {
 public:
-    explicit db_query(std::pmr::memory_resource* resource = nullptr);
+    db_query();
     db_query(const db_query&) = delete;
     db_query& operator=(const db_query&) = delete;
     db_query(db_query&&) noexcept;
     db_query& operator=(db_query&&) noexcept;
     ~db_query();
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const;
-    [[nodiscard]] db_query clone(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] db_query clone() const;
     [[nodiscard]] bool returns_rows() const;
     [[nodiscard]] bool has_where() const;
     // Classifies the current statement and its active CTE/set-operation graph,
@@ -1190,8 +1184,7 @@ public:
     // a chain of one AND or OR operator counts as a single level.
     db_expression import_expression(db_expression expression, std::string_view source_qualifier = {}, std::string_view target_qualifier = {});
     // Renders one expression with inline literals, never bound parameters.
-    [[nodiscard]] static std::pmr::string render_expression(db_expression expression, db_driver driver,
-        std::pmr::memory_resource* resource);
+    [[nodiscard]] static std::string render_expression(db_expression expression, db_driver driver);
 
     // Replacing SELECT, GROUP BY, DISTINCT ON or RETURNING lists preserves
     // the previous clause on validation or allocation failure.
@@ -1234,7 +1227,23 @@ public:
     db_query& add_order_by(db_expression expression, db_order_direction direction = db_order_direction::asc, db_nulls_order nulls = db_nulls_order::default_value);
     db_query& clear_order();
     db_query& limit(std::optional<query_row_count> count);
+    template <std::integral integer_type>
+        requires(!std::same_as<integer_type, bool>)
+    db_query& limit(integer_type count) {
+        if (!std::cmp_greater_equal(+count, 0)) {
+            throw std::invalid_argument("database query limit must not be negative");
+        }
+        return set_limit_value(static_cast<std::uint64_t>(count));
+    }
     db_query& offset(std::optional<query_row_count> count);
+    template <std::integral integer_type>
+        requires(!std::same_as<integer_type, bool>)
+    db_query& offset(integer_type count) {
+        if (!std::cmp_greater_equal(+count, 0)) {
+            throw std::invalid_argument("database query offset must not be negative");
+        }
+        return set_offset_value(static_cast<std::uint64_t>(count));
+    }
     db_query& distinct(bool enabled = true);
     db_query& distinct_on(std::span<const db_expression> expressions);
     db_query& distinct_on(std::initializer_list<db_expression> expressions) {
@@ -1293,7 +1302,7 @@ public:
     // statement needing more than 65535 parameters (the protocol's Int16
     // count) with std::length_error. In bound mode, raw SQL text must not
     // contain PostgreSQL positional parameters ($1); pass value() arguments.
-    [[nodiscard]] db_statement compile(db_driver driver, std::pmr::memory_resource* resource,
+    [[nodiscard]] db_statement compile(db_driver driver,
         db_parameter_mode mode = db_parameter_mode::bound) const;
 
 private:
@@ -1321,20 +1330,19 @@ private:
     [[nodiscard]] detail::db_cache_shape cache_shape() const;
     void copy_cache(const db_query& source, detail::db_cache_shape shape);
     void with_columns(std::string_view name, const db_query& query, db_materialization materialization,
-        std::span<const std::pmr::string> columns);
+        std::span<const std::string> columns);
 
     struct storage_deleter_type final {
-        std::pmr::memory_resource* resource_{nullptr};
         void operator()(detail::db_query_storage* storage) const noexcept;
     };
     using storage_owner_type = std::unique_ptr<detail::db_query_storage, storage_deleter_type>;
     explicit db_query(storage_owner_type storage) noexcept;
-    [[nodiscard]] static storage_owner_type copy_storage(const detail::db_query_storage& source, std::pmr::memory_resource* resource);
+    [[nodiscard]] static storage_owner_type copy_storage(const detail::db_query_storage& source);
     [[nodiscard]] detail::db_query_storage& storage();
     [[nodiscard]] const detail::db_query_storage& storage() const;
     [[nodiscard]] std::size_t require_expression(db_expression expression) const;
     void require_select_query() const;
-    db_query& replace_expressions(std::pmr::vector<std::size_t>& target, std::span<const db_expression> expressions);
+    db_query& replace_expressions(std::vector<std::size_t>& target, std::span<const db_expression> expressions);
     db_query& combine_clause_predicate(std::size_t& clause, db_binary_operator op, db_expression predicate);
     // Every expression builder constructs exactly its own node kind and
     // appends it here; the returned handle addresses the appended node.
@@ -1343,6 +1351,8 @@ private:
     // Callers prepare clause metadata and reserve every publication slot first.
     [[nodiscard]] db_query adopt(db_query&& query) const;
     [[nodiscard]] db_expression add_subquery(detail::db_node_kind kind, db_query&& query);
+    db_query& set_limit_value(std::uint64_t count);
+    db_query& set_offset_value(std::uint64_t count);
     storage_owner_type storage_;
 };
 

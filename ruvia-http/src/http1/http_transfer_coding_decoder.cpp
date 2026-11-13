@@ -8,9 +8,6 @@
 #include <optional>
 #include <stdexcept>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
-
 #include "coding/http_zlib_stream.h"
 
 namespace ruvia {
@@ -21,7 +18,7 @@ namespace detail {
 // second public decoder. Its address must stay fixed for the pinned zlib stream.
 class transfer_coding_decoder final {
 public:
-    transfer_coding_decoder(http_transfer_coding coding, std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit);
+    transfer_coding_decoder(http_transfer_coding coding, protocol_byte_limit decoded_limit);
     transfer_coding_decoder(const transfer_coding_decoder&) = delete;
     transfer_coding_decoder& operator=(const transfer_coding_decoder&) = delete;
     [[nodiscard]] http_transfer_coding_decode_result decode(std::string_view input, std::span<char> output) noexcept;
@@ -71,8 +68,8 @@ namespace {
 }  // namespace
 
 transfer_coding_decoder::transfer_coding_decoder(
-    http_transfer_coding coding, std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit)
-    : stream_(detail::http_pmr_resource_or_default(resource), transfer_coding_window_bits(coding)),
+    http_transfer_coding coding, protocol_byte_limit decoded_limit)
+    : stream_(transfer_coding_window_bits(coding)),
       body_limit_(decoded_limit),
       coding_(coding) {
     if (!stream_.initialized()) {
@@ -224,9 +221,8 @@ struct transfer_coding_scratch_buffer final {
 };
 
 struct transfer_coding_stage final {
-    transfer_coding_stage(http_transfer_coding coding, std::pmr::memory_resource* resource,
-        protocol_byte_limit decoded_limit)
-        : decoder_(coding, resource, decoded_limit) {}
+    transfer_coding_stage(http_transfer_coding coding, protocol_byte_limit decoded_limit)
+        : decoder_(coding, decoded_limit) {}
 
     detail::transfer_coding_decoder decoder_;
     std::size_t begin_{0};
@@ -237,17 +233,13 @@ struct transfer_coding_stage final {
 }  // namespace
 
 struct http_transfer_coding_stack_decoder::impl_type final {
-    impl_type(std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
-        protocol_byte_limit decoded_limit)
-        : resource_(detail::http_pmr_resource_or_default(resource)),
-          stage_count_(codings.size()) {
+    impl_type(std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit)
+        : stage_count_(codings.size()) {
         std::size_t index = 0;
         for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
-            stages_[index++].emplace(*coding, resource_, decoded_limit);
+            stages_[index++].emplace(*coding, decoded_limit);
         }
     }
-
-    std::pmr::memory_resource* resource_;
     std::array<std::optional<transfer_coding_stage>, max_transfer_codings> stages_{};
     std::size_t stage_count_{0};
     // Only inter-stage edges own scratch. The final stage writes directly to
@@ -258,21 +250,15 @@ struct http_transfer_coding_stack_decoder::impl_type final {
 };
 
 http_transfer_coding_stack_decoder::http_transfer_coding_stack_decoder(
-    std::span<const http_transfer_coding> codings, std::pmr::memory_resource* resource,
-    protocol_byte_limit decoded_limit) {
+    std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit) {
     if (codings.empty() || codings.size() > max_transfer_codings) {
         throw std::invalid_argument("invalid transfer-coding stack length");
     }
-    auto* memory = detail::http_pmr_resource_or_default(resource);
-    impl_ = detail::construct_http_pmr_object<impl_type>(
-        detail::http_resolved_pmr_resource_tag{}, memory, codings, memory, decoded_limit);
+    impl_ = new impl_type(codings, decoded_limit);
 }
 
 http_transfer_coding_stack_decoder::~http_transfer_coding_stack_decoder() {
-    if (impl_ != nullptr) {
-        detail::destroy_http_pmr_object(
-            detail::http_resolved_pmr_resource_tag{}, impl_, impl_->resource_);
-    }
+    delete impl_;
 }
 
 http_transfer_coding_decode_result http_transfer_coding_stack_decoder::decode(

@@ -29,7 +29,7 @@ constexpr std::size_t linger_read_bytes = 4096;
 class graceful_close_bounds final {
 public:
     graceful_close_bounds(asio::ip::tcp::socket& socket, connection_scanner& scanner,
-        const worker_handle& worker_value)
+        const worker_ref& worker_value)
         : guard_(scanner, entry_, connection_transport::tcp(socket)) {
         entry_.set_phase(connection_scanner::phase::writing);
         armed_ = worker_value.schedule_timer(timer_, deadline_after(graceful_close_time),
@@ -59,7 +59,7 @@ private:
 // RFC 9112 §9.6: half-close, then read until the peer's end of input. Any
 // error -- including the bounds closing the socket -- ends the wait.
 task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tls,
-    http_connection_close mode, connection_scanner& scanner, const worker_handle& worker_value) {
+    http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value) {
     const graceful_close_bounds bounds(socket, scanner, worker_value);
     if (!bounds.armed() || !socket.is_open()) {
         co_return;
@@ -100,12 +100,12 @@ task<void> close_gracefully(asio::ip::tcp::socket& socket, server_tls_stream* tl
 }  // namespace
 
 task<void> linger_http_connection(
-    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_handle& worker_value) {
+    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(socket, nullptr, http_connection_close::linger, scanner, worker_value);
 }
 
 task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode,
-    connection_scanner& scanner, const worker_handle& worker_value) {
+    connection_scanner& scanner, const worker_ref& worker_value) {
     return close_gracefully(stream.lowest_layer(), &stream, mode, scanner, worker_value);
 }
 

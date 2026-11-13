@@ -9,7 +9,6 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>

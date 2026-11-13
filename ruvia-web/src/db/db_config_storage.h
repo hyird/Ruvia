@@ -4,16 +4,14 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "client/client_tls.h"
 #include "integration/named_capability.h"
-#include "util/config_validation.h"
+#include "server/config_validation.h"
 
 namespace ruvia::detail {
 
@@ -100,11 +98,11 @@ validated_db_config_view validated_db_config(const db_config&&) = delete;
 #ifdef RUVIA_ENABLE_REDIS
 struct db_cache_config_storage final {
     template <typename config_type>
-    db_cache_config_storage(const config_type& source_value, std::pmr::memory_resource* resource)
+    db_cache_config_storage(const config_type& source_value)
         : duration_(source_value.duration_),
           always_enabled_(source_value.always_enabled_),
           ignore_errors_(source_value.ignore_errors_),
-          key_prefix_(source_value.key_prefix_, resource) {
+          key_prefix_(source_value.key_prefix_) {
         if (duration_.count() <= 0 || key_prefix_.empty()) {
             throw std::invalid_argument("database cache requires a positive duration and nonempty namespace");
         }
@@ -112,29 +110,30 @@ struct db_cache_config_storage final {
     std::chrono::milliseconds duration_;
     bool always_enabled_;
     bool ignore_errors_;
-    std::pmr::string key_prefix_;
+    std::string key_prefix_;
 };
 #endif
 
 // Worker/app-owned copy of the public startup configuration. Retained runtime
 // state is explicitly rebound to its owning PMR domain here.
 struct db_config_storage final {
-    db_config_storage(const db_config& source_value, std::pmr::memory_resource* resource)
-        : db_config_storage(validated_db_config(source_value), pmr_resource_or_default(resource)) {}
+    db_config_storage(const db_config& source_value)
+        : db_config_storage(validated_db_config(source_value)) {}
 
-    db_config_storage(validated_db_config_view source_value, std::pmr::memory_resource* resource)
-        : db_config_storage(validated_config_tag_type{}, source_value.get(), pmr_resource_or_default(resource)) {}
+    db_config_storage(validated_db_config_view source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value.get()) {}
 
-    db_config_storage(const db_config_storage& source_value, std::pmr::memory_resource* resource)
-        : db_config_storage(validated_config_tag_type{}, source_value, pmr_resource_or_default(resource)) {}
+    db_config_storage(db_config_storage&&) noexcept = default;
+    db_config_storage(const db_config_storage& source_value)
+        : db_config_storage(validated_config_tag_type{}, source_value) {}
 
     db_driver driver_{db_driver::unspecified};
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_{0};
-    std::pmr::string username_;
-    std::pmr::string password_;
+    std::string username_;
+    std::string password_;
     client_tls_config_storage tls_;
-    std::pmr::string database_;
+    std::string database_;
     std::size_t pool_size_per_worker_;
     std::optional<timeout_duration> connect_timeout_;
     std::optional<timeout_duration> read_timeout_;
@@ -164,24 +163,24 @@ private:
         return source.reconnect_;
     }
     [[nodiscard]] static client_tls_config_storage tls_storage(
-        const db_config& source, std::pmr::memory_resource* resource) {
-        return {source.tls_, client_tls_files::keep_paths, resource};
+        const db_config& source) {
+        return {source.tls_, client_tls_files::keep_paths};
     }
     [[nodiscard]] static client_tls_config_storage tls_storage(
-        const db_config_storage& source, std::pmr::memory_resource* resource) {
-        return {source.tls_, resource};
+        const db_config_storage& source) {
+        return {source.tls_};
     }
 
     template <typename source_type>
         requires(std::same_as<source_type, db_config> || std::same_as<source_type, db_config_storage>)
-    db_config_storage(validated_config_tag_type, const source_type& source_value, std::pmr::memory_resource* resource)
+    db_config_storage(validated_config_tag_type, const source_type& source_value)
         : driver_(source_value.driver_),
-          host_(source_value.host_, resource),
+          host_(source_value.host_),
           port_(resolved_port(source_value)),
-          username_(source_value.username_, resource),
-          password_(source_value.password_, resource),
-          tls_(tls_storage(source_value, resource)),
-          database_(source_value.database_, resource),
+          username_(source_value.username_),
+          password_(source_value.password_),
+          tls_(tls_storage(source_value)),
+          database_(source_value.database_),
           pool_size_per_worker_(source_value.pool_size_per_worker_),
           connect_timeout_(source_value.connect_timeout_),
           read_timeout_(source_value.read_timeout_),
@@ -194,20 +193,19 @@ private:
 
 #ifdef RUVIA_ENABLE_REDIS
 struct db_query_cache_registration_storage final {
-    db_query_cache_registration_storage(const db_query_cache_registration& source_value,
-        std::pmr::memory_resource* resource)
-        : redis_alias_(source_value.redis_alias_, resource),
-          policy_(source_value.policy_, resource) {
+    db_query_cache_registration_storage(const db_query_cache_registration& source_value)
+        : redis_alias_(source_value.redis_alias_),
+          policy_(source_value.policy_) {
         validate_capability_alias(redis_alias_, "database query cache Redis alias must not be empty");
     }
-    std::pmr::string redis_alias_;
+    std::string redis_alias_;
     db_cache_config_storage policy_;
 };
 #endif
 
 struct db_definition final {
     using config_storage_type = db_config_storage;
-    std::pmr::string alias_;
+    std::string alias_;
     db_config_storage config_;
 #ifdef RUVIA_ENABLE_REDIS
     std::optional<db_query_cache_registration_storage> query_cache_{};

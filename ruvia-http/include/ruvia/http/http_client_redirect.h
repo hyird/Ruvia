@@ -8,7 +8,6 @@
 // method/content rewrite rules, and resolve one HTTP(S) URI-reference.
 
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -44,10 +43,9 @@ enum class http_client_redirect_content_disposition : std::uint8_t {
 
 struct http_client_redirect_request_plan_options final {
     http_status_code status_;
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
-// The method is copied into caller-selected PMR storage so the plan does not
+// The method is copied into owned storage so the plan does not
 // inherit the request or request-method backing storage lifetime.
 class http_client_redirect_request_plan final {
 public:
@@ -70,11 +68,10 @@ private:
     friend http_client_redirect_request_plan plan_http_client_redirect_request(
         const http_client_request_view&, http_client_redirect_request_plan_options);
 
-    http_client_redirect_request_plan(std::string_view method,
-        http_client_redirect_content_disposition content_disposition,
-        std::pmr::memory_resource* resource);
+    http_client_redirect_request_plan(
+        std::string_view method, http_client_redirect_content_disposition content_disposition);
 
-    std::pmr::string method_;
+    std::string method_;
     http_client_redirect_content_disposition content_disposition_;
 };
 
@@ -107,7 +104,6 @@ enum class http_client_redirect_resolution_error : std::uint8_t {
 struct http_client_redirect_target_options final {
     borrowed_text current_target_{};
     borrowed_text location_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // A followable redirect destination: the resolved origin plus the origin-form
@@ -156,8 +152,8 @@ private:
     friend std::variant<http_client_resolved_redirect, http_client_redirect_resolution_error>
     resolve_http_client_redirect_target(const http_origin_view&, http_client_redirect_target_options);
 
-    http_client_resolved_redirect(http_scheme scheme, std::pmr::string host, std::uint16_t port,
-        std::pmr::string target, bool cross_origin) noexcept
+    http_client_resolved_redirect(http_scheme scheme, std::string host, std::uint16_t port,
+        std::string target, bool cross_origin) noexcept
         : scheme_(scheme),
           host_(std::move(host)),
           port_(port),
@@ -165,9 +161,9 @@ private:
           cross_origin_(cross_origin) {}
 
     http_scheme scheme_;
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_;
-    std::pmr::string target_;
+    std::string target_;
     bool cross_origin_;
 };
 

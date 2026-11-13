@@ -4,7 +4,6 @@
 #include <concepts>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,7 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/fixed_string.h"
 #include "ruvia/web/model.h"
@@ -23,19 +21,17 @@
 namespace ruvia::detail {
 
 // Shared owning value storage. Backend descriptors and relations stay with
-// their backend; each slot normalizes data into its entity's PMR resource.
+// their backend.
 template <typename t_type>
-struct is_pmr_vector : std::false_type {};
+struct is_std_vector : std::false_type {};
 template <typename t_type>
-struct is_pmr_vector<std::pmr::vector<t_type>> : std::true_type {
+struct is_std_vector<std::vector<t_type>> : std::true_type {
     using value_type = t_type;
 };
 
 template <typename value_type>
 void commit_entity_value(value_type& target, value_type&& owned) noexcept {
-    if constexpr (std::is_same_v<value_type, std::pmr::string> || is_pmr_vector<value_type>::value) {
-        // Both values belong to the same resource. Swap also avoids allocating
-        // debug iterator proxies during publication.
+    if constexpr (std::is_same_v<value_type, std::string> || is_std_vector<value_type>::value) {
         target.swap(owned);
     } else {
         static_assert(std::is_nothrow_move_constructible_v<value_type>);
@@ -48,31 +44,16 @@ struct entity_value_slot {
     enum class state_type : unsigned char { unset,
         null,
         value };
-    explicit entity_value_slot(std::pmr::memory_resource* resource)
-        : resource_(resource),
-          value_(make_value(resource)) {}
-    static t_type make_value(std::pmr::memory_resource* resource) {
-        if constexpr (std::is_same_v<t_type, string>) {
-            return string(model_options{.resource_ = resource});
-        } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-            // MSVC Debug allocates iterator proxies even for empty containers.
-            // Use constructors that can propagate an allocation failure.
-            return t_type(0, '\0', resource);
-        } else if constexpr (is_pmr_vector<t_type>::value) {
-            return t_type(0, resource);
-        } else {
-            return t_type{};
-        }
+    entity_value_slot() = default;
+    static t_type make_value() {
+        return t_type{};
     }
     void clear() {
-        // Even an empty container can allocate (for example, a debug iterator
-        // proxy). Keep the current value alive until that construction succeeds.
-        auto empty = make_value(resource_);
+        auto empty = make_value();
         commit_entity_value(value_, std::move(empty));
     }
-    std::pmr::memory_resource* resource_{nullptr};
     state_type state_{state_type::unset};
-    t_type value_;
+    t_type value_{};
 };
 
 // Position of the descriptor named `name` in a descriptor tuple (entity
@@ -106,45 +87,6 @@ struct is_optional<std::optional<t_type>> : std::true_type {
     using value_type = t_type;
 };
 
-template <typename value_type>
-consteval bool entity_type_has_resource() noexcept {
-    if constexpr (std::is_same_v<value_type, string> || std::is_same_v<value_type, std::pmr::string> ||
-                  is_pmr_vector<value_type>::value) {
-        return true;
-    } else if constexpr (is_optional<value_type>::value) {
-        return entity_type_has_resource<typename is_optional<value_type>::value_type>();
-    } else {
-        return false;
-    }
-}
-
-template <typename value_type>
-[[nodiscard]] bool entity_value_uses_resource(
-    const value_type& value, const std::pmr::memory_resource* resource) noexcept {
-    if constexpr (std::is_same_v<value_type, string>) {
-        return value.resource() == resource;
-    } else if constexpr (std::is_same_v<value_type, std::pmr::string>) {
-        return value.get_allocator().resource() == resource;
-    } else if constexpr (is_optional<value_type>::value) {
-        return !value || entity_value_uses_resource(*value, resource);
-    } else if constexpr (is_pmr_vector<value_type>::value) {
-        if (value.get_allocator().resource() != resource) {
-            return false;
-        }
-        using element_type = typename is_pmr_vector<value_type>::value_type;
-        if constexpr (entity_type_has_resource<element_type>()) {
-            for (const auto& item : value) {
-                if (!entity_value_uses_resource(item, resource)) {
-                    return false;
-                }
-            }
-        }
-        return true;
-    } else {
-        return true;
-    }
-}
-
 template <typename range_type, typename element_type>
 consteval bool is_exact_element_range() noexcept {
     using decayed_type = std::remove_cvref_t<range_type>;
@@ -157,11 +99,11 @@ consteval bool is_exact_element_range() noexcept {
 }
 
 template <typename t_type, typename v_type>
-void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource* resource) {
+void assign_entity_value(t_type& out, v_type&& value) {
     constexpr bool movable_rvalue =
         !std::is_lvalue_reference_v<v_type> && !std::is_const_v<std::remove_reference_t<v_type>>;
     if constexpr (std::is_arithmetic_v<t_type> && is_ruvia_scalar<v_type>) {
-        assign_entity_value(out, value.value_, resource);
+        assign_entity_value(out, value.value_);
     } else if constexpr (is_model_integer<t_type> && std::is_arithmetic_v<std::remove_cvref_t<v_type>>) {
         // 整数输入先检查范围；浮点输入须由调用方显式选择整数转换策略。
         out = integer_value<t_type>(value).value_;
@@ -174,20 +116,18 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         }
     } else if constexpr (std::is_same_v<t_type, string>) {
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, string>) {
-            commit_entity_value(out, rebind_model_value(std::move(value), resource));
+            commit_entity_value(out, rebind_model_value(std::move(value)));
         } else {
-            auto owned = string(std::string_view(value), model_options{.resource_ = resource});
+            auto owned = string(std::string_view(value));
             commit_entity_value(out, std::move(owned));
         }
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string>) {
-        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::pmr::string>) {
-            if (value.get_allocator().resource() == resource) {
-                std::pmr::string owned(std::move(value));
-                commit_entity_value(out, std::move(owned));
-                return;
-            }
+    } else if constexpr (std::is_same_v<t_type, std::string>) {
+        if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, std::string>) {
+            std::string owned(std::move(value));
+            commit_entity_value(out, std::move(owned));
+            return;
         }
-        std::pmr::string owned(std::string_view(value), resource);
+        std::string owned{std::string_view(value)};
         commit_entity_value(out, std::move(owned));
     } else if constexpr (is_optional<t_type>::value) {
         using element_type = typename is_optional<t_type>::value_type;
@@ -195,65 +135,54 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
             if (!value) {
                 out.reset();
             } else {
-                auto owned = entity_value_slot<element_type>::make_value(resource);
+                auto owned = entity_value_slot<element_type>::make_value();
                 if constexpr (movable_rvalue) {
-                    assign_entity_value(owned, std::move(*value), resource);
+                    assign_entity_value(owned, std::move(*value));
                 } else {
-                    assign_entity_value(owned, *value, resource);
+                    assign_entity_value(owned, *value);
                 }
                 out.emplace(std::move(owned));
             }
         } else {
-            auto owned = entity_value_slot<element_type>::make_value(resource);
-            assign_entity_value(owned, std::forward<v_type>(value), resource);
+            auto owned = entity_value_slot<element_type>::make_value();
+            assign_entity_value(owned, std::forward<v_type>(value));
             out.emplace(std::move(owned));
         }
-    } else if constexpr (is_pmr_vector<t_type>::value) {
-        using element_type = typename is_pmr_vector<t_type>::value_type;
+    } else if constexpr (is_std_vector<t_type>::value) {
+        using element_type = typename is_std_vector<t_type>::value_type;
         if constexpr (movable_rvalue && std::is_same_v<std::remove_cvref_t<v_type>, t_type>) {
-            if (entity_value_uses_resource(value, resource)) {
-                t_type owned(std::move(value));
-                commit_entity_value(out, std::move(owned));
-                return;
-            }
+            t_type owned(std::move(value));
+            commit_entity_value(out, std::move(owned));
+            return;
         }
         if constexpr (std::is_arithmetic_v<element_type> &&
                       is_exact_element_range<v_type, element_type>()) {
-            t_type owned(value.begin(), value.end(), resource);
+            t_type owned(value.begin(), value.end());
             commit_entity_value(out, std::move(owned));
-        } else if constexpr (std::is_same_v<element_type, std::pmr::string>) {
-            auto owned = entity_value_slot<t_type>::make_value(resource);
+        } else if constexpr (std::is_same_v<element_type, std::string>) {
+            auto owned = entity_value_slot<t_type>::make_value();
             owned.reserve(value.size());
             if constexpr (movable_rvalue &&
-                          std::is_same_v<std::remove_cvref_t<decltype(*value.begin())>, std::pmr::string>) {
-                bool all_same_resource = true;
-                for (const auto& item : value) {
-                    if (item.get_allocator().resource() != resource) {
-                        all_same_resource = false;
-                        break;
-                    }
+                          std::is_same_v<std::remove_cvref_t<decltype(*value.begin())>, std::string>) {
+                for (auto& item : value) {
+                    owned.emplace_back(std::move(item));
                 }
-                if (all_same_resource) {
-                    for (auto& item : value) {
-                        owned.emplace_back(std::move(item));
-                    }
-                    commit_entity_value(out, std::move(owned));
-                    return;
-                }
+                commit_entity_value(out, std::move(owned));
+                return;
             }
             for (const auto& item : value) {
                 owned.emplace_back(std::string_view(item));
             }
             commit_entity_value(out, std::move(owned));
         } else {
-            auto owned = entity_value_slot<t_type>::make_value(resource);
+            auto owned = entity_value_slot<t_type>::make_value();
             owned.reserve(value.size());
             for (auto& item : value) {
-                auto element = entity_value_slot<element_type>::make_value(resource);
+                auto element = entity_value_slot<element_type>::make_value();
                 if constexpr (movable_rvalue) {
-                    assign_entity_value(element, std::move(item), resource);
+                    assign_entity_value(element, std::move(item));
                 } else {
-                    assign_entity_value(element, item, resource);
+                    assign_entity_value(element, item);
                 }
                 owned.push_back(std::move(element));
             }
@@ -263,7 +192,7 @@ void assign_entity_value(t_type& out, v_type&& value, std::pmr::memory_resource*
         if constexpr (std::is_nothrow_assignable_v<t_type&, v_type&&>) {
             out = std::forward<v_type>(value);
         } else {
-            auto owned = entity_value_slot<t_type>::make_value(resource);
+            auto owned = entity_value_slot<t_type>::make_value();
             owned = std::forward<v_type>(value);
             commit_entity_value(out, std::move(owned));
         }
@@ -295,9 +224,7 @@ public:
     static consteval std::string_view column_name() noexcept {
         return std::tuple_element_t<column_index<name>(), columns_type>::name.view();
     }
-    explicit entity_value_storage(std::pmr::memory_resource* resource = nullptr)
-        : resource_(pmr_resource_or_default(resource)),
-          slots_(entity_value_slot<typename columns::value_type>(resource_)...) {}
+    entity_value_storage() = default;
     entity_value_storage(const entity_value_storage&) = delete;
     entity_value_storage& operator=(const entity_value_storage&) = delete;
     entity_value_storage(entity_value_storage&&) noexcept = default;
@@ -321,7 +248,7 @@ public:
     template <fixed_string name, typename value_type>
     void set(value_type&& value) {
         auto& target = slot<name>();
-        assign_entity_value(target.value_, std::forward<value_type>(value), resource_);
+        assign_entity_value(target.value_, std::forward<value_type>(value));
         target.state_ = decltype(target.state_)::value;
     }
     template <fixed_string name>
@@ -348,27 +275,6 @@ public:
         const auto& value = slot<name>();
         return value.state_ == decltype(value.state_)::null;
     }
-    std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-    [[nodiscard]] entity_value_storage rebind(std::pmr::memory_resource* resource) const {
-        entity_value_storage copy(resource);
-        for_each_descriptor<columns_type>([&]<typename column_type, std::size_t> {
-            constexpr auto name = column_type::name;
-            const auto& source_slot = slot<name>();
-            if (source_slot.state_ == decltype(source_slot.state_)::value) {
-                copy.template set<name>(source_slot.value_);
-            } else if (source_slot.state_ == decltype(source_slot.state_)::null) {
-                if constexpr (column_type::options.nullable_) {
-                    copy.template set_null<name>();
-                }
-            }
-        });
-        return copy;
-    }
-
-private:
-    std::pmr::memory_resource* resource_;
     slots_type slots_;
 };
 
@@ -383,32 +289,22 @@ struct entity_storage_from_tuple<std::tuple<columns...>> {
 
 // Construction, row rebinding and column lookup shared by every entity owner
 // macro (SQL entity, SQL projection, Redis entity). Leaves access public.
-#define RUVIA_DETAIL_ENTITY_OWNER_API(owner, storage_type, member)                    \
-private:                                                                              \
-    template <typename>                                                               \
-    friend class ::ruvia::entity_rows;                                                \
-    explicit owner(storage_type&& storage) noexcept                                   \
-        : member(std::move(storage)) {}                                               \
-    [[nodiscard]] owner rebind_for_rows(std::pmr::memory_resource* resource) const {  \
-        return owner(member.rebind(resource));                                        \
-    }                                                                                 \
-                                                                                      \
-public:                                                                               \
-    explicit owner(std::pmr::memory_resource* resource = nullptr)                     \
-        : member(resource) {}                                                         \
-    template <typename owner_type>                                                    \
-        requires requires(owner_type& source) {                                       \
-            { source.resource() } -> std::convertible_to<std::pmr::memory_resource*>; \
-        }                                                                             \
-    explicit owner(owner_type& source)                                                \
-        : member(source.resource()) {}                                                \
-    template <::ruvia::fixed_string field_name>                                       \
-    static consteval std::size_t column_index() {                                     \
-        return storage_type::template column_index<field_name>();                     \
-    }                                                                                 \
-    template <::ruvia::fixed_string field_name>                                       \
-    static consteval std::string_view column_name() noexcept {                        \
-        return storage_type::template column_name<field_name>();                      \
+#define RUVIA_DETAIL_ENTITY_OWNER_API(owner, storage_type, member) \
+private:                                                           \
+    template <typename>                                            \
+    friend class ::ruvia::entity_rows;                             \
+    explicit owner(storage_type&& storage) noexcept                \
+        : member(std::move(storage)) {}                            \
+                                                                   \
+public:                                                            \
+    owner() = default;                                             \
+    template <::ruvia::fixed_string field_name>                    \
+    static consteval std::size_t column_index() {                  \
+        return storage_type::template column_index<field_name>();  \
+    }                                                              \
+    template <::ruvia::fixed_string field_name>                    \
+    static consteval std::string_view column_name() noexcept {     \
+        return storage_type::template column_name<field_name>();   \
     }
 
 // Public value facades only forward; state transitions belong to the owner.
@@ -457,7 +353,4 @@ public:                                                                         
     template <::ruvia::fixed_string name>                           \
     bool is_null() const {                                          \
         return member.template is_null<name>();                     \
-    }                                                               \
-    std::pmr::memory_resource* resource() const noexcept {          \
-        return member.resource();                                   \
     }

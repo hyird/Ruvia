@@ -25,7 +25,7 @@ struct request_label final {
 
 class label_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         // The binding borrows this local value until next() finishes. Neither
         // the label nor its request-backed string_view may escape the request.
         const request_label label{c.req().header("X-Demo-Name").value_or("guest")};
@@ -55,7 +55,7 @@ private:
 
     ruvia::task<ruvia::http_response> label(ruvia::context& c) {
         const auto& value = c.request_state<request_label>();
-        std::pmr::string text(value.name_, c.arena());
+        std::string text(value.name_);
         text.append(c.is_subrequest() ? " (subrequest)\n" : " (network request)\n");
         co_return c.text(std::move(text));
     }

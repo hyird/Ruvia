@@ -8,7 +8,7 @@
 
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -46,7 +46,7 @@ using router_stream_handler = move_only_function<task<void>(context&)>;
 // facade need not outlive that task; the request still must.
 class router final {
 public:
-    explicit router(worker_handle worker);
+    explicit router(worker_ref worker);
     ~router();
     router(const router&) = delete;
     router& operator=(const router&) = delete;

@@ -14,7 +14,7 @@ namespace ruvia::test {
 // Start roots on their handle's owner and drain every root. The roots use
 // their own stop sources when exercising cancellation.
 template <std::size_t Count>
-task<void> join_worker_tasks(const worker_handle& worker,
+task<void> join_worker_tasks(const worker_ref& worker,
     std::array<task<void>, Count> tasks) {
     task_scope scope(worker);
     std::exception_ptr failure;
@@ -34,7 +34,7 @@ task<void> join_worker_tasks(const worker_handle& worker,
 // The root task holds the loop's retirement open, so a test may stop the
 // attachment while its roots still run; the loop retires once they joined.
 template <std::size_t Count>
-task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const worker_handle& worker,
+task<void> join_worker_tasks_then_stop(event_loop_attachment& attachment, const worker_ref& worker,
     std::array<task<void>, Count> tasks, bool& joined) {
     std::exception_ptr failure;
     try {
@@ -55,7 +55,7 @@ template <typename... Tasks>
 void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
     bool joined = false;
     const auto loop = attachment.loop();
-    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.handle(),
+    auto root = loop.start(join_worker_tasks_then_stop(attachment, loop.worker(),
         std::array<task<void>, sizeof...(Tasks)>{std::forward<Tasks>(tasks)...}, joined));
     attachment.run();
     if (!joined) {

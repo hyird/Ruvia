@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -9,7 +8,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/integration/worker_state.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -21,7 +19,7 @@ namespace ruvia::detail {
 class router;
 
 template <typename callback_type>
-using callback_registration = std::unique_ptr<callback_type, pmr_object_deleter<callback_type>>;
+using callback_registration = std::unique_ptr<callback_type>;
 
 // Pin configured callables before entering the application lock: publication
 // only swaps owning pointers, and router views borrow an address-stable owner.
@@ -31,7 +29,7 @@ template <typename signature_type>
     if (!callback) {
         return {};
     }
-    return make_pmr_object<move_only_function<signature_type>>(process_resource(), std::move(callback));
+    return std::make_unique<move_only_function<signature_type>>(std::move(callback));
 }
 
 template <middleware middleware_type, typename... args_types>
@@ -85,10 +83,10 @@ public:
 private:
     callback_registration<http_error_handler> error_handler_;
     callback_registration<http_not_found_handler> not_found_handler_;
-    std::pmr::vector<std::pair<std::pmr::string, callback_registration<http_error_handler>>> prefix_error_handlers_;
-    std::pmr::vector<std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> prefix_not_found_handlers_;
-    std::pmr::vector<owned_middleware_descriptor> middlewares_;
-    std::pmr::vector<worker_state_definition> worker_states_;
+    std::vector<std::pair<std::string, callback_registration<http_error_handler>>> prefix_error_handlers_;
+    std::vector<std::pair<std::string, callback_registration<http_not_found_handler>>> prefix_not_found_handlers_;
+    std::vector<owned_middleware_descriptor> middlewares_;
+    std::vector<worker_state_definition> worker_states_;
 };
 
 }  // namespace ruvia::detail

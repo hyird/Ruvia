@@ -10,14 +10,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/decimal_number.h"
 
 #include "redis/redis_command_args.h"
 #include "redis/redis_types_access.h"
-#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 namespace {
@@ -44,9 +42,9 @@ std::string_view redis_value_string(const redis_value& value) {
     return value.string();
 }
 
-std::pmr::string take_redis_string(redis_value&& value, std::pmr::memory_resource* resource) {
+std::string take_redis_string(redis_value&& value) {
     (void)redis_value_string(value);
-    return rebind_owned_storage(redis_types_access::text(value), pmr_resource_or_default(resource));
+    return std::move(redis_types_access::text(value));
 }
 
 std::int64_t redis_value_integer(const redis_value& value) {
@@ -93,7 +91,7 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     }
     std::array<char, http_max_unsigned_decimal_size> index_digits;
     const auto index_text = http_format_unsigned(index_digits, index);
-    std::pmr::string message(process_resource());
+    std::string message;
     message.reserve(26 + index_text.size() + value.error().size());
     message.append("redis transaction reply ");
     message.append(index_text);
@@ -102,38 +100,37 @@ void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_
     throw redis_error(redis_error::code_type::command_error, message);
 }
 
-std::optional<std::pmr::string> parse_redis_optional_string(redis_value&& value, std::pmr::memory_resource* resource) {
+std::optional<std::string> parse_redis_optional_string(redis_value&& value) {
     throw_if_redis_error(value);
     if (value.null()) {
         return std::nullopt;
     }
-    return take_redis_string(std::move(value), resource);
+    return take_redis_string(std::move(value));
 }
 
-std::int64_t parse_redis_integer(redis_value&& value, std::pmr::memory_resource*) {
+std::int64_t parse_redis_integer(redis_value&& value) {
     return redis_value_integer(value);
 }
 
-bool parse_redis_integer_bool(redis_value&& value, std::pmr::memory_resource*) {
+bool parse_redis_integer_bool(redis_value&& value) {
     return redis_value_integer_bool(value);
 }
 
-void parse_redis_ok(redis_value&& value, std::pmr::memory_resource*) {
+void parse_redis_ok(redis_value&& value) {
     if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
         throw redis_error(redis_error::code_type::command_error, "unexpected redis status reply");
     }
 }
 
-void parse_redis_pong(redis_value&& value, std::pmr::memory_resource*) {
+void parse_redis_pong(redis_value&& value) {
     if (!http_ascii_equals_ignore_case(redis_value_string(value), "PONG")) {
         throw redis_error(redis_error::code_type::command_error, "unexpected redis ping reply");
     }
 }
 
-std::pmr::vector<bool> parse_redis_bool_array(redis_value&& value, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
+std::vector<bool> parse_redis_bool_array(redis_value&& value) {
     const auto items = redis_value_array(std::as_const(value));
-    std::pmr::vector<bool> output(resolved);
+    std::vector<bool> output;
     output.reserve(items.size());
     for (const auto& item : items) {
         output.emplace_back(redis_value_integer_bool(item));
@@ -141,14 +138,13 @@ std::pmr::vector<bool> parse_redis_bool_array(redis_value&& value, std::pmr::mem
     return output;
 }
 
-std::pmr::vector<std::optional<std::pmr::string>> parse_redis_optional_string_array(
-    redis_value&& value, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
+std::vector<std::optional<std::string>> parse_redis_optional_string_array(
+    redis_value&& value) {
     const auto items = redis_value_array(value);
-    std::pmr::vector<std::optional<std::pmr::string>> output(resolved);
+    std::vector<std::optional<std::string>> output;
     output.reserve(items.size());
     for (auto& item : items) {
-        output.emplace_back(parse_redis_optional_string(std::move(item), resolved));
+        output.emplace_back(parse_redis_optional_string(std::move(item)));
     }
     return output;
 }
@@ -162,25 +158,24 @@ std::optional<double> parse_redis_optional_double(redis_value&& value, std::stri
 }
 
 redis_set_result parse_redis_set_reply(
-    redis_value&& value, std::pmr::memory_resource* resource, const redis_set_options& options) {
+    redis_value&& value, const redis_set_options& options) {
     throw_if_redis_error(value);
-    resource = pmr_resource_or_default(resource);
     const auto returns_previous = redis_set_returns_previous(options.previous_value_);
     if (value.null()) {
         const bool applied =
             returns_previous &&
             (!options.condition_.has_value() || *options.condition_ == redis_set_condition::if_absent);
-        return redis_types_access::set_result(applied, resource);
+        return redis_types_access::set_result(applied);
     }
     if (!returns_previous) {
         if (!http_ascii_equals_ignore_case(redis_value_string(value), "OK")) {
             throw redis_error(redis_error::code_type::command_error, "unexpected redis set reply");
         }
-        return redis_types_access::set_result(true, resource);
+        return redis_types_access::set_result(true);
     }
     const bool applied =
         !options.condition_.has_value() || *options.condition_ != redis_set_condition::if_absent;
-    return redis_types_access::set_result(applied, resource, take_redis_string(std::move(value), resource));
+    return redis_types_access::set_result(applied, take_redis_string(std::move(value)));
 }
 
 redis_ttl parse_redis_ttl(redis_value&& value, bool seconds_precision) {
@@ -226,49 +221,46 @@ double parse_redis_double(std::string_view value, std::string_view context_value
     return *output;
 }
 
-std::pmr::vector<redis_key_value> parse_redis_key_value_array(
-    redis_value&& value, std::pmr::memory_resource* resource, std::string_view context_value) {
-    auto* const resolved = pmr_resource_or_default(resource);
+std::vector<redis_key_value> parse_redis_key_value_array(
+    redis_value&& value, std::string_view context_value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, context_value);
     }
-    std::pmr::vector<redis_key_value> result(resolved);
+    std::vector<redis_key_value> result;
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         result.push_back(redis_types_access::key_value(
-            take_redis_string(std::move(values[i]), resolved),
-            take_redis_string(std::move(values[i + 1]), resolved)));
+            take_redis_string(std::move(values[i])),
+            take_redis_string(std::move(values[i + 1]))));
     }
     return result;
 }
 
-std::pmr::vector<redis_scored_value> parse_redis_scored_array(
-    redis_value&& value, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
+std::vector<redis_scored_value> parse_redis_scored_array(
+    redis_value&& value) {
     const auto values = redis_value_array(value);
     if (values.size() % 2 != 0) {
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis scored array reply");
     }
-    std::pmr::vector<redis_scored_value> result(resolved);
+    std::vector<redis_scored_value> result;
     result.reserve(values.size() / 2);
     for (std::size_t i = 0; i < values.size(); i += 2) {
         const auto score_text = redis_value_string(values[i + 1]);
         result.push_back(redis_types_access::scored_value(
-            take_redis_string(std::move(values[i]), resolved),
+            take_redis_string(std::move(values[i])),
             parse_redis_double(score_text, "invalid redis score")));
     }
     return result;
 }
 
-std::pmr::vector<std::pmr::string> parse_redis_string_array(
-    redis_value&& value, std::pmr::memory_resource* resource) {
-    auto* const resolved = pmr_resource_or_default(resource);
+std::vector<std::string> parse_redis_string_array(
+    redis_value&& value) {
     const auto items = redis_value_array(value);
-    std::pmr::vector<std::pmr::string> output(resolved);
+    std::vector<std::string> output;
     output.reserve(items.size());
     for (auto& item : items) {
-        output.emplace_back(take_redis_string(std::move(item), resolved));
+        output.emplace_back(take_redis_string(std::move(item)));
     }
     return output;
 }
@@ -291,32 +283,30 @@ template <typename result_type, typename payload_parser_type>
 
 }  // namespace
 
-redis_scan_result parse_redis_scan_result(redis_value&& value, std::pmr::memory_resource* resource) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_result(resource), "unexpected redis scan reply",
-        [resource](redis_scan_result& result_value, redis_value&& payload) {
-            redis_types_access::values(result_value) = parse_redis_string_array(std::move(payload), resource);
+redis_scan_result parse_redis_scan_result(redis_value&& value) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::scan_result(), "unexpected redis scan reply",
+        [](redis_scan_result& result_value, redis_value&& payload) {
+            redis_types_access::values(result_value) = parse_redis_string_array(std::move(payload));
         });
 }
 
 redis_hash_scan_result parse_redis_hash_scan_result(
-    redis_value&& value, std::pmr::memory_resource* resource) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::hash_scan_result(resource),
-        "unexpected redis hscan reply", [resource](redis_hash_scan_result& result_value, redis_value&& payload) {
-            redis_types_access::entries(result_value) =
-                parse_redis_key_value_array(std::move(payload), resource, "unexpected redis hscan entry count");
-        });
+    redis_value&& value) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::hash_scan_result(), "unexpected redis hscan reply", [](redis_hash_scan_result& result_value, redis_value&& payload) {
+        redis_types_access::entries(result_value) =
+            parse_redis_key_value_array(std::move(payload), "unexpected redis hscan entry count");
+    });
 }
 
 redis_z_scan_result parse_redis_z_scan_result(
-    redis_value&& value, std::pmr::memory_resource* resource) {
-    return parse_redis_scan_envelope(std::move(value), redis_types_access::z_scan_result(resource),
-        "unexpected redis zscan reply", [resource](redis_z_scan_result& result_value, redis_value&& payload) {
-            redis_types_access::entries(result_value) = parse_redis_scored_array(std::move(payload), resource);
-        });
+    redis_value&& value) {
+    return parse_redis_scan_envelope(std::move(value), redis_types_access::z_scan_result(), "unexpected redis zscan reply", [](redis_z_scan_result& result_value, redis_value&& payload) {
+        redis_types_access::entries(result_value) = parse_redis_scored_array(std::move(payload));
+    });
 }
 
 std::optional<redis_key_value> parse_redis_blocking_pop_reply(
-    redis_value&& value, std::pmr::memory_resource* resource) {
+    redis_value&& value) {
     throw_if_redis_error(value);
     if (value.null()) {
         return std::nullopt;
@@ -326,18 +316,18 @@ std::optional<redis_key_value> parse_redis_blocking_pop_reply(
         throw redis_error(redis_error::code_type::protocol_error, "unexpected redis blocking pop reply");
     }
     return redis_types_access::key_value(
-        take_redis_string(std::move(items[0]), resource),
-        take_redis_string(std::move(items[1]), resource));
+        take_redis_string(std::move(items[0])),
+        take_redis_string(std::move(items[1])));
 }
 
 std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
-    redis_value&& value, std::pmr::memory_resource* resource) {
+    redis_value&& value) {
     throw_if_redis_error(value);
     if (value.null()) {
         return std::nullopt;
     }
 
-    auto result_value = redis_types_access::xread_group_result(resource);
+    auto result_value = redis_types_access::xread_group_result();
     const auto stream_values = redis_value_array(value);
     auto& streams = redis_types_access::streams(result_value);
     streams.reserve(stream_values.size());
@@ -348,7 +338,7 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
                 redis_error::code_type::protocol_error, "unexpected redis xreadgroup stream reply");
         }
         auto stream =
-            redis_types_access::stream_read_result(take_redis_string(std::move(stream_parts[0]), resource));
+            redis_types_access::stream_read_result(take_redis_string(std::move(stream_parts[0])));
         const auto entry_values = redis_value_array(stream_parts[1]);
         auto& entries = redis_types_access::entries(stream);
         entries.reserve(entry_values.size());
@@ -358,10 +348,10 @@ std::optional<redis_x_read_group_result> parse_redis_x_read_group_reply(
                 throw redis_error(
                     redis_error::code_type::protocol_error, "unexpected redis xreadgroup entry reply");
             }
-            auto parsed_entry = redis_types_access::stream_entry(take_redis_string(std::move(entry_parts[0]), resource));
+            auto parsed_entry = redis_types_access::stream_entry(take_redis_string(std::move(entry_parts[0])));
             if (!entry_parts[1].null()) {
                 redis_types_access::fields(parsed_entry) = parse_redis_key_value_array(
-                    std::move(entry_parts[1]), resource, "unexpected redis xreadgroup field reply");
+                    std::move(entry_parts[1]), "unexpected redis xreadgroup field reply");
             }
             entries.emplace_back(std::move(parsed_entry));
         }

@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -19,15 +18,13 @@ namespace ruvia::detail {
 // each name; groups are sorted only for lookup and are never exposed publicly.
 class request_query_values final {
 public:
-    request_query_values(const request_name_value_list& fields, std::pmr::memory_resource* resource)
-        : groups_(resource),
-          values_(resource) {
+    explicit request_query_values(const request_name_value_list& fields) {
         if (fields.empty()) {
             return;
         }
         static constexpr std::size_t inline_order_capacity = 32;
         std::array<std::size_t, inline_order_capacity> inline_order;
-        std::pmr::vector<std::size_t> heap_order(resource);
+        std::vector<std::size_t> heap_order;
         std::span<std::size_t> order;
         if (fields.size() <= inline_order_capacity) {
             order = std::span<std::size_t>(inline_order.data(), fields.size());
@@ -77,17 +74,23 @@ private:
         std::size_t begin_;
         std::size_t count_;
     };
-    std::pmr::vector<group_type> groups_;
-    std::pmr::vector<std::string_view> values_;
+    std::vector<group_type> groups_;
+    std::vector<std::string_view> values_;
 };
 
-// Field views borrow the request query string or decoded bytes in the request
-// arena, so neither moves once published.
+// Field views borrow the request query string or decoded_bytes_, so neither
+// moves once published.
 class request_query_cache final {
 public:
-    request_query_cache(request_name_value_list&& fields_value, std::pmr::memory_resource* arena) noexcept
-        : fields_(std::move(fields_value)),
-          arena_(arena) {}
+    request_query_cache() noexcept
+        : fields_(request_name_value_list_access::make()) {}
+
+    [[nodiscard]] std::string& decoded_bytes() noexcept {
+        return decoded_bytes_;
+    }
+    [[nodiscard]] request_name_value_list& mutable_fields() noexcept {
+        return fields_;
+    }
 
     [[nodiscard]] const request_name_value_list& fields() const& noexcept {
         return fields_;
@@ -96,18 +99,15 @@ public:
 
     [[nodiscard]] const request_query_values& values() & {
         if (!values_) {
-            // Construct completely before publishing any spans. A failed
-            // allocation leaves the scalar cache intact and permits a retry.
-            values_.emplace(fields_, arena_);
+            values_.emplace(fields_);
         }
         return *values_;
     }
     const request_query_values& values() && = delete;
 
 private:
-    // Member order destroys the index before the fields it borrows.
+    std::string decoded_bytes_;
     request_name_value_list fields_;
-    std::pmr::memory_resource* arena_;
     std::optional<request_query_values> values_;
 };
 

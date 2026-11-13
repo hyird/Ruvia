@@ -9,8 +9,8 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/app.h"
@@ -29,25 +29,23 @@ inline constexpr std::array<ruvia::jwt_claim_view, 1> default_claims{{
     {.name_ = "scope", .value_ = "example"},
 }};
 
-ruvia::jwt_sign_options sign_options(ruvia::context& c) {
+ruvia::jwt_sign_options sign_options() {
     ruvia::jwt_sign_options options;
     options.secret_ = jwt_secret;
     options.issuer_ = "ruvia-example";
     options.audience_ = "ruvia-api";
     options.expires_in_ = std::chrono::minutes(30);
     options.claims_ = default_claims;
-    options.resource_ = c.arena();
     return options;
 }
 
-ruvia::jwt_verify_options verify_options(std::string_view token, std::pmr::memory_resource* resource) {
+ruvia::jwt_verify_options verify_options(std::string_view token) {
     ruvia::jwt_verify_options options;
     options.token_ = token;
     options.secret_ = jwt_secret;
     options.issuer_ = "ruvia-example";
     options.audience_ = "ruvia-api";
     options.leeway_ = std::chrono::seconds(30);
-    options.resource_ = resource;
     return options;
 }
 
@@ -60,7 +58,7 @@ struct authenticated_user final {
 
 class jwt_auth_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         const auto token = ruvia::jwt_bearer_token(c.req().header("Authorization").value_or(""));
         if (!token) {
             // RFC 9110 15.5.2: a 401 names the scheme that would succeed.
@@ -76,7 +74,7 @@ public:
         // instead of reaching on_error.
         std::optional<ruvia::jwt_payload> payload;
         try {
-            payload.emplace(ruvia::jwt_verify(verify_options(*token, c.arena())));
+            payload.emplace(ruvia::jwt_verify(verify_options(*token)));
         } catch (const ruvia::jwt_error&) {
             // RFC 6750 3.1: a presented but unusable token is invalid_token.
             c.policy().header("WWW-Authenticate", R"(Bearer error="invalid_token")");
@@ -106,7 +104,7 @@ public:
 
 private:
     ruvia::task<ruvia::http_response> token(ruvia::context& c) {
-        auto options = sign_options(c);
+        auto options = sign_options();
         options.subject_ = c.req().query("sub").value_or("example-user");
         auto jwt = ruvia::jwt_sign(options);
         co_return c.text(std::move(jwt));
@@ -116,7 +114,7 @@ private:
     // handler reads it back by type, with no out-of-band channel.
     ruvia::task<ruvia::http_response> me(ruvia::context& c) {
         const auto& user_value = c.request_state<authenticated_user>();
-        std::pmr::string reply(c.arena());
+        std::string reply;
         reply.append("authenticated as ");
         reply.append(user_value.subject_);
         reply.push_back('\n');

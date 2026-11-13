@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,7 +13,6 @@
 #include <asio.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -51,12 +49,12 @@ using ruvia::test::append_frame;
 // client retirement cannot be masked by a server request-lease destructor.
 class early_final_peer final {
 public:
-    early_final_peer(asio::io_context& io, const ruvia::worker_handle& worker, response_mode mode)
+    early_final_peer(asio::io_context& io, const ruvia::worker_ref& worker, response_mode mode)
         : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           socket_(io),
           done_(worker),
           mode_(mode) {}
-    early_final_peer(asio::io_context&, ruvia::worker_handle&&, response_mode) = delete;
+    early_final_peer(asio::io_context&, ruvia::worker_ref&&, response_mode) = delete;
 
     std::uint16_t port() const {
         return acceptor_.local_endpoint().port();
@@ -88,7 +86,7 @@ public:
         }
     }
 
-    std::pmr::string received_{ruvia::process_resource()};
+    std::string received_{};
     bool request_ended_{false};
     bool request_reset_{false};
     unsigned requests_{0};
@@ -103,7 +101,7 @@ private:
         }
         if (mode_ == response_mode::connection_lost || mode_ == response_mode::connection_lost_upload ||
             mode_ == response_mode::goaway_upload) {
-            std::pmr::string wire{ruvia::process_resource()};
+            std::string wire{};
             const std::array<char, 6> no_streams{0, 3, 0, 0, 0, 0};
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {no_streams.data(), no_streams.size()});
             const std::array<char, 8> ping{};
@@ -116,7 +114,7 @@ private:
                 if (!header) {
                     throw std::runtime_error("invalid client HTTP/2 frame");
                 }
-                std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+                std::string payload(header->length_, '\0');
                 if (!payload.empty()) {
                     co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
                 }
@@ -146,7 +144,7 @@ private:
                 throw std::runtime_error("missing retried HTTP/2 client preface");
             }
         }
-        std::pmr::string wire{ruvia::process_resource()};
+        std::string wire{};
         const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
         if (mode_ == response_mode::disconnected) {
@@ -154,8 +152,7 @@ private:
             append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {zero_window.data(), zero_window.size()});
         }
         co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
-        std::pmr::unsynchronized_pool_resource memory;
-        ruvia::hpack_decoder decoder({.resource_ = &memory});
+        ruvia::hpack_decoder decoder;
         std::uint32_t first_stream = 0;
         for (;;) {
             std::array<char, ruvia::http2_frame_header_bytes> bytes;
@@ -164,7 +161,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid client HTTP/2 frame");
             }
-            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+            std::string payload(header->length_, '\0');
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -173,8 +170,8 @@ private:
             if (type == ruvia::http2_frame_type::settings && (header->flags_ & 1U) == 0) {
                 append_frame(wire, type, 1, 0, {});
             } else if (type == ruvia::http2_frame_type::headers) {
-                std::pmr::string method{ruvia::process_resource()};
-                std::pmr::string path{ruvia::process_resource()};
+                std::string method{};
+                std::string path{};
                 const auto decoded = decoder.decode(payload, [&](std::string_view name, std::string_view value) {
                     if (name == ":method") {
                         method = value;
@@ -212,7 +209,7 @@ private:
                     }
                     first_stream = header->stream_id_;
                     if (mode_ == response_mode::continued) {
-                        std::pmr::string interim(&memory);
+                        std::string interim;
                         ruvia::hpack_encoder::encode_header(interim, ":status", "100");
                         append_frame(wire, type, 4, first_stream, interim);
                     }
@@ -227,7 +224,7 @@ private:
                 const bool rejected = requests_ == 1 && mode_ == response_mode::rejected;
                 const std::string_view body = requests_ == 2 || mode_ == response_mode::connection_lost ? "next" : rejected ? "no"
                                                                                                                             : "ok";
-                std::pmr::string fields(&memory);
+                std::string fields;
                 const bool empty_final = requests_ == 1 &&
                                          (mode_ == response_mode::buffered || mode_ == response_mode::streaming);
                 ruvia::hpack_encoder::encode_header(fields, ":status", empty_final ? "204" : rejected ? "413"
@@ -291,7 +288,7 @@ private:
 
 class draining_peer final {
 public:
-    draining_peer(asio::io_context& io, const ruvia::worker_handle& worker)
+    draining_peer(asio::io_context& io, const ruvia::worker_ref& worker)
         : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           socket_(io),
           start_drain_(io),
@@ -347,7 +344,7 @@ private:
         if (std::string_view(preface.data(), preface.size()) != ruvia::http2_client_preface) {
             throw std::runtime_error("missing HTTP/2 preface");
         }
-        std::pmr::string wire{ruvia::process_resource()};
+        std::string wire{};
         const std::array<char, 6> one_stream{0, 3, 0, 0, 0, 1};
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {one_stream.data(), one_stream.size()});
         co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
@@ -359,7 +356,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }
-            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+            std::string payload(header->length_, '\0');
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -390,7 +387,7 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 frame");
             }
-            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+            std::string payload(header->length_, '\0');
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
@@ -423,12 +420,12 @@ private:
 void exercise_abandon_during_drain() {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     draining_peer peer(io, worker);
     peer.start();
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
+        const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(5),
@@ -481,12 +478,12 @@ void exercise(response_mode mode) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     // The peer's signal borrows this handle through completion and join.
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     early_final_peer peer(io, worker, mode);
     peer.start();
     std::exception_ptr failure;
     const auto run = [&]() -> ruvia::task<void> {
-        const std::pmr::string client_url("http://127.0.0.1:" + std::pmr::string(std::to_string(peer.port()), ruvia::process_resource()), ruvia::process_resource());
+        const std::string client_url("http://127.0.0.1:" + std::string(std::to_string(peer.port())));
         ruvia::http_client client(attachment.loop(), {.base_url_ = client_url,
                                                          .connection_limits_ = {.max_open_ = 1},
                                                          .request_timeout_ = std::chrono::seconds(2),
@@ -541,14 +538,14 @@ void exercise(response_mode mode) {
                 }
                 EXPECT_TRUE(completion_cancelled);
             } else if (mode == response_mode::buffered) {
-                const std::pmr::string payload(65536, 'b', ruvia::process_resource());
+                const std::string payload(65536, 'b');
                 auto response = co_await client.client().post("/upload").body(payload).send();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
                 const auto bytes = co_await response.stream().read_all();
                 EXPECT_TRUE(bytes.bytes().empty());
                 EXPECT_TRUE(response.stream().complete());
             } else if (mode == response_mode::streaming) {
-                const std::pmr::string payload(streaming_payload_bytes, 's', ruvia::process_resource());
+                const std::string payload(streaming_payload_bytes, 's');
                 auto exchange = co_await client.client().request("POST", "/upload").upload({.content_length_ = payload.size(), .max_chunk_bytes_ = payload.size()});
                 auto response = co_await exchange.response();
                 EXPECT_TRUE(response.status() == ruvia::http_status::no_content);
@@ -617,10 +614,10 @@ void exercise(response_mode mode) {
                 if (mode == response_mode::ordinary || mode == response_mode::continued ||
                     mode == response_mode::buffered || mode == response_mode::streaming) {
                     const auto expected = mode == response_mode::buffered
-                                              ? std::pmr::string(65536, 'b', ruvia::process_resource())
+                                              ? std::string(65536, 'b')
                                           : mode == response_mode::streaming
-                                              ? std::pmr::string(streaming_payload_bytes, 's', ruvia::process_resource())
-                                              : std::pmr::string("payload", ruvia::process_resource());
+                                              ? std::string(streaming_payload_bytes, 's')
+                                              : std::string("payload");
                     EXPECT_EQ(peer.received_, expected);
                     EXPECT_TRUE(peer.request_ended_);
                 } else if (mode == response_mode::refused || mode == response_mode::connection_lost) {

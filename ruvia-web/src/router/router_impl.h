@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -43,8 +42,8 @@ public:
     void set_not_found_handler(http_not_found_handler_ref handler) noexcept;
     // Copies normalized, de-duplicated prefixes into the plan, deepest first.
     // Callback views borrow their app_configuration owners until the plan retires.
-    void set_prefix_error_handlers(std::span<const std::pair<std::pmr::string, callback_registration<http_error_handler>>> handlers);
-    void set_prefix_not_found_handlers(std::span<const std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> handlers);
+    void set_prefix_error_handlers(std::span<const std::pair<std::string, callback_registration<http_error_handler>>> handlers);
+    void set_prefix_not_found_handlers(std::span<const std::pair<std::string, callback_registration<http_not_found_handler>>> handlers);
     // Application-wide middleware, prepended to every route's chain. Each
     // descriptor becomes exactly one instance per worker, serving all routes.
     void set_global_middlewares(std::span<const controller_middleware_descriptor> descriptors);
@@ -94,10 +93,10 @@ private:
     [[nodiscard]] static bool is_dynamic_path(std::string_view path) noexcept;
 
     compiled_route_plan_ptr_type plan_;
-    std::pmr::vector<std::uint64_t> route_hashes_;
-    std::pmr::vector<controller_middleware_descriptor> route_middleware_descriptors_;
-    std::pmr::vector<route_middleware_range_type> route_middleware_ranges_;
-    std::pmr::vector<controller_middleware_descriptor> global_middleware_descriptors_;
+    std::vector<std::uint64_t> route_hashes_;
+    std::vector<controller_middleware_descriptor> route_middleware_descriptors_;
+    std::vector<route_middleware_range_type> route_middleware_ranges_;
+    std::vector<controller_middleware_descriptor> global_middleware_descriptors_;
     std::size_t controller_slot_{0};
     void* controller_target_{nullptr};
 };

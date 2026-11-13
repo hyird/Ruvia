@@ -8,7 +8,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <span>
@@ -20,12 +19,12 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/fnv1a.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_date.h"
 
+#include "http/inline_text_concat.h"
 #include "http/static_file_metadata.h"
 #include "http/static_file_variant.h"
 #include "http/static_path_normalization.h"
@@ -33,7 +32,6 @@
 #include "http/static_root_index.h"
 #include "http/static_root_options_validation.h"
 #include "server/http_native_file.h"
-#include "util/inline_text_concat.h"
 // servable file recorded with the metadata a response needs, and lookups after
 // that touch only the index. A request never walks or stats the tree: a
 // file-backed response opens its one indexed entry on the blocking pool and
@@ -51,12 +49,7 @@ namespace {
 }
 
 [[nodiscard]] detail::static_root_state* make_static_root_state(detail::static_root_config_storage config) {
-    auto* const resource = process_resource();
-    if (resource == nullptr) {
-        std::terminate();
-    }
-    return construct_pmr_object<detail::static_root_state>(
-        resource, resource, std::move(config));
+    return new detail::static_root_state(std::move(config));
 }
 
 [[nodiscard]] std::filesystem::path canonical_static_root_path(const std::filesystem::path& root) {
@@ -69,7 +62,7 @@ namespace {
 }
 
 [[nodiscard]] const detail::static_root_entry* find_static_root_entry(
-    const std::pmr::vector<detail::static_root_entry>& entries,
+    const std::vector<detail::static_root_entry>& entries,
     std::string_view relative_path) noexcept {
     return detail::find_static_index_entry(entries, relative_path,
         [](const detail::static_root_entry& entry_value) noexcept {
@@ -78,9 +71,9 @@ namespace {
 }
 
 [[nodiscard]] bool contains_static_directory(
-    const std::pmr::vector<std::pmr::string>& directories, std::string_view relative_path) noexcept {
+    const std::vector<std::string>& directories, std::string_view relative_path) noexcept {
     return detail::find_static_index_entry(directories, relative_path,
-               [](const std::pmr::string& directory) noexcept { return std::string_view(directory); }) != nullptr;
+               [](const std::string& directory) noexcept { return std::string_view(directory); }) != nullptr;
 }
 
 [[nodiscard]] detail::static_file_version static_root_entry_version(
@@ -105,7 +98,7 @@ namespace {
         return nullptr;
     }
     const detail::inline_text_concat<256> lookup_path(
-        {identity.relative_path_, suffix}, process_resource());
+        {identity.relative_path_, suffix});
     const auto* variant = find_static_root_entry(state_value.entries_, lookup_path.view());
     if (variant == nullptr ||
         !static_root_entry_version(*variant).at_least_as_new_as(static_root_entry_version(identity))) {
@@ -127,8 +120,8 @@ namespace {
 // Reuses an unchanged file's encoded bytes from the previous snapshot. The
 // buffer is immutable, so the new snapshot shares it instead of copying it.
 void share_memory_variant(detail::static_root_entry& entry_value,
-    const detail::static_root_memory_variant& source_value, std::pmr::memory_resource* resource) {
-    auto& stored = entry_value.memory_variants_.emplace_back(resource);
+    const detail::static_root_memory_variant& source_value) {
+    auto& stored = entry_value.memory_variants_.emplace_back();
     stored.content_coding_ = source_value.content_coding_;
     stored.bytes_ = source_value.bytes_;
     stored.modified_token_ = source_value.modified_token_;
@@ -156,7 +149,7 @@ void share_memory_variant(detail::static_root_entry& entry_value,
 // without following a symlink in any component, so a path swapped after
 // indexing cannot reach outside the root. Windows opens the canonical path;
 // the identity check against the index is its guard.
-[[nodiscard]] detail::native_file_handle open_static_root_file(const detail::static_root_state& state_value,
+[[nodiscard]] detail::native_file_descriptor open_static_root_file(const detail::static_root_state& state_value,
     const http_native_path_char_type* file_path, std::error_code& ec) noexcept {
 #if defined(__unix__)
     return detail::open_native_file_beneath(
@@ -168,8 +161,8 @@ void share_memory_variant(detail::static_root_entry& entry_value,
 
 // A file that changed (or vanished) since it was indexed yields nothing: only
 // that entry loses its variants and stays file-backed, validated per request.
-[[nodiscard]] std::optional<std::pmr::string> read_static_root_entry_bytes(const detail::static_root_state& state_value,
-    const detail::static_root_entry& entry_value, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::optional<std::string> read_static_root_entry_bytes(const detail::static_root_state& state_value,
+    const detail::static_root_entry& entry_value) {
     if (entry_value.size_ > static_cast<std::uint64_t>(std::numeric_limits<std::size_t>::max())) {
         throw std::runtime_error("static file is too large to buffer");
     }
@@ -181,7 +174,7 @@ void share_memory_variant(detail::static_root_entry& entry_value,
     if (ec || detail::validate_native_file(input.get(), entry_value.identity_, entry_value.size_)) {
         return std::nullopt;
     }
-    std::pmr::string bytes(resource);
+    std::string bytes;
     bytes.resize(size);
     if ((size != 0 && detail::read_native_file_at(input.get(), 0, bytes.data(), size)) ||
         detail::validate_native_file(input.get(), entry_value.identity_, entry_value.size_)) {
@@ -191,17 +184,15 @@ void share_memory_variant(detail::static_root_entry& entry_value,
 }
 
 void store_precompressed_variant(detail::static_root_entry& entry_value, http_content_coding coding,
-    std::pmr::string encoded, bool emit_response_validators, std::pmr::memory_resource* resource) {
-    auto bytes = std::allocate_shared<std::pmr::string>(
-        std::pmr::polymorphic_allocator<std::pmr::string>(resource), std::move(encoded));
-    auto& variant = entry_value.memory_variants_.emplace_back(resource);
+    std::string encoded, bool emit_response_validators) {
+    auto bytes = std::make_shared<std::string>(std::move(encoded));
+    auto& variant = entry_value.memory_variants_.emplace_back();
     variant.content_coding_ = coding;
     variant.modified_token_ = entry_value.modified_token_;
     variant.modified_seconds_ = entry_value.modified_seconds_;
     variant.bytes_ = std::move(bytes);
     if (emit_response_validators) {
-        variant.etag_ = detail::make_static_file_snapshot_etag(
-            resource, variant.bytes_->size(), entry_value.modified_token_, entry_value.identity_, coding);
+        variant.etag_ = detail::make_static_file_snapshot_etag(variant.bytes_->size(), entry_value.modified_token_, entry_value.identity_, coding);
         variant.last_modified_ = entry_value.last_modified_;
     }
 }
@@ -238,8 +229,8 @@ void hash_value(std::uint64_t& hash, t_type value) noexcept {
 }  // namespace
 
 detail::static_root_config_storage detail::static_root_access::copy_config(
-    const static_root& root, std::pmr::memory_resource* resource) {
-    return static_root_config_storage(root.state_->config_, resource);
+    const static_root& root) {
+    return static_root_config_storage(root.state_->config_);
 }
 
 std::string_view detail::static_root_access::index_file(const static_root& root) noexcept {
@@ -289,7 +280,7 @@ bool detail::static_root_access::is_indexed_directory(
 namespace {
 
 [[nodiscard]] std::optional<detail::static_root_entry_view> resolve_normalized_static_root_entry(
-    const static_root& root, bool directory_slash, std::string_view& relative, std::pmr::string& storage) {
+    const static_root& root, bool directory_slash, std::string_view& relative, std::string& storage) {
     auto entry_value =
         directory_slash ? std::optional<detail::static_root_entry_view>{} : detail::static_root_access::find(root, relative);
     if (!entry_value.has_value() && detail::static_root_access::is_indexed_directory(root, relative)) {
@@ -314,7 +305,7 @@ namespace {
 }  // namespace
 
 std::optional<detail::static_root_entry_view> detail::static_root_access::resolve(
-    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    const static_root& root, std::string_view& relative, std::string& storage) {
     const bool directory_slash =
         !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
     relative = normalize_static_relative_path(relative, storage);
@@ -325,7 +316,7 @@ std::optional<detail::static_root_entry_view> detail::static_root_access::resolv
 }
 
 std::optional<detail::static_root_entry_view> detail::static_root_access::try_resolve(
-    const static_root& root, std::string_view& relative, std::pmr::string& storage) {
+    const static_root& root, std::string_view& relative, std::string& storage) {
     const bool directory_slash =
         !relative.empty() && (relative.back() == '/' || relative.back() == '\\');
     const auto normalized = try_normalize_static_relative_path(relative, storage);
@@ -353,7 +344,6 @@ void detail::static_root_access::install_precompressed_variants(
     }
 
     auto& state_value = *root.state_;
-    auto* const resource = process_resource();
     const auto* previous_state = previous == nullptr ? nullptr : previous->state_.get();
     const bool emit_response_validators =
         state_value.config_.response_validators_ == static_response_validator_policy::emit;
@@ -373,8 +363,8 @@ void detail::static_root_access::install_precompressed_variants(
             }
         }
 
-        std::optional<std::pmr::string> plain;
-        const std::pmr::string* plain_bytes = entry.resident_bytes_.get();
+        std::optional<std::string> plain;
+        const std::string* plain_bytes = entry.resident_bytes_.get();
         for (const auto& sidecar : detail::static_precompression_sidecars) {
             const auto coding = sidecar.content_coding_;
             if (!options.enabled(coding) || find_fresh_sidecar_entry(state_value, entry, sidecar.suffix_) != nullptr) {
@@ -383,12 +373,12 @@ void detail::static_root_access::install_precompressed_variants(
             if (previous_entry != nullptr) {
                 if (const auto* previous_variant = find_memory_variant(*previous_entry, coding);
                     previous_variant != nullptr) {
-                    share_memory_variant(entry, *previous_variant, resource);
+                    share_memory_variant(entry, *previous_variant);
                     continue;
                 }
             }
             if (plain_bytes == nullptr) {
-                plain = read_static_root_entry_bytes(state_value, entry, resource);
+                plain = read_static_root_entry_bytes(state_value, entry);
                 if (!plain.has_value()) {
                     entry.memory_variants_.clear();
                     break;
@@ -399,10 +389,10 @@ void detail::static_root_access::install_precompressed_variants(
                 continue;
             }
             auto encoded = encode_http_content(
-                coding, *plain_bytes, {.max_encoded_bytes_ = plain_bytes->size() - 1, .resource_ = resource});
+                coding, *plain_bytes, {.max_encoded_bytes_ = plain_bytes->size() - 1});
             if (encoded.has_value()) {
                 store_precompressed_variant(entry, coding, std::move(*encoded),
-                    emit_response_validators, resource);
+                    emit_response_validators);
             }
         }
     }
@@ -414,7 +404,6 @@ void detail::static_root_access::install_resident_bodies(
         return;
     }
     auto& state_value = *root.state_;
-    auto* const resource = process_resource();
     const auto* previous_state = previous == nullptr ? nullptr : previous->state_.get();
     std::size_t used = 0;
     for (auto& entry : state_value.entries_) {
@@ -431,12 +420,11 @@ void detail::static_root_access::install_resident_bodies(
                 continue;
             }
         }
-        auto bytes = read_static_root_entry_bytes(state_value, entry, resource);
+        auto bytes = read_static_root_entry_bytes(state_value, entry);
         if (!bytes.has_value()) {
             continue;
         }
-        entry.resident_bytes_ = std::allocate_shared<std::pmr::string>(
-            std::pmr::polymorphic_allocator<std::pmr::string>(resource), std::move(*bytes));
+        entry.resident_bytes_ = std::make_shared<std::string>(std::move(*bytes));
         used += size;
     }
 }
@@ -444,7 +432,7 @@ void detail::static_root_access::install_resident_bodies(
 detail::static_root_entry_open detail::static_root_access::entry_open(
     const static_root& root, const static_root_entry_view& entry, bool checked) {
     const auto& state_value = *root.state_;
-    http_native_path_string_type open_path(static_root_open_path(state_value, entry.file_path()), process_resource());
+    http_native_path_string_type open_path(static_root_open_path(state_value, entry.file_path()));
 #if defined(__unix__)
     return static_root_entry_open(state_value.root_directory_, std::move(open_path), entry.identity(), entry.size(), checked);
 #else
@@ -452,7 +440,7 @@ detail::static_root_entry_open detail::static_root_access::entry_open(
 #endif
 }
 
-http_response_file_handle detail::static_root_entry_open::operator()() const noexcept {
+http_response_file_descriptor detail::static_root_entry_open::operator()() const noexcept {
     std::error_code ec;
 #if defined(__unix__)
     auto input = detail::open_native_file_beneath(root_directory_->get(), open_path_.c_str(), ec);
@@ -491,12 +479,10 @@ bool detail::static_root_access::same_snapshot(
 
 namespace {
 
-[[nodiscard]] std::unique_ptr<detail::static_root_state, pmr_object_deleter<detail::static_root_state>>
+[[nodiscard]] std::unique_ptr<detail::static_root_state>
 build_static_root_state(const std::filesystem::path& root, detail::static_root_config_storage config_storage) {
     const auto canonical_root = canonical_static_root_path(root);
-    std::unique_ptr<detail::static_root_state, pmr_object_deleter<detail::static_root_state>> state(
-        make_static_root_state(std::move(config_storage)),
-        pmr_object_deleter<detail::static_root_state>{process_resource()});
+    std::unique_ptr<detail::static_root_state> state(make_static_root_state(std::move(config_storage)));
     std::error_code ec;
     auto& state_value = *state;
     http_assign_native_path(state_value.root_, canonical_root);
@@ -510,12 +496,10 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (ec) {
             throw std::filesystem::filesystem_error("inspect static file root", canonical_root, ec);
         }
-        state_value.root_directory_ = std::allocate_shared<detail::native_file_handle>(
-            std::pmr::polymorphic_allocator<detail::native_file_handle>(process_resource()), std::move(root_directory));
+        state_value.root_directory_ = std::make_shared<detail::native_file_descriptor>(std::move(root_directory));
     }
 #endif
 
-    auto* const upstream = process_resource();
     const auto& config = state_value.config_;
     const auto serve_dotfiles = detail::static_root_serves_dotfiles(config.dotfiles_);
     if (!config.index_file_.empty()) {
@@ -542,7 +526,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
             continue;
         }
         auto relative = detail::static_file_utf8_string(
-            file_path.lexically_relative(canonical_root), upstream);
+            file_path.lexically_relative(canonical_root));
         if (relative.empty() || relative.starts_with("../")) {
             continue;
         }
@@ -563,7 +547,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         if (!std::filesystem::is_regular_file(status)) {
             continue;
         }
-        const auto extension = detail::lower_static_file_extension_from_utf8(relative, upstream);
+        const auto extension = detail::lower_static_file_extension_from_utf8(relative);
         const bool is_sidecar_extension = detail::is_precompressed_sidecar_extension(extension);
         const bool directly_servable = detail::file_type_allowed(extension, config);
         bool usable_as_sidecar = false;
@@ -571,7 +555,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
             const auto stem_view =
                 std::string_view(relative).substr(0, relative.size() - extension.size());
             usable_as_sidecar = detail::file_type_allowed(
-                detail::lower_static_file_extension_from_utf8(stem_view, upstream), config);
+                detail::lower_static_file_extension_from_utf8(stem_view), config);
         }
         if (!directly_servable && !usable_as_sidecar) {
             continue;
@@ -579,7 +563,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         // The entry is opened beneath the retained root, the way a request
         // opens it: a directory swapped for a symlink after it was listed
         // fails the snapshot instead of indexing a file outside the root.
-        http_native_path_string_type native_path(upstream);
+        http_native_path_string_type native_path;
         http_assign_native_path(native_path, file_path);
         ec.clear();
         const auto snapshot = [&] {
@@ -592,10 +576,10 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         }
         const auto emit_response_validators =
             config.response_validators_ == static_response_validator_policy::emit;
-        detail::static_root_entry entry(upstream);
+        detail::static_root_entry entry;
         entry.relative_path_ = std::move(relative);
         entry.file_path_ = std::move(native_path);
-        entry.content_type_ = detail::content_type_for(extension, config, upstream);
+        entry.content_type_ = detail::content_type_for(extension, config);
         entry.size_ = snapshot.size_;
         entry.identity_ = snapshot.identity_;
         entry.modified_token_ = snapshot.modified_token_;
@@ -603,7 +587,7 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
         entry.directly_servable_ = directly_servable;
         if (emit_response_validators) {
             entry.etag_ = detail::make_static_file_snapshot_etag(
-                upstream, snapshot.size_, snapshot.modified_token_, snapshot.identity_);
+                snapshot.size_, snapshot.modified_token_, snapshot.identity_);
             if (const auto date = format_http_date(snapshot.modified_seconds_)) {
                 entry.last_modified_.assign(date->data(), date->size());
             }
@@ -641,25 +625,16 @@ build_static_root_state(const std::filesystem::path& root, detail::static_root_c
 
 }  // namespace
 
-std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
-    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-    const static_root_config_storage& config) {
-    return make(object_resource, root, detail::static_root_config_storage(config, process_resource()));
+std::unique_ptr<static_root> detail::static_root_access::make(
+    const std::filesystem::path& root, const static_root_config_storage& config) {
+    return make(root, detail::static_root_config_storage(config));
 }
 
-std::unique_ptr<static_root, pmr_object_deleter<static_root>> detail::static_root_access::make(
-    std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-    static_root_config_storage&& config) {
-    auto stored = config.cache_control_.get_allocator().resource() == process_resource()
-                      ? std::move(config)
-                      : detail::static_root_config_storage(config, process_resource());
-    auto state = build_static_root_state(root, std::move(stored));
-    auto* const resource = pmr_resource_or_default(object_resource);
-    auto* const storage = resource->allocate(sizeof(static_root), alignof(static_root));
-    auto* const result_value = ::new (storage) static_root(
-        std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release()));
-    return std::unique_ptr<static_root, pmr_object_deleter<static_root>>(
-        result_value, pmr_object_deleter<static_root>{resource});
+std::unique_ptr<static_root> detail::static_root_access::make(
+    const std::filesystem::path& root, static_root_config_storage&& config) {
+    auto state = build_static_root_state(root, std::move(config));
+    return std::unique_ptr<static_root>(new static_root(
+        std::unique_ptr<detail::static_root_state, static_root::state_deleter_type>(state.release())));
 }
 
 static_root::static_root(std::unique_ptr<detail::static_root_state, state_deleter_type> state) noexcept
@@ -669,7 +644,7 @@ static_root::static_root(const std::filesystem::path& root, static_root_options 
     : state_([&] {
           detail::validate_static_root_options(options);
           auto built = build_static_root_state(
-              root, detail::store_validated_static_root_config(options, process_resource()));
+              root, detail::store_validated_static_root_config(options));
           return std::unique_ptr<detail::static_root_state, state_deleter_type>(built.release());
       }()) {
     detail::static_root_access::install_resident_bodies(*this, nullptr,
@@ -680,7 +655,7 @@ static_root::static_root(const std::filesystem::path& root, static_root_options 
 static_root::~static_root() = default;
 
 void static_root::state_deleter_type::operator()(detail::static_root_state* state_value) const noexcept {
-    destroy_pmr_object(state_value, process_resource());
+    delete state_value;
 }
 
 std::filesystem::path static_root::path() const {
@@ -690,7 +665,7 @@ std::filesystem::path static_root::path() const {
 namespace detail {
 namespace {
 
-void lowercase_ascii(std::pmr::string& value) noexcept {
+void lowercase_ascii(std::string& value) noexcept {
     for (char& character : value) {
         character = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(character)));
     }
@@ -728,7 +703,7 @@ inline constexpr std::string_view default_static_file_types[] = {
 };
 
 const static_root_mime_type_storage* find_static_mime_type(
-    const std::pmr::vector<static_root_mime_type_storage>& mime_types,
+    const std::vector<static_root_mime_type_storage>& mime_types,
     std::string_view extension) noexcept {
     return find_static_index_entry(mime_types, extension,
         [](const static_root_mime_type_storage& mime) noexcept {
@@ -738,39 +713,15 @@ const static_root_mime_type_storage* find_static_mime_type(
 
 }  // namespace
 
-static_root_config_storage::static_root_config_storage(
-    const static_root_config_storage& source_value, std::pmr::memory_resource* resource)
-    : static_root_config_storage(resource) {
-    cache_control_ = source_value.cache_control_;
-    index_file_ = source_value.index_file_;
-    default_content_type_ = source_value.default_content_type_;
-    auto* const stored_resource = cache_control_.get_allocator().resource();
-    mime_types_.reserve(source_value.mime_types_.size());
-    for (const auto& mime : source_value.mime_types_) {
-        auto& stored = mime_types_.emplace_back(stored_resource);
-        stored.extension_ = mime.extension_;
-        stored.content_type_ = mime.content_type_;
-    }
-    file_type_kind_ = source_value.file_type_kind_;
-    file_type_extensions_.reserve(source_value.file_type_extensions_.size());
-    for (const auto& extension : source_value.file_type_extensions_) {
-        file_type_extensions_.emplace_back(extension);
-    }
-    range_requests_ = source_value.range_requests_;
-    response_validators_ = source_value.response_validators_;
-    dotfiles_ = source_value.dotfiles_;
-}
-
 static_root_config_storage store_validated_static_root_config(
-    const static_root_options& source_value, std::pmr::memory_resource* resource) {
-    static_root_config_storage result(resource);
+    const static_root_options& source_value) {
+    static_root_config_storage result;
     result.cache_control_ = source_value.cache_control_.view();
     result.index_file_ = source_value.index_file_.view();
     result.default_content_type_ = source_value.default_content_type_.view();
-    auto* const stored_resource = result.cache_control_.get_allocator().resource();
     result.mime_types_.reserve(source_value.mime_types_.size());
     for (const auto& mime : source_value.mime_types_) {
-        auto& stored = result.mime_types_.emplace_back(stored_resource);
+        auto& stored = result.mime_types_.emplace_back();
         const auto ext = mime.extension_.view();
         const bool has_dot = ext.starts_with('.');
         stored.extension_.reserve(ext.size() + (has_dot ? 0U : 1U));
@@ -835,25 +786,24 @@ bool file_type_allowed(std::string_view extension, const static_root_config_stor
     return std::ranges::binary_search(config.file_type_extensions_, value);
 }
 
-std::pmr::string content_type_for(std::string_view extension,
-    const static_root_config_storage& config, std::pmr::memory_resource* resource) {
+std::string content_type_for(std::string_view extension,
+    const static_root_config_storage& config) {
     if (const auto* const mime = find_static_mime_type(config.mime_types_, extension); mime != nullptr) {
-        return std::pmr::string(mime->content_type_, resource);
+        return std::string(mime->content_type_);
     }
 
     const auto guessed = guess_static_file_content_type_from_extension(extension);
     if (guessed != std::string_view("application/octet-stream") ||
         config.default_content_type_.empty()) {
-        return std::pmr::string(guessed, resource);
+        return std::string(guessed);
     }
-    return std::pmr::string(config.default_content_type_, resource);
+    return std::string(config.default_content_type_);
 }
 
 }  // namespace detail
 
 std::optional<static_file_representation> select_static_file_representation(const static_root& root,
-    std::string_view relative, const http_response_coding_selection& selection,
-    std::pmr::memory_resource* resource, detail::static_root_entry_view identity) {
+    std::string_view relative, const http_response_coding_selection& selection, detail::static_root_entry_view identity) {
     if (!selection.acceptable()) {
         return std::nullopt;
     }
@@ -885,7 +835,7 @@ std::optional<static_file_representation> select_static_file_representation(cons
     if (use_inline_path && !relative.empty()) {
         std::memcpy(inline_path.data(), relative.data(), relative.size());
     }
-    std::pmr::string variant_path(resource);
+    std::string variant_path;
     const detail::static_file_version identity_version{
         identity.modified_seconds(), identity.modified_token()};
     for (std::size_t i = 0; i < candidates.size(); ++i) {

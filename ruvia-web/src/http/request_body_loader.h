@@ -8,7 +8,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia::detail {
 

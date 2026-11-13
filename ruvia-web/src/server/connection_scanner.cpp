@@ -5,11 +5,11 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory/request_memory.h"
+#include "ruvia/core/memory.h"
 #include "ruvia/core/socket.h"
 
 #include "server/connection_lifecycle.h"
-#include "util/steady_clock.h"
+#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 
@@ -23,7 +23,7 @@ connection_transport connection_transport::tcp(asio::ip::tcp::socket& socket) no
 }
 namespace {
 
-[[nodiscard]] worker_handle require_scanner_worker(worker_handle worker_value) {
+[[nodiscard]] worker_ref require_scanner_worker(worker_ref worker_value) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("connection scanner requires a valid worker");
     }
@@ -220,11 +220,10 @@ connection_scanner::guard::~guard() {
     connection_scanner::detach_entry(entry_);
 }
 connection_scanner::impl_type::impl_type(
-    connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options)
+    connection_scanner* owner_value, worker_ref worker_value, connection_scanner_options options)
     : owner_(owner_value),
       worker_(require_scanner_worker(std::move(worker_value))),
-      timer_state_(std::allocate_shared<timer_state_type>(
-          std::pmr::polymorphic_allocator<timer_state_type>(process_resource()), this)),
+      timer_state_(std::make_shared<timer_state_type>(this)),
       options_(std::move(options)),
       cached_now_ms_(steady_now_ms()) {
     sentinel_.prev_ = sentinel_.next_ = &sentinel_;
@@ -257,8 +256,8 @@ bool connection_scanner::impl_type::retire() noexcept {
     return nested_in_scan;
 }
 
-connection_scanner::connection_scanner(worker_handle worker_value, connection_scanner_options options)
-    : impl_(make_pmr_object<impl_type>(process_resource(), this, std::move(worker_value), std::move(options))) {}
+connection_scanner::connection_scanner(worker_ref worker_value, connection_scanner_options options)
+    : impl_(std::make_unique<impl_type>(this, std::move(worker_value), std::move(options))) {}
 connection_scanner::~connection_scanner() noexcept {
     if (impl_->retire()) {
         // The scan running further up this stack frees the impl.
@@ -418,7 +417,7 @@ void connection_scanner::impl_type::schedule() {
             }
         }
         if (destroy_after_lock != nullptr) {
-            destroy_pmr_object(destroy_after_lock, process_resource());
+            delete destroy_after_lock;
         }
     });
 }

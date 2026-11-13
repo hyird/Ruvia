@@ -37,9 +37,9 @@ struct owned_identity final {
     }
 };
 
-using owned_identity_pointer = std::unique_ptr<owned_identity, pmr_object_deleter<owned_identity>>;
+using owned_identity_pointer = std::unique_ptr<owned_identity>;
 
-void require_accepting_caller(const worker_handle& caller) {
+void require_accepting_caller(const worker_ref& caller) {
     if (!caller.accepting()) {
         throw std::runtime_error("TLS certificate mutation caller is stopping");
     }
@@ -53,7 +53,7 @@ struct tls_certificate_store::state final {
         std::make_shared<const detail::tls_certificate_snapshot>()};
 
     [[nodiscard]] static task<void> insert_or_assign(
-        std::shared_ptr<state> owner, worker_handle caller, tls_certificate_id id,
+        std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id,
         owned_identity_pointer identity) {
         const auto lease = co_await owner->writer_.acquire(caller);
         require_accepting_caller(caller);
@@ -73,7 +73,7 @@ struct tls_certificate_store::state final {
     }
 
     [[nodiscard]] static task<bool> erase(
-        std::shared_ptr<state> owner, worker_handle caller, tls_certificate_id id) {
+        std::shared_ptr<state> owner, worker_ref caller, tls_certificate_id id) {
         const auto lease = co_await owner->writer_.acquire(caller);
         require_accepting_caller(caller);
         auto current = owner->snapshot_.load(std::memory_order_acquire);
@@ -100,13 +100,13 @@ tls_certificate_store::tls_certificate_store()
 tls_certificate_store::~tls_certificate_store() = default;
 
 task<void> tls_certificate_store::insert_or_assign(
-    worker_handle caller, tls_certificate_id id, tls_identity_config identity) {
+    worker_ref caller, tls_certificate_id id, tls_identity_config identity) {
     const cleanse_identity cleanse{identity};
     auto owner = state_;
     if (id == 0) {
         throw std::invalid_argument("TLS certificate ID zero is reserved");
     }
-    auto owned = make_pmr_object<owned_identity>(process_resource());
+    auto owned = std::make_unique<owned_identity>();
     owned->value_.certificate_chain_file_ = std::move(identity.certificate_chain_file_);
     owned->value_.private_key_file_ = std::move(identity.private_key_file_);
     owned->value_.certificate_chain_pem_.assign(identity.certificate_chain_pem_);
@@ -115,7 +115,7 @@ task<void> tls_certificate_store::insert_or_assign(
     return state::insert_or_assign(std::move(owner), std::move(caller), id, std::move(owned));
 }
 
-task<bool> tls_certificate_store::erase(worker_handle caller, tls_certificate_id id) {
+task<bool> tls_certificate_store::erase(worker_ref caller, tls_certificate_id id) {
     return state::erase(state_, std::move(caller), id);
 }
 

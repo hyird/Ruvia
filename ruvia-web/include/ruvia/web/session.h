@@ -1,7 +1,6 @@
 #pragma once
 
 #include <chrono>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -52,7 +51,6 @@ private:
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/middleware/middleware_registration.h"
@@ -67,9 +65,9 @@ namespace ruvia {
 // or deletes the session. A new session mints a random ID in an HttpOnly cookie.
 // The blob format is the application's; pair it with JSON if desired.
 struct session_config final {
-    std::pmr::string redis_alias_{"default", process_resource()};
-    std::pmr::string cookie_name_{"sid", process_resource()};
-    std::pmr::string key_prefix_{"sess:", process_resource()};
+    std::string redis_alias_{"default"};
+    std::string cookie_name_{"sid"};
+    std::string key_prefix_{"sess:"};
     // Must be positive and representable in std::chrono::milliseconds;
     // otherwise construction throws std::invalid_argument.
     std::chrono::seconds ttl_{std::chrono::hours(24)};
@@ -85,18 +83,17 @@ public:
     session_middleware(session_middleware&&) = delete;
     session_middleware& operator=(session_middleware&&) = delete;
 
-    task<void> handle(context& c, next& next);
+    task<void> invoke(context& c, next& next);
 
 private:
     friend struct detail::session_access;
     task<void> commit(context& c) const;
 
     [[nodiscard]] static const session_config& validate(const session_config& source);
-    session_middleware(const session_config& validated, std::pmr::memory_resource* resource);
 
-    std::pmr::string redis_alias_;
-    std::pmr::string cookie_name_;
-    std::pmr::string key_prefix_;
+    std::string redis_alias_;
+    std::string cookie_name_;
+    std::string key_prefix_;
     std::chrono::seconds ttl_;
 };
 

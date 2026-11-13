@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
@@ -13,11 +12,10 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/root_task.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
@@ -177,10 +175,10 @@ public:
     asio::io_context& io_context() const&& = delete;
     [[nodiscard]] asio::io_context::executor_type executor() const;
     // The loop's worker endpoint: admission state, identity, posting, timers,
-    // and the completion lane. Rvalue loops return a copy: the handle must not
+    // and the completion lane. Rvalue loops return a copy: the worker_ref must not
     // outlive its loop owner.
-    [[nodiscard]] const worker_handle& handle() const& noexcept;
-    [[nodiscard]] worker_handle handle() const&& noexcept;
+    [[nodiscard]] const worker_ref& worker() const& noexcept;
+    [[nodiscard]] worker_ref worker() const&& noexcept;
 
     // Reports a terminal runtime failure without throwing on the caller's
     // thread. Pool owners retain the first failure for join(); attachments
@@ -193,7 +191,7 @@ public:
     // admission but takes retirement protection, so it can still return false
     // after retirement has begun. Accepted callbacks and their owned inputs
     // retire before the loop can release its execution context. Contrast
-    // worker_handle::defer_completion(), the completion, cancellation, and
+    // worker_ref::defer_completion(), the completion, cancellation, and
     // resume lane of an operation the worker already admitted.
     template <typename fn_type>
         requires detail::move_only_function_target<void, fn_type>
@@ -218,11 +216,9 @@ public:
         if (!retirement_lease) {
             return detail::worker_delivery_access::reject<result_type>(post_status::worker_stopping, std::move(task_value));
         }
-        auto completion = std::allocate_shared<detail::root_task_state<t_type>>(
-            std::pmr::polymorphic_allocator<detail::root_task_state<t_type>>(process_resource()),
-            handle(), state_);
+        auto completion = std::make_shared<detail::root_task_state<t_type>>(worker(), state_);
         const auto bound_executor = executor();
-        const auto status = handle().post_factory([&]() -> move_only_function<void()> {
+        const auto status = worker().post_factory([&]() -> move_only_function<void()> {
             return [bound_executor, retirement_lease = std::move(retirement_lease),
                        launch = detail::root_task_launch_guard<t_type>(std::move(task_value), completion)]() mutable {
                 try {

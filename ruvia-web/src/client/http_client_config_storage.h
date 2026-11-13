@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -14,7 +13,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_client.h"
@@ -25,8 +23,8 @@
 
 #include "client/client_tls.h"
 #include "integration/named_capability.h"
-#include "util/config_validation.h"
-#include "util/tcp_socket_policies.h"
+#include "server/config_validation.h"
+#include "server/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -193,20 +191,20 @@ inline void validate_http_client_configured_cookie_capacity(
 }
 
 struct http_client_config_storage final {
-    http_client_config_storage(const http_client_config& source_value, std::pmr::memory_resource* resource,
+    http_client_config_storage(const http_client_config& source_value,
         client_tls_files files = client_tls_files::parse)
         : http_client_config_storage(
-              source_value, validate_http_client_config(source_value), pmr_resource_or_default(resource), files) {}
+              source_value, validate_http_client_config(source_value), files) {}
 
     http_client_config_storage(
-        const http_client_config_storage& source_value, std::pmr::memory_resource* resource)
+        const http_client_config_storage& source_value)
         : http_client_config_storage(source_value,
               http_client_origin_spec{.scheme_ = source_value.scheme_,
                   .origin_ = source_value.fixed_origin_ ? std::optional(source_value.origin()) : std::nullopt},
-              pmr_resource_or_default(resource), client_tls_files::keep_paths) {}
+              client_tls_files::keep_paths) {}
 
-    std::pmr::string host_;
-    std::pmr::string dial_host_;
+    std::string host_;
+    std::string dial_host_;
     std::uint16_t dial_port_;
     std::shared_ptr<const http_client_address_validator> address_validator_;
     std::optional<timeout_duration> dns_refresh_interval_;
@@ -217,10 +215,10 @@ struct http_client_config_storage final {
     bool fixed_origin_;
     // RFC 3986 uri-host (IPv6 literals bracketed) and the default-port-omitted
     // authority of the fixed origin, computed once at startup.
-    std::pmr::string uri_host_;
+    std::string uri_host_;
     http_scheme scheme_;
     std::uint16_t port_;
-    std::pmr::string authority_;
+    std::string authority_;
     http_client_connection_limits connection_limits_;
     std::size_t max_concurrent_http2_streams_per_connection_;
     std::size_t max_buffered_requests_;
@@ -241,10 +239,10 @@ struct http_client_config_storage final {
     client_tls_config_storage tls_;
     client_tcp_config tcp_;
     http_client_received_cookie_policy received_cookies_;
-    std::pmr::string user_agent_;
+    std::string user_agent_;
     // Configured name/value cookie pairs, one allocation per pair; a later
     // configured entry replaces an earlier one of the same name in place.
-    std::pmr::vector<http_header> cookies_;
+    std::vector<http_header> cookies_;
 
     // Validating factory for the fixed origin. Owners that are never moved
     // cache the returned view, which borrows uri_host_. Requires fixed_origin_.
@@ -287,13 +285,12 @@ private:
     // Allocator-rebound copies share already prepared material.
     template <typename source_type>
     [[nodiscard]] static client_tls_config_storage tls_storage(
-        const source_type& source_value, http_scheme scheme, std::pmr::memory_resource* resource, client_tls_files files) {
+        const source_type& source_value, http_scheme scheme, client_tls_files files) {
         if constexpr (std::same_as<source_type, http_client_config>) {
             return {source_value.tls_,
-                scheme == http_scheme::https ? files : client_tls_files::keep_paths,
-                resource};
+                scheme == http_scheme::https ? files : client_tls_files::keep_paths};
         } else {
-            return {source_value.tls_, resource};
+            return {source_value.tls_};
         }
     }
 
@@ -303,18 +300,18 @@ private:
         requires(std::same_as<source_type, http_client_config> ||
                     std::same_as<source_type, http_client_config_storage>)
     http_client_config_storage(
-        const source_type& source_value, http_client_origin_spec spec, std::pmr::memory_resource* resource, client_tls_files files)
-        : host_(transport_host(spec.origin_), resource),
-          dial_host_(dial_host_view(source_value, spec.origin_), resource),
+        const source_type& source_value, http_client_origin_spec spec, client_tls_files files)
+        : host_(transport_host(spec.origin_)),
+          dial_host_(dial_host_view(source_value, spec.origin_)),
           dial_port_(dial_port_value(source_value, spec.origin_)),
           address_validator_(source_value.address_validator_),
           dns_refresh_interval_(source_value.dns_refresh_interval_),
           decode_content_(source_value.decode_content_),
           fixed_origin_(spec.origin_.has_value()),
-          uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}, resource),
+          uri_host_(spec.origin_ ? spec.origin_->host() : std::string_view{}),
           scheme_(spec.scheme_),
           port_(spec.origin_ ? spec.origin_->port() : (spec.scheme_ == http_scheme::https ? 443 : 80)),
-          authority_(spec.origin_ ? make_http_origin_authority(origin(), resource) : std::pmr::string(resource)),
+          authority_(spec.origin_ ? make_http_origin_authority(origin()) : std::string{}),
           connection_limits_(source_value.connection_limits_),
           max_concurrent_http2_streams_per_connection_(source_value.max_concurrent_http2_streams_per_connection_),
           max_buffered_requests_(source_value.max_buffered_requests_),
@@ -332,22 +329,21 @@ private:
           advertisements_(source_value.advertisements_),
           push_(source_value.push_),
           http3_(source_value.http3_),
-          tls_(tls_storage(source_value, scheme_, resource, files)),
+          tls_(tls_storage(source_value, scheme_, files)),
           tcp_(source_value.tcp_),
           received_cookies_(source_value.received_cookies_),
-          user_agent_(user_agent_view(source_value), resource),
-          cookies_(resource) {
+          user_agent_(user_agent_view(source_value)) {
         cookies_.reserve(source_value.cookies_.size());
         for (const auto& cookie : source_value.cookies_) {
             if constexpr (std::same_as<source_type, http_client_config>) {
                 const auto existing = std::ranges::find_if(cookies_,
                     [name = cookie.name()](const http_header& entry) { return entry.name() == name; });
                 if (existing != cookies_.end()) {
-                    *existing = http_header(cookie.name(), cookie.value(), resource);
+                    *existing = http_header(cookie.name(), cookie.value());
                     continue;
                 }
             }
-            cookies_.emplace_back(cookie.name(), cookie.value(), resource);
+            cookies_.emplace_back(cookie.name(), cookie.value());
         }
         if constexpr (std::same_as<source_type, http_client_config>) {
             validate_http_client_configured_cookie_capacity(cookies_, max_cookies_, max_cookie_bytes_);

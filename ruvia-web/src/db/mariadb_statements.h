@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -29,13 +28,13 @@ union mariadb_param_value {
 
 // Storage of one result column between mysql_stmt_fetch() and formatting.
 struct mariadb_column final {
-    std::pmr::vector<char> buffer_;
+    std::vector<char> buffer_;
     unsigned long length_{0};
     char null_{0};
     char error_{0};
 };
 
-// One cached statement: its handle once prepared, the placeholders its text
+// One cached statement: its entry_ref once prepared, the placeholders its text
 // restricts (mariadb_statement_traits::integer_params_), and the hash of its
 // key, for refusing it.
 struct mariadb_statement final {
@@ -76,13 +75,13 @@ struct mariadb_statement final {
 // after a CALL the next prepared execution first reads the tracked list back
 // from the server.
 //
-// The cache owns every statement handle, including those evicted or found
+// The cache owns every statement entry_ref, including those evicted or found
 // stale that still wait to be closed on the server, and each entry's SQL,
 // which libmariadb reads while a prepare is suspended. After the connection
 // was closed, clear() frees the handles without I/O.
 class mariadb_statement_cache final {
 public:
-    using handle = db_statement_handle;
+    using entry_ref = db_statement_entry;
 
     mariadb_statement_cache();
     ~mariadb_statement_cache();
@@ -93,7 +92,7 @@ public:
     // Counts a use of `sql` with `params`. A statement comes back only when
     // the caller may run it prepared now and it would return what its text
     // returns; another use still counts toward preparing it later.
-    [[nodiscard]] std::optional<handle> find(std::string_view sql, std::span<const db_value> params, bool may_prepare);
+    [[nodiscard]] std::optional<entry_ref> find(std::string_view sql, std::span<const db_value> params, bool may_prepare);
     // A new connection starts without server-side statements; the old one is
     // closed, so its handles are freed without I/O. Until connected() says
     // otherwise, the session counts as untracked.
@@ -115,18 +114,18 @@ public:
     // tracked, and so current once every response before has been read.
     [[nodiscard]] bool client_utf8mb4() const noexcept;
 
-    [[nodiscard]] mariadb_statement& entry(handle statement);
+    [[nodiscard]] mariadb_statement& entry(entry_ref statement);
     void reserve_retired(std::size_t count = 1);
     void retire(st_mysql_stmt* statement) noexcept;
     void refuse(std::size_t hash) noexcept;
-    void refuse(handle statement, std::size_t hash) noexcept;
+    void refuse(entry_ref statement, std::size_t hash) noexcept;
     [[nodiscard]] bool refused(std::size_t hash) const noexcept;
     void invalidate();
     [[nodiscard]] bool usable() const noexcept;
     void lose_tracking() noexcept;
 
     db_statement_cache<mariadb_statement> statements_;
-    std::pmr::vector<st_mysql_stmt*> retired_;
+    std::vector<st_mysql_stmt*> retired_;
     // Key hashes of statements that run as text on this connection; zero
     // marks a free position.
     std::array<std::size_t, db_statement_cache<mariadb_statement>::capacity> refused_{};
@@ -144,10 +143,10 @@ public:
     // A stored procedure ran since the tracked list was last read back.
     bool verify_{false};
     // Scratch of the one execution a connection runs at a time.
-    std::pmr::vector<unsigned int> types_;
-    std::pmr::vector<std::max_align_t> binds_;
-    std::pmr::vector<mariadb_param_value> values_;
-    std::pmr::vector<mariadb_column> columns_;
+    std::vector<unsigned int> types_;
+    std::vector<std::max_align_t> binds_;
+    std::vector<mariadb_param_value> values_;
+    std::vector<mariadb_column> columns_;
     // The bytes the column buffers hold, and those the last result needed.
     std::size_t column_bytes_{0};
     std::size_t column_needed_{0};
@@ -208,12 +207,12 @@ struct mariadb_prepared_run final {
     };
 
     mariadb_statement_cache* cache_{nullptr};
-    mariadb_statement_cache::handle handle_{};
+    mariadb_statement_cache::entry_ref handle_{};
     std::span<const db_value> params_{};
     step step_{step::done};
     // The current step's operation has been started and waits to continue.
     bool started_{false};
-    // A handle being closed on the server, or drained.
+    // A entry_ref being closed on the server, or drained.
     st_mysql_stmt* closing_{nullptr};
     // The statement's outcome: its failure, or what its first result reported.
     std::exception_ptr failure_{};
@@ -237,14 +236,14 @@ struct mariadb_prepared_run final {
 
 // Starts a run for a statement find() returned.
 [[nodiscard]] mariadb_prepared_run start_mariadb_prepared(
-    mariadb_statement_cache& cache, mariadb_statement_cache::handle statement, std::span<const db_value> params) noexcept;
+    mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept;
 // Continues a run with the readiness libmariadb waited for (0 to start the
 // current step); returns the next wait mask, or 0 when the caller goes on.
 // A failure that leaves the connection out of step is thrown.
 [[nodiscard]] int resume_mariadb_prepared(st_mysql& connection, mariadb_prepared_run& run, int ready);
 // Keeps the stored rows of the run's first result in `output`, or discards
 // them when it is null; then the run resumes.
-void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std::pmr::memory_resource* resource);
+void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output);
 // Ends a run whose statement was abandoned before it executed.
 void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
 // What a statement's responses amount to, whichever protocol ran it: its own

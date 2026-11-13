@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <type_traits>
@@ -147,7 +146,7 @@ private:
     [[nodiscard]] std::optional<rate_limit_rejection> allow(rate_limit_scope scope, std::string_view key,
         const rate_limit_rule& rule, std::chrono::steady_clock::time_point now) noexcept;
     std::optional<rate_limit_rule> default_rule_per_worker_;
-    std::pmr::vector<rate_limit_slot> slots_;
+    std::vector<rate_limit_slot> slots_;
     rate_limit_hash_key hash_key_{};
 };
 

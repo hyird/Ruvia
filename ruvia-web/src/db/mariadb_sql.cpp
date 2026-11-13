@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -52,7 +51,7 @@ namespace {
 // backslash byte inside one is not escaped; without it, no backslash may
 // follow a byte above 0x7F (ambiguous_backslash()), and an ASCII byte never
 // joins the backslash put after it.
-void append_string_literal(std::pmr::string& output, std::string_view value, bool backslash_escapes,
+void append_string_literal(std::string& output, std::string_view value, bool backslash_escapes,
     const MARIADB_CHARSET_INFO* charset) {
     const bool multibyte = backslash_escapes && charset != nullptr && charset->char_maxlen > 1 &&
                            value.find('\\') != std::string_view::npos;
@@ -101,7 +100,7 @@ void append_string_literal(std::pmr::string& output, std::string_view value, boo
 }
 
 void append_value_literal(
-    std::pmr::string& output, const db_value& value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
+    std::string& output, const db_value& value, bool backslash_escapes, const MARIADB_CHARSET_INFO* charset) {
     switch (value.type()) {
         case db_value_type::null:
             output.append("NULL");
@@ -314,7 +313,7 @@ db_error mariadb_error(std::string_view operation, unsigned int native_code, con
     std::array<char, http_max_unsigned_decimal_size> digits;
     const std::string_view code_view =
         native_code != 0 ? http_format_unsigned(digits, static_cast<std::uint64_t>(native_code)) : std::string_view{};
-    std::pmr::string error(process_resource());
+    std::string error;
     error.reserve(operation.size() + 7U + (code_view.empty() ? 0U : 9U + code_view.size()) +
                   (state_view.empty() ? 0U : 12U + state_view.size()) +
                   (message_view.empty() ? 0U : 2U + message_view.size()));
@@ -385,12 +384,12 @@ const MARIADB_CHARSET_INFO& mariadb_queried_charset(MYSQL_RES& result) {
     if (row == nullptr || row[0] == nullptr || lengths == nullptr || mysql_num_fields(&result) != 1) {
         throw std::invalid_argument("MariaDB did not name the session's character set");
     }
-    const std::pmr::string name(row[0], lengths[0], process_resource());
+    const std::string name(row[0], lengths[0]);
     const auto* charset = mariadb_get_charset_by_name(name.c_str());
     if (charset == nullptr) {
         throw std::invalid_argument(
-            (std::pmr::string("MariaDB session character set ", process_resource()).append(name).append(" is unknown to the client library, so a string parameter with a backslash "
-                                                                                                        "cannot be escaped for it"))
+            (std::string("MariaDB session character set ").append(name).append(" is unknown to the client library, so a string parameter with a backslash "
+                                                                               "cannot be escaped for it"))
                 .c_str());
     }
     return *charset;
@@ -403,7 +402,7 @@ const MARIADB_CHARSET_INFO& mariadb_utf8mb4_charset() noexcept {
 }
 
 void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params,
-    std::pmr::string& output, const MARIADB_CHARSET_INFO* charset) {
+    std::string& output, const MARIADB_CHARSET_INFO* charset) {
     validate_mariadb_sql_length(sql.size());
     const bool backslash_escapes = (connection.server_status & SERVER_STATUS_NO_BACKSLASH_ESCAPES) == 0;
     std::size_t size_hint = sql.size();

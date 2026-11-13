@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -32,11 +31,10 @@ enum class websocket_inflate_result : std::uint8_t {
 // next use: no message, and no failed message, ever influences another. Raw
 // deflaters are created on first use for each (compression level, window
 // bits) pair; one raw inflater with a 15-bit window serves every receive
-// window. All codec memory comes from the resource, which must outlive this
-// object. Not thread-safe; the address is stable for the borrowers.
+// window. Not thread-safe; the address is stable for the borrowers.
 class websocket_deflate_codecs final {
 public:
-    explicit websocket_deflate_codecs(std::pmr::memory_resource* resource) noexcept;
+    websocket_deflate_codecs() noexcept = default;
     ~websocket_deflate_codecs();
     websocket_deflate_codecs(const websocket_deflate_codecs&) = delete;
     websocket_deflate_codecs& operator=(const websocket_deflate_codecs&) = delete;
@@ -49,19 +47,18 @@ public:
     // else throws std::invalid_argument. false reports a codec failure;
     // allocation exceptions propagate with their original type.
     [[nodiscard]] bool deflate_message(
-        std::string_view payload, std::pmr::string& out, int compression_level, int window_bits);
+        std::string_view payload, std::string& out, int compression_level, int window_bits);
 
     // Appends the decompressed message to `out`, bounded by `message_limit`
     // across everything this call appends (RFC 7692 section 7.2.2).
     [[nodiscard]] websocket_inflate_result inflate_message(
-        std::string_view payload, std::pmr::string& out, protocol_byte_limit message_limit);
+        std::string_view payload, std::string& out, protocol_byte_limit message_limit);
 
 private:
     static constexpr int min_window_bits = 8;
     static constexpr int max_window_bits = 15;
     static constexpr int compression_levels = 10;
 
-    std::pmr::memory_resource* resource_;
     std::array<detail::zlib_deflate_stream*,
         static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)>
         deflaters_{};

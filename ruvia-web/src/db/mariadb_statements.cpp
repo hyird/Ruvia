@@ -22,7 +22,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "db/mariadb_sql.h"
@@ -300,7 +299,7 @@ static_assert(std::is_same_v<my_bool, char>);
 static_assert(alignof(std::max_align_t) >= alignof(MYSQL_BIND));
 static_assert(std::is_trivially_copyable_v<MYSQL_BIND>);
 
-[[nodiscard]] MYSQL_BIND* reserve_binds(std::pmr::vector<std::max_align_t>& storage, std::size_t count) {
+[[nodiscard]] MYSQL_BIND* reserve_binds(std::vector<std::max_align_t>& storage, std::size_t count) {
     const std::size_t units = (count * sizeof(MYSQL_BIND) + sizeof(std::max_align_t) - 1) / sizeof(std::max_align_t);
     storage.resize(units);
     return reinterpret_cast<MYSQL_BIND*>(storage.data());
@@ -467,17 +466,17 @@ void hear_session_status(void* data, status_type type, ...) {
 }  // namespace
 
 mariadb_statement_cache::mariadb_statement_cache()
-    : retired_(process_resource()),
-      types_(process_resource()),
-      binds_(process_resource()),
-      values_(process_resource()),
-      columns_(process_resource()) {}
+    : retired_(),
+      types_(),
+      binds_(),
+      values_(),
+      columns_() {}
 
 mariadb_statement_cache::~mariadb_statement_cache() {
     clear();
 }
 
-mariadb_statement& mariadb_statement_cache::entry(handle statement) {
+mariadb_statement& mariadb_statement_cache::entry(entry_ref statement) {
     auto* found = statements_.payload(statement);
     if (found == nullptr) {
         throw db_error(
@@ -501,7 +500,7 @@ void mariadb_statement_cache::refuse(std::size_t hash) noexcept {
     next_refused_ = (next_refused_ + 1) % refused_.size();
 }
 
-void mariadb_statement_cache::refuse(handle statement, std::size_t hash) noexcept {
+void mariadb_statement_cache::refuse(entry_ref statement, std::size_t hash) noexcept {
     (void)statements_.forget(statement, false);
     refuse(hash);
 }
@@ -589,7 +588,7 @@ bool mariadb_statement_cache::client_utf8mb4() const noexcept {
     return tracked_ && all_variables_ && !untracked_ && !verify_ && client_utf8mb4_;
 }
 
-std::optional<mariadb_statement_cache::handle> mariadb_statement_cache::find(
+std::optional<mariadb_statement_cache::entry_ref> mariadb_statement_cache::find(
     std::string_view sql, std::span<const db_value> params, bool may_prepare) {
     auto& cache = *this;
     if (cache.changed_) {
@@ -661,7 +660,7 @@ std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, 
 }
 
 mariadb_prepared_run start_mariadb_prepared(
-    mariadb_statement_cache& cache, mariadb_statement_cache::handle statement, std::span<const db_value> params) noexcept {
+    mariadb_statement_cache& cache, mariadb_statement_cache::entry_ref statement, std::span<const db_value> params) noexcept {
     mariadb_prepared_run run;
     run.cache_ = &cache;
     run.handle_ = statement;
@@ -737,7 +736,7 @@ using cache_state = mariadb_statement_cache;
 MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::size_t count) {
     auto* binds = reserve_binds(cache.binds_, count);
     while (cache.columns_.size() < count) {
-        cache.columns_.emplace_back(mariadb_column{std::pmr::vector<char>(process_resource())});
+        cache.columns_.emplace_back(mariadb_column{std::vector<char>()});
     }
     cache.column_needed_ = 0;
     for (std::size_t index = 0; index < count; ++index) {
@@ -854,7 +853,7 @@ MYSQL_BIND* bind_results(cache_state& cache, const MYSQL_FIELD* fields, std::siz
 // Fetches every stored row and keeps it, as text, in `output`. The fields
 // are those of the statement's current result, which libmariadb updates on
 // each execution.
-void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output, std::pmr::memory_resource* resource) {
+void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output) {
     const auto field_count = static_cast<std::size_t>(statement.field_count);
     const auto* fields = statement.fields;
     auto* binds = bind_results(cache, fields, field_count);
@@ -881,11 +880,11 @@ void materialize_rows(cache_state& cache, MYSQL_STMT& statement, db_rows& output
         for (std::size_t index = 0; index < field_count; ++index) {
             const auto& column = cache.columns_[index];
             if (column.null_ != 0) {
-                values.push_back(db_result_access::null_field(resource));
+                values.push_back(db_result_access::null_field());
                 continue;
             }
             values.push_back(
-                db_result_access::owned_field(column_text(fields[index], binds[index], column, buffer), resource));
+                db_result_access::owned_field(column_text(fields[index], binds[index], column, buffer)));
         }
         db_result_access::append_row(output, row_start, field_count);
     }
@@ -910,7 +909,7 @@ void start_draining(cache_state& cache, mariadb_prepared_run& run, mariadb_state
 
 }  // namespace
 
-void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std::pmr::memory_resource* resource) {
+void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output) {
     auto& cache = *run.cache_;
     auto& entry = cache.entry(run.handle_);
     auto& statement = *entry.handle_;
@@ -918,7 +917,7 @@ void take_mariadb_prepared_rows(mariadb_prepared_run& run, db_rows* output, std:
         run.extra_row_set_ = true;
     } else if (output != nullptr) {
         try {
-            materialize_rows(cache, statement, *output, resource);
+            materialize_rows(cache, statement, *output);
         } catch (...) {
             db_result_access::clear(*output);
             run.output_failure_ = std::current_exception();

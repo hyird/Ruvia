@@ -1,17 +1,12 @@
 #include <gtest/gtest.h>
 
-#include <atomic>
 #include <chrono>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
-#include <string_view>
-#include <thread>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http_response.h"
@@ -20,50 +15,6 @@
 #include "ruvia/web/testing.h"
 
 namespace {
-
-struct memory_counters final {
-    std::atomic<std::size_t> allocations_{0};
-    std::atomic<std::size_t> deallocations_{0};
-    std::atomic<std::size_t> live_{0};
-    std::atomic<std::size_t> foreign_deallocations_{0};
-};
-
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    explicit counting_resource(memory_counters* counters) noexcept
-        : counters_(counters) {}
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        auto* const value = std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-        counters_->allocations_.fetch_add(1, std::memory_order_relaxed);
-        counters_->live_.fetch_add(1, std::memory_order_release);
-        return value;
-    }
-
-    void do_deallocate(void* value, std::size_t bytes_value, std::size_t alignment) override {
-        if (std::this_thread::get_id() != owner_) {
-            counters_->foreign_deallocations_.fetch_add(1, std::memory_order_relaxed);
-        }
-        std::pmr::new_delete_resource()->deallocate(value, bytes_value, alignment);
-        counters_->deallocations_.fetch_add(1, std::memory_order_relaxed);
-        counters_->live_.fetch_sub(1, std::memory_order_release);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    memory_counters* counters_;
-    std::thread::id owner_{std::this_thread::get_id()};
-};
-
-struct memory_state final {
-    explicit memory_state(memory_counters* counters) noexcept
-        : resource_(counters) {}
-
-    counting_resource resource_;
-};
 
 class testing_memory_controller final {
 public:
@@ -75,32 +26,26 @@ public:
     RUVIA_ROUTES_END
 
 private:
-    ruvia::task<ruvia::http_response> owned(ruvia::context& c) {
-        auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response(&state_value.resource_);
-        std::pmr::string body(&state_value.resource_);
-        body.assign(256 * 1024, 'm');
+    ruvia::task<ruvia::http_response> owned(ruvia::context&) {
+        ruvia::http_response response;
+        std::string body(256 * 1024, 'm');
         response.owned_body(std::move(body));
         co_return response;
     }
 
-    ruvia::task<ruvia::http_response> throwing(ruvia::context& c) {
-        auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response(&state_value.resource_);
-        std::pmr::string body(&state_value.resource_);
-        body.assign(256 * 1024, 'e');
+    ruvia::task<ruvia::http_response> throwing(ruvia::context&) {
+        ruvia::http_response response;
+        std::string body(256 * 1024, 'e');
         response.owned_body(std::move(body));
         throw std::runtime_error("testing memory failure");
         co_return response;
     }
 
     ruvia::task<ruvia::http_response> cancelled(ruvia::context& c) {
-        auto& state_value = c.worker_state<memory_state>();
-        ruvia::http_response response(&state_value.resource_);
-        std::pmr::string body(256 * 1024, 'c', &state_value.resource_);
+        ruvia::http_response response;
+        std::string body(256 * 1024, 'c');
         response.owned_body(std::move(body));
-        // Exercise explicit downstream cancellation while the response still
-        // owns worker-allocated memory, without a request-level timer.
+        // Exercise explicit downstream cancellation without a request-level timer.
         ruvia::stop_source stop;
         stop.request_stop();
         const auto result_value = co_await ruvia::sleep_for(
@@ -114,49 +59,25 @@ private:
 
 }  // namespace
 
-TEST(Ruvia, testing_facade_reclaims_worker_owned_response_memory) {
-    memory_counters counters;
+TEST(Ruvia, testing_facade_retains_owned_response_memory_across_app_lifetime) {
     std::optional<ruvia::dispatch_response> retained;
     {
         ruvia::test_app app;
-        app.use_worker_state<memory_state>([&counters] { return memory_state(&counters); });
 
         retained.emplace(app.request(ruvia::test_request::get("/testing-memory/owned")));
         EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
         EXPECT_TRUE(retained->body().front() == 'm');
-        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        EXPECT_TRUE(counters.allocations_.load() > 0);
-        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto cancelled = app.request(ruvia::test_request::get("/testing-memory/cancel"));
-        EXPECT_EQ(cancelled.body(), std::pmr::string(256 * 1024, 'c', ruvia::process_resource()));
-        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
+        EXPECT_EQ(cancelled.body(), std::string(256 * 1024, 'c'));
 
         const auto repeated = app.request(ruvia::test_request::get("/testing-memory/owned"));
         EXPECT_EQ(repeated.body().size(), std::size_t(256 * 1024));
         EXPECT_TRUE(retained->body().front() == 'm');
-        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
 
         const auto failed = app.request(ruvia::test_request::get("/testing-memory/throw"));
         EXPECT_TRUE(failed.status() == ruvia::http_status::internal_server_error);
-        EXPECT_EQ(counters.live_.load(std::memory_order_acquire), std::size_t(0));
-        EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
     }
     EXPECT_EQ(retained->body().size(), std::size_t(256 * 1024));
     EXPECT_TRUE(retained->body().front() == 'm');
-    EXPECT_EQ(counters.live_.load(), std::size_t(0));
-    EXPECT_EQ(counters.allocations_.load(), counters.deallocations_.load());
-    EXPECT_EQ(counters.foreign_deallocations_.load(), std::size_t(0));
-}
-
-TEST(Ruvia, testing_facade_unused_worker_allocates_no_response_storage) {
-    memory_counters counters;
-    {
-        ruvia::test_app app;
-        app.use_worker_state<memory_state>([&counters] { return memory_state(&counters); });
-    }
-    EXPECT_EQ(counters.allocations_.load(), std::size_t(0));
-    EXPECT_EQ(counters.deallocations_.load(), std::size_t(0));
 }

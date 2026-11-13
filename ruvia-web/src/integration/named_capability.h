@@ -3,15 +3,12 @@
 #include <algorithm>
 #include <cstddef>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 
@@ -24,25 +21,25 @@ inline void validate_capability_alias(std::string_view alias, const char* empty_
 }
 
 // Every named worker capability has the same startup representation: an alias
-// plus configuration normalized into the owning PMR domain.
+// plus validated, normalized configuration storage.
 template <typename storage_type>
 struct named_capability_definition final {
     using config_storage_type = storage_type;
 
-    std::pmr::string alias_;
+    std::string alias_;
     storage_type config_;
 };
 
 // Replaces the definition registered under replacement.alias_ in place, so
-// existing aliases preserve registration order, or appends a new alias. The
-// replacement must already be validated and normalized into the owning PMR domain.
+// existing aliases preserve registration order, or appends a new alias.
 template <typename definition_type>
 void upsert_named_capability_definition(
-    std::pmr::vector<definition_type>& definitions, definition_type&& replacement) {
+    std::vector<definition_type>& definitions, definition_type&& replacement) {
     const std::string_view alias = replacement.alias_;
     for (auto& definition : definitions) {
         if (std::string_view(definition.alias_) == alias) {
-            definition = std::move(replacement);
+            std::destroy_at(&definition);
+            std::construct_at(&definition, std::move(replacement));
             return;
         }
     }
@@ -50,16 +47,13 @@ void upsert_named_capability_definition(
 }
 
 // Validates and normalizes the replacement before mutating retained application
-// state; the new definition takes one owned process-resource copy of the name
-// and configuration.
+// state; the new definition takes one owned copy of the name and configuration.
 template <typename definition_type, typename source_config_type>
-void upsert_named_capability_definition(std::pmr::vector<definition_type>& definitions,
+void upsert_named_capability_definition(std::vector<definition_type>& definitions,
     std::string_view alias, const source_config_type& source_config, const char* empty_message) {
     validate_capability_alias(alias, empty_message);
-    auto* const resource = process_resource();
     upsert_named_capability_definition(definitions,
-        definition_type{std::pmr::string(alias, resource),
-            typename definition_type::config_storage_type(source_config, resource)});
+        definition_type{std::string(alias), typename definition_type::config_storage_type(source_config)});
 }
 
 // Validates the complete startup alias set without allocating. Capability
@@ -80,14 +74,12 @@ void validate_capability_aliases(
 }
 
 // Immutable startup-built index shared by worker-local named capabilities.
-// It owns one PMR copy of each alias and binds it to the source registration
+// It owns one copy of each alias and binds it to the source registration
 // position; source definitions need not outlive build(). Request-time lookup
 // performs one allocation-free binary search.
 class named_capability_index final {
 public:
-    explicit named_capability_index(std::pmr::memory_resource* resource)
-        : aliases_(pmr_resource_or_default(resource)) {}
-
+    named_capability_index() = default;
     void build(std::initializer_list<std::string_view> aliases) {
         build_aliases(aliases, [](std::string_view alias) noexcept { return alias; });
     }
@@ -113,7 +105,7 @@ public:
 
 private:
     struct indexed_alias_type final {
-        std::pmr::string alias_;
+        std::string alias_;
         std::size_t index_;
     };
 
@@ -123,14 +115,13 @@ private:
 
     template <typename entries_type, typename alias_projection_type>
     void build_aliases(const entries_type& entries, alias_projection_type alias_projection) {
-        auto* const resource = aliases_.get_allocator().resource();
-        std::pmr::vector<indexed_alias_type> aliases(resource);
+        std::vector<indexed_alias_type> aliases;
         aliases.reserve(entries.size());
         std::optional<std::size_t> default_index;
         std::size_t index = 0;
         for (const auto& entry : entries) {
             const std::string_view alias = alias_projection(entry);
-            aliases.push_back(indexed_alias_type{std::pmr::string(alias, resource), index});
+            aliases.push_back(indexed_alias_type{std::string(alias), index});
             if (alias == default_capability_alias) {
                 default_index = index;
             }
@@ -141,7 +132,7 @@ private:
         default_index_ = default_index;
     }
 
-    std::pmr::vector<indexed_alias_type> aliases_;
+    std::vector<indexed_alias_type> aliases_;
     std::optional<std::size_t> default_index_;
 };
 

@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <utility>
@@ -147,8 +146,8 @@ private:
 // The sole transfer-decoding entry point for one or more codings. Copies the
 // protocol-order sequence during construction and decodes it in reverse.
 // Input is never retained; output views borrow the caller's scratch storage.
-// Consume each view before reusing it. Keep the decoder at a stable address and
-// its PMR resource alive until destruction. Drain output with decode({}, scratch)
+// Consume each view before reusing it. Keep the decoder at a stable address
+// until destruction. Drain output with decode({}, scratch)
 // before requesting more input; finish_input() commits framing EOF only after
 // all input/output is drained. Each layer enforces decoded_limit independently.
 // A layer that received no coded bytes before framing EOF completes as empty.
@@ -156,8 +155,8 @@ private:
 // retain the exact wire consumption even when a layer fails; failure is terminal.
 class http_transfer_coding_stack_decoder final {
 public:
-    http_transfer_coding_stack_decoder(std::span<const http_transfer_coding> codings,
-        std::pmr::memory_resource* resource, protocol_byte_limit decoded_limit);
+    http_transfer_coding_stack_decoder(
+        std::span<const http_transfer_coding> codings, protocol_byte_limit decoded_limit);
     ~http_transfer_coding_stack_decoder();
     http_transfer_coding_stack_decoder(const http_transfer_coding_stack_decoder&) = delete;
     http_transfer_coding_stack_decoder& operator=(const http_transfer_coding_stack_decoder&) = delete;

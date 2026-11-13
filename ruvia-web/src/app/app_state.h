@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/app/app_configuration.h"
@@ -119,10 +118,8 @@ private:
 struct app_runtime_graph;
 
 struct app_document_root_config final {
-    app_document_root_config(
-        std::pmr::memory_resource* resource, static_root_config_storage configured_static_options)
-        : root_(resource),
-          static_options_(std::move(configured_static_options)) {}
+    explicit app_document_root_config(static_root_config_storage configured_static_options)
+        : static_options_(std::move(configured_static_options)) {}
 
     http_native_path_string_type root_;
     static_root_config_storage static_options_;
@@ -135,7 +132,7 @@ struct app_state final {
     app_state();
     ~app_state();
 
-    std::pmr::vector<http_server_listener_definition> listeners_{process_resource()};
+    std::vector<http_server_listener_definition> listeners_;
     callback_registration<access_log_callback> access_log_callback_;
     callback_registration<connection_failure_callback> connection_failure_callback_;
     callback_registration<tls_client_hello_callback> tls_client_hello_callback_;
@@ -157,17 +154,17 @@ struct app_state final {
     std::optional<app_document_root_config> document_root_config_;
     app_configuration configuration_;
     std::optional<blocking_pool_options> blocking_pool_{std::in_place};
-    std::pmr::vector<callback_registration<app_hook>> on_start_hooks_{process_resource()};
-    std::pmr::vector<callback_registration<app_hook>> on_stop_hooks_{process_resource()};
+    std::vector<callback_registration<app_hook>> on_start_hooks_;
+    std::vector<callback_registration<app_hook>> on_stop_hooks_;
 #ifdef RUVIA_ENABLE_DATABASE
-    std::pmr::vector<db_definition> databases_{process_resource()};
+    std::vector<db_definition> databases_;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    std::pmr::vector<redis_definition_type> redis_{process_resource()};
+    std::vector<redis_definition_type> redis_;
 #endif
-    std::pmr::vector<http_client_definition_type> http_clients_{process_resource()};
+    std::vector<http_client_definition_type> http_clients_;
     env env_;
-    std::unique_ptr<app_runtime_graph, pmr_object_deleter<app_runtime_graph>> runtime_;
+    std::unique_ptr<app_runtime_graph> runtime_;
 
     mutable std::mutex mutex_;
     std::condition_variable lifecycle_changed_;

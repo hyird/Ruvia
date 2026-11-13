@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -19,14 +18,13 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_rows.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "client/client_host_resolver.h"
@@ -47,30 +45,29 @@ struct pg_conn;
 
 namespace ruvia::detail {
 
-using db_resolved_addresses_type = std::pmr::vector<std::pmr::string>;
+using db_resolved_addresses_type = std::vector<std::string>;
 
 [[nodiscard]] db_resolved_addresses_type collect_db_resolved_addresses(
-    const client_resolve_result& results, db_driver driver, std::pmr::memory_resource* resource);
+    const client_resolve_result& results, db_driver driver);
 
 // Connector/C accepts comma-separated hosts and performs failover only while
 // opening the transport. IPv6 literals in a multi-host list must be bracketed
 // so their colons are not parsed as a per-host port separator; a lone IPv6
 // literal remains unbracketed because Connector/C only invokes that list parser
 // when a comma is present.
-[[nodiscard]] std::pmr::string make_mariadb_resolved_host_list(
-    std::span<const std::pmr::string> addresses, std::pmr::memory_resource* resource);
+[[nodiscard]] std::string make_mariadb_resolved_host_list(
+    std::span<const std::string> addresses);
 
 struct postgresql_resolved_host_list final {
-    std::pmr::string hosts_;
-    std::pmr::string addresses_;
+    std::string hosts_;
+    std::string addresses_;
 };
 
 // libpq requires host and hostaddr lists to contain the same number of items.
 // Repeating the logical hostname preserves TLS/GSS/password-file identity while
 // the numeric hostaddr list suppresses libpq's blocking DNS lookup.
 [[nodiscard]] postgresql_resolved_host_list make_postgresql_resolved_host_list(
-    std::string_view logical_host, std::span<const std::pmr::string> addresses,
-    std::pmr::memory_resource* resource);
+    std::string_view logical_host, std::span<const std::string> addresses);
 
 enum class db_deadline_kind : std::uint8_t {
     resolve,
@@ -81,12 +78,11 @@ enum class db_deadline_kind : std::uint8_t {
 
 // What a driver hook reports after starting an unbuffered statement.
 struct db_stream_start final {
-    explicit db_stream_start(std::pmr::memory_resource* resource = nullptr)
-        : column_names_(pmr_resource_or_default(resource)) {}
+    db_stream_start() = default;
 
     // Driver-owned result handle handed to the stream (may be null).
     void* result_{nullptr};
-    std::pmr::vector<std::pmr::string> column_names_;
+    std::vector<std::string> column_names_;
     // False when the statement produced no row set; the slot is still clean.
     bool returns_rows_{true};
 };
@@ -152,14 +148,13 @@ struct mariadb_driver final {
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
-        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle.
     static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
     static void discard_stream(void* result) noexcept;
@@ -179,14 +174,13 @@ struct postgresql_driver final {
     [[nodiscard]] static bool reusable_connection(connection_type& connection) noexcept;
     [[nodiscard]] static bool idle_connection_alive(connection_type& connection) noexcept;
     static task<db_rows> query(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_exec_result> execute(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_start> start_stream(pool_type& pool, std::size_t slot, std::string_view sql,
-        std::span<const db_value> params, std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::span<const db_value> params, const operation_deadline& deadline);
     static task<db_stream_step> read_stream_row(pool_type& pool, std::size_t slot, void*& result,
-        std::pmr::vector<db_field>& fields, std::pmr::vector<std::pmr::string>& column_names,
-        std::pmr::memory_resource* resource, const operation_deadline& deadline);
+        std::vector<db_field>& fields, std::vector<std::string>& column_names, const operation_deadline& deadline);
     // Ends a stream before its rows ran out; on return the connection is idle
     // or closed.
     static task<void> close_stream(pool_type& pool, std::size_t slot, void*& result, const operation_deadline& deadline);
@@ -198,7 +192,7 @@ struct postgresql_driver final {
 // continuations and pipeline records address the slot, so it never moves.
 template <typename driver_type>
 struct db_slot final {
-    db_slot(asio::io_context& io_context, const worker_handle& worker)
+    db_slot(asio::io_context& io_context, const worker_ref& worker)
         : resolver_(worker),
           wait_socket_(io_context) {}
 
@@ -277,8 +271,8 @@ public:
     };
     using leases_type = slot_pool<slot_policy>;
 
-    db_pool(asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config);
-    db_pool(asio::io_context&, worker_handle&&, db_config_storage) = delete;
+    db_pool(asio::io_context& io_context, const worker_ref& worker_value, db_config_storage config);
+    db_pool(asio::io_context&, worker_ref&&, db_config_storage) = delete;
     ~db_pool();
 
     db_pool(const db_pool&) = delete;
@@ -299,36 +293,32 @@ public:
     // whose deadline passes between operations has its connection closed by
     // the lease timer; its next operation fails with timeout and gives the
     // slot back.
-    task<db_rows> query(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options,
+    task<db_rows> query(std::string sql, std::vector<db_value> params, operation_options options,
         request_io_metrics* io_metrics = nullptr);
-    task<db_exec_result> execute(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options,
+    task<db_exec_result> execute(std::string sql, std::vector<db_value> params, operation_options options,
         request_io_metrics* io_metrics = nullptr);
-    task<db_stream_result> stream(std::pmr::string sql, std::pmr::vector<db_value> params,
-        std::pmr::memory_resource* resource, operation_options options);
-    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::pmr::vector<db_field>& fields,
-        std::pmr::vector<std::pmr::string>& column_names, std::pmr::memory_resource* resource,
+    task<db_stream_result> stream(std::string sql, std::vector<db_value> params, operation_options options);
+    task<std::optional<db_row>> read_stream_row(std::size_t slot, std::vector<db_field>& fields,
+        std::vector<std::string>& column_names,
         const operation_options& options);
     task<void> close_stream(std::size_t slot, const operation_options& options);
     void abort_stream(std::size_t slot) noexcept;
-    task<db_rows> query_on_transaction_slot(std::size_t slot, std::pmr::string sql,
-        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options);
-    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::pmr::string sql,
-        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options);
-    task<db_transaction> begin_transaction(std::pmr::memory_resource* resource,
-        operation_options operation_options_value, db_transaction_options transaction_options);
+    task<db_rows> query_on_transaction_slot(std::size_t slot, std::string sql,
+        std::vector<db_value> params, const operation_options& options);
+    task<db_exec_result> execute_on_transaction_slot(std::size_t slot, std::string sql,
+        std::vector<db_value> params, const operation_options& options);
+    task<db_transaction> begin_transaction(operation_options operation_options_value, db_transaction_options transaction_options);
     task<void> commit_transaction(
-        std::size_t slot, std::pmr::memory_resource* resource, const operation_options& options);
+        std::size_t slot, const operation_options& options);
     task<void> rollback_transaction(
-        std::size_t slot, std::pmr::memory_resource* resource, const operation_options& options);
+        std::size_t slot, const operation_options& options);
     void abort_transaction(std::size_t slot) noexcept;
 
     // Services for driver hooks.
     [[nodiscard]] const db_config_storage& config() const noexcept {
         return config_;
     }
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
     [[nodiscard]] slot_type& slot(std::size_t index) noexcept {
@@ -435,7 +425,7 @@ public:
 private:
     template <typename result_type>
     using statement_hook_type = task<result_type> (*)(db_pool&, std::size_t, std::string_view,
-        std::span<const db_value>, std::pmr::memory_resource*, const operation_deadline&);
+        std::span<const db_value>, const operation_deadline&);
 
     // A caller waiting for a lease, listed in arrival order for the duration
     // of its acquire.
@@ -487,14 +477,13 @@ private:
     };
 
     template <typename result_type>
-    task<result_type> run_on_transaction_slot(std::size_t index, std::pmr::string sql,
-        std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, const operation_options& options,
+    task<result_type> run_on_transaction_slot(std::size_t index, std::string sql,
+        std::vector<db_value> params, const operation_options& options,
         statement_hook_type<result_type> statement);
-    task<void> execute_control(std::size_t index, std::string_view sql, std::pmr::memory_resource* resource,
+    task<void> execute_control(std::size_t index, std::string_view sql,
         const operation_deadline& timeout);
-    task<void> finish_transaction(std::size_t index, std::string_view command,
-        std::pmr::memory_resource* resource, const operation_options& options);
-    task<void> retire_failed_transaction_slot(std::size_t index, std::pmr::memory_resource* resource,
+    task<void> finish_transaction(std::size_t index, std::string_view command, const operation_options& options);
+    task<void> retire_failed_transaction_slot(std::size_t index,
         const operation_deadline& timeout, const std::exception_ptr& failure);
     task<void> open_slot(std::size_t index, const operation_deadline& timeout);
     // Starts the lease deadline of a transaction or stream on its fresh lease,
@@ -524,10 +513,10 @@ private:
 
     asio::io_context& io_context_;
     db_config_storage config_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     // Declared before the lease pool: pending deadline timers address slots.
     // Each slot is allocated once and stays put while the pool lives.
-    std::pmr::vector<std::unique_ptr<slot_type, pmr_object_deleter<slot_type>>> slots_;
+    std::vector<std::unique_ptr<slot_type>> slots_;
     leases_type leases_;
     std::uint64_t arrivals_{0};
     exclusive_wait* oldest_exclusive_{nullptr};

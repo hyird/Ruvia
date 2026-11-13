@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,12 +22,11 @@
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_connection.h"
 #include "ruvia/http/websocket_protocol.h"
@@ -36,9 +34,8 @@
 
 #include "http/http_stream_end.h"
 #include "server/connection_scanner.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
-#include "util/steady_clock.h"
 #include "websocket/http_websocket_liveness.h"
 #include "websocket/websocket_state.h"
 
@@ -53,15 +50,16 @@ public:
     static constexpr bool native_stream = requires(stream_type& stream) { stream.get_executor(); };
     using stream_argument_type = std::conditional_t<native_stream, stream_type&, stream_type>;
 
-    websocket_session_connection(stream_argument_type stream, const worker_handle& worker_value,
+    websocket_session_connection(stream_argument_type stream, const worker_ref& worker_value,
         connection_scanner::entry& scanner_entry, websocket_lifecycle_options lifecycle_options,
-        protocol_byte_limit message_limit, std::pmr::memory_resource& resource, std::string_view initial_bytes,
-        websocket_connection_options protocol_options, std::pmr::string&& subprotocol_value)
+        protocol_byte_limit message_limit, std::string_view initial_bytes,
+        websocket_connection_options protocol_options, std::string&& subprotocol_value,
+        inbound_buffer_account* inbound = nullptr)
         : stream_(std::forward<stream_argument_type>(stream)),
           worker_(&worker_value),
           scanner_entry_(scanner_entry),
           lifecycle_options_(lifecycle_options),
-          buffer_(std::pmr::polymorphic_allocator<char>(&resource)),
+          buffer_reservation_(inbound),
           protocol_(buffer_, [&] {
               protocol_options.message_limit_ = message_limit;
               return protocol_options;
@@ -69,9 +67,9 @@ public:
           subprotocol_(std::move(subprotocol_value)),
           write_lane_(worker_value),
           reader_done_signal_(worker_value),
-          background_tasks_(worker_value, {.resource_ = &resource}) {
+          background_tasks_(worker_value) {
         try {
-            buffer_.append(initial_bytes);
+            inbound_append(buffer_, buffer_reservation_, initial_bytes);
         } catch (...) {
             close_stream();
             throw;
@@ -79,10 +77,9 @@ public:
         scanner_entry_.register_periodic_check(periodic_check_, this, &websocket_session_connection::heartbeat_tick_thunk);
     }
 
-    websocket_session_connection(stream_argument_type, worker_handle&&, connection_scanner::entry&, websocket_lifecycle_options,
-        protocol_byte_limit, std::pmr::memory_resource&, std::string_view, websocket_connection_options,
-        std::pmr::string&&) = delete;
-
+    websocket_session_connection(stream_argument_type, worker_ref&&, connection_scanner::entry&, websocket_lifecycle_options,
+        protocol_byte_limit, std::string_view, websocket_connection_options,
+        std::string&&, inbound_buffer_account* = nullptr) = delete;
     static void close_stream(stream_type& stream) noexcept {
         if constexpr (!native_stream) {
             stream.abort();
@@ -135,10 +132,10 @@ public:
         abort_transport(websocket_termination::aborted);
     }
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return *worker_;
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
         return subprotocol_;
@@ -452,12 +449,13 @@ private:
 
     std::shared_ptr<websocket_state> facade_;
     stream_argument_type stream_;
-    const worker_handle* worker_;
+    const worker_ref* worker_;
     connection_scanner::entry& scanner_entry_;
     websocket_lifecycle_options lifecycle_options_{};
     http_io_buffer buffer_;
+    inbound_buffer_reservation buffer_reservation_{};
     websocket_connection protocol_;
-    std::pmr::string subprotocol_;
+    std::string subprotocol_;
     websocket_peer_close_info peer_close_{};
     websocket_write_lane write_lane_;
     worker_signal reader_done_signal_;
@@ -716,8 +714,10 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
     throw_if_read_interrupted();
     if constexpr (!native_stream) {
         try {
-            co_return co_await stream_.read_more(
+            const bool more = co_await stream_.read_more(
                 buffer_, [this] { throw_if_read_interrupted(); }, read_cancellation_.slot());
+            buffer_reservation_.resize_to(buffer_.capacity());
+            co_return more;
         } catch (const inbound_transport_error&) {
             if (protocol_.liveness_mode() != websocket_liveness_mode::inactive) {
                 abort_transport(websocket_termination::io_error, true);
@@ -735,11 +735,11 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
             // Preserve the native socket's small idle read allocation and
             // retained storage for steady mid-size messages.
             if (buffer_.capacity() > websocket_retained_buffer_bytes) {
-                buffer_.shrink_to(websocket_retained_buffer_bytes);
+                inbound_shrink_to(buffer_, buffer_reservation_, websocket_retained_buffer_bytes);
             }
             const auto min_idle_bytes = small_frames_ ? websocket_idle_read_bytes : min_read_bytes;
             if (buffer_.capacity() < min_idle_bytes) {
-                read_space = buffer_.prepare(min_idle_bytes);
+                read_space = inbound_prepare(buffer_, buffer_reservation_, min_idle_bytes);
             } else {
                 read_space = buffer_.prepare_spare();
                 if (small_frames_ && read_space.size() > websocket_idle_read_bytes) {
@@ -753,7 +753,7 @@ task<bool> websocket_session_connection<stream_type>::read_more() {
             read_space = buffer_.prepare_spare();
             if (read_space.empty()) {
                 const auto needed = std::clamp(protocol_.needed_input_bytes(), min_read_bytes, max_read_bytes);
-                read_space = buffer_.prepare(needed);
+                read_space = inbound_prepare(buffer_, buffer_reservation_, needed);
             } else if (read_space.size() > max_read_bytes) {
                 read_space = read_space.first(max_read_bytes);
             }

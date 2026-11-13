@@ -18,7 +18,7 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
 
@@ -29,9 +29,9 @@ namespace ruvia::detail {
 // Resumes the coroutine on a later turn of its worker, letting other
 // connections run between bursts of one connection's output.
 struct worker_turn final {
-    explicit worker_turn(const worker_handle& worker_value) noexcept
+    explicit worker_turn(const worker_ref& worker_value) noexcept
         : worker_(worker_value) {}
-    worker_turn(worker_handle&&) = delete;
+    worker_turn(worker_ref&&) = delete;
     const worker_turn* operator&() const = delete;
     worker_turn* operator&() = delete;
 
@@ -43,7 +43,7 @@ struct worker_turn final {
     }
     void await_resume() const noexcept {}
 
-    const worker_handle& worker_;
+    const worker_ref& worker_;
 };
 
 struct free_tls final {

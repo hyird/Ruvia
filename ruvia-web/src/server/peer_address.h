@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <array>
 #include <cstring>
-#include <memory_resource>
 #include <string>
 
 #include <asio/detail/socket_ops.hpp>
@@ -38,7 +37,7 @@ namespace ruvia::detail {
 // The peer address a connection's services name, shared by TCP and QUIC
 // sessions: dotted IPv4, also for an IPv4-mapped IPv6 peer, otherwise the
 // RFC 5952 IPv6 text.
-inline void assign_peer_address(std::pmr::string& output, const asio::ip::address& address) {
+inline void assign_peer_address(std::string& output, const asio::ip::address& address) {
     asio::ip::address_v4 v4;
     if (address.is_v4()) {
         v4 = address.to_v4();

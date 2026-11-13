@@ -4,13 +4,11 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
@@ -107,7 +105,7 @@ public:
         // every waiter in a later worker turn, as release() does: closure runs
         // inside the owner's own teardown, which must finish before any waiter
         // observes it.
-        void complete_all(const worker_handle& worker, worker_wait_status status) noexcept {
+        void complete_all(const worker_ref& worker, worker_wait_status status) noexcept {
             while (head_ != nullptr) {
                 if (auto continuation = head_->resolve(status)) {
                     worker.defer_resume(continuation);
@@ -131,11 +129,10 @@ public:
         pool_lease_acquire* tail_{nullptr};
     };
 
-    impl_type(std::size_t pool_size, const worker_handle& worker_value, std::pmr::memory_resource* resource)
+    impl_type(std::size_t pool_size, const worker_ref& worker_value)
         : worker_(worker_value),
-          next_free_(pool_size, no_free_slot, pmr_resource_or_default(resource)),
-          waiter_state_(std::allocate_shared<waiter_state_type>(
-              std::pmr::polymorphic_allocator<waiter_state_type>(process_resource()), worker_value)) {
+          next_free_(pool_size, no_free_slot),
+          waiter_state_(std::make_shared<waiter_state_type>(worker_value)) {
         for (std::size_t i = 0; i < pool_size; ++i) {
             next_free_[i] = free_head_;
             free_head_ = i;
@@ -153,12 +150,12 @@ public:
     }
 
     struct waiter_state_type final : std::enable_shared_from_this<waiter_state_type> {
-        explicit waiter_state_type(worker_handle worker_value) noexcept
+        explicit waiter_state_type(worker_ref worker_value) noexcept
             : worker_(std::move(worker_value)) {}
 
         // First member: unlinks from the worker registry after every other member is gone.
         worker_shutdown_registration shutdown_registration_;
-        worker_handle worker_;
+        worker_ref worker_;
         waiter_queue_type queue_;
         // Worker-affine: set once the shutdown notification reaches the worker.
         bool stopping_{false};
@@ -214,7 +211,7 @@ public:
         }
         if (free_head_ == no_free_slot) {
             if (waiter_state_->stopping_ || !worker_.accepting() ||
-                detail::worker_handle_access::timers_stopping(worker_)) {
+                detail::worker_ref_access::timers_stopping(worker_)) {
                 return worker_wait_result<std::size_t>::with_status(worker_wait_status::worker_stopping);
             }
             if (deadline.has_value() && *deadline <= std::chrono::steady_clock::now()) {
@@ -259,8 +256,8 @@ public:
         return true;
     }
 
-    worker_handle worker_;
-    std::pmr::vector<std::size_t> next_free_;
+    worker_ref worker_;
+    std::vector<std::size_t> next_free_;
     std::size_t free_head_{no_free_slot};
     std::shared_ptr<waiter_state_type> waiter_state_;
     std::size_t reserved_acquires_{0};
@@ -268,12 +265,11 @@ public:
     bool closing_{false};
 };
 
-pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_handle& worker_value,
-    std::pmr::memory_resource* resource) {
+pool_lease_scheduler::pool_lease_scheduler(std::size_t pool_size, const worker_ref& worker_value) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("pool lease scheduler requires a valid worker");
     }
-    impl_ = make_pmr_object<impl_type>(resource, pool_size, worker_value, resource);
+    impl_ = std::make_unique<impl_type>(pool_size, worker_value);
 }
 
 pool_lease_scheduler::~pool_lease_scheduler() = default;

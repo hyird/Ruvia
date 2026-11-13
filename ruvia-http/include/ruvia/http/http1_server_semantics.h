@@ -85,7 +85,7 @@ inline void http1_mark_connection_close(http_response& response,
     const std::string_view base =
         field_policy == http1_connection_close_field_policy::preserve_upgrade ? "close, Upgrade"
                                                                               : "close";
-    std::pmr::string merged(response.memory_resource());
+    std::string merged;
     for (const auto& header : response.headers()) {
         if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
             continue;

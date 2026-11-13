@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cassert>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 
@@ -13,8 +12,7 @@ namespace ruvia::detail {
 // consumes the draft; selecting or replacing a response never merges metadata.
 class context_response_state final {
 public:
-    explicit context_response_state(std::pmr::memory_resource* resource) noexcept
-        : resource_(resource) {}
+    context_response_state() noexcept = default;
 
     [[nodiscard]] bool has_draft() const noexcept {
         return draft_.has_value();
@@ -27,7 +25,7 @@ public:
     }
     [[nodiscard]] http_response take_draft_or_new() noexcept {
         if (!draft_) {
-            return http_response(resource_);
+            return http_response{};
         }
         auto response = std::move(*draft_);
         draft_.reset();
@@ -35,7 +33,7 @@ public:
     }
     [[nodiscard]] http_response& draft() {
         if (!draft_) {
-            draft_.emplace(resource_);
+            draft_.emplace();
         }
         return *draft_;
     }
@@ -47,13 +45,13 @@ public:
     }
     [[nodiscard]] http_response& policy() {
         if (!policy_) {
-            policy_.emplace(resource_);
+            policy_.emplace();
         }
         return *policy_;
     }
     [[nodiscard]] http_response& defaults() {
         if (!defaults_) {
-            defaults_.emplace(resource_);
+            defaults_.emplace();
         }
         return *defaults_;
     }
@@ -84,7 +82,6 @@ public:
     http_response&& release_final() && = delete;
 
 private:
-    std::pmr::memory_resource* resource_;
     std::optional<http_response> draft_;
     std::optional<http_response> policy_;
     std::optional<http_response> defaults_;

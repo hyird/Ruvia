@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -28,19 +27,11 @@ struct sse_message final {
     std::optional<std::chrono::milliseconds> retry_{};
 };
 
-struct sse_format_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
 // Build one complete UTF-8 event-stream block. Invalid event/id line syntax
 // or a field that is not well-formed UTF-8 throws std::invalid_argument.
-[[nodiscard]] std::pmr::string format_sse_message(
-    const sse_message& message, sse_format_options options = {});
+[[nodiscard]] std::string format_sse_message(const sse_message& message);
 
 struct sse_parser_options final {
-    // Holds every parser buffer and must outlive the parser. nullptr uses the
-    // default PMR.
-    std::pmr::memory_resource* resource_{nullptr};
     // Bytes buffered for the event being assembled: its data lines with their
     // LFs, its event type, and a pending event or id field value. Comments and
     // ignored fields buffer nothing. Exceeding it fails the stream.
@@ -162,12 +153,12 @@ private:
     void release_event_buffers() noexcept;
     void fail() noexcept;
 
-    std::pmr::string data_;
-    std::pmr::string event_type_;
+    std::string data_;
+    std::string event_type_;
     // A pending event or id value, committed at its line end.
-    std::pmr::string value_;
-    std::pmr::string last_event_id_buffer_;
-    std::pmr::string last_event_id_;
+    std::string value_;
+    std::string last_event_id_buffer_;
+    std::string last_event_id_;
     std::optional<std::chrono::milliseconds> reconnection_time_{};
     protocol_byte_limit event_limit_;
     std::uint64_t retry_value_{0};

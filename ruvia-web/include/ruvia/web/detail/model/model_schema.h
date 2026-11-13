@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <string_view>
 #include <tuple>
 #include <type_traits>
@@ -131,7 +130,7 @@ template <typename model_type, typename... descriptor_types, typename visitor_ty
 template <typename model_type>
 void initialize_model(model_type& value) {
     visit_model_fields(value, model_access::schema<model_type>(),
-        [resource = value.resource()](const auto&, auto& slot) { slot.apply_initial(resource); });
+        [](const auto&, auto& slot) { slot.apply_initial(); });
 }
 
 }  // namespace ruvia::detail::model

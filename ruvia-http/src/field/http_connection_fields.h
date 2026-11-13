@@ -133,18 +133,14 @@ enum class http_connection_field_role : std::uint8_t {
     response_recipient,
 };
 
-// The received options a recipient still refuses. RFC 9110 section 7.6.1
-// forbids only sending an option that names an end-to-end field, but an
-// intermediary removes every named field, so an option naming a field that
-// changes how the recipient processes the message leaves that processing
-// ambiguous and fails closed:
-// - every message: the framing fields Content-Length and Transfer-Encoding,
-//   and Set-Cookie (state);
-// - a request also: Host (routing) and Authorization, Cookie, Origin (access
-//   credentials, state, provenance).
-// Request-only fields cannot change how a response is processed, so a
-// response naming them is valid. Any other named field is kept and the option
-// ignored.
+// The received options a recipient refuses. RFC 9110 section 7.6.1 forbids
+// sending an option that names an end-to-end field, while a recipient only
+// rejects options that make message framing or request target routing
+// ambiguous if stripped by an intermediary:
+// - every message: Content-Length and Transfer-Encoding;
+// - a request also: Host.
+// End-to-end fields such as Authorization, Cookie, Origin, or Set-Cookie
+// remain prohibited for senders, not 400-rejected on receipt.
 [[nodiscard]] inline bool http_connection_option_names_protected_field(
     std::string_view option, http_connection_field_role recipient) noexcept {
     switch (classify_http_field(option)) {
@@ -152,12 +148,9 @@ enum class http_connection_field_role : std::uint8_t {
         case http_field_kind::transfer_encoding:
             return true;
         case http_field_kind::host:
-        case http_field_kind::authorization:
-        case http_field_kind::cookie:
-        case http_field_kind::origin:
             return recipient == http_connection_field_role::request_recipient;
         default:
-            return classify_response_header_name(option) == response_header_set_cookie;
+            return false;
     }
 }
 

@@ -40,7 +40,7 @@ template <typename args_type>
 // the required capacity up front (per command in append_resp_command(), or once
 // for the whole batch in redis_pool::execute_commands()).
 template <typename args_type>
-void serialize_resp_command_impl(std::pmr::string& output, const args_type& args) {
+void serialize_resp_command_impl(std::string& output, const args_type& args) {
     append_resp_header(output, args.size());
     for (const auto& arg : args) {
         append_resp_bulk(output, std::string_view(arg.data(), static_cast<std::size_t>(arg.size())));
@@ -48,7 +48,7 @@ void serialize_resp_command_impl(std::pmr::string& output, const args_type& args
 }
 
 template <typename args_type>
-void append_resp_command_impl(std::pmr::string& output, const args_type& args) {
+void append_resp_command_impl(std::string& output, const args_type& args) {
     const auto serialized_size = resp_serialized_size(args);
     if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
         throw std::length_error("redis RESP output is too large");
@@ -91,13 +91,13 @@ std::size_t resp_bulk_serialized_size(std::size_t arg_bytes) {
     return size;
 }
 
-void append_resp_header(std::pmr::string& output, std::size_t arg_count) {
+void append_resp_header(std::string& output, std::size_t arg_count) {
     output.push_back('*');
     http_append_unsigned(output, static_cast<std::uint64_t>(arg_count));
     output.append("\r\n", 2);
 }
 
-void append_resp_bulk(std::pmr::string& output, std::string_view arg) {
+void append_resp_bulk(std::string& output, std::string_view arg) {
     output.push_back('$');
     http_append_unsigned(output, static_cast<std::uint64_t>(arg.size()));
     output.append("\r\n", 2);
@@ -107,16 +107,16 @@ void append_resp_bulk(std::pmr::string& output, std::string_view arg) {
     output.append("\r\n", 2);
 }
 
-void serialize_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
+void serialize_resp_command(std::string& output, std::span<const std::string_view> args) {
     serialize_resp_command_impl(output, args);
 }
 
-void serialize_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args) {
+void serialize_resp_command(std::string& output, std::span<const std::string> args) {
     serialize_resp_command_impl(output, args);
 }
 
 void serialize_resp_command(
-    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest) {
+    std::string& output, std::string_view first, std::span<const std::string_view> rest) {
     if (rest.size() == std::numeric_limits<std::size_t>::max()) {
         throw std::length_error("redis RESP command is too large");
     }
@@ -127,16 +127,16 @@ void serialize_resp_command(
     }
 }
 
-void append_resp_command(std::pmr::string& output, std::span<const std::string_view> args) {
+void append_resp_command(std::string& output, std::span<const std::string_view> args) {
     append_resp_command_impl(output, args);
 }
 
-void append_resp_command(std::pmr::string& output, std::span<const std::pmr::string> args) {
+void append_resp_command(std::string& output, std::span<const std::string> args) {
     append_resp_command_impl(output, args);
 }
 
 void append_resp_command(
-    std::pmr::string& output, std::string_view first, std::span<const std::string_view> rest) {
+    std::string& output, std::string_view first, std::span<const std::string_view> rest) {
     const auto serialized_size = resp_command_serialized_size(first, rest);
     if (serialized_size > std::numeric_limits<std::size_t>::max() - output.size()) {
         throw std::length_error("redis RESP output is too large");
@@ -149,7 +149,7 @@ std::size_t resp_command_serialized_size(std::span<const std::string_view> args)
     return resp_serialized_size(args);
 }
 
-std::size_t resp_command_serialized_size(std::span<const std::pmr::string> args) {
+std::size_t resp_command_serialized_size(std::span<const std::string> args) {
     return resp_serialized_size(args);
 }
 
@@ -203,11 +203,10 @@ redisReader* redis_reply_builder::create_reader() {
     return reader_value;
 }
 
-void redis_reply_builder::begin(std::pmr::memory_resource* resource) noexcept {
+void redis_reply_builder::begin() noexcept {
     if (root_) {
         std::terminate();
     }
-    resource_ = resource;
     remaining_elements_ = maximum_elements_;
     rejection_ = rejection_type::none;
     failure_ = nullptr;
@@ -233,7 +232,6 @@ void redis_reply_builder::throw_if_rejected() {
 
 void redis_reply_builder::clear() noexcept {
     root_.reset();
-    resource_ = nullptr;
     remaining_elements_ = maximum_elements_;
     rejection_ = rejection_type::none;
     failure_ = nullptr;
@@ -244,7 +242,6 @@ redis_value redis_reply_builder::take(void* reply) noexcept {
     auto* owner = root->owner_;
     redis_value value(std::move(root->value_));
     owner->root_.reset();
-    owner->resource_ = nullptr;
     return value;
 }
 
@@ -281,8 +278,8 @@ void* redis_reply_builder::create_string(const redisReadTask* task_value, char* 
         text.remove_prefix(4);
     }
     return builder.place(task_value, [&] {
-        return task_value->type == REDIS_REPLY_ERROR ? redis_types_access::error_value(text, builder.resource_)
-                                                     : redis_types_access::string_value(text, builder.resource_);
+        return task_value->type == REDIS_REPLY_ERROR ? redis_types_access::error_value(text)
+                                                     : redis_types_access::string_value(text);
     });
 }
 
@@ -303,7 +300,7 @@ void* redis_reply_builder::create_array(const redisReadTask* task_value, std::si
     // announcing more elements grows the array as they actually arrive.
     const auto buffered = builder.reader_->len - builder.reader_->pos;
     const auto capacity = std::min(elements, buffered / 3);
-    auto* node = builder.place(task_value, [&] { return redis_types_access::array_value(capacity, builder.resource_); });
+    auto* node = builder.place(task_value, [&] { return redis_types_access::array_value(capacity); });
     if (node != nullptr) {
         builder.remaining_elements_ -= elements;
     }
@@ -313,25 +310,25 @@ void* redis_reply_builder::create_array(const redisReadTask* task_value, std::si
 void* redis_reply_builder::create_integer(const redisReadTask* task_value, long long value) noexcept {
     auto& builder = builder_of(task_value);
     return builder.place(task_value, [&] {
-        return redis_types_access::integer_value(static_cast<std::int64_t>(value), builder.resource_);
+        return redis_types_access::integer_value(static_cast<std::int64_t>(value));
     });
 }
 
 void* redis_reply_builder::create_double(const redisReadTask* task_value, double, char* data, std::size_t size) noexcept {
     auto& builder = builder_of(task_value);
     return builder.place(task_value, [&] {
-        return redis_types_access::string_value(std::string_view(data, size), builder.resource_);
+        return redis_types_access::string_value(std::string_view(data, size));
     });
 }
 
 void* redis_reply_builder::create_nil(const redisReadTask* task_value) noexcept {
     auto& builder = builder_of(task_value);
-    return builder.place(task_value, [&] { return redis_types_access::null_value(builder.resource_); });
+    return builder.place(task_value, [&] { return redis_types_access::null_value(); });
 }
 
 void* redis_reply_builder::create_bool(const redisReadTask* task_value, int value) noexcept {
     auto& builder = builder_of(task_value);
-    return builder.place(task_value, [&] { return redis_types_access::integer_value(value == 0 ? 0 : 1, builder.resource_); });
+    return builder.place(task_value, [&] { return redis_types_access::integer_value(value == 0 ? 0 : 1); });
 }
 
 void redis_reply_builder::free_object(void* reply) noexcept {

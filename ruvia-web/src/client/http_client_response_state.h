@@ -7,7 +7,6 @@
 #include <deque>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -32,8 +31,8 @@
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_field_section.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_push.h"
 #include "ruvia/http/http_response.h"
@@ -43,7 +42,7 @@
 
 #include "body/http_body_buffer.h"
 #include "client/http_client_request_storage.h"
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia {
 class response_stream_writer;
@@ -68,10 +67,9 @@ inline std::uint64_t next_nonzero_id(std::uint64_t& value) noexcept {
 // protocol cursor commits it. Terminal wakeups never free a pending SSL span.
 class http_client_output_queue final {
 public:
-    http_client_output_queue(const worker_handle& worker_value, std::pmr::memory_resource* resource)
+    http_client_output_queue(const worker_ref& worker_value)
         : data_(worker_value),
-          space_(worker_value),
-          chunk_(resource) {}
+          space_(worker_value) {}
     void notify_data() noexcept {
         data_.notify();
         if (wake_ != nullptr) {
@@ -80,12 +78,12 @@ public:
     }
     void acknowledge_chunk() noexcept {
         chunk_ready_ = false;
-        http_clear_pmr_string_retaining_small(chunk_, http_body_buffer_bytes);
+        http_clear_string_retaining_small(chunk_, http_body_buffer_bytes);
         space_.notify();
     }
     void finish() noexcept {
         ended_ = true;
-        std::pmr::string(chunk_.get_allocator()).swap(chunk_);
+        std::string(chunk_.get_allocator()).swap(chunk_);
         space_.notify();
     }
     void stop() noexcept {
@@ -100,7 +98,7 @@ public:
     void (*wake_)(void*) noexcept {};
     worker_signal data_;
     worker_signal space_;
-    std::pmr::string chunk_;
+    std::string chunk_;
     bool chunk_ready_{};
     bool end_requested_{};
     bool completion_pending_{};
@@ -139,8 +137,8 @@ private:
 
 class http_client_tunnel_state final {
 public:
-    http_client_tunnel_state(const worker_handle& worker_value, std::pmr::memory_resource* resource, http_client_tunnel_config config)
-        : output_(worker_value, resource),
+    http_client_tunnel_state(const worker_ref& worker_value, http_client_tunnel_config config)
+        : output_(worker_value),
           config_(config) {}
     http_client_output_queue output_;
     http_client_tunnel_config config_;
@@ -151,14 +149,13 @@ public:
 
 class http_client_upload_state final {
 public:
-    http_client_upload_state(const worker_handle& worker_value, std::pmr::memory_resource* resource, http_client_upload_config config)
-        : output_(worker_value, resource),
-          config_(config),
-          trailers_(resource) {}
-    http_client_upload_state(worker_handle&&, std::pmr::memory_resource*, http_client_upload_config) = delete;
+    http_client_upload_state(const worker_ref& worker_value, http_client_upload_config config)
+        : output_(worker_value),
+          config_(config) {}
+    http_client_upload_state(worker_ref&&, http_client_upload_config) = delete;
     http_client_output_queue output_;
     http_client_upload_config config_;
-    std::pmr::vector<http_header> trailers_;
+    std::vector<http_header> trailers_;
     // The caller stopped sending through abandon(); the response stays valid.
     bool abandoned_{};
     // Upload-only failures belong to the writer, not to an otherwise valid
@@ -167,7 +164,7 @@ public:
     std::exception_ptr failure_;
     bool content_released_{};
     http_client_response_handoff response_;
-    std::unique_ptr<http_client_request, pmr_object_deleter<http_client_request>> redirect_request_;
+    std::unique_ptr<http_client_request> redirect_request_;
 };
 
 // Composite per-stream deadline timer shared by HTTP/2 and HTTP/3 client
@@ -203,7 +200,7 @@ struct http_client_stream_timer final {
     }
 
     template <typename callback_type>
-    void schedule(const worker_handle& worker, const operation_deadline& timeout, callback_type&& on_expired) {
+    void schedule(const worker_ref& worker, const operation_deadline& timeout, callback_type&& on_expired) {
         const auto deadline = earliest_deadline(timeout);
         if (!deadline || (timer_at_ && *timer_at_ <= *deadline)) {
             return;
@@ -221,7 +218,7 @@ struct http_client_stream_timer final {
     }
 
     template <typename timeout_source_type, typename expired_type, typename error_type>
-    void schedule_with_retry(const worker_handle& worker, const timeout_source_type& timeout_source,
+    void schedule_with_retry(const worker_ref& worker, const timeout_source_type& timeout_source,
         expired_type on_expired, error_type on_error) {
         const auto current_timeout = [&timeout_source]() noexcept -> const operation_deadline& {
             if constexpr (std::is_pointer_v<timeout_source_type>) {
@@ -248,7 +245,7 @@ struct http_client_stream_timer final {
 
 template <typename wake_fn_type, typename stop_predicate_type, typename release_fn_type,
     typename send_chunk_fn_type, typename finish_fn_type>
-[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_handle& worker,
+[[nodiscard]] task<void> run_multiplexed_client_upload(const worker_ref& worker,
     const http_client_request_storage& request, http_client_output_queue& upload, worker_signal& stream_signal,
     wake_fn_type&& wake_fn, stop_predicate_type&& stop_predicate, release_fn_type&& release_content,
     send_chunk_fn_type&& send_chunk, finish_fn_type&& finish_upload) {
@@ -373,16 +370,12 @@ public:
     // releases request content gated on it.
     template <typename fields_type>
         requires(std::is_same_v<std::remove_cvref_t<fields_type>, std::span<const http_header>> ||
-                 std::is_same_v<fields_type, std::pmr::vector<http_header>>)
+                 std::is_same_v<fields_type, std::vector<http_header>>)
     void retain_informational(http_status_code status, fields_type&& fields_value,
         std::optional<http_client_request_content_signal> request_content_signal) {
-        constexpr bool transferring = std::is_same_v<fields_type, std::pmr::vector<http_header>>;
-        http_client_informational_response head(status, resource_);
-        if constexpr (transferring) {
-            if (fields_value.get_allocator().resource() != resource_) {
-                throw std::logic_error("owned informational fields use a different response resource");
-            }
-        } else {
+        constexpr bool transferring = std::is_same_v<fields_type, std::vector<http_header>>;
+        http_client_informational_response head(status);
+        if constexpr (!transferring) {
             head.headers_.reserve(fields_value.size());
         }
         // Fieldless heads still consume response-budgeted vector storage.
@@ -396,7 +389,7 @@ public:
                 throw http_client_error(make_error_code(http_client_errc::protocol_error), "informational response metadata exceeds byte limit");
             }
             if constexpr (!transferring) {
-                head.headers_.emplace_back(field.name(), field.value(), resource_);
+                head.headers_.emplace_back(field.name(), field.value());
             }
         }
         if constexpr (transferring) {
@@ -423,7 +416,6 @@ public:
     worker_signal data_signal_;
     worker_signal space_signal_;
     http_client_pool* pool_{nullptr};
-    std::pmr::memory_resource* resource_;
     http_received_status status_{http_status::ok};
     http_known_method request_method_{http_known_method::unknown};
     http_protocol_version protocol_version_{http_protocol_version::http11};
@@ -442,16 +434,16 @@ public:
     bool informational_active_{false};
     bool informational_stop_requested_{false};
     bool decode_content_{true};
-    std::pmr::vector<http_client_informational_response> informational_;
+    std::vector<http_client_informational_response> informational_;
     // One aggregate byte budget across every retained interim head.
     http_field_section_budget informational_budget_;
     std::size_t informational_delivered_{};
-    std::pmr::vector<http_header> headers_;
-    std::pmr::vector<http_header> trailers_;
-    std::pmr::string buffered_;
+    std::vector<http_header> headers_;
+    std::vector<http_header> trailers_;
+    std::string buffered_;
     // Producers only append here. The consumer swaps it with `buffered` before
     // returning a view, so later network progress cannot invalidate that view.
-    std::pmr::string pending_;
+    std::string pending_;
     std::size_t offset_{0};
     std::size_t buffered_limit_{default_max_buffered_body_bytes};
     std::exception_ptr failure_;
@@ -480,7 +472,7 @@ public:
     // takes it (RFC 9000 §4.1).
     std::optional<::ruvia::http3_received_data_credit> http3_data_credit_{};
 #endif
-    std::optional<std::pmr::deque<std::pmr::string>> http3_datagrams_;
+    std::optional<std::deque<std::string>> http3_datagrams_;
     std::size_t http3_datagram_bytes_{0};
     bool http3_native_datagrams_{false};
     // Pool position and pool-unique serial of the connection owner carrying

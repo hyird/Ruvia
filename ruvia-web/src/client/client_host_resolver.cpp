@@ -2,7 +2,6 @@
 
 #include <array>
 #include <exception>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -11,13 +10,12 @@
 #include <asio/ip/address.hpp>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/http/http_number_format.h"
 
 namespace ruvia::detail {
 struct client_host_resolver::query final {
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_;
 
     [[nodiscard]] client_resolve_result operator()() const {
@@ -35,7 +33,7 @@ bool client_host_needs_lookup(std::string_view host) {
     return !parse_ip_address(host).has_value();
 }
 
-void require_client_host_lookup(std::string_view host, const worker_handle& worker) {
+void require_client_host_lookup(std::string_view host, const worker_ref& worker) {
     if (worker.blocking_pool() == nullptr && client_host_needs_lookup(host)) {
         throw std::invalid_argument("a DNS host requires an event loop with a blocking pool");
     }
@@ -64,7 +62,7 @@ client_resolve_operation client_host_resolver::resolve(std::string_view host, st
     if (const auto address = parse_ip_address(host)) {
         return client_resolve_result{.literal_ = asio::ip::tcp::endpoint(*address, port)};
     }
-    return resolve_query(query{std::pmr::string(host, process_resource()), port}, timeout, std::move(stop));
+    return resolve_query(query{std::string(host), port}, timeout, std::move(stop));
 }
 
 task<client_resolve_result> client_host_resolver::resolve_query(query input, operation_deadline timeout, stop_token stop) {

@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -19,7 +18,6 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/web/app.h"
@@ -211,7 +209,7 @@ class sleeping_stream_routes final {
         while (auto chunk = co_await reader_value.read()) {
             bytes_value += chunk->size();
         }
-        std::pmr::string text(context_value.arena());
+        std::string text;
         text.append(std::to_string(bytes_value));
         co_return context_value.text(std::move(text));
     }
@@ -271,11 +269,11 @@ using ruvia::test::append_frame;
 
 // With expect_continue the HEADERS announce the content but the DATA frame is
 // left for the caller to send once the server has answered the expectation.
-std::pmr::string request_wire(std::pmr::memory_resource* resource, std::string_view method,
+std::string request_wire(std::string_view method,
     std::string_view path, std::string_view body, bool expect_continue = false) {
-    std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+    std::string wire(ruvia::http2_client_preface);
     append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
-    std::pmr::string block(resource);
+    std::string block;
     ruvia::hpack_encoder::encode_header(block, ":method", method);
     ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
     ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
@@ -297,14 +295,14 @@ using ruvia::test::read_frame;
 
 // Reads frames until the first HEADERS frame on stream 1 and returns the
 // decoded :status; connection-level frames before it are skipped.
-std::pmr::string read_first_status(asio::ip::tcp::socket& client, ruvia::hpack_decoder& decoder) {
+std::string read_first_status(asio::ip::tcp::socket& client, ruvia::hpack_decoder& decoder) {
     for (;;) {
         const auto frame = read_frame(client);
         if (frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::headers) ||
             frame.header_.stream_id_ != 1) {
             continue;
         }
-        std::pmr::string status{ruvia::process_resource()};
+        std::string status{};
         const auto decoded = decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
             if (name == ":status") {
                 status = value;
@@ -320,15 +318,15 @@ std::pmr::string read_first_status(asio::ip::tcp::socket& client, ruvia::hpack_d
 
 // Reads frames until the first DATA frame on stream 1 and returns its payload;
 // a GOAWAY or RST_STREAM before that ends the read with an empty result.
-std::pmr::string read_first_data(asio::ip::tcp::socket& client) {
+std::string read_first_data(asio::ip::tcp::socket& client) {
     for (;;) {
         std::array<char, ruvia::http2_frame_header_bytes> header_bytes{};
         asio::read(client, asio::buffer(header_bytes));
         const auto header_value = ruvia::parse_http2_frame_header(header_bytes);
         if (!header_value.has_value()) {
-            return std::pmr::string{ruvia::process_resource()};
+            return std::string{};
         }
-        std::pmr::string payload(header_value->length_, '\0', ruvia::process_resource());
+        std::string payload(header_value->length_, '\0');
         if (!payload.empty()) {
             asio::read(client, asio::buffer(payload));
         }
@@ -338,7 +336,7 @@ std::pmr::string read_first_data(asio::ip::tcp::socket& client) {
         }
         if (header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway) ||
             header_value->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::rst_stream)) {
-            return std::pmr::string{ruvia::process_resource()};
+            return std::string{};
         }
     }
 }
@@ -362,14 +360,13 @@ TEST(Ruvia, http2_response_stream_sleep_ends_when_the_peer_disconnects) {
     sleeping_stream_observed->sleep_elapsed_ = false;
     const auto failures_before = ruvia::app().stats().connection_failures_;
     for (const bool send_goaway : {false, true}) {
-        std::pmr::unsynchronized_pool_resource resource;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const auto wire = request_wire(&resource, "GET", "/http2-sleeping-stream", {});
+        const auto wire = request_wire("GET", "/http2-sleeping-stream", {});
         asio::write(client, asio::buffer(wire));
-        EXPECT_EQ(read_first_data(client), std::pmr::string("first\n", ruvia::process_resource()));
+        EXPECT_EQ(read_first_data(client), std::string("first\n"));
         if (send_goaway) {
-            std::pmr::string goaway{ruvia::process_resource()};
+            std::string goaway{};
             append_frame(goaway, ruvia::http2_frame_type::goaway, 0, 0, std::string_view("\0\0\0\0\0\0\0\0", 8));
             asio::write(client, asio::buffer(goaway));
         }
@@ -390,12 +387,11 @@ TEST(Ruvia, http2_response_stream_sleep_ends_when_the_peer_disconnects) {
 TEST(Ruvia, http2_post_sse_reads_the_request_body_before_streaming) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    std::pmr::unsynchronized_pool_resource resource;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    const auto wire = request_wire(&resource, "POST", "/http2-post-sse", "{\"id\":\"1\"}");
+    const auto wire = request_wire("POST", "/http2-post-sse", "{\"id\":\"1\"}");
     asio::write(client, asio::buffer(wire));
-    EXPECT_EQ(read_first_data(client), std::pmr::string("data: {\"id\":\"1\"}\n\n", ruvia::process_resource()));
+    EXPECT_EQ(read_first_data(client), std::string("data: {\"id\":\"1\"}\n\n"));
 }
 
 // A quiet SSE producer waits on context::stop_token(), not on a transport
@@ -407,15 +403,14 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     sleeping_stream_observed->sse_wait_failed_ = false;
     sleeping_stream_observed->sse_wait_finished_ = false;
     const auto stats_before = ruvia::app().stats();
-    std::pmr::unsynchronized_pool_resource resource;
-    ruvia::hpack_decoder decoder({.resource_ = &resource});
+    ruvia::hpack_decoder decoder;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    const auto wire = request_wire(&resource, "GET", "/http2-quiet-sse", {});
+    const auto wire = request_wire("GET", "/http2-quiet-sse", {});
     asio::write(client, asio::buffer(wire));
     client.non_blocking(true);
     const auto ready_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    std::pmr::string event{ruvia::process_resource()};
+    std::string event{};
     while (event.size() < std::string_view("data: ready\n\n").size()) {
         const auto frame = http2_streaming_test::read_frame(client, ready_deadline);
         EXPECT_TRUE(frame.header_.type_ != static_cast<std::uint8_t>(ruvia::http2_frame_type::goaway));
@@ -429,22 +424,22 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
             event.append(frame.payload_);
         }
     }
-    EXPECT_EQ(event, std::pmr::string("data: ready\n\n", ruvia::process_resource()));
+    EXPECT_EQ(event, std::string("data: ready\n\n"));
     EXPECT_TRUE(!sleeping_stream_observed->sse_wait_finished_);
 
     client.non_blocking(false);
     // Keep a sibling upload open across the reset, rather than merely opening
     // a new stream after cancellation has already finished.
-    std::pmr::string block(&resource);
+    std::string block;
     ruvia::hpack_encoder::encode_header(block, ":method", "POST");
     ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
     ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
     ruvia::hpack_encoder::encode_header(block, ":path", "/http2-count-upload");
     ruvia::hpack_encoder::encode_header(block, "content-length", "1");
-    std::pmr::string sibling_request{ruvia::process_resource()};
+    std::string sibling_request{};
     append_frame(sibling_request, ruvia::http2_frame_type::headers, 0x4, 3, block);
     asio::write(client, asio::buffer(sibling_request));
-    std::pmr::string reset{ruvia::process_resource()};
+    std::string reset{};
     append_frame(reset, ruvia::http2_frame_type::rst_stream, 0, 1, std::string_view("\0\0\0\x08", 4));
     asio::write(client, asio::buffer(reset));
     const auto cancel_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -455,13 +450,13 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
     EXPECT_TRUE(sleeping_stream_observed->sse_wait_cancelled_);
     EXPECT_TRUE(!sleeping_stream_observed->sse_wait_failed_);
 
-    std::pmr::string sibling_body{ruvia::process_resource()};
+    std::string sibling_body{};
     append_frame(sibling_body, ruvia::http2_frame_type::data, 0x1, 3, "x");
     asio::write(client, asio::buffer(sibling_body));
     client.non_blocking(true);
     const auto response_deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    std::pmr::string status{ruvia::process_resource()};
-    std::pmr::string body{ruvia::process_resource()};
+    std::string status{};
+    std::string body{};
     bool ended = false;
     while (!ended) {
         const auto frame = http2_streaming_test::read_frame(client, response_deadline);
@@ -486,8 +481,8 @@ TEST(Ruvia, http2_quiet_sse_peer_reset_cancels_wait_and_preserves_connection) {
             }
         }
     }
-    EXPECT_EQ(status, std::pmr::string("200", ruvia::process_resource()));
-    EXPECT_EQ(body, std::pmr::string("1", ruvia::process_resource()));
+    EXPECT_EQ(status, std::string("200"));
+    EXPECT_EQ(body, std::string("1"));
     client.close();
     server.finish();
     const auto stats_after = ruvia::app().stats();
@@ -501,12 +496,11 @@ TEST(Ruvia, http2_opt_in_writer_sleep_preserves_reset_error) {
     sleeping_stream_observed->sleep_failed_ = false;
     sleeping_stream_observed->sleep_elapsed_ = false;
     const auto before = ruvia::app().stats().connection_failures_;
-    std::pmr::unsynchronized_pool_resource resource;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    asio::write(client, asio::buffer(request_wire(&resource, "GET", "/http2-quiet-sse?writer=1", {})));
-    EXPECT_EQ(read_first_data(client), std::pmr::string("data: ready\n\n", ruvia::process_resource()));
-    std::pmr::string reset{ruvia::process_resource()};
+    asio::write(client, asio::buffer(request_wire("GET", "/http2-quiet-sse?writer=1", {})));
+    EXPECT_EQ(read_first_data(client), std::string("data: ready\n\n"));
+    std::string reset{};
     append_frame(reset, ruvia::http2_frame_type::rst_stream, 0, 1, std::string_view("\0\0\0\x08", 4));
     asio::write(client, asio::buffer(reset));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -527,12 +521,11 @@ TEST(Ruvia, http2_streaming_upload_received_in_one_read_is_dispatched) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     for (const std::size_t body_size : {std::size_t{1}, std::size_t{100}, std::size_t{5000}}) {
-        std::pmr::unsynchronized_pool_resource resource;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const auto wire = request_wire(&resource, "POST", "/http2-count-upload", std::pmr::string(body_size, 'x', ruvia::process_resource()));
+        const auto wire = request_wire("POST", "/http2-count-upload", std::string(body_size, 'x'));
         asio::write(client, asio::buffer(wire));
-        EXPECT_EQ(read_first_data(client), std::pmr::string(std::to_string(body_size), ruvia::process_resource()));
+        EXPECT_EQ(read_first_data(client), std::string(std::to_string(body_size)));
         client.close();
     }
     server.finish();
@@ -546,27 +539,25 @@ TEST(Ruvia, http2_expect_continue_is_answered_when_the_content_is_consumed) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
     {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        const std::pmr::string body(40, 'x', ruvia::process_resource());
-        asio::write(client, asio::buffer(request_wire(&resource, "POST", "/http2-count-upload", body, true)));
-        EXPECT_EQ(read_first_status(client, decoder), std::pmr::string("100", ruvia::process_resource()));
-        std::pmr::string data{ruvia::process_resource()};
+        const std::string body(40, 'x');
+        asio::write(client, asio::buffer(request_wire("POST", "/http2-count-upload", body, true)));
+        EXPECT_EQ(read_first_status(client, decoder), std::string("100"));
+        std::string data{};
         append_frame(data, ruvia::http2_frame_type::data, 0x1, 1, body);
         asio::write(client, asio::buffer(data));
-        EXPECT_EQ(read_first_status(client, decoder), std::pmr::string("200", ruvia::process_resource()));
-        EXPECT_EQ(read_first_data(client), std::pmr::string("40", ruvia::process_resource()));
+        EXPECT_EQ(read_first_status(client, decoder), std::string("200"));
+        EXPECT_EQ(read_first_data(client), std::string("40"));
         client.close();
     }
     {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        asio::write(client, asio::buffer(request_wire(&resource, "POST", "/http2-missing-upload", std::pmr::string(40, 'x', ruvia::process_resource()), true)));
-        EXPECT_EQ(read_first_status(client, decoder), std::pmr::string("404", ruvia::process_resource()));
+        asio::write(client, asio::buffer(request_wire("POST", "/http2-missing-upload", std::string(40, 'x'), true)));
+        EXPECT_EQ(read_first_status(client, decoder), std::string("404"));
         client.close();
     }
     server.finish();
@@ -577,22 +568,21 @@ TEST(Ruvia, http2_expect_continue_is_answered_when_the_content_is_consumed) {
 TEST(Ruvia, http2_head_falls_back_to_sse_get_route_without_content) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    std::pmr::unsynchronized_pool_resource resource;
-    ruvia::hpack_decoder decoder({.resource_ = &resource});
+    ruvia::hpack_decoder decoder;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-paced-sse", {})));
+    asio::write(client, asio::buffer(request_wire("HEAD", "/http2-paced-sse", {})));
     client.non_blocking(true);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    std::pmr::string status{ruvia::process_resource()};
-    std::pmr::string content_type{ruvia::process_resource()};
-    std::pmr::string body{ruvia::process_resource()};
+    std::string status{};
+    std::string content_type{};
+    std::string body{};
     bool ended = false;
     while (!ended) {
         const auto frame = http2_streaming_test::read_frame(client, deadline);
         if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
             (frame.header_.flags_ & 0x1) == 0) {
-            std::pmr::string ack{ruvia::process_resource()};
+            std::string ack{};
             append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
             asio::write(client, asio::buffer(ack));
             continue;
@@ -617,7 +607,7 @@ TEST(Ruvia, http2_head_falls_back_to_sse_get_route_without_content) {
             ended = (frame.header_.flags_ & 0x1) != 0;
         }
     }
-    EXPECT_EQ(status, std::pmr::string("200", ruvia::process_resource()));
+    EXPECT_EQ(status, std::string("200"));
     EXPECT_TRUE(content_type.starts_with("text/event-stream"));
     EXPECT_TRUE(body.empty());
     client.close();
@@ -629,10 +619,9 @@ TEST(Ruvia, http2_head_and_304_streams_complete_without_abort) {
     for (const bool not_modified : {false, true}) {
         auto& io = ruvia::test::new_test_io_context();
         ruvia::test::http_server_fixture server(io);
-        std::pmr::unsynchronized_pool_resource resource;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        asio::write(client, asio::buffer(request_wire(&resource, not_modified ? "GET" : "HEAD",
+        asio::write(client, asio::buffer(request_wire(not_modified ? "GET" : "HEAD",
                                 not_modified ? "/http2-head-loop-sse?not-modified" : "/http2-head-loop-sse", {})));
         client.non_blocking(true);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
@@ -641,7 +630,7 @@ TEST(Ruvia, http2_head_and_304_streams_complete_without_abort) {
             const auto frame = http2_streaming_test::read_frame(client, deadline);
             if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
                 (frame.header_.flags_ & 0x1) == 0) {
-                std::pmr::string ack{ruvia::process_resource()};
+                std::string ack{};
                 append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                 asio::write(client, asio::buffer(ack));
                 continue;
@@ -671,10 +660,9 @@ TEST(Ruvia, http2_head_and_304_streams_complete_without_abort) {
 TEST(Ruvia, http2_head_only_producer_finishes_at_commit) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    std::pmr::unsynchronized_pool_resource resource;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    asio::write(client, asio::buffer(request_wire(&resource, "HEAD", "/http2-head-naive-sse", {})));
+    asio::write(client, asio::buffer(request_wire("HEAD", "/http2-head-naive-sse", {})));
     client.non_blocking(true);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     bool ended = false;
@@ -682,7 +670,7 @@ TEST(Ruvia, http2_head_only_producer_finishes_at_commit) {
         const auto frame = http2_streaming_test::read_frame(client, deadline);
         if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
             (frame.header_.flags_ & 0x1) == 0) {
-            std::pmr::string ack{ruvia::process_resource()};
+            std::string ack{};
             append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
             asio::write(client, asio::buffer(ack));
             continue;
@@ -718,21 +706,20 @@ TEST(Ruvia, http2_sse_response_is_not_killed_by_request_body_completion_timeout)
             .request_body_timeout_ = std::chrono::milliseconds(60),
             .body_completion_timeout_ = std::chrono::milliseconds(80),
         });
-    std::pmr::unsynchronized_pool_resource resource;
-    ruvia::hpack_decoder decoder({.resource_ = &resource});
+    ruvia::hpack_decoder decoder;
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    asio::write(client, asio::buffer(request_wire(&resource, "GET", "/http2-paced-sse", {})));
+    asio::write(client, asio::buffer(request_wire("GET", "/http2-paced-sse", {})));
     client.non_blocking(true);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-    std::pmr::string status{ruvia::process_resource()};
-    std::pmr::string body{ruvia::process_resource()};
+    std::string status{};
+    std::string body{};
     bool ended = false;
     while (!ended) {
         const auto frame = http2_streaming_test::read_frame(client, deadline);
         if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
             (frame.header_.flags_ & 0x1) == 0) {
-            std::pmr::string ack{ruvia::process_resource()};
+            std::string ack{};
             append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
             asio::write(client, asio::buffer(ack));
             continue;
@@ -755,8 +742,8 @@ TEST(Ruvia, http2_sse_response_is_not_killed_by_request_body_completion_timeout)
             ended = (frame.header_.flags_ & 0x1) != 0;
         }
     }
-    EXPECT_EQ(status, std::pmr::string("200", ruvia::process_resource()));
-    EXPECT_EQ(body, std::pmr::string("data: tick\n\ndata: tick\n\ndata: tick\n\ndata: tick\n\n", ruvia::process_resource()));
+    EXPECT_EQ(status, std::string("200"));
+    EXPECT_EQ(body, std::string("data: tick\n\ndata: tick\n\ndata: tick\n\ndata: tick\n\n"));
     client.close();
     server.finish();
 }
@@ -764,20 +751,20 @@ TEST(Ruvia, http2_sse_response_is_not_killed_by_request_body_completion_timeout)
 TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const std::pmr::string oversized(64, 'x', ruvia::process_resource());
+    const std::string oversized(64, 'x');
     // Read through END_STREAM: a valid head alone cannot prove that the
     // rejection's borrowed diagnostic survived until its response was sent.
     const auto check_body_limit_response = [&](asio::ip::tcp::socket& client, ruvia::hpack_decoder& decoder) {
         client.non_blocking(true);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        std::pmr::string body{ruvia::process_resource()};
+        std::string body{};
         unsigned response_heads = 0;
         bool ended = false;
         while (!ended) {
             const auto frame = http2_streaming_test::read_frame(client, deadline);
             if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
                 (frame.header_.flags_ & 0x1) == 0) {
-                std::pmr::string ack{ruvia::process_resource()};
+                std::string ack{};
                 append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                 asio::write(client, asio::buffer(ack));
                 continue;
@@ -792,7 +779,7 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
             }
             if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
                 ++response_heads;
-                std::pmr::string status{ruvia::process_resource()};
+                std::string status{};
                 const auto decoded = decoder.decode(frame.payload_, [&](std::string_view name, std::string_view value) {
                     if (name == ":status") {
                         status = value;
@@ -800,7 +787,7 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
                     return true;
                 });
                 EXPECT_TRUE(!decoded.has_value());
-                EXPECT_EQ(status, std::pmr::string("413", ruvia::process_resource()));
+                EXPECT_EQ(status, std::string("413"));
                 ended = (frame.header_.flags_ & 0x1) != 0;
             } else if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::data)) {
                 body.append(frame.payload_);
@@ -818,11 +805,10 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
     // 1. Declared Content-Length exceeding route body_limit<16> with Expect: 100-continue
     //    must answer 413 immediately without sending 100 Continue first.
     for (const std::string_view path : {"/http2-bounded-buffered", "/http2-bounded-stream"}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        asio::write(client, asio::buffer(request_wire(&resource, "POST", path, oversized, true)));
+        asio::write(client, asio::buffer(request_wire("POST", path, oversized, true)));
         check_body_limit_response(client, decoder);
         client.close();
     }
@@ -830,13 +816,12 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
     // 2. Unannounced (no Content-Length) DATA exceeding route body_limit<16> on both
     //    buffered and stream_body routes must answer 413 rather than RST_STREAM(CANCEL).
     for (const std::string_view path : {"/http2-bounded-buffered", "/http2-bounded-stream"}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        std::string wire(ruvia::http2_client_preface);
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
-        std::pmr::string block(&resource);
+        std::string block;
         ruvia::hpack_encoder::encode_header(block, ":method", "POST");
         ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
         ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
@@ -856,13 +841,12 @@ TEST(Ruvia, http2_oversized_request_body_answers_413_without_100_continue) {
     //      the handler performs its first read after oversized DATA arrived, 100 Continue
     //      is skipped and 413 is returned directly.
     for (const bool read_after_wait : {false, true}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        std::string wire(ruvia::http2_client_preface);
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
-        std::pmr::string block(&resource);
+        std::string block;
         ruvia::hpack_encoder::encode_header(block, ":method", "POST");
         ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
         ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
@@ -890,11 +874,10 @@ TEST(Ruvia, http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_
     observed.head_trailer_done_ = false;
 
     for (const std::string_view path : {"/http2-head-trailer-write", "/http2-head-trailer-only"}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        asio::write(client, asio::buffer(request_wire(&resource, "HEAD", path, {})));
+        asio::write(client, asio::buffer(request_wire("HEAD", path, {})));
         client.non_blocking(true);
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
         bool ended = false;
@@ -904,7 +887,7 @@ TEST(Ruvia, http2_head_stream_with_trailers_strips_trailer_header_and_stops_eof_
             const auto frame = http2_streaming_test::read_frame(client, deadline);
             if (frame.header_.type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::settings) &&
                 (frame.header_.flags_ & 0x1) == 0) {
-                std::pmr::string ack{ruvia::process_resource()};
+                std::string ack{};
                 append_frame(ack, ruvia::http2_frame_type::settings, 0x1, 0, {});
                 asio::write(client, asio::buffer(ack));
                 continue;
@@ -942,13 +925,12 @@ TEST(Ruvia, http2_stream_custom_content_encoding_and_bodyless_status_negotiation
     ruvia::test::http_server_fixture server(io);
     const auto check_status = [&](std::string_view path, std::string_view accept_encoding,
                                   std::string_view expected_status) {
-        std::pmr::unsynchronized_pool_resource resource;
-        ruvia::hpack_decoder decoder({.resource_ = &resource});
+        ruvia::hpack_decoder decoder;
         asio::ip::tcp::socket client(io);
         client.connect(server.endpoint());
-        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        std::string wire(ruvia::http2_client_preface);
         append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
-        std::pmr::string block(&resource);
+        std::string block;
         ruvia::hpack_encoder::encode_header(block, ":method", "GET");
         ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
         ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
@@ -956,7 +938,7 @@ TEST(Ruvia, http2_stream_custom_content_encoding_and_bodyless_status_negotiation
         ruvia::hpack_encoder::encode_header(block, "accept-encoding", accept_encoding);
         append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);
         asio::write(client, asio::buffer(wire));
-        EXPECT_EQ(read_first_status(client, decoder), std::pmr::string(expected_status, ruvia::process_resource()));
+        EXPECT_EQ(read_first_status(client, decoder), std::string(expected_status));
         client.close();
     };
     check_status("/http2-stream-custom", "x-custom, identity;q=0", "200");

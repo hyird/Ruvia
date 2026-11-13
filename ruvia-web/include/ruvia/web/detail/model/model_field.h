@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,7 +12,7 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/web/detail/json/json_escape.h"
+#include "ruvia/web/detail/json/json_scan.h"
 #include "ruvia/web/detail/model/rule/rule_support.h"
 
 namespace ruvia::detail::model {
@@ -42,7 +41,7 @@ public:
     static constexpr bool has_initial = (is_initial_rule<option_types>() || ... || false);
     static constexpr bool has_default = (is_default_rule<option_types>() || ... || false);
 
-    // The field owns assignment, nullability and allocator normalization.
+    // The field owns assignment, nullability and storage normalization.
     template <typename consumer_type>
     static void apply_default(consumer_type&& consume) {
         if constexpr (sizeof...(option_types) != 0) {
@@ -87,8 +86,7 @@ private:
 };
 
 template <typename field_type, typename value_type>
-void assign_field_value(
-    std::optional<field_type>& target, value_type&& value, std::pmr::memory_resource* resource) {
+void assign_field_value(std::optional<field_type>& target, value_type&& value) {
     if constexpr (detail::is_ruvia_scalar<field_type>) {
         // Validate narrowing before replacing an existing field value.
         const auto field = [&] {
@@ -100,21 +98,21 @@ void assign_field_value(
         }();
         target.emplace(field);
     } else if constexpr (detail::is_ruvia_string<field_type> &&
-                         std::is_same_v<std::remove_cvref_t<value_type>, std::pmr::string> &&
+                         std::is_same_v<std::remove_cvref_t<value_type>, std::string> &&
                          std::is_rvalue_reference_v<value_type&&>) {
-        field_type field(::ruvia::model_options{.resource_ = resource});
+        field_type field;
         field.assign_owned(std::forward<value_type>(value));
         target.emplace(std::move(field));
     } else if constexpr (detail::is_ruvia_string<field_type> &&
                          std::is_convertible_v<value_type&&, std::string_view> &&
                          !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
-        field_type field(::ruvia::model_options{.resource_ = resource});
+        field_type field;
         field.assign_owned(std::string_view(std::forward<value_type>(value)));
         target.emplace(std::move(field));
     } else if constexpr (detail::is_ruvia_bytes<field_type> &&
                          !std::is_same_v<std::remove_cvref_t<value_type>, field_type>) {
-        field_type field(::ruvia::model_options{.resource_ = resource});
-        if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::pmr::vector<std::uint8_t>> &&
+        field_type field;
+        if constexpr (std::is_same_v<std::remove_cvref_t<value_type>, std::vector<std::uint8_t>> &&
                       std::is_rvalue_reference_v<value_type&&>) {
             field.assign_owned(std::forward<value_type>(value));
         } else {
@@ -129,7 +127,7 @@ void assign_field_value(
                 throw_model_move_source_owns_destination();
             }
         }
-        target.emplace(detail::rebind_model_value(std::forward<value_type>(value), resource));
+        target.emplace(detail::rebind_model_value(std::forward<value_type>(value)));
     }
 }
 
@@ -241,23 +239,22 @@ public:
 
     // Dynamic JSON tokens require whole-value assignment to keep null state
     // synchronized; only values that cannot become JSON null expose mutation.
-    [[nodiscard]] field_value_type& ensure(std::pmr::memory_resource* resource) & RUVIA_LIFETIMEBOUND
+    [[nodiscard]] field_value_type& ensure() & RUVIA_LIFETIMEBOUND
         requires(!detail::is_ruvia_json_value<field_value_type>)
     {
         if (!value_) {
-            value_.emplace(
-                detail::make_request_value<field_value_type>(resolved_pmr_resource_tag{}, resource));
+            value_.emplace();
         }
         state_ = detail::model_field_state::parsed;
         return *value_;
     }
 
-    field_value_type& ensure(std::pmr::memory_resource*) &&
+    field_value_type& ensure() &&
         requires(!detail::is_ruvia_json_value<field_value_type>)
     = delete;
 
     template <typename input_type>
-    void assign(input_type&& input, std::pmr::memory_resource* resource) {
+    void assign(input_type&& input) {
         if constexpr (std::is_null_pointer_v<std::remove_cvref_t<input_type>>) {
             static_assert(nullable, "setting null requires RUVIA_NULLABLE");
             assign_null();
@@ -272,7 +269,7 @@ public:
                     }
                 }
             }
-            assign_field_value(value_, std::forward<input_type>(input), resource);
+            assign_field_value(value_, std::forward<input_type>(input));
             state_ = detail::model_field_state::parsed;
         }
     }
@@ -288,22 +285,20 @@ public:
         value_.reset();
     }
 
-    void apply_initial(std::pmr::memory_resource* resource) {
-        options_type::apply_initial([this, resource]<typename input_type>(input_type&& value) {
-            this->assign(std::forward<input_type>(value), resource);
+    void apply_initial() {
+        options_type::apply_initial([this]<typename input_type>(input_type&& value) {
+            this->assign(std::forward<input_type>(value));
         });
     }
 
-    void apply_default(std::pmr::memory_resource* resource) {
+    void apply_default() {
         if constexpr (options_type::has_default) {
             if (state_ != detail::model_field_state::missing) {
                 return;
             }
-            options_type::apply_default([this, resource]<typename input_type>(input_type&& value) {
-                this->assign(std::forward<input_type>(value), resource);
+            options_type::apply_default([this]<typename input_type>(input_type&& value) {
+                this->assign(std::forward<input_type>(value));
             });
-        } else {
-            (void)resource;
         }
     }
 
@@ -356,12 +351,12 @@ private:
         state_ = detail::model_field_state::parsed;
     }
 
-    [[nodiscard]] model_field rebind(std::pmr::memory_resource* resource) const {
+    [[nodiscard]] model_field rebind() const {
         model_field rebound;
         rebound.state_ = state_;
         rebound.present_ = present_;
         if (value_) {
-            rebound.value_.emplace(detail::rebind_model_value(*value_, resource));
+            rebound.value_.emplace(detail::rebind_model_value(*value_));
         }
         return rebound;
     }

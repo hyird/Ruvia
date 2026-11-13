@@ -3,7 +3,6 @@
 #include <chrono>
 #include <concepts>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -73,14 +72,14 @@ public:
     task<std::optional<std::string_view>> text(operation_options = {}) && = delete;
 
 private:
-    void bind_worker(const worker_handle& worker_value) noexcept {
+    void bind_worker(const worker_ref& worker_value) noexcept {
         worker_ = &worker_value;
         operation_scope_.bind_worker(worker_value);
     }
 
     read_type read_;
-    const worker_handle* worker_{nullptr};
     bool read_active_{false};
+    const worker_ref* worker_{nullptr};
     ::ruvia::operation_scope operation_scope_;
 };
 
@@ -113,14 +112,12 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
 
     /// Takes ownership of an already-allocated chunk and transfers it into the
-    /// output lane, rebinding it to owner storage when needed before returning.
-    /// Compatible allocators transfer the
-    /// existing allocation; incompatible allocators copy it before returning.
-    template <std::same_as<std::pmr::string> string_type>
+    /// output lane before returning.
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
         return write_owned(std::move(chunk), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
 
     [[nodiscard]] task<void> writeln(std::string_view chunk, operation_options operation = {}) &;
@@ -164,11 +161,10 @@ private:
     using aborted_type = bool (*)(void*) noexcept;
 
     // `interrupts` is the sink's; it routes stop requests to output operations.
-    response_stream_writer(std::pmr::memory_resource& resource, void* target, detail::operation_interrupt_source& interrupts,
+    response_stream_writer(void* target, detail::operation_interrupt_source& interrupts,
         commit_type commit, write_type write, end_type end, sleep_type sleep, bind_context_type bind_context,
         release_context_type release_context, committed_type committed, aborted_type aborted) noexcept
-        : resource_(&resource),
-          target_(target),
+        : target_(target),
           interrupts_(&interrupts),
           commit_(commit),
           write_(write),
@@ -179,7 +175,7 @@ private:
           committed_(committed),
           aborted_(aborted) {}
 
-    void bind_worker(const worker_handle& worker_value) noexcept {
+    void bind_worker(const worker_ref& worker_value) noexcept {
         worker_ = &worker_value;
         operation_scope_.bind_worker(worker_value);
     }
@@ -206,9 +202,8 @@ private:
     }
     void require_output() const;
 
-    task<void> write_owned(std::pmr::string&& chunk, operation_options operation);
+    task<void> write_owned(std::string&& chunk, operation_options operation);
 
-    std::pmr::memory_resource* resource_;
     void* target_;
     detail::operation_interrupt_source* interrupts_;
     commit_type commit_;
@@ -220,7 +215,7 @@ private:
     committed_type committed_;
     aborted_type aborted_;
     stop_token stop_token_;
-    const worker_handle* worker_{nullptr};
+    const worker_ref* worker_{nullptr};
     context* context_{nullptr};
     bool output_active_{false};
     ::ruvia::operation_scope operation_scope_;
@@ -266,5 +261,45 @@ private:
     response_stream_writer* writer_;
     scoped_capability_registration registration_;
 };
+
+namespace detail {
+
+struct streaming_access final {
+    [[nodiscard]] static body_reader make_body_reader(void* target, body_reader::read_type::invoke_type read) noexcept {
+        return body_reader(target, read);
+    }
+
+    [[nodiscard]] static response_stream_writer make_response_stream_writer(
+        void* target, operation_interrupt_source& interrupts, response_stream_writer::commit_type commit,
+        response_stream_writer::write_type write, response_stream_writer::end_type end,
+        response_stream_writer::sleep_type sleep, response_stream_writer::bind_context_type bind_context,
+        response_stream_writer::release_context_type release_context,
+        response_stream_writer::committed_type committed, response_stream_writer::aborted_type aborted) noexcept {
+        return response_stream_writer(
+            target, interrupts, commit, write, end, sleep, bind_context, release_context, committed, aborted);
+    }
+
+    static void bind_worker(body_reader& reader, const worker_ref& worker_value) noexcept {
+        reader.bind_worker(worker_value);
+    }
+
+    static void bind_worker(response_stream_writer& writer, const worker_ref& worker_value) noexcept {
+        writer.bind_worker(worker_value);
+    }
+
+    [[nodiscard]] static bool& output_lane(response_stream_writer& writer) noexcept {
+        return writer.output_active_;
+    }
+
+    static void bind_context(response_stream_writer& writer, context& context_value, stop_token stop_token_value) {
+        writer.bind_context(context_value, std::move(stop_token_value));
+    }
+
+    static void release_context(response_stream_writer& writer) noexcept {
+        writer.release_context();
+    }
+};
+
+}  // namespace detail
 
 }  // namespace ruvia

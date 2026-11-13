@@ -4,15 +4,13 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <variant>
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_runtime.h"
 
 #include "worker_runtime_context.h"
@@ -74,8 +72,7 @@ public:
             ++pending_;
         }
         try {
-            auto token = std::allocate_shared<lease_token_type>(
-                std::pmr::polymorphic_allocator<lease_token_type>(process_resource()), owner);
+            auto token = std::make_shared<lease_token_type>(owner);
             return std::shared_ptr<void>(std::move(token), this);
         } catch (...) {
             finish();

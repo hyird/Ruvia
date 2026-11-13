@@ -145,8 +145,8 @@ struct task_final_awaiter final {
 
     template <typename promise_type>
     [[nodiscard]] std::coroutine_handle<> await_suspend(
-        std::coroutine_handle<promise_type> handle) const noexcept {
-        return handle.promise().control_.finish();
+        std::coroutine_handle<promise_type> coroutine) const noexcept {
+        return coroutine.promise().control_.finish();
     }
 
     void await_resume() const noexcept {}

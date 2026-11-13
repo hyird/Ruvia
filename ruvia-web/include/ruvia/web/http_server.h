@@ -131,16 +131,15 @@ public:
     task<void> shutdown() && = delete;
     // Any thread.
     [[nodiscard]] http_server_stats stats() const;
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
 
 private:
     std::shared_ptr<detail::http_server_state> state_;
 };
 
 // Builds one worker's callbacks; see http_server_group.
-using http_server_callbacks_factory = move_only_function<http_server_callbacks(const worker_handle&)>;
-
+using http_server_callbacks_factory = move_only_function<http_server_callbacks(const worker_ref&)>;
 // A service shared by caller-owned loops. Configuration before start does not
 // require the loops to be driven. Controls suspend without blocking member
 // loops and resume on the explicit caller worker (which may itself be a
@@ -170,15 +169,15 @@ public:
     // configuration, dispatch_ included.
     http_server_group& listen(listen_config config) &;
     http_server_group& listen(listen_config) && = delete;
-    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) &;
-    task<prepared_listener> prepare_listener(worker_handle, listen_config) && = delete;
+    [[nodiscard]] task<prepared_listener> prepare_listener(worker_ref caller, listen_config config) &;
+    task<prepared_listener> prepare_listener(worker_ref, listen_config) && = delete;
     // 整批所有 worker 就绪后才返回；单一票据统一激活或回滚全部端点。
-    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) &;
-    task<prepared_listener> prepare_listeners(worker_handle, std::span<const listen_config>) && = delete;
-    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config) &;
-    task<void> add_listener(worker_handle, listen_config) && = delete;
-    [[nodiscard]] task<void> add_connection_service(worker_handle caller, listen_config config) &;
-    task<void> add_connection_service(worker_handle, listen_config) && = delete;
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_ref caller, std::span<const listen_config> configs) &;
+    task<prepared_listener> prepare_listeners(worker_ref, std::span<const listen_config>) && = delete;
+    [[nodiscard]] task<void> add_listener(worker_ref caller, listen_config config) &;
+    task<void> add_listener(worker_ref, listen_config) && = delete;
+    [[nodiscard]] task<void> add_connection_service(worker_ref caller, listen_config config) &;
+    task<void> add_connection_service(worker_ref, listen_config) && = delete;
     // Before start only; replaces the complete set on every worker. Parsing
     // and allocation finish before publication; invalid input changes nothing.
     // An empty config trusts no forwarded headers.
@@ -187,35 +186,35 @@ public:
     // Ensures every member's callbacks are built, then prepares every worker
     // before opening any listener; failure rolls back the whole host without
     // cancelling unrelated caller work.
-    [[nodiscard]] task<void> start(worker_handle caller) &;
-    task<void> start(worker_handle) && = delete;
-    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
-    task<void> remove_listener(worker_handle, const listener_endpoint&, listener_remove_options = {}) && = delete;
+    [[nodiscard]] task<void> start(worker_ref caller) &;
+    task<void> start(worker_ref) && = delete;
+    [[nodiscard]] task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    task<void> remove_listener(worker_ref, const listener_endpoint&, listener_remove_options = {}) && = delete;
     // As http_server::wait_connections_closed(), across every member.
-    [[nodiscard]] task<void> wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options = {}) &;
-    task<void> wait_connections_closed(worker_handle, const listener_endpoint&, operation_options = {}) && = delete;
-    [[nodiscard]] task<void> replace_tls_identities(worker_handle caller, const listener_endpoint& endpoint, tls_config config) &;
-    task<void> replace_tls_identities(worker_handle, const listener_endpoint&, tls_config) && = delete;
+    [[nodiscard]] task<void> wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options = {}) &;
+    task<void> wait_connections_closed(worker_ref, const listener_endpoint&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> replace_tls_identities(worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
+    task<void> replace_tls_identities(worker_ref, const listener_endpoint&, tls_config) && = delete;
 #ifndef _WIN32
-    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_handle caller, const listener_endpoint& endpoint) const&;
-    task<listener_sockets> duplicate_listener_sockets(worker_handle, const listener_endpoint&) const&& = delete;
+    [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(worker_ref caller, const listener_endpoint& endpoint) const&;
+    task<listener_sockets> duplicate_listener_sockets(worker_ref, const listener_endpoint&) const&& = delete;
 #endif
     // Explicit target worker; takes socket ownership even when rejected.
     // As http_server::adopt() otherwise.
-    [[nodiscard]] task<void> adopt(worker_handle caller, std::size_t worker_index, const listener_endpoint& service, native_socket socket, adopt_options options = {}) &;
-    task<void> adopt(worker_handle, std::size_t, const listener_endpoint&, native_socket, adopt_options = {}) && = delete;
+    [[nodiscard]] task<void> adopt(worker_ref caller, std::size_t worker_index, const listener_endpoint& service, native_socket socket, adopt_options options = {}) &;
+    task<void> adopt(worker_ref, std::size_t, const listener_endpoint&, native_socket, adopt_options = {}) && = delete;
     // IDs never name another connection after retirement.
-    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) &;
-    task<bool> close_connection(worker_handle, std::uint64_t) && = delete;
+    [[nodiscard]] task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) &;
+    task<bool> close_connection(worker_ref, std::uint64_t) && = delete;
     void close() & noexcept;
     void close() && = delete;
-    [[nodiscard]] task<void> shutdown(worker_handle caller) &;
-    task<void> shutdown(worker_handle) && = delete;
+    [[nodiscard]] task<void> shutdown(worker_ref caller) &;
+    task<void> shutdown(worker_ref) && = delete;
     // Any thread.
     [[nodiscard]] http_server_stats stats() const;
     [[nodiscard]] std::size_t worker_count() const noexcept;
-    [[nodiscard]] const worker_handle& worker(std::size_t index) const& RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker(std::size_t) const&& = delete;
+    [[nodiscard]] const worker_ref& worker(std::size_t index) const& RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker(std::size_t) const&& = delete;
 
 private:
     std::shared_ptr<detail::http_server_group_state> state_;

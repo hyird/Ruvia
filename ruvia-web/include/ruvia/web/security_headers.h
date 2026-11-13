@@ -2,13 +2,11 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_header.h"
@@ -19,10 +17,9 @@ namespace ruvia {
 
 class context;
 struct security_header final {
-    std::pmr::string name_{process_resource()};
-    std::pmr::string value_{process_resource()};
+    std::string name_{};
+    std::string value_{};
 };
-
 // Legacy browser XSS filters can introduce vulnerabilities in otherwise safe
 // pages. Modern policy either emits X-XSS-Protection: 0 to disable the obsolete
 // auditor, or omits the obsolete header entirely for clients that ignore it.
@@ -51,11 +48,11 @@ struct security_headers_config final {
         default_security_header_policy::emit_default;
     xss_protection_header_policy xss_protection_header_ = xss_protection_header_policy::emit_disabled;
 
-    std::pmr::string content_security_policy_{"default-src 'self'", process_resource()};
-    std::pmr::string referrer_policy_{"strict-origin-when-cross-origin", process_resource()};
-    std::pmr::string permissions_policy_{"geolocation=(), microphone=(), camera=()", process_resource()};
+    std::string content_security_policy_{"default-src 'self'"};
+    std::string referrer_policy_{"strict-origin-when-cross-origin"};
+    std::string permissions_policy_{"geolocation=(), microphone=(), camera=()"};
 
-    std::pmr::vector<security_header> custom_headers_{process_resource()};
+    std::vector<security_header> custom_headers_{};
     security_header_conflict_policy existing_headers_ = security_header_conflict_policy::preserve_existing;
 };
 
@@ -76,21 +73,18 @@ public:
     security_headers_middleware(security_headers_middleware&&) = delete;
     security_headers_middleware& operator=(security_headers_middleware&&) = delete;
 
-    task<void> handle(context& context, next& next);
+    task<void> invoke(context& context, next& next);
 
 private:
-    security_headers_middleware(
-        const security_headers_config& source_value, std::pmr::memory_resource* resource);
-
     bool emit_content_type_options_{true};
     bool emit_frame_options_{true};
     bool emit_strict_transport_security_{true};
     bool emit_disabled_xss_protection_{true};
     bool replace_existing_{false};
-    std::pmr::string content_security_policy_;
-    std::pmr::string referrer_policy_;
-    std::pmr::string permissions_policy_;
-    std::pmr::vector<http_header> custom_headers_;
+    std::string content_security_policy_;
+    std::string referrer_policy_;
+    std::string permissions_policy_;
+    std::vector<http_header> custom_headers_;
 };
 
 }  // namespace ruvia

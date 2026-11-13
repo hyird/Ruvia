@@ -5,20 +5,17 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http3_request_head.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_priority.h"
 #include "ruvia/http/http_request_body_error.h"
 #include "ruvia/http/http_request_trailers.h"
@@ -26,7 +23,7 @@
 #include "ruvia/web/detail/router/route_handlers.h"
 
 #include "router/route_resolution.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/multiplexed_stream_signal.h"
 
 // Web-side state of one HTTP/3 request stream. The QUIC/HTTP/3 core owns
@@ -41,25 +38,25 @@ enum class http3_body_store_status : std::uint8_t {
     stored,
     too_large,
     backlog_overflow,
+    buffer_limit,
 };
 
 // Tunnel bytes taken together with the receive credit they hold; the reader
 // drops the credit once it consumed the bytes.
 struct http3_tunnel_chunk final {
-    std::pmr::string bytes_;
+    std::string bytes_;
     std::optional<http3_received_data_credit> credit_;
 };
 
 class http3_stream final {
 public:
     http3_stream(http3_request_head head, route_resolution resolution, request_body_mode body_mode,
-        std::pmr::memory_resource* resource, std::pmr::memory_resource* body_resource)
+        inbound_buffer_account* inbound = nullptr) noexcept
         : head_(std::move(head)),
           resolution_(std::move(resolution)),
           body_mode_(body_mode),
-          trailers_(resource),
-          body_(body_resource),
-          active_chunk_(body_resource) {}
+          body_reservation_(inbound),
+          active_reservation_(inbound) {}
 
     http3_stream(const http3_stream&) = delete;
     http3_stream& operator=(const http3_stream&) = delete;
@@ -109,7 +106,7 @@ public:
         }
         try {
             if (!datagrams_) {
-                datagrams_.emplace(body_.get_allocator().resource());
+                datagrams_.emplace();
             }
             datagrams_->emplace_back(payload);
             datagram_bytes_ += payload.size();
@@ -120,7 +117,7 @@ public:
             signal_->wake();
         }
     }
-    [[nodiscard]] std::optional<std::pmr::string> pop_datagram() {
+    [[nodiscard]] std::optional<std::string> pop_datagram() {
         if (!datagrams_ || datagrams_->empty()) {
             return std::nullopt;
         }
@@ -130,8 +127,9 @@ public:
         return payload;
     }
     [[nodiscard]] http3_tunnel_chunk take_tunnel_bytes() {
-        http3_tunnel_chunk result{std::pmr::string(body_.get_allocator()), std::exchange(body_credit_, std::nullopt)};
+        http3_tunnel_chunk result{std::string{}, std::exchange(body_credit_, std::nullopt)};
         result.bytes_.swap(body_);
+        body_reservation_.clear();
         return result;
     }
 
@@ -148,9 +146,9 @@ public:
             return http3_body_store_status::backlog_overflow;
         }
         try {
-            body_.append(data.data(), data.size());
+            inbound_append(body_, body_reservation_, data);
         } catch (const inbound_buffer_limit_error&) {
-            return http3_body_store_status::backlog_overflow;
+            return http3_body_store_status::buffer_limit;
         }
         received_bytes_ += data.size();
         if (body_mode_ == request_body_mode::stream && credit.valid()) {
@@ -178,8 +176,9 @@ public:
             active_credit_.emplace(std::move(*body_credit_));
             body_credit_.reset();
         }
-        http_clear_pmr_string_retaining_small(active_chunk_);
+        inbound_clear_retaining_small(active_chunk_, active_reservation_);
         active_chunk_.swap(body_);
+        active_reservation_.swap(body_reservation_);
         return {active_chunk_, returned};
     }
     std::pair<std::string_view, bool> pop() && = delete;
@@ -192,8 +191,8 @@ public:
         const bool returned = body_credit_.has_value() || active_credit_.has_value();
         body_credit_.reset();
         active_credit_.reset();
-        std::pmr::string(body_.get_allocator()).swap(body_);
-        std::pmr::string(active_chunk_.get_allocator()).swap(active_chunk_);
+        inbound_discard(body_, body_reservation_);
+        inbound_discard(active_chunk_, active_reservation_);
         datagrams_.reset();
         datagram_bytes_ = 0;
         return returned;
@@ -270,7 +269,7 @@ public:
     }
 
     [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        const worker_handle& worker_value, multiplexed_session_termination& termination) {
+        const worker_ref& worker_value, multiplexed_session_termination& termination) {
         if (signal_ || handler_done_) {
             return nullptr;
         }
@@ -307,12 +306,14 @@ private:
     std::optional<http_priority> priority_{};
     // Received request content: the whole body (buffered), or the queue the
     // reader drains (streaming). active_chunk_ backs the last popped view.
-    std::pmr::string body_;
-    std::pmr::string active_chunk_;
+    std::string body_;
+    inbound_buffer_reservation body_reservation_;
+    std::string active_chunk_;
+    inbound_buffer_reservation active_reservation_;
     // Receive credit of body_ and active_chunk_ (streaming body or tunnel).
     std::optional<http3_received_data_credit> body_credit_;
     std::optional<http3_received_data_credit> active_credit_;
-    std::optional<std::pmr::deque<std::pmr::string>> datagrams_;
+    std::optional<std::deque<std::string>> datagrams_;
     std::size_t datagram_bytes_{0};
     std::size_t received_bytes_{0};
     std::optional<http_request_body_failure> body_failure_{};

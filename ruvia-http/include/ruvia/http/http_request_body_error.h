@@ -18,6 +18,7 @@ namespace ruvia {
 enum class http_request_body_failure : std::uint8_t {
     too_large,
     incomplete,
+    buffer_limit,
 };
 
 [[nodiscard]] inline http_protocol_error http_request_body_protocol_error(
@@ -29,6 +30,9 @@ enum class http_request_body_failure : std::uint8_t {
         case http_request_body_failure::incomplete:
             return http_protocol_error(
                 http_status::bad_request, "incomplete_request_body", "incomplete request body");
+        case http_request_body_failure::buffer_limit:
+            return http_protocol_error(http_status::service_unavailable, "inbound_buffer_limit",
+                "inbound buffer capacity exhausted");
     }
     return http_protocol_error(http_status::bad_request, "invalid_request_body", "invalid request body");
 }

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -54,22 +53,6 @@ namespace ruvia::detail {
     return size;
 }
 
-// Returns `input` itself when it holds nothing to decode; otherwise the
-// decoded bytes are allocated from `arena`, which must keep them until it is
-// destroyed (a request arena never reclaims individual allocations).
-[[nodiscard]] inline std::optional<std::string_view> decode_url_component_in_arena(std::string_view input,
-    url_decode_mode mode, bool reject_encoded_separators, std::pmr::memory_resource* arena) {
-    if (!has_url_encoding(input, mode)) {
-        return input;
-    }
-    auto* const output = static_cast<char*>(arena->allocate(input.size(), alignof(char)));
-    const auto size = decode_url_bytes(input, output, mode, reject_encoded_separators);
-    if (!size) {
-        return std::nullopt;
-    }
-    return std::string_view(output, *size);
-}
-
 // Percent-decodes an encoded request path, or a wildcard tail of one, exactly
 // once into the file path it names: the path itself when it holds no escape,
 // otherwise the decoded bytes in `storage`. Routing and path-scoped middleware
@@ -77,7 +60,7 @@ namespace ruvia::detail {
 // would forge a segment boundary they never saw; that, like a malformed
 // escape, yields nullopt.
 [[nodiscard]] inline std::optional<std::string_view> decode_request_path(
-    std::string_view path, std::pmr::string& storage) {
+    std::string_view path, std::string& storage) {
     if (!has_url_encoding(path, url_decode_mode::percent)) {
         return path;
     }
@@ -100,7 +83,7 @@ namespace ruvia::detail {
 // the directory itself and is dropped. The input is borrowed when it is
 // already canonical; only a '\\' separator rebuilds it in `storage`.
 [[nodiscard]] inline std::optional<std::string_view> try_normalize_static_relative_path(
-    std::string_view input, std::pmr::string& storage) {
+    std::string_view input, std::string& storage) {
     if (input.empty()) {
         return input;
     }
@@ -141,7 +124,7 @@ namespace ruvia::detail {
 }
 
 [[nodiscard]] inline std::string_view normalize_static_relative_path(
-    std::string_view input, std::pmr::string& storage) {
+    std::string_view input, std::string& storage) {
     const auto normalized = try_normalize_static_relative_path(input, storage);
     if (!normalized.has_value()) {
         throw_invalid_static_file_path();

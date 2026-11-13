@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <limits>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -65,7 +64,6 @@ void decode_http_client_response_body(http_client_response_state& state_value,
     if (!content_semantics_present || !state_value.body_decode_required_) {
         return;
     }
-    auto* const resource = state_value.resource_;
     try {
         const auto& parsed_coding = *state_value.content_coding_;
         if (parsed_coding.invalid() != nullptr || parsed_coding.unsupported() != nullptr) {
@@ -75,7 +73,7 @@ void decode_http_client_response_body(http_client_response_state& state_value,
         // Encoded bytes are never exposed, so the unread part of buffered_ and
         // pending_ together are the whole body. Decode in place when one holds it.
         const auto buffered_bytes = state_value.buffered_.size() - state_value.offset_;
-        std::pmr::string joined(resource);
+        std::string joined;
         std::string_view encoded;
         if (state_value.pending_.empty()) {
             encoded = std::string_view(state_value.buffered_).substr(state_value.offset_);
@@ -94,10 +92,10 @@ void decode_http_client_response_body(http_client_response_state& state_value,
 
         const auto decoded_limit = std::min(max_decoded_bytes, state_value.buffered_limit_);
         auto decoded = decode_http_content(
-            parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit, .resource_ = resource});
-        if (auto* decoded_body = std::get_if<std::pmr::string>(&decoded)) {
-            std::pmr::string empty_buffered(state_value.resource_);
-            std::pmr::string empty_pending(state_value.resource_);
+            parsed_coding.codings(), encoded, {.max_decoded_bytes_ = decoded_limit});
+        if (auto* decoded_body = std::get_if<std::string>(&decoded)) {
+            std::string empty_buffered;
+            std::string empty_pending;
             state_value.buffered_.swap(empty_buffered);
             state_value.pending_.swap(empty_pending);
             state_value.buffered_.swap(*decoded_body);
@@ -152,15 +150,7 @@ void retain_http_client_binary_response_head(http_client_response_state& state_v
     const auto status = head.status();
     state_value.content_length_ = head.content_length();
     auto fields = std::move(head).take_headers();
-    if (fields.get_allocator().resource() == state_value.resource_) {
-        state_value.headers_.swap(fields);
-    } else {
-        state_value.headers_.clear();
-        state_value.headers_.reserve(fields.size());
-        for (const auto& field : fields) {
-            state_value.headers_.emplace_back(field.name(), field.value(), state_value.resource_);
-        }
-    }
+    state_value.headers_ = std::move(fields);
     const auto body_plan = plan_http_response_body(state_value.request_method_, status);
     state_value.framing_ = body_plan.content_semantics() == http_response_content_semantics::connect_tunnel
                                ? http_client_response_framing::tunnel

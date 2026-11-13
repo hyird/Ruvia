@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <stdexcept>
 #include <vector>
 
@@ -8,7 +7,7 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http_interim_response.h"
 
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia {
 class context;
@@ -16,14 +15,13 @@ class context;
 
 namespace ruvia::detail {
 
-// One request's typed interim output lane. The protocol driver and its worker
-// resource outlive this object; operations own their fields until completion.
+// One request's typed interim output lane. The protocol driver outlives this
+// object; operations own their fields until completion.
 class http_interim_response_output final {
 public:
     using write_type = task<void> (*)(void*, const http_interim_response_head&);
-    http_interim_response_output(std::pmr::memory_resource* resource, void* target, write_type write) noexcept
-        : resource_(resource),
-          target_(target),
+    http_interim_response_output(void* target, write_type write) noexcept
+        : target_(target),
           write_(write) {}
 
     // An interrupted inform() resets the request of `context_value`.
@@ -43,8 +41,7 @@ public:
 
 private:
     [[nodiscard]] task<void> write_owned(
-        http_status_code status, std::pmr::vector<http_header> fields, operation_options operation, context& context_value);
-    std::pmr::memory_resource* resource_;
+        http_status_code status, std::vector<http_header> fields, operation_options operation, context& context_value);
     void* target_;
     write_type write_;
     bool final_committed_{};

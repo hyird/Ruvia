@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -21,7 +20,7 @@ struct http1_request_message final {
     std::optional<std::size_t> message_bytes_{};
     // Decoded body of a complete message: the Content-Length bytes or the
     // concatenated chunk payloads.
-    std::pmr::string body_{};
+    std::string body_{};
     std::optional<http1_chunk_decode_error> chunk_error_{};
 
     [[nodiscard]] bool complete() const noexcept {
@@ -34,9 +33,9 @@ struct http1_request_message final {
 };
 
 [[nodiscard]] inline http1_request_message parse_http1_request_message(
-    std::string_view buffer, std::pmr::memory_resource* resource = nullptr) {
+    std::string_view buffer) {
     http1_request_message message;
-    message.state_.parse_head(buffer, 0, resource);
+    message.state_.parse_head(buffer, 0);
     const auto* head = message.state_.head_ready();
     if (head == nullptr) {
         return message;

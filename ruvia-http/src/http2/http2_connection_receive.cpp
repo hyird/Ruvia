@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -11,9 +10,7 @@
 #include "coding/http_content_length.h"
 #include "http1/http_client_response_head.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_header_rules.h"
 #include "http2/http2_request_headers.h"
-#include "http2/http2_response_headers.h"
 // Inbound HEADERS, PUSH_PROMISE and DATA as nghttp2 delivers them: one field
 // block per on_begin_headers/on_header/on_frame_recv sequence, DATA payload in
 // chunks borrowed from the fed input. nghttp2 has already enforced framing,
@@ -32,10 +29,18 @@ namespace {
     return known == nullptr || known->declared_length() == 0;
 }
 
+// Decoded HTTP/2 field names are already required to be lowercase. TE is
+// permitted only in requests (RFC 9113 Section 8.2.2); a response carrying TE
+// is malformed even when its value is exactly "trailers".
+[[nodiscard]] bool http2_is_valid_decoded_response_header(
+    std::string_view name, std::string_view value) noexcept {
+    return http2_is_valid_regular_header(name, value) && name != "te";
+}
+
 // ':status' is first and unique; interim metadata is retained separately
 // without applying sender prohibitions.
 [[nodiscard]] bool accept_response_header(http2_header_decode_context& context,
-    std::pmr::vector<http_header>& informational_fields, std::optional<http_received_status>& status_value,
+    std::vector<http_header>& informational_fields, std::optional<http_received_status>& status_value,
     http_response_content_semantics& content_semantics, bool& saw_regular, std::string_view name,
     std::string_view value) {
     if (!http2_accumulate_header_list_bytes(context, name, value)) {
@@ -64,7 +69,7 @@ namespace {
     saw_regular = true;
     if (status_value->status().is_informational()) {
         // These fields cannot frame a 1xx or carry over to the final response.
-        informational_fields.emplace_back(name, value, informational_fields.get_allocator().resource());
+        informational_fields.emplace_back(name, value);
         return true;
     }
     const auto kind = classify_http_field(name);
@@ -81,10 +86,8 @@ namespace {
     return stream.append_remote_header(name, value, kind);
 }
 
-}  // namespace
-
-bool http2_on_decoded_response_trailer(void* target, std::string_view name, std::string_view value) {
-    auto& context_value = *static_cast<http2_header_decode_context*>(target);
+[[nodiscard]] bool http2_on_decoded_response_trailer(
+    http2_header_decode_context& context_value, std::string_view name, std::string_view value) {
     if (!http2_accumulate_header_list_bytes(context_value, name, value)) {
         return false;
     }
@@ -96,6 +99,8 @@ bool http2_on_decoded_response_trailer(void* target, std::string_view name, std:
     }
     return is_forbidden_response_trailer_name(name) || context_value.stream_.append_remote_trailer(name, value);
 }
+
+}  // namespace
 
 // --- HEADERS / PUSH_PROMISE ---------------------------------------------------
 
@@ -153,7 +158,7 @@ int http2_connection::begin_request_headers(const nghttp2_frame& frame) {
         if (end_stream) {
             (void)stream->record_remote_head_end_stream();
         }
-        header_block_.emplace(header_block_kind::request, *stream, resource_);
+        header_block_.emplace(header_block_kind::request, *stream);
         return 0;
     }
 
@@ -169,7 +174,7 @@ int http2_connection::begin_request_headers(const nghttp2_frame& frame) {
         reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
-    header_block_.emplace(header_block_kind::request_trailers, *stream, resource_);
+    header_block_.emplace(header_block_kind::request_trailers, *stream);
     return 0;
 }
 
@@ -186,14 +191,14 @@ int http2_connection::begin_response_headers(const nghttp2_frame& frame) {
         if (end_stream) {
             (void)stream->record_remote_head_end_stream();
         }
-        header_block_.emplace(header_block_kind::response, *stream, resource_);
+        header_block_.emplace(header_block_kind::response, *stream);
         return 0;
     }
     if (stream->tunnel().open() != nullptr || stream->remote_receive().content_open() == nullptr || !end_stream) {
         reset_stream_for_peer_error(stream_id, http2_error_code::protocol_error);
         return NGHTTP2_ERR_TEMPORAL_CALLBACK_FAILURE;
     }
-    header_block_.emplace(header_block_kind::response_trailers, *stream, resource_);
+    header_block_.emplace(header_block_kind::response_trailers, *stream);
     return 0;
 }
 
@@ -210,11 +215,11 @@ int http2_connection::begin_push_promise(const nghttp2_frame& frame) {
     const auto* parent = streams_.find(associated_id);
     // The promised request decodes into scratch storage; the pushed stream's own
     // receive state awaits the response.
-    push_scratch_.emplace(promised_id, resource_);
+    push_scratch_.emplace(promised_id);
     push_associated_stream_id_ = associated_id;
     // PUSH_PROMISE carries a complete request without content.
     (void)push_scratch_->record_remote_head_end_stream();
-    auto& block = header_block_.emplace(header_block_kind::push_promise, *push_scratch_, resource_);
+    auto& block = header_block_.emplace(header_block_kind::push_promise, *push_scratch_);
     block.reject_connected_tunnel_ = parent != nullptr && parent->tunnel().open() != nullptr;
     return 0;
 }
@@ -253,7 +258,7 @@ bool http2_connection::accept_header_field(std::string_view name, std::string_vi
             return accept_response_header(block.context_, block.informational_fields_, block.status_,
                 block.content_semantics_, block.saw_regular_, name, value);
         case header_block_kind::response_trailers:
-            return http2_on_decoded_response_trailer(&block.context_, name, value);
+            return http2_on_decoded_response_trailer(block.context_, name, value);
     }
     return false;
 }
@@ -367,7 +372,7 @@ bool http2_connection::finish_response_head(http2_stream_state& stream, header_b
         }
         stream.mark_informational_response();
         stream.activate_push();
-        auto head = http_client_response_head_access::make(*block.status_, http_protocol_version::http2, resource_);
+        auto head = http_client_response_head_access::make(*block.status_, http_protocol_version::http2);
         if (!block.informational_fields_.empty()) {
             http_client_response_head_access::headers(head) = std::move(block.informational_fields_);
         }
@@ -464,7 +469,7 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
             static_cast<std::uint32_t>(refusal.value_or(http2_error_code::enhance_your_calm))));
         return;
     }
-    http_push_request request(resource_);
+    http_push_request request;
     request.method_ = scratch.request_method();
     request.scheme_ = scratch.request_scheme();
     request.authority_ = scratch.request_authority();
@@ -472,10 +477,10 @@ void http2_connection::finish_push_promise(const nghttp2_frame& frame, header_bl
     request.headers_.reserve(scratch.remote_header_count() + static_cast<std::size_t>(scratch.has_cookie()));
     for (std::size_t i = 0; i < scratch.remote_header_count(); ++i) {
         const auto field = scratch.remote_header_at(i);
-        request.headers_.emplace_back(field.name_, field.value_, resource_);
+        request.headers_.emplace_back(field.name_, field.value_);
     }
     if (scratch.has_cookie()) {
-        request.headers_.emplace_back("cookie", scratch.request_cookie(), resource_);
+        request.headers_.emplace_back("cookie", scratch.request_cookie());
     }
     pin_stream(promised_id);
     stream->take_request_target_from(scratch);

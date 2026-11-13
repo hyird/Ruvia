@@ -8,7 +8,7 @@
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http_field_section.h"
 
-#include "util/http_wire_sink.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia {
 namespace {

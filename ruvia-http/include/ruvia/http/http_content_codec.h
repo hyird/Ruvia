@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -26,34 +25,31 @@ public:
 
 struct http_content_encode_options final {
     std::size_t max_encoded_bytes_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // Produces one complete content-coded representation within the exact output
 // cap. nullopt means only that max_encoded_bytes_ would be exceeded; zero
 // permits only a zero-byte encoding. Codec failures throw
 // http_content_codec_error.
-[[nodiscard]] std::optional<std::pmr::string> encode_http_content(
+[[nodiscard]] std::optional<std::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options);
 
 // Applies the listed codings in order. Each intermediate representation is
 // bounded by max_encoded_bytes and released before the next stage completes.
-[[nodiscard]] std::optional<std::pmr::string> encode_http_content(
+[[nodiscard]] std::optional<std::string> encode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_encode_options options);
 
 // Reusable whole-buffer encoder for one coding, for an owner that encodes many
-// representations on one thread. The first encode() creates the codec state
-// from `state_resource`; gzip, deflate and zstd keep it and reset it after
-// every call that returns, and discard it after an exception, so no history
-// and no failed state crosses representations. Brotli has no reset, so its
-// state is created per call, also from `state_resource`. Results follow
-// encode_http_content() exactly: the same bytes, cap, failures, and output
-// from options.resource_. The context is not thread-safe, and
-// `state_resource` must outlive it.
+// representations on one thread. The first encode() creates the codec state;
+// gzip, deflate and zstd keep it and reset it after every call that returns,
+// and discard it after an exception, so no history and no failed state crosses
+// representations. Brotli has no reset, so its state is created per call.
+// Results follow encode_http_content() exactly: the same bytes, cap, and
+// failures. The context is not thread-safe.
 class http_content_encode_context final {
 public:
-    http_content_encode_context(http_content_coding coding, std::pmr::memory_resource* state_resource) noexcept;
+    explicit http_content_encode_context(http_content_coding coding) noexcept;
     ~http_content_encode_context();
     http_content_encode_context(const http_content_encode_context&) = delete;
     http_content_encode_context& operator=(const http_content_encode_context&) = delete;
@@ -64,13 +60,12 @@ public:
         return coding_;
     }
 
-    [[nodiscard]] std::optional<std::pmr::string> encode(
+    [[nodiscard]] std::optional<std::string> encode(
         std::string_view input, http_content_encode_options options);
 
 private:
     struct impl_type;
     http_content_coding coding_;
-    std::pmr::memory_resource* resource_;
     impl_type* impl_{nullptr};
 };
 
@@ -83,7 +78,6 @@ enum class http_content_decode_error : std::uint8_t {
 
 struct http_content_decode_options final {
     std::size_t max_decoded_bytes_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // gzip members and zstd frames are consumed through the end of input; Brotli
@@ -91,7 +85,7 @@ struct http_content_decode_options final {
 // complete representation, and an identity representation over the cap is
 // rejected before allocating. An empty representation decodes to empty content
 // for every coding. Codec failures throw http_content_codec_error.
-[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(
     http_content_coding coding, std::string_view input, http_content_decode_options options);
 
 // Decodes the listed codings in reverse order. gzip members and zstd frames are
@@ -100,7 +94,7 @@ struct http_content_decode_options final {
 // decoded-size cap applies to every intermediate representation, and each one
 // is released before the next stage completes. Codec failures throw
 // http_content_codec_error.
-[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options);
 }  // namespace ruvia

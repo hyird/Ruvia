@@ -11,7 +11,7 @@
 
 ## 1. SQL 数据库连接池、直接查询与事务
 
-聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_handle.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_mapping.h"`、`"ruvia/web/db/db_schema.h"`）。
+聚合头文件：`"ruvia/web/db/db.h"`（或按需包含 `"ruvia/web/db/db_types.h"`、`"ruvia/web/db/db_session.h"`、`"ruvia/web/db/db_rows.h"`、`"ruvia/web/db/db_mapping.h"`、`"ruvia/web/db/db_schema.h"`）。
 参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
@@ -66,32 +66,32 @@ ruvia::app().database({
 
 池中连接在每次租出、发送任何语句之前先做一次非阻塞探测：服务端在连接空闲期间结束了会话（PostgreSQL `idle_session_timeout`、`pg_terminate_backend`，MariaDB `wait_timeout`、`KILL`，重启或故障切换）时，该连接被关闭并透明重连，首条语句不会因已失效的连接而以 `io_error` 失败。PostgreSQL 空闲会话上的异步消息（如 `NOTIFY`、`ParameterStatus`）先交给 libpq 读取，不视为失效；MariaDB 连接在两条命令之间收到任何字节即视为失效。不重连的连接池（迁移器）在此时以 `io_error`（会话已结束）失败，同样不发送语句。
 
-### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_handle`）
+### 1.2 直接查询、编译期 SQL 校验与流式游标（`db_session`）
 
-在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_handle`。ORM 与直接查询保持独立公开路线，均可直接在 `db_handle` 或 `db_transaction` 上调用。
+在路由中通过 `c.db()`（或 `c.db("alias")`）获取 `ruvia::db_session`。ORM 与直接查询保持独立公开路线，均可直接在 `db_session` 或 `db_transaction` 上调用。
 
-- **句柄获取**：出站拥有者与 `context` 同名取句柄：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
-- **逐次选项**：取得的句柄不带操作选项；超时与取消只经句柄的 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
+- **会话引用获取**：出站拥有者与 `context` 同名获取：`db_client::db()`、`redis_client::redis()`、`http_client::client()` / `client(alias)` 分别对应 `c.db()`、`c.redis()`、`c.client()`。
+- **逐次选项**：取得的会话对象不带操作选项；超时与取消只经 `with_options(operation_options)` 派生，合并规则见 [core 2](core-and-http.md#2-停止令牌超时截止期与定时器)。
 
-| `ruvia::db_handle` 方法 | 说明 |
+| `ruvia::db_session` 方法 | 说明 |
 | --- | --- |
-| `db_handle with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
+| `db_session with_options(operation_options options) const` | 绑定单次查询的 `timeout_` 与 `stop_token_` |
 | `task<db_rows> query(std::string_view sql, Args&&... params) const` | 执行参数化查询并返回缓冲结果集 `db_rows`（亦支持传入 `std::span<const db_value>`） |
 | `template <fixed_string Sql, db_driver Driver = db_driver::mariadb, typename... Params> task<db_rows> query(Params&&... params) const` | **编译期校验 SQL 占位符数量**与方言语法的参数化查询（MariaDB 用 `?`，PostgreSQL 用 `$1, $2`） |
 | `task<db_stream_result> query_stream(...) const` | 流式拉取大结果集（同上支持运行期 SQL 与编译期 `fixed_string` 模板） |
 | `task<db_exec_result> execute(...) const` | 执行 `INSERT` / `UPDATE` / `DELETE` / DDL，返回 `db_exec_result`（提供 `.affected_rows()` 与 `.last_insert_id()`） |
 | `task<db_transaction> begin_transaction(db_transaction_options options = {}) const` | 开启事务（可指定隔离级别 `.isolation_` 与读写模式 `.access_mode_`） |
 | `task<void> notify(std::string_view channel, std::string_view payload = {}) const` | （PostgreSQL）发送 `NOTIFY` 通知 |
-| `template <typename E> db_repository<E, db_handle> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
+| `template <typename E> db_repository<E, db_session> repository() const` | 获取实体 `E` 的强类型 ORM Repository |
 | `db_query_result_cache query_result_cache() const` | （需 `RUVIA_ENABLE_REDIS`）获取查询结果缓存控制器 |
 
 查询缓存命中时，结果集持有字段所需的底层存储；空结果和没有列的行不保留缓存正文。结果及其字段视图仍须遵守各自的所有权和借用生命周期。清除缓存时，临时键视图在删除命令获得自有参数后释放，不跨网络等待保留。缓存键前缀与条目编码不携带内部版本号。
 
 缓存条目的大小受所用 Redis 连接的 `max_reply_bytes_` 约束：编码后读取回复会超过该上限的结果照常返回给调用方，但不写入缓存（否则之后每次命中都会因回复超限而失败并关闭一条 Redis 连接）。同一 worker 上同一缓存键的并发未命中只由第一个调用方查询数据库（单飞），其余调用方在各自的超时与停止令牌约束内等待它的结果并直接使用；它失败、被取消或超时后，等待者重新读取缓存，由下一个仍未命中的调用方接着查询。合并只在单个 worker 内进行，不跨 worker 或进程加锁。`remove()` / `clear()` 之后到达的调用方不会合并到此前已开始的查询上。
 
-直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::pmr::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
+直接查询保留 raw 借用路线：`db_field::as<std::string_view>()` 与 `value()` 返回的文本视图只在所属行存储有效期间可用，不得从已经析构的 `db_rows` 中逸出。需要独立结果时，使用 `as<std::string>()` / `as<ruvia::string>()`；ORM 映射入口则在编译期要求 owning 类型，见第 3.1 节。
 
-事务外的 `query()` / `execute()` 会与同一 worker 上的其他调用共享连接：PostgreSQL 使用管线模式，MariaDB 连续发送多条命令后按顺序读取各自的结果。每条语句独立成功或失败，并与等待连接的事务、流式查询保持到达顺序。改变会话状态的语句（`SET`、`USE`、`BEGIN`、`LOCK TABLES` 等）会影响之后共享同一连接的语句，应放在事务中执行；若某条语句使连接停留在事务中，该连接在归还时会被关闭而不会交给下一位调用者。MariaDB 的参数在入队时插值为所有 `sql_mode` 与字符集下含义相同的文本；SQL 或字符串参数含反斜杠时，其含义取决于 `NO_BACKSLASH_ESCAPES`，这类语句会等之前的结果全部读完后，按当时的会话状态插值再发送；若字符串参数中的反斜杠紧跟在大于 0x7F 的字节之后，且会话跟踪不能确认客户端字符集仍是 `utf8mb4`（未跟踪、已报告改为其他字符集，或之后执行过 `CALL`），还会先查询当时的 `@@character_set_client`，按该字符集转义，使 GBK、Big5、SJIS 等字符集中以 0x5C 结尾的多字节字符保持完整。`LOAD DATA LOCAL INFILE` 独占连接：前面的结果读完后才发送，读完它的结果前不发送其他命令；libmariadb 只为以 `LOAD` 开头的命令发送文件，前面有空白或注释时客户端拒绝发送文件，该语句单独失败（错误 2000），连接照常复用。服务器表示会话已结束或收到错序数据包的错误（如 1927、1156）按 I/O 错误处理，该连接不再复用。
+事务外的 `query()` / `execute()` 会与同一 worker 上的其他调用共享连接：PostgreSQL 使用管线模式，MariaDB 连续发送多条命令后按顺序读取各自的结果。每条语句独立成功或失败，并与等待连接的事务、流式查询保持到达顺序。改变会话状态的语句（`SET`、`USE`、`BEGIN`、`LOCK TABLES` 等）会影响之后共享同一连接的语句，应放在事务中执行；若某条语句使连接停留在事务中，该连接在归还时会被关闭而不会交给下一位调用者。MariaDB 的参数在入队时插值为所有 `sql_mode` 与字符集下含义相同的文本；SQL 或字符串参数含反斜杠时，其含义取决于 `NO_BACKSLASH_ESCAPES`，这类语句会等之前的结果全部读完后，按当时的会话状态插值再发送；若字符串参数中的反斜杠紧跟在大于 0x7F 的字节之后，且会话跟踪不能确认客户端字符集仍是 `utf8mb4`（未跟踪、已报告改为其他字符集，或之后执行过 `CALL`），还会先查询当时的 `@@character_set_client`，按该字符集转义，使 GBK、Big5、SJIS 等字符集中以 0x5C 结尾的多字节字符保持完整。MariaDB 连接在握手前强制关闭 `MYSQL_OPT_LOCAL_INFILE`，任何 `LOAD DATA LOCAL INFILE` 均拒绝读取与发送本地文件，单独报错而不污染同连接上的其他语句。服务器表示会话已结束或收到错序数据包的错误（如 1927、1156）按 I/O 错误处理，该连接不再复用。
 
 同一连接上重复执行的 SQL 从第二次起作为服务端预处理语句缓存（按 SQL 与参数类型区分，每条连接最多 128 条，按最近最少使用淘汰；不会以预处理执行的语句不占用缓存位置）。MariaDB 在事务中总是使用它；事务外仅当该语句是所在 worker 上唯一进行中的语句时才以二进制协议执行，否则以管线化文本协议执行。预处理语句保留预处理时的会话状态（`sql_mode`、字符集、当前数据库等），因此服务器支持会话状态跟踪时，MariaDB 连接建立后会执行 `SET SESSION session_track_system_variables = 'sql_mode,old_mode,character_set_client,character_set_connection,character_set_results,time_zone,div_precision_increment,default_week_format,lc_time_names,max_sort_length,group_concat_max_len,session_track_system_variables,session_track_schema', session_track_schema = ON`，替换会话原有的跟踪列表；服务器报告其中任一变量（`collation_connection` 的变化按 `character_set_connection` 报告）或当前数据库的变化（`SET sql_mode`、`SET NAMES`、`USE`、存储过程内执行的 `SET` 等）时，该连接缓存的预处理语句全部作废，之后重新预处理；其他报告（如开启 binlog 时每次提交后的 `last_gtid`、`autocommit`）不影响缓存。存储过程可能在不报告的情况下修改跟踪列表，因此执行 `CALL` 后，下一次预处理执行前会先查询 `@@session_track_system_variables` 确认。服务器不支持跟踪、语句文本中出现 `session_track`（关闭跟踪本身不会被报告）、`CALL` 后的确认发现跟踪列表已变，或 `character_set_client` / `character_set_connection` 不是 `utf8mb4` 时，该连接不使用预处理语句。MariaDB 以文本协议的结果为准：二进制协议的值按文本协议的格式转换为字段文本，凡不能保证一致的情况都改用文本协议执行，包括 `CALL`、`LOAD`、`SET`、`USE`、含 `RETURNING` 或可执行注释（`/*! */`）的语句，预处理结果中有 `YEAR` 列的语句，以及含负数、大于 `INT64_MAX` 的无符号整数、负或非有限浮点数参数的调用，和 `LIMIT` / `OFFSET` / `FETCH` 计数位置上不是非负整数的参数。表结构变化使已预处理语句的结果列数改变，或执行时才出现不带 `ZEROFILL` 的 `YEAR` 列时，服务器已执行过该语句，为避免重复其副作用，这次调用作为语句失败返回而不重试；该语句下次使用时重新预处理或改用文本协议。
 
@@ -124,7 +124,7 @@ co_await stream.close();
 
 连接归还前统一检查事务状态，覆盖普通查询、流式查询被拒绝、读尽或关闭，以及显式事务提交、回滚和异常回滚。PostgreSQL 仍处于事务中的连接、MariaDB 仍有事务或已关闭 autocommit 的连接会被关闭，不会让下一调用方继承这些状态；例如 MariaDB 的 `completion_type=CHAIN` 可以使一次成功的 `COMMIT` / `ROLLBACK` 开启新事务，框架也不会复用该连接。此检查不恢复其他会话设置，结果形状错误也不撤销已经执行的 SQL。
 
-### 1.3 事务与保存点（`"ruvia/web/db/db_handle.h"`）
+### 1.3 事务与保存点（`"ruvia/web/db/db_session.h"`）
 
 `db_transaction` 独占一条数据库连接；若在析构或作用域退出前未调用 `co_await tx.commit()`，底层会自动回滚并回收连接：
 
@@ -216,7 +216,7 @@ auto report = co_await migrator.migrate(migrations);
   - 列与约束：`add_column`、`drop_column`、`rename_column`、`alter_column_type`、`set_column_nullable`、`set_column_default`、`add_constraint`、`drop_constraint`
   - 索引、视图、枚举与扩展：`create_index`（支持 B-Tree / GIN / GiST 与部分索引条件）、`create_view`、`create_enum`、`create_extension`
   - 函数、触发器与 TimescaleDB：`create_function`、`create_trigger_function`、`create_trigger`、`create_hypertable`、`set_compression`、`add_compression_policy`、`add_retention_policy`
-  - 调用 `schema.compile("0001_init")` 直接生成 `std::pmr::vector<db_migration>` 供 `db_migrator::migrate()` 执行。
+  - 调用 `schema.compile("0001_init")` 直接生成 `std::vector<db_migration>` 供 `db_migrator::migrate()` 执行。
   - `db_drop_behavior::cascade` 仅 PostgreSQL 支持。MariaDB 的 `DROP TABLE` / `ALTER TABLE ... DROP` 只为移植兼容而接受 `CASCADE` 且不产生任何效果（[DROP TABLE](https://mariadb.com/docs/server/server-usage/tables/drop-table)），因此 MariaDB 下所有 `drop_*` 传入 `cascade` 均抛出 `std::invalid_argument`，须改用 `restrict` 并显式删除依赖对象。
   - 实体生成的约束名使用去掉 schema 前缀的表名：`<表>_pkey`、`<表>_<关系>_fkey`、`<表>_<关系>_key`，多对多关系表为 `<表>_owner_fkey` / `<表>_inverse_fkey` / `<表>_pkey`。
 - **`db_procedure`**：结构化构建 PL/pgSQL 过程块（变量声明、`select_into`、`begin_if`/`else_if`/`otherwise`/`end_if`、异常捕获块 `begin_block`/`catch_sql_state`、循环与 `raise_exception`）。
@@ -237,10 +237,10 @@ auto report = co_await migrator.migrate(migrations);
 RUVIA_DB_ENTITY(device, "devices",
     RUVIA_DB_COLUMN(id, std::int64_t,
         ruvia::db_column_options{.primary_key_ = true, .generated_ = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
-    RUVIA_DB_COLUMN(notes, std::pmr::string,
+    RUVIA_DB_COLUMN(name, std::string),
+    RUVIA_DB_COLUMN(notes, std::string,
         ruvia::db_column_options{.nullable_ = true}),
-    RUVIA_DB_COLUMN(tags, std::pmr::vector<std::pmr::string>,
+    RUVIA_DB_COLUMN(tags, std::vector<std::string>,
         ruvia::db_column_options{.data_type_ = ruvia::db_data_type::array}),
     RUVIA_DB_COLUMN(version, std::int32_t,
         ruvia::db_column_options{.version_ = true, .default_expression_ = "1"})
@@ -249,13 +249,13 @@ RUVIA_DB_ENTITY(device, "devices",
 // 无表名 DTO 投影结构体：
 RUVIA_DB_PROJECTION(device_summary,
     RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(name, std::pmr::string)
+    RUVIA_DB_COLUMN(name, std::string)
 );
 ```
 
-- **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::pmr::string`、`ruvia::string`，以及这些值的一维 `std::pmr::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝；`std::string` 不属于既有映射字符串类型，请使用上述两种 owning 字符串。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命；结果所使用的 PMR 资源仍须覆盖结果寿命。
-- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::pmr::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
-- **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::pmr::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
+- **映射结果必须拥有数据**：公开概念 `ruvia::db_mapped_value<T>` 统一约束实体/投影的 `db_column`、读 Builder 与写 `RETURNING` Builder 的 `get_scalar<T>()` / `get_scalars<T>()` 以及字段解码。支持既有数值类型、`bool`、`std::string`、`ruvia::string`，以及这些值的一维 `std::vector`；`std::optional` 递归保留此约束，数组元素可用 `std::optional<T>` 表示 `NULL`。`std::string_view`、引用、含借用元素的数组与嵌套数组在编译期被拒绝。结果不借用局部 `db_rows` 或数组解析 token，也不会通过隐藏缓存延长其寿命。
+- **标量与数组的 NULL 语义**：`get_scalar<T>()` 返回 `std::optional<T>`，无行或首列为 SQL `NULL` 时返回 `std::nullopt`；`get_scalars<T>()` 返回 `std::vector<T>`，遇到 SQL `NULL` 行抛出 `db_conversion_error`，即使 `T` 自身为 optional 也不改变此规则。数组内部的 `NULL` 只允许 optional 元素，带引号的 `"NULL"` 是普通文本；数组下界不保留，但元素顺序保留，多维数组文本在运行期被拒绝。`[lower:upper]=` 声明的长度在预留容量前先受实际文本约束（每个元素至少占一个字符加一个分隔符），超出时抛出 `db_conversion_error::invalid_format`，不会按声明长度一次性分配。读查询与写 `RETURNING` 共用这些语义。
+- **可空列约定**：顶层列类型直接使用值类型（如 `std::int64_t`、`std::string`），并在 `db_column_options` 中设置 `.nullable_ = true`。通过 `entity.set_null<"notes">()` 置空，通过 `entity.is_null<"notes">()` 检查是否为 `NULL`。
 - **实体数值输入**：SQL 与 Redis 实体的 `set<"field">()` 在发布字段前检查整数范围和有限浮点溢出，超界抛出 `std::out_of_range`，保留原值及 unset/null 状态。SQL 数组及 optional 元素递归应用同一规则，后续元素失败不会发布部分新数组。整数列拒绝隐式浮点输入（包括模型标量包装及数组元素），调用方须先显式选择整数转换策略；浮点字段保留通常的精度舍入和显式非有限值语义。检查仅覆盖 `set()`，不拦截调用方经可变 `get()` 或显式转换自行执行的赋值。
 - **PostgreSQL 浮点数组写入**：按元素的原始浮点类型生成十进制文本，不先转为 `double`；`long double` 的额外精度与范围可由显式 `numeric` 数组列承载。NaN 与无穷大在编码时拒绝，写 Builder 保留此前已接受的行。
 - **生成列（Computed Columns）**：设置 `db_column_options{.generated_type_ = ruvia::db_generated_type::stored}`，ORM 在 `INSERT` / `UPDATE` 时自动跳过该列并在 `RETURNING` 中回填数据库计算结果。
@@ -363,17 +363,16 @@ mixed.with("samples", samples).from_cte("samples")
 
 | 公开入口 | 结果与边界 |
 | --- | --- |
-| `decode_db_field<T>(field, resource = nullptr)` | 解码标量、可选值及 PostgreSQL 一维数组；文本与数组元素递归拥有，禁止 `string_view` 结果 |
-| `decode_db_row<Entity>(row, resource = nullptr)` | 映射任意直接查询或流式行；同样接受 `db_projection` |
-| `decode_db_rows<Entity>(rows, resource = nullptr)` | 批量映射并在该结果集内复用列索引，返回 `entity_rows<Entity>` |
+| `decode_db_field<T>(field)` | 解码标量、可选值及 PostgreSQL 一维数组；文本与数组元素递归拥有，禁止 `string_view` 结果 |
+| `decode_db_row<Entity>(row)` | 映射任意直接查询或流式行；同样接受 `db_projection` |
+| `decode_db_rows<Entity>(rows)` | 批量映射并在该结果集内复用列索引，返回 `entity_rows<Entity>` |
 
-- **形状与错误**：映射类型声明的列全部必需且须唯一，额外列忽略；子集用投影声明。缺列、重名、NULL 与数值错误沿用 `db_conversion_error`，不依赖 Repository。
-- **资源所有权**：默认使用 `process_resource()`；指定资源须覆盖解码结果寿命。解码结果可独立于原始行存储存活。
+- **形状与错误**：映射类型声明的列全部必需且须唯一，额外列忽略；子集用投影声明。缺列、重名、NULL 与数值错误沿用 `db_conversion_error`，不依赖 Repository。解码结果完全独立拥有数据，可独立于原始行存储存活。
 
 ```cpp
 auto raw = co_await db.query("SELECT id, name FROM users");
-auto users = ruvia::decode_db_rows<user_projection>(raw, resource);
-// 流式路径：每次 read() 后立即 decode_db_row<user_projection>(*row, resource)。
+auto users = ruvia::decode_db_rows<user_projection>(raw);
+// 流式路径：每次 read() 后立即 decode_db_row<user_projection>(*row)。
 ```
 
 ---
@@ -400,17 +399,17 @@ ruvia::app()
 ```
 
 - 每个 worker 维护 `pool_size_per_worker_` 条常规命令连接，以及按需建立的 `blocking_pool_size_per_worker_` 条阻塞命令专用连接（供 `blpop`、`brpop`、`xread_group` 等阻塞操作自动使用，不阻塞常规命令池）。
-- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_handle`（取句柄规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_handle)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
+- 同样支持在独立 `event_loop` 上构造 `ruvia::redis_client client(loop, config)`，通过 `client.redis()` 获取 `redis_session`（规则见 [1.2](#12-直接查询编译期-sql-校验与流式游标db_session)）；`host_` 不是 IP 字面量时，事件循环须借用阻塞池执行 DNS 查询（见 1.1）。
 - **独立宿主借入**：`router::bind_redis(alias, client)` / `bind_database(alias, client)` 把同 worker 的独立客户端按别名借给该 router 分发的请求，`c.redis(alias)` / `c.db(alias)` 与 `session_middleware` 由此解析；约束见 [显式路由组合](web-guide.md#111-显式路由组合ruviawebrouterh)。
-- 每条连接复用回复解析根槽；嵌套值和字符串仍由当前操作指定的资源持有，失败或取消时随未完成的回复一起回收。
-- **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还所属 PMR。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
+- 每条连接复用回复解析根槽；嵌套值和字符串由返回结果独立持有，失败或取消时随未完成的回复一起回收。
+- **请求写缓冲**：传输结束后最多保留 `64 KiB` 容量，超限大块立即归还分配器。取消或异常同样等待传输借用结束后再清理，不提前释放在途 I/O 使用的存储。
 - 配置了 `username_` 或 `password_` 时，每条新连接先发送 `AUTH`；序列化后的 `AUTH` 请求写出后（无论成功与否）立即从连接保留的写缓冲中擦除，口令只保留在配置副本中供重连使用。
 - `subscription_ping_interval_`（默认 30 秒，`std::nullopt` 关闭）是 Pub/Sub 订阅连接在 `read()` 等待期间的空闲探活间隔，语义见 4.3。
 - **连接竞速（[RFC 8305 §4–5](https://www.rfc-editor.org/rfc/rfc8305.html#section-4)）**：保留系统解析结果的 RFC 6724 优先级，从首选地址族开始交错 IPv6 / IPv4，每隔 `250ms` 追加一次并行尝试，首个成功者获胜，其余取消并等待结束。
 - **竞速边界**：数字地址与单候选地址直接单次连接；`connect_timeout_` 统一覆盖解析、全部尝试与 TLS 握手；解析为一次合并的 `getaddrinfo`，不实现 RFC 8305 §3 的独立 A / AAAA 查询与 Resolution Delay。
 - **TLS 关闭**：关闭连接时以一次非阻塞写发送 `close_notify`，不等待对端告警；仍有未完整写出的记录、写入失败或已发生 TLS 错误时不发送告警。
 
-### 4.2 `ruvia::redis_handle` 命令分类总览
+### 4.2 `ruvia::redis_session` 命令分类总览
 
 在路由中通过 `c.redis()` 或 `c.redis("cache")` 获取：
 
@@ -502,10 +501,10 @@ while (auto event = co_await sub.read()) {
 
 ```cpp
 RUVIA_REDIS_ENTITY(cached_user, "user:",
-    RUVIA_REDIS_COLUMN(id, std::pmr::string, ruvia::redis_column_options{.primary_key_ = true}),
-    RUVIA_REDIS_COLUMN(role, std::pmr::string),
+    RUVIA_REDIS_COLUMN(id, std::string, ruvia::redis_column_options{.primary_key_ = true}),
+    RUVIA_REDIS_COLUMN(role, std::string),
     RUVIA_REDIS_COLUMN(score, std::int64_t),
-    RUVIA_REDIS_COLUMN(bio, std::pmr::string, ruvia::redis_column_options{.nullable_ = true})
+    RUVIA_REDIS_COLUMN(bio, std::string, ruvia::redis_column_options{.nullable_ = true})
 );
 
 const ruvia::redis_repository_config user_repo_config{
@@ -533,7 +532,7 @@ NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类�
 
 ### 4.5 离线查询与索引编译
 
-`redis_search_mapping::create<Entity>(config, resource = nullptr)` 校验并拥有映射配置，不需要 Redis 连接、`context` 或 `application`。Repository 与独立编译入口共用字段校验、转义与索引规则。
+`redis_search_mapping::create<Entity>(config)` 校验并拥有映射配置，不需要 Redis 连接、`context` 或 `application`。Repository 与独立编译入口共用字段校验、转义与索引规则。
 
 | 入口 | 契约 |
 | --- | --- |
@@ -541,16 +540,16 @@ NUMERIC 谓词保留输入精度，不将 double 边界窄化成 float32 列类�
 | `compile_create_index()` | 编译匹配映射的 `FT.CREATE` |
 | `compile_drop_index()` | 仅删除索引，不删除文档 |
 | `redis_compiled_command::arguments() const&` | 只读借用全部二进制安全参数，可交给其他 Redis 驱动 |
-| `std::move(command).take_arguments()` | 提取拥有型 PMR 参数容器 |
-| `redis_handle::command(std::move(command))` | 同步接管编译结果，复用现有命令执行、取消及超时主链 |
+| `std::move(command).take_arguments()` | 提取拥有型参数容器 |
+| `redis_session::command(std::move(command))` | 同步接管编译结果，复用现有命令执行、取消及超时主链 |
 
 ```cpp
-const auto mapping = ruvia::redis_search_mapping::create<cached_user>(user_repo_config, resource);
+const auto mapping = ruvia::redis_search_mapping::create<cached_user>(user_repo_config);
 auto command = mapping.compile_find({.where_ = cached_user::column<"role">() == "admin"});
 auto reply = co_await redis.command(std::move(command));
 ```
 
-- **资源寿命**：编译结果拥有参数，不借用配置、谓词或 mapping；所选 PMR 资源仍须存活。mapping 与 command 复制继承源资源，赋值保留目标资源。
+- **参数寿命**：编译结果独立拥有全部参数字节，不借用配置、谓词或 mapping。
 
 ---
 
@@ -567,7 +566,7 @@ auto reply = co_await redis.command(std::move(command));
 inline constexpr std::array<ruvia::jwt_claim_view, 1> custom_claims{{
     {.name_ = "role", .value_ = "admin"},
 }};
-std::pmr::string token = ruvia::jwt_sign({
+std::string token = ruvia::jwt_sign({
     .algorithm_ = ruvia::jwt_algorithm::hs256,
     .secret_ = secret_key_32_bytes_minimum,
     .issuer_ = "ruvia-auth",
@@ -575,7 +574,6 @@ std::pmr::string token = ruvia::jwt_sign({
     .audience_ = "ruvia-api",
     .expires_in_ = std::chrono::hours(1),
     .claims_ = custom_claims,
-    .resource_ = c.arena(),
 });
 
 // 2. 提取 Bearer Token 并验证签名与声明：
@@ -588,7 +586,6 @@ if (bearer) {
         .secret_ = secret_key_32_bytes_minimum,
         .issuer_ = "ruvia-auth",
         .audience_ = "ruvia-api",
-        .resource_ = c.arena(),
     });
     std::string_view user_id = payload.subject();
     std::optional<std::string_view> role = payload.claim("role");

@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -16,14 +15,13 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/entity/value_storage.h"
 #include "ruvia/web/detail/redis/redis_orm.h"
 #include "ruvia/web/entity_rows.h"
 #include "ruvia/web/fixed_string.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 namespace ruvia {
 
 template <typename entity_type, fixed_string name>
@@ -44,8 +42,7 @@ public:
     redis_predicate() noexcept = default;
     redis_predicate(const redis_predicate& other) {
         if (other.storage_) {
-            auto* resource = process_resource();
-            storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, *other.storage_, resource);
+            storage_ = std::make_unique<detail::redis_predicate_storage>(*other.storage_);
         }
     }
     redis_predicate& operator=(const redis_predicate& other) {
@@ -91,8 +88,7 @@ private:
     friend struct detail::redis_predicate_access;
     static redis_predicate create(std::size_t initial_capacity = 0) {
         redis_predicate result;
-        auto* resource = process_resource();
-        result.storage_ = make_pmr_object<detail::redis_predicate_storage>(resource, resource, initial_capacity);
+        result.storage_ = std::make_unique<detail::redis_predicate_storage>(initial_capacity);
         return result;
     }
     redis_predicate& combine(detail::redis_binary_operator operation, const redis_predicate& other) {
@@ -115,13 +111,13 @@ private:
         const auto offset = storage.nodes_.size();
         const auto right_root = right.storage_->root_ + offset;
         const auto count = right.storage_->nodes_.size();
-        detail::redis_predicate_node root_node(detail::redis_predicate_node::kind_type::binary, storage.resource_);
+        detail::redis_predicate_node root_node(detail::redis_predicate_node::kind_type::binary);
         root_node.binary_ = operation;
         root_node.operands_ = {left_root, right_root};
         storage.nodes_.reserve(offset + count + 1);
         try {
             for (std::size_t index = 0; index < count; ++index) {
-                storage.nodes_.emplace_back(right.storage_->nodes_[index], storage.resource_, offset);
+                storage.nodes_.emplace_back(right.storage_->nodes_[index], offset);
             }
             storage.nodes_.push_back(std::move(root_node));
         } catch (...) {
@@ -132,7 +128,7 @@ private:
         }
         storage.root_ = storage.nodes_.size() - 1;
     }
-    std::unique_ptr<detail::redis_predicate_storage, pmr_object_deleter<detail::redis_predicate_storage>> storage_;
+    std::unique_ptr<detail::redis_predicate_storage> storage_;
 };
 
 struct redis_column_options final {
@@ -179,7 +175,6 @@ concept redis_entity_schema = requires(const entity& value) {
     requires std::same_as<entity, typename entity::redis_entity_type>;
     requires redis_columns<typename entity::columns_type>;
     { entity::prefix() } -> std::convertible_to<std::string_view>;
-    { value.resource() } -> std::same_as<std::pmr::memory_resource*>;
 };
 }  // namespace detail
 
@@ -284,7 +279,7 @@ private:
     static redis_predicate list(std::span<const value_type> values, operation op) {
         auto result_value = create_field(values.size() + 3);
         auto& storage = *result_value.storage_;
-        std::pmr::vector<std::size_t> operands(storage.resource_);
+        std::vector<std::size_t> operands;
         operands.reserve(values.size());
         for (const auto& value : values) {
             operands.push_back(storage.add_value(value));
@@ -369,7 +364,7 @@ struct redis_index_config final {
 
 struct redis_repository_config final {
     borrowed_text prefix_{};
-    std::pmr::vector<redis_index_config> indexes_{process_resource()};
+    std::vector<redis_index_config> indexes_;
 };
 
 enum class redis_search_mode : std::uint8_t {
@@ -386,19 +381,15 @@ public:
     template <typename entity_type>
         requires detail::redis_entity_schema<entity_type>
     [[nodiscard]] static redis_search_mapping create(
-        const redis_repository_config& config = {}, std::pmr::memory_resource* resource = nullptr) {
+        const redis_repository_config& config = {}) {
         return redis_search_mapping(detail::normalize_redis_mapping(
-            detail::redis_query_columns<entity_type>, entity_type::prefix(), config, resource));
+            detail::redis_query_columns<entity_type>, entity_type::prefix(), config));
     }
 
     redis_search_mapping(const redis_search_mapping& other);
     redis_search_mapping(redis_search_mapping&&) noexcept = default;
     redis_search_mapping& operator=(const redis_search_mapping& other);
     redis_search_mapping& operator=(redis_search_mapping&& other);
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return mapping_.prefix_.get_allocator().resource();
-    }
 
     // rows uses take_ or redis_find_default_take; first caps that page at one.
     // count validates all options but counts all matches, ignoring pagination.
@@ -414,7 +405,6 @@ private:
     friend class redis_repository;
     explicit redis_search_mapping(detail::redis_mapping&& mapping) noexcept
         : mapping_(std::move(mapping)) {}
-    redis_search_mapping(const redis_search_mapping& other, std::pmr::memory_resource* resource);
     void swap(redis_search_mapping& other) noexcept;
     void require_valid() const;
 
@@ -451,7 +441,7 @@ public:
     // its value registration and PMR mapping; copying would create a second
     // owner with ambiguous mapping lifetime.
     redis_repository(redis_repository&& other) noexcept
-        : handle_(other.handle_),
+        : session_(other.session_),
           mapping_(std::move(other.mapping_)),
           registration_(std::move(other.registration_), this) {
         // The source no longer has a registration. Destroy moved-from
@@ -482,13 +472,12 @@ public:
 
     [[nodiscard]] task<entity_rows<entity_type>> find(
         const redis_find_options& options = {}) const {
-        (void)resource();
         auto args = mapping_->compile_find(options).take_arguments();
         detail::redis_map_many<entity_type> mapper{{mapping().storage_prefix_},
             options.take_.has_value()
                 ? std::nullopt
                 : std::optional<std::uint64_t>(options.skip_ ? options.skip_->value() : 0U)};
-        return handle_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
+        return session_.template command_mapped<entity_rows<entity_type>>(std::move(args), std::move(mapper));
     }
     template <std::same_as<redis_predicate> predicate_type>
     [[nodiscard]] task<entity_rows<entity_type>> find(const predicate_type& where) const {
@@ -497,24 +486,23 @@ public:
 
     [[nodiscard]] task<std::optional<entity_type>> find_one(
         const redis_find_options& options = {}) const {
-        const auto memory = resource();
         const bool plain = !options.order_.has_value() && !options.skip_ && !options.take_;
         if (plain) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
-                auto key = detail::redis_entity_key(mapping().storage_prefix_, *id, memory);
-                detail::redis_orm_arguments_type args(memory);
+                auto key = detail::redis_entity_key(mapping().storage_prefix_, *id);
+                detail::redis_orm_arguments_type args;
                 args.reserve(2);
                 args.emplace_back("HGETALL");
                 args.emplace_back(key);
                 detail::redis_map_one<entity_type> mapper{
                     std::move(key), mapping().storage_prefix_.size()};
-                return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
+                return session_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
             }
         }
         auto args = mapping_->compile_find(options, redis_search_mode::first).take_arguments();
         detail::redis_map_first<entity_type> mapper{{mapping().storage_prefix_}};
-        return handle_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
+        return session_.template command_mapped<std::optional<entity_type>>(std::move(args), std::move(mapper));
     }
 
     template <std::same_as<redis_predicate> predicate_type>
@@ -523,17 +511,15 @@ public:
     }
     [[nodiscard]] task<std::pair<entity_rows<entity_type>, std::uint64_t>> find_and_count(
         const redis_find_options& options = {}) const {
-        (void)resource();
         auto args = mapping_->compile_find(options).take_arguments();
         detail::redis_map_search<entity_type> mapper{mapping().storage_prefix_};
-        return handle_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
+        return session_.template command_mapped<std::pair<entity_rows<entity_type>, std::uint64_t>>(
             std::move(args), std::move(mapper));
     }
 
     [[nodiscard]] task<std::uint64_t> count(
         const redis_find_options& options = {}) const {
-        (void)resource();
-        return handle_.template command_mapped<std::uint64_t>(
+        return session_.template command_mapped<std::uint64_t>(
             mapping_->compile_find(options, redis_search_mode::count).take_arguments(), detail::redis_orm_count_result);
     }
 
@@ -544,15 +530,14 @@ public:
 
     [[nodiscard]] task<bool> exists(
         const redis_find_options& options = {}) const {
-        const auto memory = resource();
         if (!options.order_.has_value() && !options.skip_ && !options.take_) {
             detail::redis_scalar_scratch_type id_scratch;
             if (const auto id = detail::redis_primary_key(mapping(), options.where_, id_scratch)) {
-                const auto key = detail::redis_entity_key(mapping().storage_prefix_, *id, memory);
-                return handle_.exists(key);
+                const auto key = detail::redis_entity_key(mapping().storage_prefix_, *id);
+                return session_.exists(key);
             }
         }
-        return handle_.template command_mapped<bool>(
+        return session_.template command_mapped<bool>(
             mapping_->compile_find(options, redis_search_mode::count).take_arguments(),
             detail::redis_orm_exists_result);
     }
@@ -564,65 +549,50 @@ public:
 
     [[nodiscard]] task<redis_write_result> delete_by(
         const redis_predicate& predicate) const {
-        auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        return delete_by_id(id, memory);
+        return delete_by_id(id);
     }
 
     [[nodiscard]] task<redis_write_result> remove(const entity_type& entity) const {
-        auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
-        return delete_by_id(detail::redis_entity_id(entity, id_scratch), memory);
+        return delete_by_id(detail::redis_entity_id(entity, id_scratch));
     }
 
     [[nodiscard]] task<bool> expire(
         const redis_predicate& predicate, std::chrono::seconds ttl) const {
-        auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id, memory);
-        return handle_.expire(key, ttl);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
+        return session_.expire(key, ttl);
     }
 
     [[nodiscard]] task<redis_ttl> ttl(const redis_predicate& predicate) const {
-        auto* memory = resource();
         detail::redis_scalar_scratch_type id_scratch;
         const auto id = require_primary_key(predicate, id_scratch);
-        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id, memory);
-        return handle_.pttl(key);
+        const auto key = detail::redis_entity_key(mapping().storage_prefix_, id);
+        return session_.pttl(key);
     }
 
     // Explicit schema management. Repository acquisition never creates an
     // index, and an existing index is reported by Redis.
     [[nodiscard]] task<void> create_index() const {
-        (void)resource();
-        return handle_.template command_mapped<void>(
+        return session_.template command_mapped<void>(
             mapping_->compile_create_index().take_arguments(), detail::redis_orm_status_result);
     }
 
     [[nodiscard]] task<void> drop_index() const {
-        (void)resource();
-        return handle_.template command_mapped<void>(
+        return session_.template command_mapped<void>(
             mapping_->compile_drop_index().take_arguments(), detail::redis_orm_status_result);
     }
 
 private:
-    friend class redis_handle;
+    friend class redis_session;
 
-    explicit redis_repository(const redis_handle& handle, const redis_repository_config& config)
-        : handle_(handle),
-          mapping_(redis_search_mapping::create<entity_type>(config, handle.resource_)),
-          registration_(handle.registration_.scope(), this, &redis_repository::expire_capability) {}
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const {
-        registration_.require_active();
-        handle_.registration_.require_active();
-        if (!mapping_) {
-            throw std::logic_error("Redis repository mapping has expired");
-        }
-        return handle_.resource_;
-    }
+    explicit redis_repository(const redis_session& session_value, const redis_repository_config& config)
+        : session_(session_value),
+          mapping_(redis_search_mapping::create<entity_type>(config)),
+          registration_(session_value.registration_.scope(), this, &redis_repository::expire_capability) {}
 
     [[nodiscard]] const detail::redis_mapping& mapping() const {
         if (!mapping_) {
@@ -647,9 +617,9 @@ private:
     }
 
     [[nodiscard]] task<redis_write_result> delete_by_id(
-        std::string_view id, std::pmr::memory_resource* memory) const {
-        return handle_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
-            detail::redis_orm_delete_arguments(mapping().storage_prefix_, id, memory), detail::redis_orm_delete_result);
+        std::string_view id) const {
+        return session_.template script_mapped<redis_write_result>(detail::redis_orm_delete_script(),
+            detail::redis_orm_delete_arguments(mapping().storage_prefix_, id), detail::redis_orm_delete_result);
     }
 
     enum class write_mode : std::uint8_t {
@@ -674,7 +644,6 @@ private:
     [[nodiscard]] task<redis_write_result> write(
         write_mode mode, std::string_view id, const entity_type& entity,
         redis_write_options options) const {
-        auto* memory = resource();
         static constexpr std::size_t required = [] {
             std::size_t count = 0;
             detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -695,7 +664,7 @@ private:
             return count;
         }();
         auto args = detail::redis_orm_write_arguments(
-            mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments, memory);
+            mapping().storage_prefix_, id, write_mode_token(mode), options, 1 + required + max_mutation_arguments);
         detail::redis_scalar_scratch_type scalar_scratch;
         args.emplace_back(detail::encode_redis_scalar(required, scalar_scratch));
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
@@ -716,33 +685,33 @@ private:
                     detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch) != id) {
                     throw std::invalid_argument("an entity update cannot change its ID");
                 }
-                detail::append_redis_entity_field(args, field, id, numeric_index, tag_shadow, memory);
+                detail::append_redis_entity_field(args, field, id, numeric_index, tag_shadow);
             } else if (entity.template is_set<column_type::name>()) {
                 if (entity.template is_null<column_type::name>()) {
-                    detail::append_redis_entity_field(args, field, std::nullopt, false, tag_shadow, memory);
+                    detail::append_redis_entity_field(args, field, std::nullopt, false, tag_shadow);
                 } else {
                     const auto value = detail::encode_redis_scalar(entity.template get<column_type::name>(), scalar_scratch);
-                    detail::append_redis_entity_field(args, field, value, numeric_index, tag_shadow, memory);
+                    detail::append_redis_entity_field(args, field, value, numeric_index, tag_shadow);
                 }
             }
         });
 
-        return handle_.template script_mapped<redis_write_result>(
+        return session_.template script_mapped<redis_write_result>(
             detail::redis_orm_write_script(), std::move(args), detail::redis_orm_exec_result);
     }
 
-    redis_handle handle_;
+    redis_session session_;
     std::optional<redis_search_mapping> mapping_;
     scoped_capability_registration registration_;
 };
 
 template <typename entity_type>
-redis_repository<entity_type> redis_handle::repository() const {
+redis_repository<entity_type> redis_session::repository() const {
     return repository<entity_type>(redis_repository_config{});
 }
 
 template <typename entity_type>
-redis_repository<entity_type> redis_handle::repository(const redis_repository_config& config) const {
+redis_repository<entity_type> redis_session::repository(const redis_repository_config& config) const {
     registration_.require_active();
     return redis_repository<entity_type>(*this, config);
 }

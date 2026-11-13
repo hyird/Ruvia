@@ -21,10 +21,7 @@ std::string_view http1_client_response_body_error_message(http1_client_response_
 }
 
 http1_client_response_body_decoder::http1_client_response_body_decoder(
-    http1_client_response_plan plan, std::pmr::memory_resource* resource) {
-    if (resource == nullptr) {
-        throw std::invalid_argument("HTTP/1 response body decoder requires a memory resource");
-    }
+    http1_client_response_plan plan) {
     if (plan.informational() || plan.connect_tunnel() || plan.protocol_upgrade()) {
         throw std::invalid_argument("HTTP/1 response plan has no ordinary message body");
     }
@@ -36,11 +33,11 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
     // A discarding (205) plan carries the same framings as an ordinary one,
     // but its content is never emitted, so it is never transfer-decoded.
     discard_content_ = plan.discards_content();
-    const auto configure_coding = [this, resource](const http_transfer_codings& codings) {
+    const auto configure_coding = [this](const http_transfer_codings& codings) {
         if (!codings.empty() && !discard_content_) {
             transfer_.emplace(std::span<const http_transfer_coding>(
                                   codings.data(), codings.size()),
-                resource, protocol_byte_limit::unlimited());
+                protocol_byte_limit::unlimited());
         }
     };
     if (const auto* known = plan.known_length()) {
@@ -52,8 +49,7 @@ http1_client_response_body_decoder::http1_client_response_body_decoder(
         persistence_ = chunked->persistence();
         configure_coding(chunked->transfer_codings());
         chunked_.emplace(http1_chunked_body_decoder_config{.obs_fold_ = http1_trailer_obs_fold::accept,
-            .trailer_message_ = http1_trailer_message::response,
-            .resource_ = resource});
+            .trailer_message_ = http1_trailer_message::response});
     } else if (const auto* close = plan.close_delimited()) {
         framing_ = framing_type::close_delimited;
         configure_coding(close->transfer_codings());

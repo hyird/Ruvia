@@ -9,7 +9,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -19,7 +18,6 @@
 #include <asio/ip/udp.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
@@ -35,7 +33,7 @@
 #include "server/connection_scanner.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_tls_contexts.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "tls/tls_served_certificate.h"
 
 struct ngtcp2_crypto_ossl_ctx;
@@ -103,7 +101,7 @@ public:
     // Abandons both directions of a request stream (RFC 9114 §4.1.1) and
     // stops every wait of its handler.
     void reset_stream(std::int64_t stream_id, http3_error_code error) noexcept;
-    [[nodiscard]] const worker_handle& worker() const noexcept;
+    [[nodiscard]] const worker_ref& worker() const noexcept;
     [[nodiscard]] std::string_view remote_address() const& noexcept RUVIA_LIFETIMEBOUND {
         return remote_address_;
     }
@@ -111,7 +109,7 @@ public:
     [[nodiscard]] http3_quic_status submit_datagram(std::int64_t stream_id, std::span<const std::byte> payload);
 
 private:
-    using stream_pointer = std::unique_ptr<http3_stream, pmr_object_deleter<http3_stream>>;
+    using stream_pointer = std::unique_ptr<http3_stream>;
 
     enum class lifecycle_type : std::uint8_t {
         open,
@@ -182,13 +180,13 @@ private:
     asio::ip::udp::endpoint path_remote_;
     asio::ip::udp::endpoint path_local_;
     std::uint32_t path_interface_index_;
-    std::pmr::string remote_address_;
+    std::string remote_address_;
     // Present only with an on_tls_client_hello observer; tls_ borrows it, so
     // it is declared before tls_.
-    std::pmr::string local_address_;
+    std::string local_address_;
     std::optional<tls_client_hello_observation> client_hello_;
     // Keys this connection holds in the endpoint's table.
-    std::pmr::vector<http3_cid_key> connection_ids_;
+    std::vector<http3_cid_key> connection_ids_;
     std::unique_ptr<SSL, free_tls> tls_;
     std::array<unsigned char, 32> tls_resumption_context_{};
     std::unique_ptr<ngtcp2_crypto_ossl_ctx, free_crypto> crypto_;
@@ -196,16 +194,16 @@ private:
     // Destroyed first: ngtcp2 still references the TLS objects above.
     std::optional<http3_quic_connection> connection_;
     http3_quic_datagram datagram_;
-    std::pmr::string client_certificate_;
+    std::string client_certificate_;
     std::optional<tls_served_certificate> served_certificate_;
-    inbound_buffer_resource inbound_buffers_;
+    inbound_buffer_account inbound_buffers_;
     std::optional<context_services> base_services_;
     http_request_admission_policy admission_policy_;
     multiplexed_session_termination termination_;
     worker_signal write_signal_;
     worker_signal handler_finished_;
     // Declared after the inbound buffers their bodies borrow.
-    std::pmr::unordered_map<std::int64_t, stream_pointer> streams_;
+    std::unordered_map<std::int64_t, stream_pointer> streams_;
     http3_buffered_response_writer buffered_response_writer_;
     std::size_t active_handler_tasks_{0};
     std::size_t accepted_request_heads_{0};

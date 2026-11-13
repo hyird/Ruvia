@@ -7,7 +7,6 @@
 #include <exception>
 #include <functional>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -74,14 +73,7 @@ enum class hpack_decode_error : std::uint8_t {
     callback_rejected,
 };
 
-struct hpack_decoder_options final {
-    // Must outlive the decoder, including its implementation and dynamic table.
-    // nullptr binds the current default PMR resource at construction.
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
-// Stateful RFC 7541 decoder backed by nghttp2's HPACK inflater; every
-// allocation, the dynamic table included, uses the configured resource.
+// Stateful RFC 7541 decoder backed by nghttp2's HPACK inflater.
 // decode() consumes one complete field block. Callback rejection stops further
 // callbacks but still decodes the rest of the block, so the dynamic table stays
 // synchronized and the decoder remains usable. A compression error or an
@@ -96,7 +88,7 @@ struct hpack_decoder_options final {
 // compression error. Raising the maximum requires no update.
 class hpack_decoder final {
 public:
-    explicit hpack_decoder(hpack_decoder_options options = {});
+    hpack_decoder();
     ~hpack_decoder();
     hpack_decoder(const hpack_decoder&) = delete;
     hpack_decoder& operator=(const hpack_decoder&) = delete;
@@ -159,10 +151,7 @@ private:
     [[nodiscard]] std::optional<hpack_decode_error> decode_with_callback(
         std::string_view block, void* target, header_callback_type callback);
 
-    struct impl_deleter_type final {
-        void operator()(detail::hpack_decoder* value) const noexcept;
-    };
-    std::unique_ptr<detail::hpack_decoder, impl_deleter_type> impl_;
+    std::unique_ptr<detail::hpack_decoder> impl_;
 };
 
 // Field-level HPACK encoding through nghttp2's deflater with a zero-capacity
@@ -172,12 +161,12 @@ private:
 // set-cookie, RFC 7541 section 7.1.3), Huffman-coded when that is shorter.
 class hpack_encoder final {
 public:
-    // Names and values may borrow output. Aliasing inputs are owned in output's
-    // resource before appending can invalidate them. Allocation failure leaves
-    // the existing output bytes unchanged.
+    // Names and values may borrow output. Aliasing inputs are owned before
+    // appending can invalidate them. Allocation failure leaves the existing
+    // output bytes unchanged.
     static void encode_header(
-        std::pmr::string& output, std::string_view name, std::string_view value);
-    static void encode_status(std::pmr::string& output, http_status_code status);
+        std::string& output, std::string_view name, std::string_view value);
+    static void encode_status(std::string& output, http_status_code status);
 };
 
 }  // namespace ruvia

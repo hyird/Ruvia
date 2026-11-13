@@ -6,7 +6,6 @@
 #include <exception>
 #include <future>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -25,7 +24,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_signal.h"
@@ -51,7 +49,7 @@ struct observed_configuration final {
 // pending until its client closes the transport.
 class peer final {
 public:
-    peer(asio::io_context& io, const worker_handle& worker, std::span<const std::string_view> replies)
+    peer(asio::io_context& io, const worker_ref& worker, std::span<const std::string_view> replies)
         : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           socket_(io),
           replies_(replies),
@@ -94,13 +92,13 @@ public:
         socket_.close(ignored);
     }
 
-    std::pmr::vector<std::pmr::string> requests_{process_resource()};
+    std::vector<std::string> requests_{};
     bool client_closed_{};
 
 private:
     asio::awaitable<void> serve() {
         socket_ = co_await acceptor_.async_accept(asio::use_awaitable);
-        std::pmr::string input(process_resource());
+        std::string input;
         for (const auto reply : replies_) {
             const auto count = co_await asio::async_read_until(socket_, asio::dynamic_buffer(input),
                 "\r\n\r\n", asio::use_awaitable);
@@ -216,7 +214,7 @@ TEST(Ruvia, http_client_dynamic_origins_preserve_other_pool_connections_and_cook
     constexpr std::string_view reply =
         "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nSet-Cookie: stable=1; Path=/\r\n\r\n";
     const std::array replies{reply, reply};
-    ruvia::test::dynamic_origin_tests::peer peer(io, loop.handle(), replies);
+    ruvia::test::dynamic_origin_tests::peer peer(io, loop.worker(), replies);
     const auto url = peer.url();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(loop, {.alias_ = "stable", .base_url_ = url, .request_timeout_ = std::chrono::seconds(2), .versions_ = ruvia::http_client_versions{.http2_ = false}, .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send});
@@ -257,11 +255,11 @@ TEST(Ruvia, http_client_dynamic_origin_replacement_cancels_and_joins_live_reques
     auto attachment = ruvia::attach_event_loop(io);
     const auto loop = attachment.loop();
     constexpr std::array replies{std::string_view{}};
-    ruvia::test::dynamic_origin_tests::peer peer(io, loop.handle(), replies);
+    ruvia::test::dynamic_origin_tests::peer peer(io, loop.worker(), replies);
     const auto url = peer.url();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(loop, {.base_url_ = url, .request_timeout_ = std::chrono::seconds(2)});
-        ruvia::task_scope requests(loop.handle());
+        ruvia::task_scope requests(loop.worker());
         requests.spawn(ruvia::test::dynamic_origin_tests::expect_closed(client.client().get("/pending").send()));
         co_await peer.received();
         co_await client.upsert({.base_url_ = "http://127.0.0.1:8002"});
@@ -279,11 +277,11 @@ TEST(Ruvia, http_client_redirect_policy_can_register_an_origin_and_remains_fail_
     auto attachment = ruvia::attach_event_loop(io);
     const auto loop = attachment.loop();
     constexpr std::array target_replies{std::string_view("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n")};
-    ruvia::test::dynamic_origin_tests::peer target(io, loop.handle(), target_replies);
+    ruvia::test::dynamic_origin_tests::peer target(io, loop.worker(), target_replies);
     const auto target_url = target.url();
     const auto redirect = "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: " + target_url + "/destination\r\n\r\n";
     const std::array source_replies{std::string_view(redirect), std::string_view(redirect), std::string_view(redirect), std::string_view(redirect)};
-    ruvia::test::dynamic_origin_tests::peer source(io, loop.handle(), source_replies);
+    ruvia::test::dynamic_origin_tests::peer source(io, loop.worker(), source_replies);
     const auto source_url = source.url();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(loop, {.base_url_ = source_url,
@@ -353,7 +351,7 @@ TEST(Ruvia, http_client_retired_origin_handles_and_cold_operations_expire_with_o
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     const auto run = [&]() -> ruvia::task<void> {
-        std::optional<ruvia::http_client_handle> retired;
+        std::optional<ruvia::http_client_ref> retired;
         std::optional<ruvia::task<ruvia::http_client_response>> cold;
         std::optional<ruvia::task<ruvia::http_client_exchange>> upload;
         std::optional<ruvia::task<ruvia::http_client_tunnel_result>> tunnel;
@@ -439,7 +437,7 @@ TEST(Ruvia, http_client_cold_upload_and_tunnel_pin_replaced_origins_without_hand
 TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     const auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client client(attachment.loop(), std::span<const ruvia::http_client_config>{});
         ruvia::worker_signal retired(worker);
@@ -452,7 +450,7 @@ TEST(Ruvia, http_client_retired_origin_resources_release_after_last_cold_borrow)
             co_await client.upsert({.base_url_ = "http://127.0.0.1:8001",
                 .address_validator_ = std::make_shared<const ruvia::http_client_address_validator>([marker](const ruvia::ip_address&, std::uint16_t) { return marker != nullptr; })});
         }
-        std::optional<ruvia::http_client_handle> old(client.client());
+        std::optional<ruvia::http_client_ref> old(client.client());
         std::optional<ruvia::task<ruvia::http_client_exchange>> cold(old->post("/cold").upload());
         EXPECT_TRUE(client.remove("default"));
         EXPECT_FALSE(observed.expired());
@@ -577,7 +575,7 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
     auto gate = release.get_future().share();
     ASSERT_EQ(blocking.submit([gate] { gate.wait(); }), blocking_submit_status::accepted);
     auto attachment = attach_event_loop(io, {.blocking_pool_ = &blocking});
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     const auto run = [&]() -> task<void> {
         http_client client(attachment.loop(), {.base_url_ = "http://127.0.0.1:8001"});
         http_client_config config{.base_url_ = "https://localhost:8443"};
@@ -637,7 +635,7 @@ void exercise_origin_preparation_cancellation(cancellation_case mode) {
 void exercise_redirect_policy_cancellation(cancellation_case mode) {
     auto& io = new_test_io_context();
     auto attachment = attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     constexpr std::array replies{std::string_view(
         "HTTP/1.1 302 Found\r\nContent-Length: 0\r\nLocation: http://127.0.0.1:8123/next\r\n\r\n")};
     peer source(io, worker, replies);

@@ -7,14 +7,13 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_types.h"
@@ -31,7 +30,7 @@
 // before its results arrive.
 //
 // A driver supplies an io_type with its protocol: what a flight and a group
-// keep (flight_type, group_data), the statement its caller prepared
+// keep (flight_type, group_state), the statement its caller prepared
 // (statement_type), and the hooks that open a group, queue a flight, read
 // results without waiting, wait for and exchange I/O, and judge whether a
 // connection can be reused once its group dissolves. Everything else --
@@ -112,7 +111,7 @@ public:
     using state_type = db_pipeline_state<io_type>;
 
     db_pipeline_member(
-        state_type& state, db_rows* rows, std::pmr::memory_resource* resource, const stop_token& stop_token_value);
+        state_type& state, db_rows* rows, const stop_token& stop_token_value);
     ~db_pipeline_member();
 
     db_pipeline_member(const db_pipeline_member&) = delete;
@@ -145,7 +144,6 @@ public:
     state_type& state_;
     // The caller's result for query(); null for execute().
     db_rows* rows_;
-    std::pmr::memory_resource* resource_;
     // The caller's options outlive the statement's frame.
     const stop_token& stop_token_;
     std::uint64_t affected_rows_{0};
@@ -207,7 +205,7 @@ struct db_pipeline_group final {
 
     std::array<db_pipeline_record<io_type>, db_pipeline_depth> records_{};
     // The driver's protocol state of the connection's flights.
-    typename io_type::group_data io_{};
+    typename io_type::group_state io_{};
     // Why the connection failed, once closing_.
     std::exception_ptr failure_{};
     // When the reader's current socket wait ends at the latest.
@@ -245,7 +243,7 @@ public:
     using statement_type = typename io_type::statement_type;
     using cancellation_target_type = worker_cancellation_target<db_pipeline_state>;
 
-    db_pipeline_state(pool_type& pool, const worker_handle& worker_value);
+    db_pipeline_state(pool_type& pool, const worker_ref& worker_value);
     ~db_pipeline_state();
 
     db_pipeline_state(const db_pipeline_state&) = delete;
@@ -289,7 +287,7 @@ public:
     [[nodiscard]] std::optional<std::chrono::steady_clock::time_point> earliest_deadline(std::size_t slot) const noexcept;
     // Fails every pending member and closes the connection.
     void fail_group(std::size_t slot, const std::exception_ptr& failure) noexcept;
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -334,7 +332,7 @@ private:
     void dissolve(std::size_t slot) noexcept;
 
     pool_type& pool_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     member_type* members_{nullptr};
     std::size_t statements_{0};
     member_type* parked_head_{nullptr};

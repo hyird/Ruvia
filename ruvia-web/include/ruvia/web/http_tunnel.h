@@ -5,7 +5,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -16,8 +15,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_datagram.h"
 
@@ -26,12 +24,13 @@ namespace ruvia {
 namespace detail {
 class http_capsule_stream_state;
 class capsule_state_pin;
+class inbound_buffer_account;
 template <typename stream_type>
 class http_tunnel_session;
 // Transport input for a single tunnel read lane. Datagram bytes exclude the
 // HTTP/3 Quarter Stream ID but retain any protocol-specific Context ID.
 struct http_tunnel_input final {
-    std::pmr::string bytes_;
+    std::string bytes_;
     bool datagram_{};
 };
 }  // namespace detail
@@ -71,11 +70,11 @@ public:
 private:
     friend class http_capsule_stream;
     friend class http_datagram_stream;
-    http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::pmr::string payload_value) noexcept;
+    http_capsule(detail::http_capsule_stream_state& state_value, std::uint64_t type, std::string payload_value) noexcept;
     void release() noexcept;
     detail::http_capsule_stream_state* state_{};
     std::uint64_t type_{};
-    std::optional<std::pmr::string> payload_;
+    std::optional<std::string> payload_;
 };
 
 // RFC 9297 reliable Capsule Protocol over an established tunnel. The protocol
@@ -105,11 +104,11 @@ public:
     task<void> write(std::uint64_t, std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::uint64_t type, std::span<const std::byte> payload, operation_options operation = {}) &;
     task<void> write(std::uint64_t, std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(std::uint64_t type, string_type&& payload, operation_options operation = {}) & {
         return write_owned(type, std::move(payload), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(std::uint64_t, string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
     task<void> finish(operation_options = {}) && = delete;
@@ -123,9 +122,9 @@ private:
     friend class http_datagram_stream;
     [[nodiscard]] static task<std::optional<http_capsule>> read_owned(detail::capsule_state_pin pin, operation_options operation);
     [[nodiscard]] task<void> write_frame(std::string_view prefix, std::string_view payload, bool datagram, operation_options operation);
-    [[nodiscard]] task<void> write_owned(std::uint64_t type, std::pmr::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::uint64_t type, std::string&& payload, operation_options operation);
     [[nodiscard]] task<void> write_frame_owned(
-        std::string_view prefix, std::pmr::string&& payload, bool datagram, operation_options operation);
+        std::string_view prefix, std::string&& payload, bool datagram, operation_options operation);
     explicit http_capsule_stream(http_tunnel& tunnel, http_capsule_config config);
     explicit http_capsule_stream(http_client_tunnel&& tunnel, http_capsule_config config);
     void release() noexcept;
@@ -186,11 +185,11 @@ public:
     task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
     task<void> send(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
         return send_owned(std::move(payload), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> send(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
@@ -208,9 +207,9 @@ private:
     explicit http_datagram_stream(http_capsule_stream&& stream);
     static task<std::optional<http_datagram>> read_owned(detail::capsule_state_pin pin, bool udp, operation_options operation);
     [[nodiscard]] task<void> send_payload(std::string_view payload, bool udp, operation_options operation);
-    [[nodiscard]] task<void> send_owned(std::pmr::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
     [[nodiscard]] task<void> send_payload_owned(
-        std::pmr::string&& payload, bool udp, operation_options operation);
+        std::string&& payload, bool udp, operation_options operation);
     http_capsule_stream stream_;
 };
 
@@ -233,11 +232,11 @@ public:
     task<void> send(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> send(std::string_view payload, operation_options operation = {}) &;
     task<void> send(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> send(string_type&& payload, operation_options operation = {}) & {
         return send_owned(std::move(payload), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> send(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(operation_options operation = {}) & {
         return stream_.finish(std::move(operation));
@@ -251,7 +250,7 @@ public:
 private:
     friend class http_tunnel;
     friend class http_client_tunnel;
-    [[nodiscard]] task<void> send_owned(std::pmr::string&& payload, operation_options operation);
+    [[nodiscard]] task<void> send_owned(std::string&& payload, operation_options operation);
     explicit http_udp_tunnel(http_datagram_stream stream) noexcept
         : stream_(std::move(stream)) {}
     http_datagram_stream stream_;
@@ -294,11 +293,11 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
         return write_owned(std::move(bytes), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
 
     // Half-close the send direction; reading remains available until peer EOF.
@@ -323,28 +322,28 @@ private:
     friend class detail::http_tunnel_session;
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
-    using read_type = task<std::optional<std::pmr::string>> (*)(void*, operation_options);
+    using read_type = task<std::optional<std::string>> (*)(void*, operation_options);
     using write_type = task<void> (*)(void*, std::string_view, operation_options);
     using read_datagram_type = task<std::optional<detail::http_tunnel_input>> (*)(void*, operation_options);
     using write_datagram_type = task<bool> (*)(void*, std::string_view, operation_options);
     using finish_type = task<void> (*)(void*, operation_options);
     // malformed: the received tunnel data is malformed (RFC 9297 section 3.3).
     using abort_type = void (*)(void*, bool malformed) noexcept;
-    http_tunnel(std::pmr::memory_resource& resource, const worker_handle& worker_value,
+    http_tunnel(detail::inbound_buffer_account* inbound, const worker_ref& worker_value,
         void* target, read_type read, write_type write, finish_type finish_value, abort_type abort,
         bool datagrams, read_datagram_type read_datagram = nullptr,
         write_datagram_type write_datagram = nullptr) noexcept;
     [[nodiscard]] task<std::optional<std::span<const std::byte>>> read_borrowed(operation_options operation);
-    [[nodiscard]] task<std::optional<std::pmr::string>> read_raw(operation_options operation);
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
-    [[nodiscard]] task<void> write_raw(std::pmr::string&& bytes, operation_options operation);
+    [[nodiscard]] task<std::optional<std::string>> read_raw(operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
+    [[nodiscard]] task<void> write_raw(std::string&& bytes, operation_options operation);
     [[nodiscard]] task<std::optional<detail::http_tunnel_input>> read_datagram_raw(operation_options operation);
     [[nodiscard]] task<bool> write_datagram_raw(std::string_view bytes, operation_options operation);
     void abort_input(bool malformed) noexcept;
     void require_active() const;
     void require_unadapted() const;
-    std::pmr::memory_resource& resource_;
-    const worker_handle& worker_;
+    detail::inbound_buffer_account* inbound_;
+    const worker_ref& worker_;
     void* target_;
     read_type read_;
     write_type write_;
@@ -353,7 +352,7 @@ private:
     read_datagram_type read_datagram_;
     write_datagram_type write_datagram_;
     // The chunk the last read() returned.
-    std::optional<std::pmr::string> read_chunk_;
+    std::optional<std::string> read_chunk_;
     bool datagrams_;
     bool adapted_{false};
     bool read_active_{false};

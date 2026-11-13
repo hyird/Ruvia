@@ -6,7 +6,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/app/app_configuration.h"
@@ -23,12 +22,11 @@ namespace {
 
 // app_configuration already normalized, null-checked and de-duplicated the prefixes.
 template <typename stored_type, typename registration_type>
-void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<const registration_type> handlers) {
-    auto* const resource = stored.get_allocator().resource();
-    std::pmr::vector<stored_type> ordered(resource);
+void replace_prefix_handlers(std::vector<stored_type>& stored, std::span<const registration_type> handlers) {
+    std::vector<stored_type> ordered;
     ordered.reserve(handlers.size());
     for (const auto& registration : handlers) {
-        ordered.emplace_back(resource, std::string_view(registration.first), callback_access::ref(registration.second));
+        ordered.emplace_back(std::string_view(registration.first), callback_access::ref(registration.second));
     }
     // Deepest prefix first: selection is a first-match scan. A nested scope
     // always has more segments; distinct scopes of equal depth cannot nest, so
@@ -42,11 +40,11 @@ void replace_prefix_handlers(std::pmr::vector<stored_type>& stored, std::span<co
 }  // namespace
 
 detail::router::router()
-    : plan_(make_pmr_object<compiled_route_plan>(process_resource())),
-      route_hashes_(process_resource()),
-      route_middleware_descriptors_(process_resource()),
-      route_middleware_ranges_(process_resource()),
-      global_middleware_descriptors_(process_resource()) {}
+    : plan_(std::make_unique<compiled_route_plan>()),
+      route_hashes_(),
+      route_middleware_descriptors_(),
+      route_middleware_ranges_(),
+      global_middleware_descriptors_() {}
 
 detail::router::~router() = default;
 
@@ -59,12 +57,12 @@ void detail::router::set_not_found_handler(http_not_found_handler_ref handler) n
 }
 
 void detail::router::set_prefix_error_handlers(
-    std::span<const std::pair<std::pmr::string, callback_registration<http_error_handler>>> handlers) {
+    std::span<const std::pair<std::string, callback_registration<http_error_handler>>> handlers) {
     replace_prefix_handlers(plan_->prefix_error_handlers_, handlers);
 }
 
 void detail::router::set_prefix_not_found_handlers(
-    std::span<const std::pair<std::pmr::string, callback_registration<http_not_found_handler>>> handlers) {
+    std::span<const std::pair<std::string, callback_registration<http_not_found_handler>>> handlers) {
     replace_prefix_handlers(plan_->prefix_not_found_handlers_, handlers);
 }
 
@@ -247,15 +245,14 @@ void detail::router::register_owned_endpoint(std::size_t slot, http_known_method
     const auto index = routes.size();
     const auto max_request_body_bytes =
         append_route_middlewares(controller_middlewares, route_middlewares);
-    routes.emplace_back(process_resource(),
-        route_entry::init_type{.index_ = index,
-            .controller_ = slot,
-            .method_ = method,
-            .method_token_ = method_token,
-            .path_ = path,
-            .endpoint_ = std::move(endpoint),
-            .dynamic_ = dynamic,
-            .max_request_body_bytes_ = max_request_body_bytes});
+    routes.emplace_back(route_entry::init_type{.index_ = index,
+        .controller_ = slot,
+        .method_ = method,
+        .method_token_ = method_token,
+        .path_ = path,
+        .endpoint_ = std::move(endpoint),
+        .dynamic_ = dynamic,
+        .max_request_body_bytes_ = max_request_body_bytes});
     route_hashes_.push_back(hash);
 }
 

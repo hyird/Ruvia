@@ -17,9 +17,8 @@
 #include <asio/ssl/error.hpp>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http1_chunked_framing.h"
 #include "ruvia/http/http1_client_request_writer.h"
@@ -29,7 +28,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 
 #include "body/http_body_buffer.h"
@@ -59,7 +57,7 @@ template <typename prepare_type>
 [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error>
 prepare_http1_request_head(
     http_io_buffer& buffer, std::size_t max_head_bytes, const prepare_type& prepare) {
-    auto first = prepare(buffer.prepare((std::max)(buffer.capacity(), http_retained_pmr_string_bytes)));
+    auto first = prepare(buffer.prepare((std::max)(buffer.capacity(), http_retained_string_bytes)));
     const auto* too_small = std::get_if<http1_client_request_buffer_too_small>(&first);
     if (too_small == nullptr || too_small->required_head_bytes() > max_head_bytes) {
         return first;
@@ -70,9 +68,9 @@ prepare_http1_request_head(
 // The returned plan borrows only the request body and the output buffer, not
 // the temporary header descriptors or the assembled Cookie field.
 [[nodiscard]] auto prepare_client_head(http_client_pool& pool, const http_client_request_storage& request,
-    const http_client_upload_state* upload, std::pmr::memory_resource* response_resource,
+    const http_client_upload_state* upload,
     http_io_buffer& write_buffer) {
-    client_prepared_request_scratch scratch(process_resource());
+    client_prepared_request_scratch scratch;
     auto source = pool.policy().prepare_request(request, scratch);
     const auto headers = static_cast<std::span<const http_header_view>>(source.headers_);
     // Host comes from the request route (its authority override, else the alias).
@@ -87,11 +85,11 @@ prepare_http1_request_head(
         origin = pool.config().scheme_ == http_scheme::https ? http_origin_view::https(options)
                                                              : http_origin_view::http(options);
     }
-    http1_client_request_writer writer(response_resource);
+    http1_client_request_writer writer;
     const auto prepare = [&](std::span<char> buffer) {
         if (const auto* websocket = request.websocket()) {
             return prepare_http1_websocket_client_request(origin, source.target_.view(), websocket->key_,
-                websocket->negotiation_, headers, buffer, response_resource, request.options_.field_source_);
+                websocket->negotiation_, headers, buffer, request.options_.field_source_);
         }
         if (connect_udp) {
             return writer.prepare_connect_udp(origin, source.target_, headers, buffer, {.field_source_ = request.options_.field_source_});
@@ -127,7 +125,7 @@ prepare_http1_request_head(
             continue;
         }
         ++non_empty;
-        if (part.size() > http_retained_pmr_string_bytes - total_bytes) {
+        if (part.size() > http_retained_string_bytes - total_bytes) {
             return parts;
         }
         total_bytes += part.size();
@@ -179,7 +177,7 @@ void publish_body_progress(http_client_response_state& state_value,
         const auto fields = trailers->fields();
         state_value.trailers_.reserve(state_value.trailers_.size() + fields.size());
         for (const auto& field : fields) {
-            state_value.trailers_.emplace_back(field.name(), field.value(), state_value.resource_);
+            state_value.trailers_.emplace_back(field.name(), field.value());
         }
     } else if (const auto* failure = decoded.protocol_failure()) {
         throw http_client_error(make_error_code(http_client_errc::protocol_error),
@@ -274,12 +272,11 @@ task<void> http1_client_exchange::run(
     state_value.request_method_ = classify_http_method(request.method());
     cancellation.arm(stop_token_value);
 
-    auto* const response_resource = state_value.resource_;
     auto* const upload = state_value.upload_ ? &*state_value.upload_ : nullptr;
     // The head is written into the connection's retained, uninitialized buffer.
     auto& write_buffer = connection_.write_buffer_;
     write_buffer.clear();
-    auto prepared_result = prepare_client_head(pool_, request, upload, response_resource, write_buffer);
+    auto prepared_result = prepare_client_head(pool_, request, upload, write_buffer);
     auto* prepared = std::get_if<prepared_http1_client_request>(&prepared_result);
     if (!prepared) {
         const auto* failure = std::get_if<http1_client_request_prepare_error>(&prepared_result);
@@ -288,7 +285,7 @@ task<void> http1_client_exchange::run(
                 ? http1_client_request_prepare_error_message(*failure)
                 : std::string_view("HTTP request head is too large"));
     }
-    http1_client_response_parser parser(std::move(*prepared).take_exchange_state(), response_resource);
+    http1_client_response_parser parser(std::move(*prepared).take_exchange_state());
     const auto* immediate = prepared->content_plan().immediate();
     const bool immediate_content = immediate != nullptr && !immediate->bytes().empty();
     if (!immediate_content) {
@@ -301,7 +298,7 @@ task<void> http1_client_exchange::run(
         connection_.retain_idle_buffers();
         co_return;
     }
-    task_scope writers(pool_.worker(), {.resource_ = process_resource()});
+    task_scope writers(pool_.worker());
     std::exception_ptr writer_failure;
     bool immediate_completed = false;
     // An origin may read the whole request before it answers: until the final
@@ -468,7 +465,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         co_await run_tunnel(state_value, tunnel_timeout, request.websocket() != nullptr);
         co_return;
     }
-    http1_client_response_body_decoder body_decoder(plan, state_value.resource_);
+    http1_client_response_body_decoder body_decoder(plan);
     const bool content_semantics_present = plan.without_content() == nullptr;
 
     // The body loop stays in this frame: one exchange costs one receive frame.
@@ -484,7 +481,7 @@ task<void> http1_client_exchange::receive(const http_client_request_storage& req
         ((plan.chunked() != nullptr && !plan.chunked()->transfer_codings().empty()) ||
             (plan.close_delimited() != nullptr && !plan.close_delimited()->transfer_codings().empty()));
     std::array<char, 1> empty_output{};
-    http_io_buffer output_storage(process_resource());
+    http_io_buffer output_storage;
     const auto transfer_output = needs_transfer_scratch ? output_storage.prepare(http_body_buffer_bytes)
                                                         : std::span<char>{};
     bool eof = false;
@@ -657,11 +654,11 @@ task<void> http1_client_exchange::run_tunnel(http_client_response_state& state_v
     // Everything that can throw after the TLS writer starts runs inside the
     // receive try below, so the started writer is always joined before `tls`
     // is destroyed; the scope and timer slots are allocated first.
-    task_scope writers(pool_.worker(), {.resource_ = process_resource()});
+    task_scope writers(pool_.worker());
     worker_timer_registration lifetime_timer;
     std::optional<tls_tunnel_output> tls;
     if (secure) {
-        tls.emplace(*stream.native_handle(), stream.next_layer().socket(), pool_.worker(), *process_resource());
+        tls.emplace(*stream.native_handle(), stream.next_layer().socket(), pool_.worker());
         tls->start();
     }
     std::exception_ptr writer_failure;
@@ -824,12 +821,12 @@ task<void> http1_client_exchange::write_upload(http_client_response_state& state
             for (const auto& field : upload.trailers_) {
                 (void)section_budget.add_field(field.name(), field.value());
             }
-            const inline_http_header_views trailers(upload.trailers_, state_value.resource_);
+            const inline_http_header_views trailers(upload.trailers_);
             // Keep the last-chunk line and small trailer sections in this
             // operation; larger trailer sections allocate only their exact wire size.
             constexpr std::size_t inline_ending_bytes = 256;
             std::array<char, inline_ending_bytes> inline_ending;
-            http_io_buffer scratch(state_value.resource_);
+            http_io_buffer scratch;
             const auto required_bytes = section_budget.bytes();
             const auto finish_buffer = required_bytes <= inline_ending.size()
                                            ? std::span<char>(inline_ending.data(), required_bytes)

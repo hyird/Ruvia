@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -17,7 +16,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http3_request_head.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_client_response_head.h"
@@ -248,15 +246,13 @@ private:
 // DATA payload of a request stream. With own_data_events_ the event owns its
 // bytes; otherwise they borrow the read_stream() input. The credit stays with
 // the event until take_credit() hands it to the consumer.
-// Move assignment returns the target's untaken credit and retains the target's
-// resource; when owned bytes must be copied into it and allocation fails, both
-// events are unchanged.
+// Move assignment returns the target's untaken credit.
 class http3_data_event final {
 public:
     http3_data_event(const http3_data_event&) = delete;
     http3_data_event& operator=(const http3_data_event&) = delete;
     http3_data_event(http3_data_event&& other) noexcept;
-    http3_data_event& operator=(http3_data_event&& other);
+    http3_data_event& operator=(http3_data_event&& other) noexcept;
 
     [[nodiscard]] std::int64_t stream_id() const noexcept {
         return stream_id_;
@@ -271,11 +267,11 @@ public:
 
 private:
     friend class http3_connection;
-    http3_data_event(std::int64_t stream_id, std::string_view bytes, std::pmr::memory_resource* resource,
+    http3_data_event(std::int64_t stream_id, std::string_view bytes,
         bool own_bytes, http3_received_data_credit credit);
     std::int64_t stream_id_{-1};
     std::string_view bytes_;
-    std::pmr::string owned_bytes_;
+    std::string owned_bytes_;
     bool owns_bytes_{false};
     http3_received_data_credit credit_;
 };
@@ -374,17 +370,17 @@ public:
         return trailers_;
     }
     std::span<const http_header> trailers() const&& = delete;
-    [[nodiscard]] std::pmr::vector<http_header> take_trailers() && noexcept {
+    [[nodiscard]] std::vector<http_header> take_trailers() && noexcept {
         return std::move(trailers_);
     }
 
 private:
     friend class http3_connection;
-    http3_message_end_event(std::int64_t stream_id, std::pmr::vector<http_header> trailers) noexcept
+    http3_message_end_event(std::int64_t stream_id, std::vector<http_header> trailers) noexcept
         : stream_id_(stream_id),
           trailers_(std::move(trailers)) {}
     std::int64_t stream_id_;
-    std::pmr::vector<http_header> trailers_;
+    std::vector<http_header> trailers_;
 };
 
 enum class http3_transport_action : std::uint8_t {
@@ -527,17 +523,17 @@ public:
         return payload_;
     }
     std::string_view payload() const&& = delete;
-    [[nodiscard]] std::pmr::string take_payload() && noexcept {
+    [[nodiscard]] std::string take_payload() && noexcept {
         return std::move(payload_);
     }
 
 private:
     friend class http3_connection;
-    http3_datagram_event(std::int64_t stream_id, std::pmr::string payload) noexcept
+    http3_datagram_event(std::int64_t stream_id, std::string payload) noexcept
         : stream_id_(stream_id),
           payload_(std::move(payload)) {}
     std::int64_t stream_id_;
-    std::pmr::string payload_;
+    std::string payload_;
 };
 
 // One codec event. Exactly one accessor returns non-null.
@@ -725,8 +721,6 @@ using http3_field_observer_type = void (*)(void*, const http3_field_metadata&) n
 using http3_received_data_credit_sink_type = void (*)(void* context, std::int64_t stream_id, std::size_t bytes) noexcept;
 
 struct http3_connection_options final {
-    // The resource must outlive the connection and any escaped event or credit.
-    std::pmr::memory_resource* resource_{nullptr};
     std::uint64_t max_field_section_size_{64 * 1024};
     std::size_t max_concurrent_streams_{100};
     std::uint64_t qpack_max_dtable_capacity_{4096};
@@ -743,7 +737,7 @@ struct http3_connection_options final {
     // max_datagram_frame_size transport parameter (http3_quic_connection
     // does so whenever this is set).
     bool enable_h3_datagram_{false};
-    // Copies DATA into event-owned PMR storage. QUIC enables this because its
+    // Copies DATA into event-owned storage. QUIC enables this because its
     // decrypted stream callback storage expires before receive_datagram returns.
     bool own_data_events_{false};
     // Server only: serialized origins (RFC 9412 §2) sent in an ORIGIN frame on
@@ -975,7 +969,7 @@ private:
     class impl;
     explicit http3_connection(http3_role role,
         const http3_connection_options& options);
-    std::unique_ptr<impl, detail::http_pmr_object_deleter<impl>> impl_;
+    std::unique_ptr<impl> impl_;
 };
 
 // RFC 9220 extended CONNECT with :protocol websocket on a client request

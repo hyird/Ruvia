@@ -1,12 +1,10 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/http_client.h"
 
 #include "client/http_client_advertisement_queue.h"
@@ -15,7 +13,7 @@ namespace ruvia::detail {
 
 class http_client_advertisement_memory final {
 public:
-    explicit http_client_advertisement_memory(const worker_handle& worker_value)
+    explicit http_client_advertisement_memory(const worker_ref& worker_value)
         : worker_(worker_value) {}
 
     void retain(std::size_t bytes_value) noexcept {
@@ -64,9 +62,9 @@ private:
         if (retained_bytes_ != 0 || references_ != 1) {
             std::terminate();
         }
-        destroy_pmr_object(this, process_resource());
+        delete (this);
     }
-    worker_handle worker_;
+    worker_ref worker_;
     std::size_t references_{1};
     std::size_t retained_bytes_{};
     bool active_{};
@@ -80,7 +78,7 @@ struct http_client_advertisement_state final {
           slot_(slot),
           protocol_(protocol),
           bytes_(bytes_value),
-          value_(std::in_place_type<http_origin_advertisement>, process_resource()) {
+          value_(std::in_place_type<http_origin_advertisement>) {
         auto& retained = std::get<http_origin_advertisement>(value_);
         retained.origins_.reserve(origins.origins_.size());
         for (const auto& origin : origins.origins_) {
@@ -94,7 +92,7 @@ struct http_client_advertisement_state final {
           slot_(slot),
           protocol_(http_protocol_version::http2),
           bytes_(bytes_value),
-          value_(std::in_place_type<http_alternative_service_advertisement>, process_resource()) {
+          value_(std::in_place_type<http_alternative_service_advertisement>) {
         auto& retained = std::get<http_alternative_service_advertisement>(value_);
         retained.stream_id_ = service.stream_id_;
         retained.origin_.assign(service.origin_);
@@ -116,21 +114,21 @@ void release_advertisement(http_client_advertisement_state* state_value) noexcep
     auto& memory = state_value->memory_;
     memory.require_current();
     const auto bytes_value = state_value->bytes_;
-    destroy_pmr_object(state_value, process_resource());
+    delete (state_value);
     memory.release(bytes_value);
 }
 }  // namespace
 
-http_client_advertisement_queue::http_client_advertisement_queue(const worker_handle& worker_value,
+http_client_advertisement_queue::http_client_advertisement_queue(const worker_ref& worker_value,
     http_client_advertisement_config config)
     : worker_(worker_value),
       config_(config),
-      pending_(process_resource()) {
+      pending_() {
     if (!worker_value.valid() || config.max_queued_advertisements_ == 0 || config.max_retained_bytes_ == 0) {
         throw std::invalid_argument("HTTP advertisement queue requires worker and positive bounds");
     }
     if (config.receive_origins_ || config.receive_alternative_services_) {
-        memory_ = make_pmr_object<http_client_advertisement_memory>(process_resource(), worker_value).release();
+        memory_ = new http_client_advertisement_memory(worker_value);
     }
 }
 http_client_advertisement_queue::~http_client_advertisement_queue() {
@@ -157,11 +155,11 @@ void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_ver
     if (!config_.receive_origins_) {
         return;
     }
-    if (origins.origins_.size() > (config_.max_retained_bytes_ / sizeof(std::pmr::string))) {
+    if (origins.origins_.size() > (config_.max_retained_bytes_ / sizeof(std::string))) {
         ++dropped_;
         return;
     }
-    auto bytes_value = sizeof(http_client_advertisement_state) + origins.origins_.size() * sizeof(std::pmr::string);
+    auto bytes_value = sizeof(http_client_advertisement_state) + origins.origins_.size() * sizeof(std::string);
     for (const auto& origin : origins.origins_) {
         if (origin.size() > config_.max_retained_bytes_ - std::min(bytes_value, config_.max_retained_bytes_)) {
             ++dropped_;
@@ -172,7 +170,7 @@ void http_client_advertisement_queue::retain(std::size_t slot, http_protocol_ver
     if (!admit(bytes_value)) {
         return;
     }
-    auto owned = make_pmr_object<http_client_advertisement_state>(process_resource(), *memory_, slot, protocol, origins, bytes_value);
+    auto owned = std::make_unique<http_client_advertisement_state>(*memory_, slot, protocol, origins, bytes_value);
     http_client_advertisement advertisement(owned.release());
     pending_.push_back(std::move(advertisement));
 }
@@ -192,7 +190,7 @@ void http_client_advertisement_queue::retain(std::size_t slot, const http_altern
     if (!admit(bytes_value)) {
         return;
     }
-    auto owned = make_pmr_object<http_client_advertisement_state>(process_resource(), *memory_, slot, service, bytes_value);
+    auto owned = std::make_unique<http_client_advertisement_state>(*memory_, slot, service, bytes_value);
     http_client_advertisement advertisement(owned.release());
     pending_.push_back(std::move(advertisement));
 }

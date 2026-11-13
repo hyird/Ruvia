@@ -2,17 +2,14 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -29,9 +26,9 @@ int failing_default_value() {
     throw std::runtime_error("default evaluation failed");
 }
 
-std::pmr::string owned_default_value() {
+std::string owned_default_value() {
     ++evaluations;
-    return std::pmr::string(128, 'd', ruvia::process_resource());
+    return std::string(128, 'd');
 }
 
 ruvia::json_value dynamic_null_default() {
@@ -101,27 +98,22 @@ TEST(Ruvia, model_default_expression_runs_once_for_absence_not_for_moves) {
 
 TEST(Ruvia, model_default_expression_exceptions_unwind_partial_owned_fields) {
     evaluations = 0;
-    ruvia::test::counting_memory_resource memory;
-    const std::pmr::string prefix("{\"name\":\"" + std::pmr::string(128, 'n', ruvia::process_resource()) + "\"", ruvia::process_resource());
+    const std::string prefix("{\"name\":\"" + std::string(128, 'n') + "\"");
     {
-        auto supplied = ruvia::from_json<failing_default_model>(std::pmr::string(prefix, ruvia::process_resource()) + ",\"value\":9}", {.resource_ = &memory});
+        auto supplied = ruvia::from_json<failing_default_model>(std::string(prefix) + ",\"value\":9}");
         EXPECT_EQ(supplied.get<"value">()->value_, 9);
         EXPECT_EQ(evaluations, std::size_t{0});
     }
-    EXPECT_EQ(memory.live_allocations(), std::size_t{0});
     for (std::size_t index = 0; index < 32; ++index) {
         bool failed = false;
         try {
-            (void)ruvia::from_json<failing_default_model>(std::pmr::string(prefix, ruvia::process_resource()) + "}", {.resource_ = &memory});
+            (void)ruvia::from_json<failing_default_model>(std::string(prefix) + "}");
         } catch (const std::runtime_error& error) {
             failed = std::string_view(error.what()) == "default evaluation failed";
         }
         EXPECT_TRUE(failed);
         EXPECT_EQ(evaluations, index + 1);
-        EXPECT_EQ(memory.live_allocations(), std::size_t{0});
     }
-    EXPECT_TRUE(memory.allocation_count() > 0);
-    EXPECT_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 TEST(Ruvia, model_default_assignment_obeys_field_nullability) {
@@ -148,21 +140,17 @@ TEST(Ruvia, model_default_assignment_obeys_field_nullability) {
 
 TEST(Ruvia, model_owned_default_is_normalized_to_the_model_resource) {
     evaluations = 0;
-    ruvia::test::counting_memory_resource source;
-    ruvia::test::counting_memory_resource destination;
     {
-        owned_default_model retained({.resource_ = &destination});
+        owned_default_model retained;
         {
-            auto parsed_value = ruvia::from_json<owned_default_model>("{}", {.resource_ = &source});
+            auto parsed_value = ruvia::from_json<owned_default_model>("{}");
             EXPECT_EQ(evaluations, std::size_t{1});
             retained = std::move(parsed_value);
         }
-        EXPECT_EQ(source.live_allocations(), std::size_t{0});
         EXPECT_EQ(evaluations, std::size_t{1});
-        EXPECT_EQ(retained.get<"value">()->view(), std::string_view(std::pmr::string(128, 'd', ruvia::process_resource())));
+        EXPECT_EQ(retained.get<"value">()->view(), std::string_view(std::string(128, 'd')));
         EXPECT_TRUE(!retained.is_present<"value">());
         retained.reset<"value">();
-        EXPECT_EQ(destination.live_allocations(), std::size_t{0});
     }
     EXPECT_EQ(evaluations, std::size_t{1});
 }

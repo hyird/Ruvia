@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -110,15 +108,15 @@ struct http_client_request_options final {
     // authority_：逻辑 Host / :authority（host[:port]，无 userinfo）。不同于
     // alias authority 时 Cookie jar 不参与，跨 origin 重定向丢弃全部覆盖；
     // Alt-Svc 按实际路由（拨号 host、拨号端口、server name）记录与使用。
-    std::optional<std::pmr::string> authority_;
+    std::optional<std::string> authority_;
     // 物理拨号目标；域名只在新建连接时解析，并经 address_validator_ 校验。
-    std::optional<std::pmr::string> dial_host_;
+    std::optional<std::string> dial_host_;
     std::optional<port_number> dial_port_;
     // TLS SNI 与证书校验名，默认取有效 authority 的 host（IP 字面量不发 SNI，
     // 按 IP SAN 校验）。连接按 (拨号 host, 拨号端口, server name, ALPN) 复用，
     // Host / :authority 不入键：HTTP/2/3 连接上发送其他 authority 时，调用方
     // 负责该证书覆盖它（RFC 9113 §9.1.1、RFC 9114 §3.3）。
-    std::optional<std::pmr::string> server_name_;
+    std::optional<std::string> server_name_;
     // Replaces the alias's versions_ for this request; part of its connection key.
     std::optional<http_client_versions> versions_;
 };
@@ -398,7 +396,7 @@ struct http_client_config final {
     // entry replaces an earlier one of the same name; max_cookies_ and
     // max_cookie_bytes_ bound the result. Explicit caller Cookie fields are
     // combined independently of the stored jar.
-    std::pmr::vector<http_header_view> cookies_{process_resource()};
+    std::vector<http_header_view> cookies_;
 };
 
 // Protocol and connection-pool failures of the HTTP client. An operation's
@@ -491,7 +489,7 @@ private:
         if (!connection_) {
             connection_.emplace();
         }
-        // 错误可比 response 存活更久，文本提升到 process_resource。
+        // 错误可比 response 存活更久，文本独立拥有。
         *connection_ = *connection;
     }
     std::optional<http_status_code> status_;

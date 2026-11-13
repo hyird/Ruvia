@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -14,7 +13,7 @@
 #include "ruvia/core/detail/suspend_race_state.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
 
@@ -35,12 +34,14 @@
 namespace ruvia {
 
 template <typename t_type, typename state_type>
+    requires std::is_trivially_move_constructible_v<t_type>
 class worker_single_wait_awaiter;
 template <typename t_type, typename state_type>
+    requires std::is_trivially_move_constructible_v<t_type>
 class worker_wait_slot;
 
 // A shared owner that links itself into its worker's shutdown registry
-// through a worker_shutdown_registration data member named
+// through a worker_shutdown_registration member named
 // shutdown_registration_ (see make_worker_wait_state()).
 template <typename state_type>
 concept worker_shutdown_registered =
@@ -53,8 +54,9 @@ concept worker_shutdown_registered =
 // lock held.
 template <typename state_type, typename t_type>
 concept worker_wait_state =
-    worker_shutdown_registered<state_type> && requires(state_type& state, const state_type& const_state) {
-        { const_state.worker() } -> std::same_as<const worker_handle&>;
+    std::is_trivially_move_constructible_v<t_type> && worker_shutdown_registered<state_type> &&
+    requires(state_type& state, const state_type& const_state) {
+        { const_state.worker() } -> std::same_as<const worker_ref&>;
         state.lock_state();
         { state.wait_slot() } -> std::same_as<worker_wait_slot<t_type, state_type>&>;
     };
@@ -65,6 +67,7 @@ concept worker_wait_state =
 // waiter through this one transition, so detachment, generation invalidation,
 // result publication, and wake ordering cannot drift between owners.
 template <typename t_type, typename state_type>
+    requires std::is_trivially_move_constructible_v<t_type>
 class worker_wait_slot final {
 public:
     using awaiter_type = worker_single_wait_awaiter<t_type, state_type>;
@@ -161,6 +164,7 @@ private:
 // The awaiter is cold until start(): nothing publishes its address before
 // then, so a cold awaiter may move; a started one must stay address-stable.
 template <typename t_type, typename state_type>
+    requires std::is_trivially_move_constructible_v<t_type>
 class worker_single_wait_awaiter final {
 public:
     worker_single_wait_awaiter(std::shared_ptr<state_type> state_value, operation_options options) noexcept
@@ -232,7 +236,7 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool suspend(std::coroutine_handle<> handle) {
+    [[nodiscard]] bool suspend(std::coroutine_handle<> continuation) {
         auto& owner_value = state();
         auto* waiter = this;
         bool suspended = false;
@@ -261,7 +265,7 @@ public:
             }
             // Completion may arrive from another thread. Publish the
             // continuation under the same lock as the result transition.
-            suspended = completion_.suspend(handle);
+            suspended = completion_.suspend(continuation);
         }
         // Registered only once the wait really suspends. A stop requested since
         // await_ready runs the callback inline, which completes the wait as
@@ -358,19 +362,17 @@ private:
     stop_registration stop_registration_;
 };
 
-// Allocates a worker-bound domain state from resource and links its
-// shutdown_registration_ into the worker's shutdown registry, so the worker's
-// stopping notification reaches every state whose endpoints are still alive.
-// The state's constructor receives args and must bind the worker that
-// worker() returns. A stopping worker throws std::runtime_error.
+// Allocates a worker-bound domain state and links its shutdown_registration_
+// into the worker's shutdown registry, so the worker's stopping notification
+// reaches every state whose endpoints are still alive. The state's constructor
+// receives args and must bind the worker that worker() returns. A stopping
+// worker throws std::runtime_error.
 template <typename state_type, typename... arg_types>
     requires worker_shutdown_registered<state_type> && requires(const state_type& state) {
-        { state.worker() } -> std::same_as<const worker_handle&>;
+        { state.worker() } -> std::same_as<const worker_ref&>;
     }
-[[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(
-    std::pmr::memory_resource* resource, arg_types&&... args) {
-    auto state_value = std::allocate_shared<state_type>(
-        std::pmr::polymorphic_allocator<state_type>(resource), std::forward<arg_types>(args)...);
+[[nodiscard]] std::shared_ptr<state_type> make_worker_wait_state(arg_types&&... args) {
+    auto state_value = std::make_shared<state_type>(std::forward<arg_types>(args)...);
     if (state_value->worker().register_shutdown(state_value, &state_type::shutdown_registration_) !=
         worker_registration_status::registered) {
         throw std::runtime_error("cannot register state on a stopping worker");

@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -18,11 +17,10 @@
 #include <asio/ip/udp.hpp>
 #endif
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/core/worker_signal.h"
 
@@ -99,7 +97,7 @@ public:
 
     // One business worker as a hand-over target.
     struct business_worker final {
-        worker_handle worker_;
+        worker_ref worker_;
         const connection_count* load_{nullptr};
         void* target_{nullptr};
         adopt_type adopt_{nullptr};
@@ -121,8 +119,8 @@ public:
     // acceptor's failure (a listener that cannot be bound).
     [[nodiscard]] bool start();
     [[nodiscard]] bool serve();
-    [[nodiscard]] task<void> start(worker_handle caller);
-    [[nodiscard]] task<void> serve(worker_handle caller);
+    [[nodiscard]] task<void> start(worker_ref caller);
+    [[nodiscard]] task<void> serve(worker_ref caller);
     // Any thread.
     void stop_admission() noexcept;
     void request_stop() noexcept;
@@ -130,7 +128,7 @@ public:
     void join();
     // Waits for the native thread HANDLE asynchronously; join() afterwards only
     // reclaims a thread whose exit has already been observed.
-    [[nodiscard]] task<void> join(worker_handle caller, asio::io_context& caller_io);
+    [[nodiscard]] task<void> join(worker_ref caller, asio::io_context& caller_io);
     [[nodiscard]] std::exception_ptr failure() noexcept;
     // Any thread: sockets the chosen worker's queue refused, and accept
     // failures other than peer disconnects.
@@ -216,14 +214,14 @@ private:
     worker_failure_sink failure_sink_;
     worker_signal finalize_signal_;
     task_scope tasks_;
-    std::pmr::vector<std::unique_ptr<worker_slot, pmr_object_deleter<worker_slot>>> workers_;
+    std::vector<std::unique_ptr<worker_slot>> workers_;
     // Indexed by listener slot, the HTTP/3 ones by HTTP/3 slot; empty for a
     // listener whose addition was rolled back. A removed listener keeps its
     // closed socket object until the acceptor ends: its accepts reference it.
-    std::pmr::vector<std::unique_ptr<tcp_listener, pmr_object_deleter<tcp_listener>>> tcp_listeners_;
+    std::vector<std::unique_ptr<tcp_listener>> tcp_listeners_;
 #if defined(RUVIA_ENABLE_HTTP3)
     http3_worker_directory* directory_;
-    std::pmr::vector<std::unique_ptr<udp_listener, pmr_object_deleter<udp_listener>>> udp_listeners_;
+    std::vector<std::unique_ptr<udp_listener>> udp_listeners_;
 #endif
     // Owner thread.
     std::size_t next_worker_{0};

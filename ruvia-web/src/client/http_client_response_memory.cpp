@@ -2,11 +2,8 @@
 
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
@@ -14,31 +11,23 @@
 
 namespace ruvia::detail {
 
-void* http_client_response_memory_domain::receive_resource::do_allocate(
-    std::size_t bytes_value, std::size_t alignment) {
-    if (!budget_.reserve_in_flight(bytes_value)) {
+void http_client_response_memory_domain::charge_in_flight(std::size_t bytes_value) {
+    if (bytes_value != 0 && !result_budget_domain_->reserve_in_flight(bytes_value)) {
         throw http_client_error(make_error_code(http_client_errc::result_budget_exceeded),
             "HTTP client in-flight response memory budget is exhausted");
     }
-    try {
-        return process_resource()->allocate(bytes_value, alignment);
-    } catch (...) {
-        budget_.release_in_flight(bytes_value);
-        throw;
+}
+
+void http_client_response_memory_domain::release_in_flight(std::size_t bytes_value) noexcept {
+    if (bytes_value != 0) {
+        result_budget_domain_->release_in_flight(bytes_value);
     }
 }
 
-void http_client_response_memory_domain::receive_resource::do_deallocate(
-    void* allocation, std::size_t bytes_value, std::size_t alignment) {
-    process_resource()->deallocate(allocation, bytes_value, alignment);
-    budget_.release_in_flight(bytes_value);
-}
-
-http_client_response_memory_domain::http_client_response_memory_domain(const worker_handle& worker_value,
+http_client_response_memory_domain::http_client_response_memory_domain(const worker_ref& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain)
     : worker_(worker_value),
-      result_budget_domain_(result_budget_domain),
-      receive_resource_(*result_budget_domain_) {
+      result_budget_domain_(result_budget_domain) {
     if (!worker_.valid()) {
         throw std::invalid_argument("HTTP client response memory requires a worker");
     }
@@ -54,25 +43,13 @@ http_client_response_memory_domain::~http_client_response_memory_domain() {
 }
 
 http_client_response_memory_domain::owner http_client_response_memory_domain::create(
-    const worker_handle& worker_value,
+    const worker_ref& worker_value,
     const std::shared_ptr<http_client_result_budget_domain>& result_budget_domain) {
-    auto* const object = process_resource()->allocate(sizeof(http_client_response_memory_domain),
-        alignof(http_client_response_memory_domain));
-    try {
-        return owner(::new (object) http_client_response_memory_domain(
-                         worker_value, result_budget_domain),
-            deleter_type{});
-    } catch (...) {
-        process_resource()->deallocate(object, sizeof(http_client_response_memory_domain),
-            alignof(http_client_response_memory_domain));
-        throw;
-    }
+    return owner(new http_client_response_memory_domain(worker_value, result_budget_domain), deleter_type{});
 }
 
 void http_client_response_memory_domain::destroy() noexcept {
-    this->~http_client_response_memory_domain();
-    process_resource()->deallocate(this, sizeof(http_client_response_memory_domain),
-        alignof(http_client_response_memory_domain));
+    delete this;
 }
 
 void http_client_response_memory_domain::deleter_type::operator()(
@@ -128,8 +105,14 @@ http_client_response_state* http_client_response_memory_domain::create_state(htt
         throw std::logic_error("HTTP client response transport is retired");
     }
     phase_ = phase_type::active;
-    auto* state_value = construct_pmr_object<http_client_response_state>(
-        resource(), *this);
+    charge_in_flight(sizeof(http_client_response_state));
+    http_client_response_state* state_value = nullptr;
+    try {
+        state_value = new http_client_response_state(*this);
+    } catch (...) {
+        release_in_flight(sizeof(http_client_response_state));
+        throw;
+    }
     state_value->pool_ = &pool;
     attach_state(*state_value);
     return state_value;
@@ -155,7 +138,8 @@ void http_client_response_memory_domain::destroy_state(http_client_response_stat
     } else if (state_value->previous_memory_state_ != nullptr || state_value->next_memory_state_ != nullptr) {
         std::terminate();
     }
-    destroy_pmr_object(state_value, resource());
+    delete state_value;
+    release_in_flight(sizeof(http_client_response_state));
     release();
 }
 
@@ -193,12 +177,6 @@ http_client_response_state::http_client_response_state(http_client_response_memo
     : head_signal_(memory_domain.worker()),
       data_signal_(memory_domain.worker()),
       space_signal_(memory_domain.worker()),
-      resource_(memory_domain.resource()),
-      informational_(resource_),
-      headers_(resource_),
-      trailers_(resource_),
-      buffered_(resource_),
-      pending_(resource_),
       memory_domain_(memory_domain) {
     body_operation_scope_.bind_worker(memory_domain.worker());
 }

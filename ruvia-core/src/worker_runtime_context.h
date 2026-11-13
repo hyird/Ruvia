@@ -7,13 +7,13 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
 class blocking_pool;
 
-// Owns the worker dispatcher endpoint and detaches escaped handles on teardown.
+// Owns the worker dispatcher endpoint and detaches escaped worker refs on teardown.
 // The io_context remains owned by the runtime that supplied it, and the
 // blocking pool, when given, by its owner; both must outlive this context.
 class worker_runtime_context final {
@@ -30,8 +30,8 @@ public:
 
     [[nodiscard]] asio::io_context& io_context() const& noexcept;
     asio::io_context& io_context() const&& = delete;
-    [[nodiscard]] const worker_handle& handle() const& noexcept;
-    const worker_handle& handle() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept;
+    const worker_ref& worker() const&& = delete;
 
     void run();
     void run(move_only_function<void()> startup_handler,
@@ -45,7 +45,7 @@ public:
 private:
     asio::io_context* io_context_;
     std::shared_ptr<detail::worker_dispatcher> dispatcher_;
-    worker_handle handle_;
+    worker_ref worker_;
 };
 
 }  // namespace ruvia

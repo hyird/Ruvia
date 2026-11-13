@@ -13,8 +13,8 @@
 
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
+#include "memory/geometric_reserve.h"
 #include "parser/http_request_target.h"
-#include "util/geometric_reserve.h"
 namespace ruvia::detail {
 
 // The standardized Expect field member is defined once so parsers and writers
@@ -128,7 +128,7 @@ inline constexpr auto binary_field_name_char_table = [] {
 // Joins split binary (RFC 9113 §8.2.3, RFC 9114 §4.2.1) Cookie crumbs with "; "
 // within max_http_header_bytes. When `first_crumb` is non-empty and `joined` is
 // still empty, `first_crumb` is materialized before appending the second crumb.
-[[nodiscard]] inline bool append_binary_cookie_crumb(std::pmr::string& joined,
+[[nodiscard]] inline bool append_binary_cookie_crumb(std::string& joined,
     std::string_view value, bool has_existing_cookie, std::string_view first_crumb = {}) {
     if (value.empty()) {
         return true;

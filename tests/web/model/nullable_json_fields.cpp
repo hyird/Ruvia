@@ -1,11 +1,9 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 
 #include "test_exceptions.h"
@@ -35,18 +33,16 @@ RUVIA_MODEL(emission_options,
 }  // namespace
 
 TEST(Ruvia, nullable_optional_string_accepts_json_null) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
-        ruvia::from_json<remark_request>(R"({"remark":null})", {.resource_ = &resource});
+        ruvia::from_json<remark_request>(R"({"remark":null})");
     EXPECT_TRUE(!parsed_value.get<"remark">().has_value());
     EXPECT_TRUE(parsed_value.is_present<"remark">());
     EXPECT_TRUE(parsed_value.is_null<"remark">());
 }
 
 TEST(Ruvia, nullable_optional_string_still_accepts_text) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value =
-        ruvia::from_json<remark_request>(R"({"remark":"note"})", {.resource_ = &resource});
+        ruvia::from_json<remark_request>(R"({"remark":"note"})");
     if (!parsed_value.get<"remark">()) {
         return;
     }
@@ -54,15 +50,14 @@ TEST(Ruvia, nullable_optional_string_still_accepts_text) {
 }
 
 TEST(Ruvia, nullable_null_does_not_apply_default) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<remark_with_default_request>(
-        R"({"remark":null})", {.resource_ = &resource});
+        R"({"remark":null})");
     EXPECT_TRUE(!parsed_value.get<"remark">().has_value());
     EXPECT_TRUE(parsed_value.is_present<"remark">());
     EXPECT_TRUE(parsed_value.is_null<"remark">());
 
     const auto missing =
-        ruvia::from_json<remark_with_default_request>("{}", {.resource_ = &resource});
+        ruvia::from_json<remark_with_default_request>("{}");
     if (!missing.get<"remark">()) {
         return;
     }
@@ -70,17 +65,14 @@ TEST(Ruvia, nullable_null_does_not_apply_default) {
 }
 
 TEST(Ruvia, required_string_rejects_json_null) {
-    std::pmr::monotonic_buffer_resource resource;
     EXPECT_TRUE(ruvia::test::throws_on([&] {
-        (void)ruvia::from_json<required_remark_request>(R"({"remark":null})", {.resource_ = &resource});
+        (void)ruvia::from_json<required_remark_request>(R"({"remark":null})");
     }));
 }
 
 TEST(Ruvia, json_value_model_fields_accept_any_json_token) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto parsed_value = ruvia::from_json<json_bag_request>(
-        R"({"payload":[1,{"k":null}],"object":{"a":true},"items":[null,"x",{"z":2}]})",
-        {.resource_ = &resource});
+        R"({"payload":[1,{"k":null}],"object":{"a":true},"items":[null,"x",{"z":2}]})");
     if (!parsed_value.get<"payload">() || !parsed_value.get<"object">() ||
         !parsed_value.get<"items">()) {
         return;
@@ -95,22 +87,20 @@ TEST(Ruvia, json_value_model_fields_accept_any_json_token) {
 }
 
 TEST(Ruvia, json_object_model_field_rejects_non_objects) {
-    std::pmr::monotonic_buffer_resource resource;
     EXPECT_TRUE(ruvia::test::throws_on([&] {
-        (void)ruvia::from_json<json_bag_request>(R"({"object":[1]})", {.resource_ = &resource});
+        (void)ruvia::from_json<json_bag_request>(R"({"object":[1]})");
     }));
 
     const auto null_object =
-        ruvia::from_json<json_bag_request>(R"({"object":null})", {.resource_ = &resource});
+        ruvia::from_json<json_bag_request>(R"({"object":null})");
     EXPECT_TRUE(!null_object.get<"object">().has_value());
     EXPECT_TRUE(null_object.is_present<"object">());
     EXPECT_TRUE(null_object.is_null<"object">());
 }
 
 TEST(Ruvia, json_value_model_fields_own_tokens_for_from_json) {
-    std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
-        std::pmr::string(R"({"payload":{"keep":true}})", ruvia::process_resource()), {.resource_ = &resource});
+        std::string(R"({"payload":{"keep":true}})"));
     if (!parsed_value.get<"payload">()) {
         return;
     }
@@ -119,17 +109,16 @@ TEST(Ruvia, json_value_model_fields_own_tokens_for_from_json) {
 }
 
 TEST(Ruvia, json_value_response_fields_write_raw_tokens) {
-    std::pmr::monotonic_buffer_resource resource;
     auto parsed_value = ruvia::from_json<json_bag_request>(
-        R"({"payload":[1,2],"object":{"a":1}})", {.resource_ = &resource});
+        R"({"payload":[1,2],"object":{"a":1}})");
     if (!parsed_value.get<"payload">() || !parsed_value.get<"object">()) {
         return;
     }
 
-    json_bag_response response({.resource_ = &resource});
+    json_bag_response response;
     response.set<"payload">(*parsed_value.get<"payload">());
     response.set<"object">(std::move(parsed_value.ensure<"object">()));
-    EXPECT_EQ(std::string_view(ruvia::to_json(response, {.resource_ = &resource})),
+    EXPECT_EQ(std::string_view(ruvia::to_json(response)),
         std::string_view(R"({"payload":[1,2],"object":{"a":1}})"));
 }
 
@@ -153,7 +142,7 @@ TEST(Ruvia, model_json_emission_options_write_expected_output_for_all_states) {
         assign.template operator()<"emitted">((combination >> 4) & 3);
         assign.template operator()<"both">((combination >> 6) & 3);
 
-        std::pmr::string expected("{", ruvia::process_resource());
+        std::string expected("{");
         for (unsigned index = 0; index != 4; ++index) {
             const auto state_value = (combination >> (index * 2)) & 3;
             if ((state_value == 0 && index < 2) || (state_value == 2 && (index == 1 || index == 3))) {

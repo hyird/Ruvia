@@ -34,8 +34,8 @@ voidpf zlib_allocate(voidpf opaque, uInt items, uInt size) noexcept {
 
 }  // namespace
 
-zlib_inflate_stream::zlib_inflate_stream(std::pmr::memory_resource* resource, int window_bits)
-    : allocation_(resource),
+zlib_inflate_stream::zlib_inflate_stream(int window_bits, std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
       stream_(make_zlib_stream(allocation_)) {
     if (inflateInit2(&stream_, window_bits) != Z_OK) {
         allocation_.rethrow_if_failed();
@@ -54,18 +54,18 @@ bool zlib_inflate_stream::reset() noexcept {
 }
 
 zlib_deflate_stream::zlib_deflate_stream(
-    std::pmr::memory_resource* resource, int level, int window_bits, int mem_level, int strategy)
-    : allocation_(resource),
+    int level, int window_bits, int mem_level, int strategy, std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
       stream_(make_zlib_stream(allocation_)) {
     if (deflateInit2(&stream_, level, Z_DEFLATED, window_bits, mem_level, strategy) != Z_OK) {
         allocation_.rethrow_if_failed();
     }
 }
 
-zlib_deflate_stream::zlib_deflate_stream(std::pmr::memory_resource* resource, zlib_content_format format)
-    : zlib_deflate_stream(resource, Z_DEFAULT_COMPRESSION,
+zlib_deflate_stream::zlib_deflate_stream(zlib_content_format format, std::size_t max_memory_bytes)
+    : zlib_deflate_stream(Z_DEFAULT_COMPRESSION,
           format == zlib_content_format::gzip ? zlib_gzip_window_bits : zlib_deflate_window_bits,
-          zlib_default_mem_level, Z_DEFAULT_STRATEGY) {}
+          zlib_default_mem_level, Z_DEFAULT_STRATEGY, max_memory_bytes) {}
 
 zlib_deflate_stream::~zlib_deflate_stream() {
     if (initialized()) {
@@ -78,7 +78,7 @@ bool zlib_deflate_stream::reset() noexcept {
     return initialized() && deflateReset(&stream_) == Z_OK;
 }
 
-bool zlib_deflate_stream::encode(std::string_view input, std::pmr::string& output, int flush,
+bool zlib_deflate_stream::encode(std::string_view input, std::string& output, int flush,
     std::size_t max_encoded_bytes) {
     if (output.size() > max_encoded_bytes) {
         return false;

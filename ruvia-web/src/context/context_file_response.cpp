@@ -5,7 +5,6 @@
 #include <ctime>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -16,7 +15,6 @@
 #include <variant>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_date.h"
@@ -130,7 +128,7 @@ class file_response_path final {
 public:
     // `path` must be NUL-terminated (a c_str() or path::native() view).
     file_response_path(http_native_path_view_type path, http_response_file_identity identity,
-        http_response_file_handle opened)
+        http_response_file_descriptor opened)
         : path_(path),
           identity_(identity),
           opened_(std::move(opened)) {
@@ -151,7 +149,7 @@ public:
 private:
     http_native_path_view_type path_;
     http_response_file_identity identity_;
-    http_response_file_handle opened_;
+    http_response_file_descriptor opened_;
 };
 
 class file_response_body_source final {
@@ -164,7 +162,7 @@ public:
         return file_response_body_source(bytes_value);
     }
 
-    void set_body(http_response& response, std::pmr::memory_resource* resource, std::uint64_t size,
+    void set_body(http_response& response, std::uint64_t size,
         std::uint64_t offset, std::uint64_t length) {
         if (auto* path = std::get_if<file_response_path>(&value_)) {
             path->set_body(response, size, offset, length);
@@ -180,18 +178,17 @@ public:
         // lease at all. Borrowing would need a per-response reference on the
         // snapshot (shared ownership on the hot path) or a lease release hook
         // inside http_response.
-        std::pmr::string owned(
-            bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)),
-            resource);
+        std::string owned(
+            bytes_value.substr(static_cast<std::size_t>(offset), static_cast<std::size_t>(length)));
         response.file_bytes_body(std::move(owned));
     }
 
     void set_full_body(
-        http_response& response, std::pmr::memory_resource* resource, std::uint64_t size) {
-        set_body(response, resource, size, 0, size);
+        http_response& response, std::uint64_t size) {
+        set_body(response, size, 0, size);
     }
 
-    void set_multipart_body(http_response& response, std::pmr::memory_resource* resource,
+    void set_multipart_body(http_response& response,
         std::uint64_t size, http_multipart_byte_range_plan&& plan) {
         if (auto* path = std::get_if<file_response_path>(&value_)) {
             path->set_multipart_body(response, size, std::move(plan));
@@ -204,7 +201,7 @@ public:
                               ? static_cast<std::size_t>(segment.file_length_)
                               : segment.metadata_length_;
         }
-        std::pmr::string body(resource);
+        std::string body;
         body.reserve(total_size);
         for (const auto& segment : plan.segments()) {
             if (segment.kind_ == http_multipart_byte_range_plan::segment_kind::file) {
@@ -429,7 +426,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 
 [[nodiscard]] http_response make_not_modified_response(context& context_value,
     const file_response_source& source_value, const file_validators& validators, http_status_code status_code) {
-    http_response response(context_value.arena());
+    http_response response;
     add_file_headers(response, source_value, validators, file_header_set::not_modified);
     apply_file_response_state(context_value, source_value, response, status_code);
     return response;
@@ -438,9 +435,9 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 [[nodiscard]] http_response make_full_file_response(context& context_value,
     const file_response_source& source_value, file_response_body_source& body, const file_validators& validators,
     std::optional<http_status_code> status_code) {
-    http_response response(context_value.arena());
+    http_response response;
     add_file_headers(response, source_value, validators);
-    body.set_full_body(response, context_value.arena(), source_value.size_);
+    body.set_full_body(response, source_value.size_);
     apply_file_response_state(context_value, source_value, response, status_code);
     return response;
 }
@@ -450,13 +447,13 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     const http_byte_range_set& ranges, file_header_set header_set) {
     std::array<char, detail::secure_token_size> boundary_token;
     const auto token = detail::generate_secure_token(boundary_token);
-    http_response response(context_value.arena());
+    http_response response;
     add_file_headers(response, source_value, validators, header_set, false);
     apply_file_response_state(context_value, source_value, response, http_status::partial_content);
     const auto media_type = response.header("Content-Type");
     const auto selected_media_type = media_type.value_or(source_value.content_type_);
     auto multipart_plan = make_http_multipart_byte_range_plan(
-        ranges, source_value.size_, selected_media_type, token, context_value.arena());
+        ranges, source_value.size_, selected_media_type, token);
 
     // The outer representation is the multipart body, which is not
     // content-coded; coded representations never reach this path.
@@ -464,7 +461,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     response.remove_header("Content-Range");
     response.remove_header("Content-Encoding");
     response.remove_header("Content-Length");
-    body.set_multipart_body(response, context_value.arena(), source_value.size_, std::move(multipart_plan));
+    body.set_multipart_body(response, source_value.size_, std::move(multipart_plan));
     return response;
 }
 
@@ -483,7 +480,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
         return make_not_modified_response(context_value, source_value, validators, plan.status());
     }
     if (plan.range_unsatisfiable()) {
-        http_response response(context_value.arena());
+        http_response response;
         response.content_range_unsatisfied(source_value.size_);
         add_file_headers(response, source_value, validators, file_header_set::range_unsatisfied);
         apply_file_response_state(context_value, source_value, response, plan.status());
@@ -494,10 +491,10 @@ void apply_file_response_state(context& context_value, const file_response_sourc
             context_value, source_value, body, validators, *ranges, partial_file_header_set(plan));
     }
     if (const auto* range = plan.partial()) {
-        http_response response(context_value.arena());
+        http_response response;
         add_file_headers(response, source_value, validators, partial_file_header_set(plan));
         response.content_range(range->offset_, range->length_, source_value.size_);
-        body.set_body(response, context_value.arena(), source_value.size_, range->offset_, range->length_);
+        body.set_body(response, source_value.size_, range->offset_, range->length_);
         apply_file_response_state(context_value, source_value, response, plan.status());
         return response;
     }
@@ -515,7 +512,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 // request pool. An empty `content_type` selects the type guessed from the
 // path.
 [[nodiscard]] task<http_response> serve_file(
-    context& context_value, http_native_path_string_type native_path, std::pmr::string content_type) {
+    context& context_value, http_native_path_string_type native_path, std::string content_type) {
     const auto content_type_value = content_type.empty() ? detail::guess_static_file_content_type_from_path_view(
                                                                http_native_path_view_type(native_path))
                                                          : std::string_view(content_type);
@@ -559,7 +556,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 // `content_type` is owned in the request pool, and an empty one selects the
 // base entry's type.
 [[nodiscard]] task<http_response> serve_static_file(context& context_value, const static_root& root,
-    static_file_representation served, detail::static_root_entry_view base_entry, std::pmr::string content_type) {
+    static_file_representation served, detail::static_root_entry_view base_entry, std::string content_type) {
     const auto& served_entry = served.entry();
     const auto* const memory_variant = served.memory_variant();
     // A document-root snapshot keeps small files' bytes; they describe exactly
@@ -589,7 +586,7 @@ void apply_file_response_state(context& context_value, const file_response_sourc
     // that cannot be opened is gone or no longer where the index found it,
     // and its path is never resolved another way. A response that sends none
     // of its bytes checks the opened handle against the index there too.
-    http_response_file_handle opened;
+    http_response_file_descriptor opened;
     if (file_backed) {
         opened = take_file_open(context_value,
             co_await run_file_open(context_value,
@@ -614,11 +611,11 @@ void apply_file_response_state(context& context_value, const file_response_sourc
 // Not a coroutine: the options are owned before the task is returned, so a
 // stored task never reads the caller's path or content type.
 task<http_response> context::file(file_response_options options) {
-    http_native_path_string_type native_path(process_resource());
+    http_native_path_string_type native_path;
     if (!assign_native_file_path(options.path_, native_path)) {
         throw file_not_found_error();
     }
-    return serve_file(*this, std::move(native_path), std::pmr::string(options.content_type_.view(), ruvia::process_resource()));
+    return serve_file(*this, std::move(native_path), std::string(options.content_type_.view()));
 }
 
 // Not a coroutine: the path is resolved and the content type owned before the
@@ -630,7 +627,7 @@ task<http_response> context::static_file(const static_root& root, static_file_re
     // scope ever saw. normalize_static_relative_path rejects "." and ".."
     // segments, absolute paths and NUL, and the lookup is a byte-exact
     // index compare that never joins the path onto the filesystem.
-    std::pmr::string relative_storage(ruvia::process_resource());
+    std::string relative_storage;
     auto relative = options.relative_path_.view();
     const auto entry_value = detail::static_root_access::resolve(root, relative, relative_storage);
     if (!entry_value.has_value()) {
@@ -655,16 +652,16 @@ task<http_response> detail::context_access::static_file_resolved(
             return static_file_representation(base_entry, http_content_coding::identity);
         }
         if (const auto* admitted = context_value.services().response_coding()) {
-            return select_static_file_representation(root, relative, *admitted, ruvia::process_resource(), base_entry);
+            return select_static_file_representation(root, relative, *admitted, base_entry);
         }
         return select_static_file_representation(
-            root, relative, http_response_coding_selection_for(context_value.request_), ruvia::process_resource(), base_entry);
+            root, relative, http_response_coding_selection_for(context_value.request_), base_entry);
     }();
     if (!served.has_value()) {
         throw http_error(detail::http_not_acceptable_coding_error());
     }
     return serve_static_file(
-        context_value, root, *served, base_entry, std::pmr::string(content_type_value, ruvia::process_resource()));
+        context_value, root, *served, base_entry, std::string(content_type_value));
 }
 
 }  // namespace ruvia

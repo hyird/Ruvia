@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -18,7 +17,7 @@
 namespace ruvia::test {
 
 // RFC 9204 §4.1.1 prefixed integer.
-inline void append_qpack_integer(std::pmr::string& bytes, std::size_t value, unsigned prefix_bits, unsigned tag) {
+inline void append_qpack_integer(std::string& bytes, std::size_t value, unsigned prefix_bits, unsigned tag) {
     const auto mask = (1u << prefix_bits) - 1;
     if (value < mask) {
         bytes.push_back(static_cast<char>(tag | static_cast<unsigned>(value)));
@@ -34,7 +33,7 @@ inline void append_qpack_integer(std::pmr::string& bytes, std::size_t value, uns
 }
 
 // RFC 9000 §16 variable-length integer.
-inline void append_quic_varint(std::pmr::string& bytes, std::uint64_t value) {
+inline void append_quic_varint(std::string& bytes, std::uint64_t value) {
     if (value < 64) {
         bytes.push_back(static_cast<char>(value));
     } else if (value < 16384) {
@@ -53,7 +52,7 @@ inline void append_quic_varint(std::pmr::string& bytes, std::uint64_t value) {
     }
 }
 
-inline void append_http3_wire_frame(std::pmr::string& bytes, std::uint64_t type, std::string_view payload) {
+inline void append_http3_wire_frame(std::string& bytes, std::uint64_t type, std::string_view payload) {
     append_quic_varint(bytes, type);
     append_quic_varint(bytes, payload.size());
     bytes.append(payload);
@@ -68,8 +67,8 @@ struct http3_wire_field final {
 // RFC 9204 §4.5.6: literal names and values, without dynamic table
 // references or Huffman coding, exercise the real decoder with arbitrary
 // HTTP semantics.
-inline void append_http3_wire_headers(std::pmr::string& bytes, std::span<const http3_wire_field> fields) {
-    std::pmr::string section(2, '\0');  // Required Insert Count = 0; Delta Base = 0.
+inline void append_http3_wire_headers(std::string& bytes, std::span<const http3_wire_field> fields) {
+    std::string section(2, '\0');  // Required Insert Count = 0; Delta Base = 0.
     for (const auto& field : fields) {
         append_qpack_integer(section, field.name_.size(), 3, 0x20);
         section.append(field.name_);
@@ -79,7 +78,7 @@ inline void append_http3_wire_headers(std::pmr::string& bytes, std::span<const h
     append_http3_wire_frame(bytes, 1, section);
 }
 
-inline void append_http3_wire_headers(std::pmr::string& bytes, std::initializer_list<http3_wire_field> fields) {
+inline void append_http3_wire_headers(std::string& bytes, std::initializer_list<http3_wire_field> fields) {
     append_http3_wire_headers(bytes, std::span(fields.begin(), fields.size()));
 }
 

@@ -3,7 +3,6 @@
 #include <array>
 #include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <string>
 #include <system_error>
 #include <utility>
@@ -13,7 +12,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
@@ -44,7 +42,7 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
     std::exception_ptr failure;
-    std::pmr::string response{ruvia::process_resource()};
+    std::string response{};
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog(io, std::chrono::seconds(5));
         watchdog.async_wait([&](std::error_code error) {
@@ -54,7 +52,7 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
         });
         try {
             // Keep-alive request: only the server's close verdict ends the read.
-            const std::pmr::string request{"GET /server-upgrade-required-without-upgrade HTTP/1.1\r\nHost: localhost\r\n\r\n", ruvia::process_resource()};
+            const std::string request{"GET /server-upgrade-required-without-upgrade HTTP/1.1\r\nHost: localhost\r\n\r\n"};
             const auto sent = co_await ruvia::async_asio<std::size_t>([&](auto handler) {
                 asio::async_write(client, asio::buffer(request), std::move(handler));
             });
@@ -89,5 +87,5 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
         std::rethrow_exception(failure);
     }
     EXPECT_TRUE(response.starts_with("HTTP/1.1 500 "));
-    EXPECT_TRUE(response.find("\r\nConnection: close\r\n") != std::pmr::string::npos);
+    EXPECT_TRUE(response.find("\r\nConnection: close\r\n") != std::string::npos);
 }

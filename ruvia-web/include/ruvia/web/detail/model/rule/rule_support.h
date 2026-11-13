@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstring>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -217,7 +216,7 @@ public:
     }
 
     // Cold path for paths beyond the issue sink's stack buffer; size_hint() is exact.
-    void render(std::pmr::string& output) const {
+    void render(std::string& output) const {
         output.resize(size_hint());
         output.resize(render_to(output).size());
     }
@@ -272,7 +271,7 @@ public:
             return;
         }
         if (!path_) {
-            path_.emplace(validator_.resource());
+            path_.emplace();
         }
         path.render(*path_);
         validator_.add(*path_, code, message);
@@ -280,7 +279,7 @@ public:
 
 private:
     validator_type& validator_;
-    std::optional<std::pmr::string> path_;
+    std::optional<std::string> path_;
 };
 
 template <typename rule_type>
@@ -437,8 +436,8 @@ struct model_access final {
     }
 
     template <typename model_type>
-    [[nodiscard]] static model_type empty(std::pmr::memory_resource* resource) {
-        return model_type(empty_model_tag{}, ::ruvia::model_options{.resource_ = resource});
+    [[nodiscard]] static model_type empty() {
+        return model_type(empty_model_tag{});
     }
 };
 

@@ -9,9 +9,9 @@
 #include <utility>
 
 #include "ruvia/http/http_connection_advertisement.h"
-#include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_io_buffer.h"
 
-#include "util/geometric_reserve.h"
+#include "memory/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -141,20 +141,11 @@ nghttp2_ssize http2_connection::read_outbound_data(nghttp2_session*, std::int32_
     return static_cast<nghttp2_ssize>(copied);
 }
 
-http2_connection::http2_connection(std::pmr::memory_resource* resource, http2_role role, bool enable_push,
+http2_connection::http2_connection(http2_role role, bool enable_push,
     bool receive_origin_advertisements, bool receive_frame_metadata,
     http2_frame_observer_type frame_observer, http2_header_observer_type header_observer,
     void* observer_context)
-    : resource_(resource),
-      memory_(resource),
-      memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
-      output_(resource),
-      fields_(resource),
-      streams_(resource),
-      priorities_(resource),
-      events_(resource),
-      owner_resets_(resource),
-      extension_payload_(resource),
+    : memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)),
       role_(role) {
     enable_push_ = role == http2_role::client && enable_push;
     receive_origin_advertisements_ = role == http2_role::client && receive_origin_advertisements;
@@ -364,7 +355,7 @@ void http2_connection::begin_connection() {
 // --- outbound byte buffer (batched writes) ------------------------------------
 
 http2_output_batch_result http2_connection::take_output_batch(std::size_t max_bytes,
-    std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context) {
+    std::string& into, http2_data_output_observer_type observer, void* observer_context) {
     const auto result_value = output_.take_batch(max_bytes, into, observer, observer_context);
     if (result_value.status_ == http2_output_batch_status::taken && !output_.wants_write()) {
         undrained_control_frames_ = 0;
@@ -760,9 +751,9 @@ void http2_connection::process_goaway(const nghttp2_frame& frame) {
 
 void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
     struct payload_guard final {
-        std::pmr::string& payload_;
+        std::string& payload_;
         ~payload_guard() {
-            http_clear_pmr_string_retaining_small(payload_);
+            http_clear_string_retaining_small(payload_);
         }
     } guard{extension_payload_};
     if (role_ != http2_role::client) {
@@ -773,7 +764,7 @@ void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
         if (!receive_origin_advertisements_ || header.stream_id != 0 || (header.flags & 0xf) != 0) {
             return;
         }
-        auto advertisement = decode_http_origin_advertisement(payload, resource_);
+        auto advertisement = decode_http_origin_advertisement(payload);
         if (advertisement.index() == 0) {
             publish_event(http2_event(std::move(std::get<0>(advertisement))));
         }
@@ -789,7 +780,7 @@ void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
             return;
         }
     }
-    auto advertisement = decode_http2_alternative_service(stream_id, payload, resource_);
+    auto advertisement = decode_http2_alternative_service(stream_id, payload);
     if (advertisement.index() == 0) {
         publish_event(http2_event(std::move(std::get<0>(advertisement))));
     }

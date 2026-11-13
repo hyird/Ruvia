@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -18,9 +17,6 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
-#include "ruvia/core/memory/pmr_object.h"
-
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -65,9 +61,9 @@ jwt_verify_options verify_options(std::string_view secret_value) {
     return options;
 }
 
-std::pmr::string sign(const jwt_sign_options& options) {
+std::string sign(const jwt_sign_options& options) {
     const auto token = jwt_sign(options);
-    return std::pmr::string(token.data(), token.size(), ruvia::process_resource());
+    return std::string(token.data(), token.size());
 }
 
 ruvia::jwt_payload verify_jwt(ruvia::borrowed_text token, jwt_verify_options options) {
@@ -80,8 +76,8 @@ ruvia::jwt_payload decode_jwt_unverified(ruvia::borrowed_text token) {
 }
 
 // Standard OpenSSL primitives prepare independent wire input for malformed JWTs.
-std::pmr::string wire_base64url(std::string_view bytes) {
-    std::pmr::string encoded(4 * ((bytes.size() + 2) / 3) + 1, '\0', ruvia::process_resource());
+std::string wire_base64url(std::string_view bytes) {
+    std::string encoded(4 * ((bytes.size() + 2) / 3) + 1, '\0');
     const auto size = EVP_EncodeBlock(reinterpret_cast<unsigned char*>(encoded.data()),
         reinterpret_cast<const unsigned char*>(bytes.data()), static_cast<int>(bytes.size()));
     if (size < 0) {
@@ -101,11 +97,11 @@ std::pmr::string wire_base64url(std::string_view bytes) {
     return encoded;
 }
 
-std::pmr::string signed_token_with_header_and_payload(
+std::string signed_token_with_header_and_payload(
     std::string_view secret_value, std::string_view header_json, std::string_view payload_json) {
     const auto header_value = wire_base64url(header_json);
     const auto payload_value = wire_base64url(payload_json);
-    std::pmr::string signing_input(std::pmr::string(header_value, ruvia::process_resource()) + "." + payload_value, ruvia::process_resource());
+    std::string signing_input(std::string(header_value) + "." + payload_value);
     unsigned char digest[EVP_MAX_MD_SIZE];
     unsigned digest_size{};
     if (HMAC(EVP_sha256(), secret_value.data(), static_cast<int>(secret_value.size()),
@@ -120,7 +116,7 @@ std::pmr::string signed_token_with_header_and_payload(
     return signing_input;
 }
 
-std::pmr::string signed_token_with_payload(std::string_view secret_value, std::string_view payload_json) {
+std::string signed_token_with_payload(std::string_view secret_value, std::string_view payload_json) {
     return signed_token_with_header_and_payload(secret_value, R"({"alg":"HS256","typ":"JWT"})", payload_json);
 }
 
@@ -161,7 +157,7 @@ TEST(Ruvia, jwt_sign_verify_round_trip_preserves_claims) {
     EXPECT_EQ(payload_value.claim("scope").value_or(""), std::string_view("read:all"));
 }
 
-TEST(Ruvia, jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocating) {
+TEST(Ruvia, jwt_payload_is_move_only_and_transfers_storage) {
     static_assert(!std::is_copy_constructible_v<ruvia::jwt_payload>);
     static_assert(!std::is_copy_assignable_v<ruvia::jwt_payload>);
     static_assert(std::is_nothrow_move_constructible_v<ruvia::jwt_payload>);
@@ -171,9 +167,9 @@ TEST(Ruvia, jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocatin
     static_assert(std::is_nothrow_move_constructible_v<ruvia::jwt_claim>);
     static_assert(std::is_move_assignable_v<ruvia::jwt_claim>);
 
-    const std::pmr::string audience(100, 'a', ruvia::process_resource());
-    const std::pmr::string claim_name(90, 'n', ruvia::process_resource());
-    const std::pmr::string claim_value(200, 'v', ruvia::process_resource());
+    const std::string audience(100, 'a');
+    const std::string claim_name(90, 'n');
+    const std::string claim_value(200, 'v');
     const jwt_claim_view claims[] = {
         {.name_ = claim_name, .value_ = claim_value},
     };
@@ -182,25 +178,15 @@ TEST(Ruvia, jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocatin
     options.claims_ = claims;
     options.not_before_delay_ = std::chrono::seconds(0);
     const auto token = sign(options);
-    ruvia::test::counting_memory_resource upstream;
     {
-        ruvia::test::equivalent_tracking_resource resource(upstream);
-        auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &resource});
+        auto input = ruvia::jwt_decode_unverified({.token_ = token});
         EXPECT_TRUE(input.expires_at() != nullptr);
         EXPECT_TRUE(input.issued_at() != nullptr);
         EXPECT_TRUE(input.not_before() != nullptr);
-        const std::pmr::string expires_at(input.expires_at() ? input.expires_at()->text() : "", ruvia::process_resource());
-        const std::pmr::string issued_at(input.issued_at() ? input.issued_at()->text() : "", ruvia::process_resource());
-        const std::pmr::string not_before(input.not_before() ? input.not_before()->text() : "", ruvia::process_resource());
-        const auto attempts = resource.allocation_attempts();
-        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            resource.reject_allocations_after(0);
-        }
+        const std::string expires_at(input.expires_at() ? input.expires_at()->text() : "");
+        const std::string issued_at(input.issued_at() ? input.issued_at()->text() : "");
+        const std::string not_before(input.not_before() ? input.not_before()->text() : "");
         ruvia::jwt_payload moved(std::move(input));
-        resource.allow_allocations();
-        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            EXPECT_EQ(resource.allocation_attempts(), attempts);
-        }
         EXPECT_EQ(moved.issuer(), std::string_view("ruvia"));
         EXPECT_EQ(moved.subject(), std::string_view("user-1"));
         EXPECT_TRUE(moved.has_audience(audience));
@@ -214,32 +200,20 @@ TEST(Ruvia, jwt_payload_is_move_only_and_transfers_pmr_storage_without_allocatin
             EXPECT_EQ(moved.not_before()->text(), not_before);
         }
     }
-    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
-TEST(Ruvia, jwt_payload_move_transfers_long_numeric_dates_without_allocating) {
+TEST(Ruvia, jwt_payload_move_transfers_long_numeric_dates) {
     const auto token = signed_token_with_payload(secret,
         R"({"exp":1.234567890123456789e999999999999999999999999,"nbf":-9.876543210987654321e999999999999999999999999,"iat":1e-999999999999999999999999})");
-    ruvia::test::counting_memory_resource upstream;
     {
-        ruvia::test::equivalent_tracking_resource resource(upstream);
-        auto input = ruvia::jwt_decode_unverified({.token_ = token, .resource_ = &resource});
+        auto input = ruvia::jwt_decode_unverified({.token_ = token});
         EXPECT_TRUE(input.expires_at() != nullptr);
         EXPECT_TRUE(input.not_before() != nullptr);
         EXPECT_TRUE(input.issued_at() != nullptr);
-        const std::pmr::string expires_at(input.expires_at() ? input.expires_at()->text() : "", ruvia::process_resource());
-        const std::pmr::string not_before(input.not_before() ? input.not_before()->text() : "", ruvia::process_resource());
-        const std::pmr::string issued_at(input.issued_at() ? input.issued_at()->text() : "", ruvia::process_resource());
-        const auto attempts = resource.allocation_attempts();
-        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            resource.reject_allocations_after(0);
-        }
+        const std::string expires_at(input.expires_at() ? input.expires_at()->text() : "");
+        const std::string not_before(input.not_before() ? input.not_before()->text() : "");
+        const std::string issued_at(input.issued_at() ? input.issued_at()->text() : "");
         ruvia::jwt_payload moved(std::move(input));
-        resource.allow_allocations();
-        if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-            EXPECT_EQ(resource.allocation_attempts(), attempts);
-        }
         EXPECT_TRUE(moved.expires_at() != nullptr);
         EXPECT_TRUE(moved.not_before() != nullptr);
         EXPECT_TRUE(moved.issued_at() != nullptr);
@@ -249,8 +223,6 @@ TEST(Ruvia, jwt_payload_move_transfers_long_numeric_dates_without_allocating) {
             EXPECT_EQ(moved.issued_at()->text(), issued_at);
         }
     }
-    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
 }
 
 TEST(Ruvia, jwt_sign_rejects_duplicate_custom_claim_names) {
@@ -308,7 +280,7 @@ TEST(Ruvia, jwt_hmac_enforces_algorithm_key_lengths_for_signing_and_verification
     };
     for (const auto& test : cases) {
         // Include NUL bytes: this is a raw key, not a C string or encoded text.
-        std::pmr::string key(257, '\0', ruvia::process_resource());
+        std::string key(257, '\0');
         key.back() = 'k';
         for (const auto size : {test.minimum_bytes_, test.minimum_bytes_ + 1, key.size()}) {
             const std::string_view valid_key(key.data(), size);
@@ -423,17 +395,17 @@ TEST(Ruvia, jwt_verify_requires_unique_complete_json_objects) {
 // exposed, while JSON syntax and claim-name uniqueness are still enforced.
 TEST(Ruvia, jwt_ignores_non_string_custom_claims) {
     const auto nested = [](std::size_t levels) {
-        std::pmr::string payload(R"({"sub":"user-1","exp":4102444800,"deep":)", ruvia::process_resource());
+        std::string payload(R"({"sub":"user-1","exp":4102444800,"deep":)");
         payload.append(levels, '[');
         payload.append(levels, ']');
         payload.push_back('}');
         return payload;
     };
-    for (const auto& payload : {std::pmr::string(R"({"sub":"u","exp":4102444800,"admin":true})", ruvia::process_resource()),
-             std::pmr::string(R"({"sub":"u","exp":4102444800,"scope":5})", ruvia::process_resource()),
-             std::pmr::string(R"({"sub":"u","exp":4102444800,"roles":["a"]})", ruvia::process_resource()),
-             std::pmr::string(R"({"sub":"u","exp":4102444800,"cnf":{"jkt":"x"}})", ruvia::process_resource()),
-             std::pmr::string(R"({"sub":"u","exp":4102444800,"nick":null})", ruvia::process_resource())}) {
+    for (const auto& payload : {std::string(R"({"sub":"u","exp":4102444800,"admin":true})"),
+             std::string(R"({"sub":"u","exp":4102444800,"scope":5})"),
+             std::string(R"({"sub":"u","exp":4102444800,"roles":["a"]})"),
+             std::string(R"({"sub":"u","exp":4102444800,"cnf":{"jkt":"x"}})"),
+             std::string(R"({"sub":"u","exp":4102444800,"nick":null})")}) {
         const auto token = signed_token_with_payload(secret, payload);
         const auto verified = verify_jwt(token, verify_options(secret));
         EXPECT_TRUE(verified.claims().empty());
@@ -449,8 +421,8 @@ TEST(Ruvia, jwt_ignores_non_string_custom_claims) {
 
     // Syntax and uniqueness still apply to ignored values; nesting beyond the
     // JSON depth limit stays a parse failure.
-    for (const auto& payload : {std::pmr::string(R"({"sub":"u","exp":4102444800,"x":[1,]})", ruvia::process_resource()),
-             std::pmr::string(R"({"sub":"u","exp":4102444800,"x":true,"x":"y"})", ruvia::process_resource()), nested(65)}) {
+    for (const auto& payload : {std::string(R"({"sub":"u","exp":4102444800,"x":[1,]})"),
+             std::string(R"({"sub":"u","exp":4102444800,"x":true,"x":"y"})"), nested(65)}) {
         const auto token = signed_token_with_payload(secret, payload);
         EXPECT_TRUE(throws_jwt_error(
             [&] { (void)verify_jwt(token, verify_options(secret)); },
@@ -758,12 +730,12 @@ TEST(Ruvia, jwt_large_leeway_does_not_collapse_out_of_range_dates_to_host_limits
     options.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
     options.leeway_ = std::chrono::seconds{2000000000000LL};
     for (const auto* date : {"999999999999999", "1e999999999999999999999999999999"}) {
-        const auto token = signed_token_with_payload(secret, std::pmr::string(R"({"nbf":)", ruvia::process_resource()) + date + "}");
+        const auto token = signed_token_with_payload(secret, std::string(R"({"nbf":)") + date + "}");
         EXPECT_TRUE(throws_jwt_error(
             [&] { (void)verify_jwt(token, options); }, jwt_error::code_type::not_yet_valid));
     }
     for (const auto* date : {"-999999999999999", "-1e999999999999999999999999999999"}) {
-        const auto token = signed_token_with_payload(secret, std::pmr::string(R"({"exp":)", ruvia::process_resource()) + date + "}");
+        const auto token = signed_token_with_payload(secret, std::string(R"({"exp":)") + date + "}");
         EXPECT_TRUE(throws_jwt_error(
             [&] { (void)verify_jwt(token, options); }, jwt_error::code_type::expired));
     }
@@ -806,7 +778,7 @@ TEST(Ruvia, jwt_numeric_dates_own_exact_json_text_and_convert_only_exact_values)
     for (const auto& test : cases) {
         const auto payload_value = [&] {
             const auto token = signed_token_with_payload(secret,
-                std::pmr::string(R"({"iat":)", ruvia::process_resource()) + std::pmr::string(test.text_, ruvia::process_resource()) + "}");
+                std::string(R"({"iat":)") + std::string(test.text_) + "}");
             auto options = verify_options(secret);
             options.expiration_claim_ = jwt_expiration_claim_policy::allow_missing;
             auto wrong_key = options;
@@ -846,11 +818,11 @@ TEST(Ruvia, jwt_numeric_dates_own_exact_json_text_and_convert_only_exact_values)
     }
     // Decimal exponent and mantissa displacement cancel before range checks.
     // Each spelling is exactly one second despite hundreds of input digits.
-    for (const auto& magnitude : {"1" + std::pmr::string(300, '0', ruvia::process_resource()) + "e-300",
-             "0." + std::pmr::string(300, '0', ruvia::process_resource()) + "1e301"}) {
+    for (const auto& magnitude : {"1" + std::string(300, '0') + "e-300",
+             "0." + std::string(300, '0') + "1e301"}) {
         for (const bool negative : {false, true}) {
-            const auto date = std::pmr::string((negative ? "-" : ""), ruvia::process_resource()) + magnitude;
-            const auto token = signed_token_with_payload(secret, std::pmr::string(R"({"iat":)", ruvia::process_resource()) + date + "}");
+            const auto date = std::string((negative ? "-" : "")) + magnitude;
+            const auto token = signed_token_with_payload(secret, std::string(R"({"iat":)") + date + "}");
             const auto payload_value = decode_jwt_unverified(token);
             EXPECT_TRUE(payload_value.issued_at() != nullptr);
             if (payload_value.issued_at()) {
@@ -867,11 +839,11 @@ TEST(Ruvia, jwt_numeric_dates_own_exact_json_text_and_convert_only_exact_values)
 TEST(Ruvia, jwt_numeric_date_conversion_preserves_host_endpoints_and_rejects_subticks) {
     using clock_type = std::chrono::system_clock;
     const auto places = host_tick_decimal_places();
-    const auto exponent = "e-" + std::pmr::string(std::to_string(places), ruvia::process_resource());
+    const auto exponent = "e-" + std::string(std::to_string(places));
     for (const auto expected : {clock_type::time_point::min(), clock_type::time_point::max(),
              clock_type::time_point(clock_type::duration(-1)), clock_type::time_point(clock_type::duration(1))}) {
-        const auto date = std::pmr::string(std::to_string(expected.time_since_epoch().count()), ruvia::process_resource()) + exponent;
-        const auto token = signed_token_with_payload(secret, std::pmr::string(R"({"iat":)", ruvia::process_resource()) + date + "}");
+        const auto date = std::string(std::to_string(expected.time_since_epoch().count())) + exponent;
+        const auto token = signed_token_with_payload(secret, std::string(R"({"iat":)") + date + "}");
         const auto payload_value = decode_jwt_unverified(token);
         EXPECT_TRUE(payload_value.issued_at() != nullptr);
         if (payload_value.issued_at()) {
@@ -885,10 +857,10 @@ TEST(Ruvia, jwt_numeric_date_conversion_preserves_host_endpoints_and_rejects_sub
     }
     const auto max_ticks = static_cast<std::uint64_t>(clock_type::time_point::max().time_since_epoch().count());
     const auto min_magnitude = std::uint64_t{0} - static_cast<std::uint64_t>(clock_type::time_point::min().time_since_epoch().count());
-    for (const auto& date : {std::pmr::string(std::to_string(max_ticks + 1), ruvia::process_resource()) + exponent,
-             "-" + std::pmr::string(std::to_string(min_magnitude + 1), ruvia::process_resource()) + exponent,
-             "1e-" + std::pmr::string(std::to_string(places + 1), ruvia::process_resource()), "-1e-" + std::pmr::string(std::to_string(places + 1), ruvia::process_resource())}) {
-        const auto token = signed_token_with_payload(secret, std::pmr::string(R"({"iat":)", ruvia::process_resource()) + date + "}");
+    for (const auto& date : {std::string(std::to_string(max_ticks + 1)) + exponent,
+             "-" + std::string(std::to_string(min_magnitude + 1)) + exponent,
+             "1e-" + std::string(std::to_string(places + 1)), "-1e-" + std::string(std::to_string(places + 1))}) {
+        const auto token = signed_token_with_payload(secret, std::string(R"({"iat":)") + date + "}");
         const auto payload_value = decode_jwt_unverified(token);
         EXPECT_TRUE(payload_value.issued_at() != nullptr);
         if (payload_value.issued_at()) {
@@ -960,7 +932,7 @@ TEST(Ruvia, jwt_verify_rejects_expired_token) {
     const auto now_seconds = std::chrono::duration_cast<std::chrono::seconds>(
         std::chrono::system_clock::now().time_since_epoch())
                                  .count();
-    const std::pmr::string recent_payload(R"({"sub":"user-1","exp":)" + std::pmr::string(std::to_string(now_seconds - 10), ruvia::process_resource()) + "}", ruvia::process_resource());
+    const std::string recent_payload(R"({"sub":"user-1","exp":)" + std::string(std::to_string(now_seconds - 10)) + "}");
     const auto recently_expired = signed_token_with_payload(secret, recent_payload);
     EXPECT_TRUE(throws_jwt_error(
         [&] { (void)verify_jwt(recently_expired, verify_options(secret)); },
@@ -980,7 +952,7 @@ TEST(Ruvia, jwt_decode_unverified_reads_claims_without_authenticating) {
     const auto decoded = decode_jwt_unverified(token);
     EXPECT_EQ(decoded.subject(), std::string_view("user-1"));
 
-    std::pmr::string forged(std::pmr::string(std::string_view(token).substr(0, token.rfind('.') + 1), ruvia::process_resource()) + "corruptedsignature", ruvia::process_resource());
+    std::string forged(std::string(std::string_view(token).substr(0, token.rfind('.') + 1)) + "corruptedsignature");
     const auto decoded_forged = decode_jwt_unverified(forged);
     EXPECT_EQ(decoded_forged.subject(), std::string_view("user-1"));
     EXPECT_TRUE(throws_jwt_error(
@@ -990,11 +962,11 @@ TEST(Ruvia, jwt_decode_unverified_reads_claims_without_authenticating) {
 
 TEST(Ruvia, jwt_decode_unverified_validates_jose_header) {
     const auto payload = wire_base64url(R"({"sub":"user-1","exp":4102444800})");
-    const auto check_header = [&](std::pmr::string token, jwt_error::code_type expected) {
+    const auto check_header = [&](std::string token, jwt_error::code_type expected) {
         EXPECT_TRUE(throws_jwt_error([&] { (void)decode_jwt_unverified(token); }, expected));
     };
-    check_header(std::pmr::string(".", ruvia::process_resource()) + payload + ".sig", jwt_error::code_type::invalid_header);
-    check_header(std::pmr::string("!!!.", ruvia::process_resource()) + payload + ".sig", jwt_error::code_type::malformed_token);
+    check_header(std::string(".") + payload + ".sig", jwt_error::code_type::invalid_header);
+    check_header(std::string("!!!.") + payload + ".sig", jwt_error::code_type::malformed_token);
     check_header(wire_base64url("not-json") + "." + payload + ".sig", jwt_error::code_type::invalid_header);
     check_header(wire_base64url(R"({"alg":"HS256","alg":"HS512"})") + "." + payload + ".sig",
         jwt_error::code_type::invalid_header);
@@ -1030,7 +1002,7 @@ TEST(Ruvia, jwt_verify_rejects_none_algorithm_downgrade) {
     const auto payload_value = wire_base64url(R"({"sub":"admin"})");
 
     // "<header>.<payload>." -- an empty third section, as an alg:none token has.
-    std::pmr::string forged{ruvia::process_resource()};
+    std::string forged{};
     forged.append(header_value.data(), header_value.size());
     forged.push_back('.');
     forged.append(payload_value.data(), payload_value.size());
@@ -1043,7 +1015,7 @@ TEST(Ruvia, jwt_verify_rejects_none_algorithm_downgrade) {
 
     // The same forgery with attacker-supplied junk in the signature slot is also
     // rejected: no chosen string equals HMAC(secret, signing_input).
-    const std::pmr::string forged_junk(std::pmr::string(forged, ruvia::process_resource()) + "AAAA", ruvia::process_resource());
+    const std::string forged_junk(std::string(forged) + "AAAA");
     EXPECT_TRUE(throws_jwt_error(
         [&] { (void)verify_jwt(forged_junk, verify); }, jwt_error::code_type::signature_mismatch));
 }

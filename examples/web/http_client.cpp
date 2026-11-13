@@ -12,14 +12,12 @@
 #include <chrono>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
@@ -136,7 +134,7 @@ int main() {
         const example::environment env(&app.env());
         const bool tls = env.get<bool>("RUVIA_UPSTREAM_TLS").value_or(false);
         const std::string_view host = env.get("RUVIA_UPSTREAM_HOST").value_or("localhost");
-        std::pmr::string base_url(tls ? "https://" : "http://", ruvia::process_resource());
+        std::string base_url(tls ? "https://" : "http://");
         const bool ipv6 = host.find(':') != std::string_view::npos;
         if (ipv6) {
             base_url.push_back('[');

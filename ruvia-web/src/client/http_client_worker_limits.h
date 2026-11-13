@@ -3,10 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/http_client_types.h"
 
 #include "client/http_client_result_budget.h"
@@ -46,7 +44,7 @@ private:
     std::size_t max_dns_refreshes_;
     std::size_t dns_refreshes_{0};
     std::uint64_t idle_clock_{0};
-    std::pmr::vector<http_client_pool*> pools_{process_resource()};
+    std::vector<http_client_pool*> pools_{};
 };
 
 // The per-worker state every pool of one owner shares.

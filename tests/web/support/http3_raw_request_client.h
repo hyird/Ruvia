@@ -10,9 +10,9 @@
 #include <filesystem>
 #include <initializer_list>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -21,8 +21,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "http3_test_client.h"
 
@@ -465,7 +463,7 @@ private:
     ngtcp2_conn* connection_{nullptr};
     nghttp3_conn* http3_{nullptr};
     std::array<std::byte, max_udp_payload_bytes> output_{};
-    std::pmr::vector<std::byte> input_ = std::pmr::vector<std::byte>(64 * 1024, ruvia::process_resource());
+    std::vector<std::byte> input_ = std::vector<std::byte>(64 * 1024);
     http3_test_response response_;
     std::int64_t stream_id_{-1};
     bool handshake_completed_{false};

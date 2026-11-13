@@ -107,8 +107,8 @@ http1_request_connection_plan http1_server_request_parse_state::take_connection_
     return std::exchange(connection_plan_, http1_request_connection_plan::http11_close());
 }
 
-void http1_server_request_parse_state::parse_head(std::string_view buffer,
-    std::size_t header_search_offset, std::pmr::memory_resource* resource) {
+void http1_server_request_parse_state::parse_head(
+    std::string_view buffer, std::size_t header_search_offset) {
     // Bytes before header_search_offset were classified by an earlier call on
     // this state; an earlier search offset discards that progress.
     auto scan = need_request_head() != nullptr ? *need_request_head()
@@ -158,7 +158,7 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         return;
     }
 
-    parsed_request_header_block block(resource);
+    parsed_request_header_block block;
     if (const auto error = parse_http_header_block(buffer, scan.leading_bytes_, header_bytes, block)) {
         return fail(*error);
     }
@@ -236,7 +236,6 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
         return fail(http_parse_error::unsupported_transfer_encoding);
     }
 
-    http_request_access::set_resource(request_, resource);
     const auto headers = block.headers_.view();
     http_request_access::reserve_headers(request_, headers.size());
     for (std::size_t i = 0; i < headers.size(); ++i) {
@@ -271,14 +270,13 @@ void http1_server_request_parse_state::parse_head(std::string_view buffer,
 
 http_request make_parsed_http_request(
     borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
-    borrowed_span<std::byte> body, std::pmr::memory_resource* resource) {
+    borrowed_span<std::byte> body) {
     const auto method_view = method.view();
     const auto target_text = target.view();
     if (!is_valid_http_method_token(method_view)) {
         throw http_parse_protocol_error(http_parse_error::invalid_request_line);
     }
     auto request = http_request_access::make();
-    http_request_access::set_resource(request, resource);
     http_request_access::set_method(request, method_view);
     http_request_access::set_target(request, target_text);
 

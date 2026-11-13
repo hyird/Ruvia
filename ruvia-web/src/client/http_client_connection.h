@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -18,7 +17,7 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/core/worker_timer.h"
 #ifdef RUVIA_ENABLE_HTTP2
@@ -78,8 +77,8 @@ public:
     // `ping_interval` bounds silence: no received frame for one interval sends
     // a PING, and another silent interval fails the session with timeout.
     http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
-        const worker_handle& worker_value, std::optional<timeout_duration> ping_interval);
-    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_handle&&,
+        const worker_ref& worker_value, std::optional<timeout_duration> ping_interval);
+    http2_client_session(http_client_connection&, client_tcp_transport&, task_scope&, worker_ref&&,
         std::optional<timeout_duration>) = delete;
 
     http2_client_session(const http2_client_session&) = delete;
@@ -266,7 +265,7 @@ private:
     // which may trail its deadline.
     void check_liveness(std::uint64_t generation) noexcept;
 
-    void take_output_batch(std::pmr::string& output);
+    void take_output_batch(std::string& output);
 
     [[nodiscard]] bool feed(std::string_view bytes_value);
 
@@ -293,11 +292,11 @@ private:
     http_client_connection& handler_;
     client_tcp_transport& transport_;
     task_scope& tasks_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     std::optional<timeout_duration> ping_interval_;
     std::optional<::ruvia::http2_connection> connection_;
     http_io_buffer read_buffer_;
-    std::pmr::string write_buffer_;
+    std::string write_buffer_;
     worker_signal write_signal_;
     worker_signal state_signal_;
     worker_signal capacity_signal_;
@@ -339,10 +338,10 @@ public:
     // One registered HTTP/2 request or push stream; a stack or driver record
     // that unregisters before its response state can be released.
     struct http2_stream final {
-        http2_stream(const worker_handle& worker_value, http_client_response_state& state_value)
+        http2_stream(const worker_ref& worker_value, http_client_response_state& state_value)
             : signal_(worker_value),
               state_(&state_value) {}
-        http2_stream(worker_handle&&, http_client_response_state&) = delete;
+        http2_stream(worker_ref&&, http_client_response_state&) = delete;
 
         worker_signal signal_;
         http_client_response_state* state_;
@@ -495,8 +494,8 @@ public:
 
 private:
     // The route's transport names; transport_ borrows them, so they precede it.
-    std::pmr::string dial_host_;
-    std::pmr::string server_name_;
+    std::string dial_host_;
+    std::string server_name_;
 
 public:
     client_tcp_transport transport_;
@@ -575,7 +574,7 @@ private:
     std::uint64_t connection_id_{};
     ip_address peer_ip_{};
 #ifdef RUVIA_ENABLE_HTTP2
-    std::pmr::vector<http2_stream*> http2_streams_;
+    std::vector<http2_stream*> http2_streams_;
     http2_stream* last_http2_stream_{nullptr};
     std::uint64_t next_http2_request_id_{0};
     // Request heads accepted by the current HTTP/2 generation: a later

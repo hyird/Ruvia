@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -18,7 +17,6 @@
 #include <asio.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
@@ -29,7 +27,6 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_head_buffer.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_response_stream.h"
@@ -39,6 +36,7 @@
 #include "body/http_stream_body_reader.h"
 #include "context/context_access.h"
 #include "context/http_interim_response_output.h"
+#include "integration/operation_interrupt.h"
 #include "router/route_table.h"
 #include "server/connection_scanner.h"
 #include "server/http1_route_dispatch.h"
@@ -52,7 +50,6 @@
 #include "server/http_streaming_response_compression.h"
 #include "server/inbound_transport_error.h"
 #include "server/worker_codecs.h"
-#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -67,15 +64,14 @@ class http1_peer_eof_monitor final {
 public:
     // `request_stop` is the request's own source; it outlives the monitor.
     // `request_pipelined`: the request itself arrived behind another one.
-    http1_peer_eof_monitor(stream_type& stream, const worker_handle& worker, std::pmr::memory_resource* resource,
+    http1_peer_eof_monitor(stream_type& stream, const worker_ref& worker,
         stop_source& request_stop, bool request_pipelined, std::size_t existing_pipeline_bytes)
         : stream_(stream),
           request_stop_(request_stop),
-          tasks_(worker, {.resource_ = resource}),
-          input_(std::pmr::polymorphic_allocator<char>(resource)),
+          tasks_(worker),
           allowance_(max_http_header_bytes - std::min(max_http_header_bytes, existing_pipeline_bytes)),
           pipelined_(request_pipelined || existing_pipeline_bytes != 0) {}
-    http1_peer_eof_monitor(stream_type&, worker_handle&&, std::pmr::memory_resource*,
+    http1_peer_eof_monitor(stream_type&, worker_ref&&,
         stop_source&, bool, std::size_t) = delete;
     void start() {
         tasks_.spawn(read_peer());
@@ -225,14 +221,14 @@ public:
     // `request_pipelined` tells whether the request arrived behind another.
     response_stream_sink(stream_type& stream, worker_codecs& codecs,
         http_response_head_buffer& head, connection_scanner::entry& scanner_entry,
-        const worker_handle& worker_value, const http_request& request, const http_cors_policy* cors,
+        const worker_ref& worker_value, const http_request& request, const http_cors_policy* cors,
         http1_response_stream_plan plan, http1_response_stream_plan consumed_plan,
         lazy_buffered_body<stream_type>& request_body, http_response_coding_selection response_coding,
         const compression_config* compression,
-        std::pmr::memory_resource& inbound_resource, stop_source& request_stop, bool request_pipelined) noexcept
+        stop_source& request_stop, bool request_pipelined) noexcept
         : stream_(stream),
           head_(head),
-          trailers_(process_resource()),
+          trailers_(),
           scanner_entry_(scanner_entry),
           worker_(worker_value),
           request_(request),
@@ -241,18 +237,17 @@ public:
           consumed_plan_(consumed_plan),
           request_body_(request_body),
           connection_plan_(plan.request_connection_plan().require_close()),
-          compression_(process_resource(), codecs, response_coding, compression),
-          inbound_resource_(&inbound_resource),
+          compression_(codecs, response_coding, compression),
           request_stop_(request_stop),
           request_pipelined_(request_pipelined) {
         request_body_.reader().observe_completion(this, &arm_peer_monitor_on_body_completion);
     }
 
     response_stream_sink(stream_type&, worker_codecs&, http_response_head_buffer&,
-        connection_scanner::entry&, worker_handle&&, const http_request&, const http_cors_policy*,
+        connection_scanner::entry&, worker_ref&&, const http_request&, const http_cors_policy*,
         http1_response_stream_plan, http1_response_stream_plan,
         lazy_buffered_body<stream_type>&, http_response_coding_selection,
-        const compression_config*, std::pmr::memory_resource&, stop_source&, bool) = delete;
+        const compression_config*, stop_source&, bool) = delete;
 
     response_stream_sink(const response_stream_sink&) = delete;
     response_stream_sink& operator=(const response_stream_sink&) = delete;
@@ -290,7 +285,7 @@ public:
             return;
         }
         peer_monitor_.emplace(
-            stream_, worker_, inbound_resource_, request_stop_, request_pipelined_, request_body_.pipeline_size());
+            stream_, worker_, request_stop_, request_pipelined_, request_body_.pipeline_size());
         try {
             peer_monitor_->start();
         } catch (...) {
@@ -543,7 +538,7 @@ private:
 
         const auto trailer_section = validate_http_response_trailers(trailers);
         const auto trailer_intent = response_trailer_intent(trailer_section);
-        http_clear_pmr_string_retaining_small(trailers_);
+        http_clear_string_retaining_small(trailers_);
         if (!trailer_section.empty()) {
             append_http1_response_trailers(trailers_, trailer_section);
         }
@@ -590,11 +585,11 @@ private:
 
     stream_type& stream_;
     http_response_head_buffer& head_;
-    std::pmr::string trailers_;
+    std::string trailers_;
     connection_scanner::entry& scanner_entry_;
     // The connection/server owns an address-stable handle for the complete
     // route dispatch. Streaming must not acquire shared ownership per request.
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     const http_request& request_;
     const http_cors_policy* cors_;
     http1_response_stream_plan plan_;
@@ -603,7 +598,6 @@ private:
     http1_request_connection_plan connection_plan_;
     http_streaming_response_compression compression_;
     response_stream_state state_;
-    std::pmr::memory_resource* inbound_resource_;
     stop_source& request_stop_;
     bool request_pipelined_;
     std::optional<http1_peer_eof_monitor<stream_type>> peer_monitor_;
@@ -618,14 +612,14 @@ template <typename stream_type>
 task<http1_session_request_completion> dispatch_http_response_stream_route(http1_route_dispatch<stream_type> d,
     http_response_head_buffer& response_head, const http1_server_request_head_ready& request_head,
     const resolved_route& resolved, std::string_view request_bytes, protocol_byte_limit body_limit_value,
-    std::pmr::string& pipeline_stash) {
+    std::string& pipeline_stash) {
     const auto body_and_pipeline = http_body_and_pipeline(request_head, request_bytes);
     http_lazy_buffered_body_route_state<stream_type> body_state;
     const auto body_setup_failure =
         try_prepare_http_lazy_buffered_body_route(body_state, d, body_limit_value, body_and_pipeline);
     if (body_setup_failure != nullptr) {
         co_return co_await complete_failed_http_route(d.scanner_entry_, body_setup_failure, d.parsed_,
-            d.routes_, d.request_memory_, d.base_route_services_, d.response_);
+            d.routes_, d.base_route_services_, d.response_);
     }
     const auto close_policy = d.request_sequence_.next_response_close_policy();
     // A body that arrived in full with the head does not cost the stream its
@@ -658,7 +652,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         stream_plan,
         http1_plan_response_stream(d.parsed_, close_policy, http1_request_body_consumption::complete),
         body_state.body(), d.response_coding_, d.options_.compression_ ? &*d.options_.compression_ : nullptr,
-        d.inbound_buffer_pool_, peer_stop, d.request_pipelined_);
+        peer_stop, d.request_pipelined_);
 
     // The handler stays in the session's idle deadman phase; the sink times
     // its own writes.
@@ -672,7 +666,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         }
         response_sink.arm_peer_monitor();
         dispatched.emplace(co_await dispatch_response_stream_with(response_sink, d.routes_, d.parsed_.request(),
-            resolved, d.request_memory_, d.base_route_services_,
+            resolved, d.base_route_services_,
             [&response_sink] { return response_sink.peer_aborted(); }));
     } catch (...) {
         escaped_failure = std::current_exception();
@@ -743,7 +737,7 @@ task<http1_session_request_completion> dispatch_http_response_stream_route(http1
         d.scanner_entry_.touch();
         co_return complete_successful_http_body_route(d.scanner_entry_, d.response_, d.parsed_.connection_plan(),
             d.request_sequence_, body_reader_value.consumption(), request_bytes.size(), pipeline_stash,
-            [&body_reader_value, &response_sink](std::pmr::string& stash) {
+            [&body_reader_value, &response_sink](std::string& stash) {
                 return body_reader_value.take_pipeline(stash, response_sink.monitored_pipeline());
             });
     }

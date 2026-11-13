@@ -66,7 +66,7 @@ ruvia::task<ruvia::http_response> upload_stream(ruvia::context& c) {
 | `task<stream_commit_result> commit(operation_options operation = {}) &` | 显式提交头和 session；返回 `body` 才可生产正文，返回 `completed` 必须停止生产（HEAD、304 等正常无正文完成） |
 | `task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &` | 在正文阶段写入字节块（HTTP/1.1 chunked，HTTP/2 DATA）；要求显式提交，提交前或完成后写入抛 `std::logic_error` |
 | `task<void> write(std::string_view chunk, operation_options operation = {}) &` | 写入一段字符串视图 |
-| `task<void> write(std::pmr::string&& chunk, operation_options operation = {}) &` | 移动写入 PMR 字符串（同内存资源下零拷贝接管） |
+| `task<void> write(std::string&& chunk, operation_options operation = {}) &` | 移动写入 `std::string`（零拷贝接管） |
 | `task<void> writeln(std::string_view chunk, operation_options operation = {}) &` | 写入文本并追加 `\n` |
 | `task<timer_sleep_result> sleep(timeout_duration duration, stop_token stop = {}) &` | 仅在正文阶段等待；`c.stop_token()` 或 `stop` 取消（含客户端断开）及停机返回 `stop_requested`，正常超时返回 `elapsed`；提交前/完成后调用抛 `std::logic_error`。HTTP/2 流终止抛传输异常。与 `sleep_for` 相同，时长是睡眠目标而非操作时限，故只接受停止令牌 |
 | `bool aborted() const noexcept` | 只报告已观察到的真实失败/中止（写失败、客户端断开），正常完成（含 HEAD、304）为 `false` |
@@ -131,7 +131,6 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 最小接入：把 `c.stop_token()` 传给订阅的异步接收。下面以公开的 `channel_receiver` 表示订阅接收端：
 
 ```cpp
-#include <memory_resource>
 #include <string>
 #include "ruvia/core/channel.h"
 #include "ruvia/web/context.h"
@@ -139,7 +138,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ruvia::task<void> stream_subscription(
     ruvia::context& c,
-    ruvia::channel_receiver<std::pmr::string>& subscription,
+    ruvia::channel_receiver<std::string>& subscription,
     std::string_view initial_snapshot) {
     auto sse = c.stream_sse();
     if (co_await sse.commit() == ruvia::stream_commit_result::completed) {
@@ -244,10 +243,10 @@ private:
 | 方法签名 | 说明 |
 | --- | --- |
 | `task<std::optional<websocket_message>> read(operation_options operation = {}) &` | 读取下一条完整 WebSocket 数据消息（底层自动处理分片重组与 Ping/Pong 心跳）；会话结束（对端或本端关闭握手完成、EOF、拒收帧、`abort()`、心跳或关闭超时）时返回 `std::nullopt`，原因由 `termination()` 区分 |
-| `task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送 UTF-8 文本消息（另有 `std::pmr::string&&` 重载） |
-| `task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送二进制消息（另有 `std::span<const std::byte>` 与 `std::pmr::string&&` 重载） |
+| `task<void> text(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送 UTF-8 文本消息（另有 `std::string&&` 重载） |
+| `task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &` | 发送二进制消息（另有 `std::span<const std::byte>` 与 `std::string&&` 重载） |
 | `task<void> send(websocket_message&& message, websocket_send_options options = {}, operation_options operation = {}) &` | 零拷贝发送 `read()` 返回的 `websocket_message`（发送完成前占用读通道） |
-| `task<void> ping(std::string_view payload = {}, operation_options operation = {}) &` / `pong(…)` | 发送显式 `Ping` 或 `Pong` 控制帧（另有 `std::pmr::string&&` 重载） |
+| `task<void> ping(std::string_view payload = {}, operation_options operation = {}) &` / `pong(…)` | 发送显式 `Ping` 或 `Pong` 控制帧（另有 `std::string&&` 重载） |
 | `task<void> close(websocket_close_options options = {}, operation_options operation = {}) &` | 发起或完成关闭握手，只占写通道（默认 `code_ = websocket_close_status::normal_closure`） |
 | `void abort() & noexcept` | 立即中止底层传输而不执行关闭握手 |
 | `websocket_message_writer begin_text(websocket_send_options options = {}) &` / `begin_binary(…)` | 开始一条分片发送的数据消息，见下文“分片发送” |
@@ -296,7 +295,7 @@ private:
 - `payload()`（返回 `std::string_view`，在下一次 `read()` 启动前有效）
 - `text()` / `binary()`（返回 `bool`）
 
-`websocket_message::borrow(opcode, borrowed_text payload)` 用于调用方自有存储的零拷贝消息；字符串字面量、`std::string_view` 和具名 `std::string` / `std::pmr::string` 可直接传入，拥有型字符串右值（包括 `const` 右值）被编译器拒绝。需要发送临时字符串时使用 `text()` / `binary()` 的拥有化入口，不要预先转成 `string_view` 绕过生命周期检查。`borrow()` 不延长存储寿命；消息视图及 `send()` 操作完成前必须保持 owner 和字节有效。
+`websocket_message::borrow(opcode, borrowed_text payload)` 用于调用方自有存储的零拷贝消息；字符串字面量、`std::string_view` 和具名 `std::string` 可直接传入，拥有型字符串右值（包括 `const` 右值）被编译器拒绝。需要发送临时字符串时使用 `text()` / `binary()` 的拥有化入口，不要预先转成 `string_view` 绕过生命周期检查。`borrow()` 不延长存储寿命；消息视图及 `send()` 操作完成前必须保持 owner 和字节有效。
 
 ---
 
@@ -458,7 +457,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 - **放弃上传**：`exchange.body().abandon()` 只停止发送，请求内容保持不完整，`response()` 照常可读。HTTP/1 读完响应后关闭连接；HTTP/2 在完整响应后以 `RST_STREAM(NO_ERROR)` 只结束发送侧，HTTP/3 以 `RESET_STREAM(H3_NO_ERROR)` 只重置发送半流（RFC 9113 §8.1、RFC 9114 §4.1）。
 - **可写查询**：`exchange.body().writable()` 在内容已结束、已开始 `end()`、已 `abandon()`，或交换自身停止上传（提前收到完成交换的最终响应、或失败）后返回 `false`；据此停止泵送正文，不必以 `write()` 抛出的 `std::errc::operation_canceled` 区分原因。
 
-句柄与响应操作留在所属 worker；请求中的句柄受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样只返回句柄（取句柄规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_handle)）；句柄的 `with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
+引用对象与响应操作留在所属 worker；请求中的 `http_client_ref` 受请求作用域约束，不能跨请求保存。拥有者的 `client()` / `client(alias)` 与 `c.client()` 一样返回 `http_client_ref`（规则见 [数据手册 1.2](data-and-auth.md#12-直接查询编译期-sql-校验与流式游标db_session)）；`with_options(operation_options)` 可附加用户取消与更紧的截止时间，但不能替换请求宿主的取消。独立拥有者结束前须 `co_await owner.shutdown()`，并在事件循环退役前收束所有已启动任务。
 
 ### 5.2 源站、转发与连接控制
 

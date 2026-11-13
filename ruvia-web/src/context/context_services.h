@@ -4,8 +4,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory_resource>
 #include <optional>
+#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,17 +13,18 @@
 #include <variant>
 
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_client_ip.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/http_priority.h"
+#include "ruvia/http/http_push.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/request_stream.h"
+#include "ruvia/web/streaming.h"
 
 #include "context/context_capabilities.h"
-#include "http/streaming_access.h"
 #include "integration/request_io_metrics.h"
 #include "integration/worker_client_registry_view.h"
 #include "server/connection_lifecycle.h"
@@ -39,16 +40,51 @@ namespace ruvia::detail {
 
 class rate_limiter;
 class http_interim_response_output;
-class http_connection_advertisement_output;
-class http_push_output;
+class inbound_buffer_account;
 class route_table;
 struct connection_failure_sink;
 class tls_served_certificate;
 class worker_state_registry;
 class borrowed_clients;
 
+// Borrows the request's connection.
+class http_push_output final {
+public:
+    using submit_type = bool (*)(void*, http_push_request_view);
+    http_push_output(void* target, submit_type submit) noexcept
+        : target_(target),
+          submit_(submit) {}
+    // Header-list bounds are enforced by the HTTP/2 submit path.
+    [[nodiscard]] bool push(http_push_request_view request) {
+        return submit_(target_, request);
+    }
+
+private:
+    void* target_;
+    submit_type submit_;
+};
+
+// Request-scoped typed access to the owning connection's advertisement lane.
+class http_connection_advertisement_output final {
+public:
+    using origins_type = void (*)(void*, std::span<const std::string_view>);
+    using alternative_service_type = void (*)(void*, std::string_view);
+    http_connection_advertisement_output(
+        void* target, origins_type origins, alternative_service_type service) noexcept
+        : target_(target),
+          origins_(origins),
+          service_(service) {}
+    void advertise_origins(std::span<const std::string_view> origins);
+    void advertise_alternative_service(std::string_view value);
+
+private:
+    void* target_;
+    origins_type origins_;
+    alternative_service_type service_;
+};
+
 struct context_worker_services final {
-    std::reference_wrapper<const worker_handle> worker_;
+    std::reference_wrapper<const worker_ref> worker_;
     worker_client_registry_view clients_{worker_client_registry_view::detached()};
     rate_limiter* rate_limiter_{};
     const ruvia::env* env_{};
@@ -66,7 +102,7 @@ struct context_worker_services final {
 
 struct context_connection_services final {
     conn_info info_;
-    std::pmr::memory_resource* inbound_buffer_pool_{};
+    inbound_buffer_account* inbound_buffers_{};
     const route_table* routes_{};
     rate_limiter* route_rate_limiter_{};
     // Whether the peer is a configured trusted proxy. Decided once per
@@ -162,17 +198,16 @@ public:
         return worker_services_->env_;
     }
 
-    [[nodiscard]] std::pmr::memory_resource* inbound_buffer_pool() const noexcept {
-        return connection_services_.inbound_buffer_pool_;
+    [[nodiscard]] inbound_buffer_account* inbound_buffers() const noexcept {
+        return connection_services_.inbound_buffers_;
     }
 
-    [[nodiscard]] context_services with_inbound_buffer_pool(std::pmr::memory_resource& resource) const noexcept {
+    [[nodiscard]] context_services with_inbound_buffers(inbound_buffer_account& account) const noexcept {
         auto services = *this;
-        services.connection_services_.inbound_buffer_pool_ = &resource;
+        services.connection_services_.inbound_buffers_ = &account;
         return services;
     }
-    context_services with_inbound_buffer_pool(std::pmr::memory_resource&&) const = delete;
-
+    context_services with_inbound_buffers(inbound_buffer_account&&) const = delete;
     [[nodiscard]] constexpr std::size_t max_decoded_body_bytes() const noexcept {
         return worker_services_->max_decoded_body_bytes_;
     }
@@ -200,7 +235,7 @@ public:
         request_services_.io_metrics_ = metrics;
     }
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_services_->worker_.get();
     }
 
@@ -331,7 +366,7 @@ public:
     [[nodiscard]] context_services for_subrequest(const stop_token& stop_token_value) const {
         context_services services(*worker_services_, stop_token_value);
         services.connection_services_.info_ = connection_services_.info_;
-        services.connection_services_.inbound_buffer_pool_ = connection_services_.inbound_buffer_pool_;
+        services.connection_services_.inbound_buffers_ = connection_services_.inbound_buffers_;
         services.connection_services_.routes_ = connection_services_.routes_;
         services.connection_services_.route_rate_limiter_ = connection_services_.route_rate_limiter_;
         services.connection_services_.lifecycle_ = connection_services_.lifecycle_;

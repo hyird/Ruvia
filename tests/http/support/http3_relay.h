@@ -7,7 +7,6 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,10 +38,10 @@ struct http3_withheld_acknowledgement final {
 template <typename event_consumer_type>
 [[nodiscard]] bool relay_http3(http3_connection& source, http3_connection& destination,
     event_consumer_type&& consume, std::uint64_t& timestamp,
-    std::pmr::vector<http3_withheld_acknowledgement>* withheld = nullptr) {
+    std::vector<http3_withheld_acknowledgement>* withheld = nullptr) {
     constexpr int max_outputs = 4096;
     http3_stream_output output;
-    std::pmr::vector<std::byte> input;
+    std::vector<std::byte> input;
     for (int iteration = 0; iteration < max_outputs; ++iteration) {
         const auto produced = source.peek_output(64 * 1024, output);
         if (produced.status_ == http3_transport_status::would_block) {
@@ -79,7 +78,7 @@ template <typename event_consumer_type>
 }
 
 [[nodiscard]] inline bool acknowledge_http3(
-    http3_connection& source, const std::pmr::vector<http3_withheld_acknowledgement>& withheld) {
+    http3_connection& source, const std::vector<http3_withheld_acknowledgement>& withheld) {
     for (const auto& acknowledgement : withheld) {
         if (source.acknowledge_output(acknowledgement.stream_id_, acknowledgement.bytes_) !=
             http3_transport_status::accepted) {
@@ -90,8 +89,8 @@ template <typename event_consumer_type>
 }
 
 struct http3_field_record final {
-    std::pmr::string name_;
-    std::pmr::string value_;
+    std::string name_;
+    std::string value_;
 };
 
 [[nodiscard]] inline std::optional<std::string_view> find_http3_field(
@@ -114,7 +113,7 @@ struct http3_headers_record final {
     }
 
     std::int64_t stream_id_{-1};
-    std::pmr::vector<http3_field_record> fields_;
+    std::vector<http3_field_record> fields_;
     bool stream_ended_{false};
     std::optional<http_received_status> status_;
     bool early_data_{false};
@@ -127,7 +126,7 @@ struct http3_message_end_record final {
     }
 
     std::int64_t stream_id_{-1};
-    std::pmr::vector<http3_field_record> trailers_;
+    std::vector<http3_field_record> trailers_;
 };
 
 // Owned copy of every event a codec published, in arrival order. sequence_
@@ -146,14 +145,14 @@ public:
             record_response_head(head->stream_id(), head->head(), head->stream_ended());
             content_lengths_.emplace_back(head->stream_id(), head->head().content_length());
         } else if (const auto* data = event.data()) {
-            data_.emplace_back(data->stream_id(), std::pmr::string(data->bytes()));
+            data_.emplace_back(data->stream_id(), std::string(data->bytes()));
             if (sequence_.empty() || sequence_.back() != 'D') {
                 sequence_.push_back('D');
             }
         } else if (const auto* end = event.message_end()) {
             http3_message_end_record record{end->stream_id(), {}};
             for (const auto& field : end->trailers()) {
-                record.trailers_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+                record.trailers_.push_back({std::string(field.name()), std::string(field.value())});
             }
             ends_.push_back(std::move(record));
             sequence_.push_back('E');
@@ -170,10 +169,10 @@ public:
             unprocessed_.push_back(unprocessed->stream_id());
             sequence_.push_back('U');
         } else if (const auto* datagram = event.datagram()) {
-            datagrams_.emplace_back(datagram->stream_id(), std::pmr::string(datagram->payload()));
+            datagrams_.emplace_back(datagram->stream_id(), std::string(datagram->payload()));
             sequence_.push_back('X');
         } else if (const auto* origins = event.origin_advertisement()) {
-            std::pmr::vector<std::pmr::string> list;
+            std::vector<std::string> list;
             list.reserve(origins->origins_.size());
             for (const auto& origin : origins->origins_) {
                 list.emplace_back(origin);
@@ -187,7 +186,7 @@ public:
         http3_headers_record record{head.stream_id(), {}, head.stream_ended(), std::nullopt, head.early_data()};
         const auto pseudo = [&](std::string_view name, std::string_view value) {
             if (!value.empty()) {
-                record.fields_.push_back({std::pmr::string(name), std::pmr::string(value)});
+                record.fields_.push_back({std::string(name), std::string(value)});
             }
         };
         pseudo(":method", head.method());
@@ -195,10 +194,9 @@ public:
         pseudo(":authority", head.authority());
         pseudo(":path", head.path());
         pseudo(":protocol", head.protocol());
-        std::pmr::unsynchronized_pool_resource resource;
-        const auto request = head.build_request(&resource);
+        const auto request = head.build_request();
         for (const auto& field : request.headers()) {
-            record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+            record.fields_.push_back({std::string(field.name()), std::string(field.value())});
         }
         headers_.push_back(std::move(record));
         sequence_.push_back('H');
@@ -207,14 +205,14 @@ public:
     void record_response_head(std::int64_t stream_id, const http_client_response_head& head, bool stream_ended) {
         http3_headers_record record{stream_id, {}, stream_ended, head.received_status(), false};
         for (const auto& field : head.headers()) {
-            record.fields_.push_back({std::pmr::string(field.name()), std::pmr::string(field.value())});
+            record.fields_.push_back({std::string(field.name()), std::string(field.value())});
         }
         headers_.push_back(std::move(record));
         sequence_.push_back('H');
     }
 
-    [[nodiscard]] std::pmr::string data(std::int64_t stream_id) const {
-        std::pmr::string bytes;
+    [[nodiscard]] std::string data(std::int64_t stream_id) const {
+        std::string bytes;
         for (const auto& [id, chunk] : data_) {
             if (id == stream_id) {
                 bytes += chunk;
@@ -247,17 +245,17 @@ public:
         *this = http3_event_log{};
     }
 
-    std::pmr::vector<http3_headers_record> headers_;
-    std::pmr::vector<std::pair<std::int64_t, std::pmr::string>> data_;
-    std::pmr::vector<std::pair<std::int64_t, std::optional<std::uint64_t>>> content_lengths_;
-    std::pmr::vector<http3_message_end_record> ends_;
-    std::pmr::vector<http3_stream_close_event> closes_;
-    std::pmr::vector<std::optional<std::int64_t>> goaways_;
-    std::pmr::vector<http3_transport_action_event> transport_actions_;
-    std::pmr::vector<std::int64_t> unprocessed_;
-    std::pmr::vector<std::pair<std::int64_t, std::pmr::string>> datagrams_;
-    std::pmr::vector<std::pmr::vector<std::pmr::string>> origins_;
-    std::pmr::string sequence_;
+    std::vector<http3_headers_record> headers_;
+    std::vector<std::pair<std::int64_t, std::string>> data_;
+    std::vector<std::pair<std::int64_t, std::optional<std::uint64_t>>> content_lengths_;
+    std::vector<http3_message_end_record> ends_;
+    std::vector<http3_stream_close_event> closes_;
+    std::vector<std::optional<std::int64_t>> goaways_;
+    std::vector<http3_transport_action_event> transport_actions_;
+    std::vector<std::int64_t> unprocessed_;
+    std::vector<std::pair<std::int64_t, std::string>> datagrams_;
+    std::vector<std::vector<std::string>> origins_;
+    std::string sequence_;
 };
 
 // A client and a server codec with their control and QPACK streams bound to
@@ -281,7 +279,7 @@ public:
 
     template <typename event_consumer_type>
     [[nodiscard]] bool to_client(event_consumer_type&& consume,
-        std::pmr::vector<http3_withheld_acknowledgement>* withheld = nullptr) {
+        std::vector<http3_withheld_acknowledgement>* withheld = nullptr) {
         return relay_http3(server_, client_, std::forward<event_consumer_type>(consume), timestamp_, withheld);
     }
 

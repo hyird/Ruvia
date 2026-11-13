@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_request.h"
@@ -22,9 +21,9 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] std::pmr::vector<http_header> copy_websocket_response_headers(
+[[nodiscard]] std::vector<http_header> copy_websocket_response_headers(
     std::span<const http_header_view> headers, std::string_view subprotocol,
-    std::string_view extension, std::pmr::memory_resource* resource) {
+    std::string_view extension) {
     // Account for the whole emitted head: the fixed 101 prefix, the accept
     // key line, the negotiated and application fields, and the terminating
     // empty line.
@@ -61,11 +60,11 @@ namespace {
             throw std::length_error("WebSocket handshake response headers are too large");
         }
     }
-    std::pmr::vector<http_header> result(resource);
+    std::vector<http_header> result;
     result.reserve(headers.size());
     for (const auto& header : headers) {
         result.push_back(
-            http_header::copy_with_lowercase_name(header.name(), header.value(), resource));
+            http_header::copy_with_lowercase_name(header.name(), header.value()));
     }
     return result;
 }
@@ -244,20 +243,17 @@ websocket_handshake_validation_result websocket_request_header_validator::finish
 }
 
 websocket_server_negotiation::websocket_server_negotiation(std::string_view subprotocol,
-    websocket_compression compression, std::span<const http_header_view> response_headers_value,
-    std::pmr::memory_resource* resource)
-    : subprotocol_(http_pmr_resource_or_default(resource)),
+    websocket_compression compression, std::span<const http_header_view> response_headers_value)
+    : subprotocol_(subprotocol),
       compression_(compression),
       extensions_(compression),
-      response_headers_(copy_websocket_response_headers(response_headers_value, subprotocol,
-          extensions_.view(), subprotocol_.get_allocator().resource())) {
-    subprotocol_.assign(subprotocol.data(), subprotocol.size());
-}
+      response_headers_(copy_websocket_response_headers(
+          response_headers_value, subprotocol, extensions_.view())) {}
 
 websocket_server_negotiation make_websocket_server_negotiation(
-    const http_request& request, const websocket_server_handshake_options& options, std::pmr::memory_resource* resource) {
+    const http_request& request, const websocket_server_handshake_options& options) {
     return websocket_server_negotiation(choose_websocket_subprotocol(request, options.supported_subprotocols_),
-        websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_, resource);
+        websocket_negotiate_permessage_deflate(request, options.deflate_), options.response_headers_);
 }
 
 websocket_handshake_validation_result validate_extended_connect_websocket_headers(
@@ -277,11 +273,11 @@ websocket_handshake_validation_result validate_extended_connect_websocket_header
 namespace ruvia {
 
 websocket_server_handshake make_websocket_server_handshake(
-    const http_request& request, websocket_server_handshake_options options, std::pmr::memory_resource* resource) {
+    const http_request& request, websocket_server_handshake_options options) {
     detail::websocket_accept_key_type accept;
     detail::encode_websocket_accept(
         accept, detail::http_request_access::known_header(request, detail::http_field_kind::sec_websocket_key));
-    auto negotiation = detail::make_websocket_server_negotiation(request, options, resource);
+    auto negotiation = detail::make_websocket_server_negotiation(request, options);
     return websocket_server_handshake(accept, std::move(negotiation).take_subprotocol(),
         negotiation.compression(), std::move(negotiation).take_response_headers());
 }

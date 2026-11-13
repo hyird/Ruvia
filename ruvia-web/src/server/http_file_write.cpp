@@ -50,7 +50,7 @@ task<http_response_file_write_result> write_http_response_file(asio::ip::tcp::so
                 asio::windows::overlapped_ptr operation(socket.get_executor(), std::move(handler));
                 operation.get()->Offset = static_cast<DWORD>(offset & UINT64_C(0xffffffff));
                 operation.get()->OffsetHigh = static_cast<DWORD>(offset >> 32);
-                const auto transmitted = ::TransmitFile(socket.native_handle(), next_send == 0 ? nullptr : input,
+                const auto transmitted = ::TransmitFile(socket.native(), next_send == 0 ? nullptr : input,
                     next_send, 0, operation.get(), buffers.HeadLength == 0 ? nullptr : &buffers, 0);
                 const int socket_error = transmitted != FALSE ? 0 : ::WSAGetLastError();
                 if (transmitted != FALSE || socket_error == WSA_IO_PENDING) {

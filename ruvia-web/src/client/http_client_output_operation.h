@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -10,13 +9,13 @@
 
 #include "client/http_client_pool.h"
 #include "client/http_client_response_state.h"
-#include "util/operation_lane_lease.h"
+#include "integration/operation_lane_lease.h"
 
 namespace ruvia::detail {
 
 struct http_client_output_write_input final {
     http_client_response pin_;
-    std::pmr::string bytes_;
+    std::string bytes_;
     operation_options operation_;
 };
 

@@ -40,10 +40,8 @@ bool is_http_standard_connection_option(std::string_view option) noexcept {
 }
 
 void http_connection_nominated_fields::update(std::string_view connection_field_value) {
-    auto* const resource = tokens_.get_allocator().resource();
-    detail::http_visit_comma_separated_quoted(connection_field_value, [&](std::string_view item) {
-        const auto token = http_trim_ows(item);
-        if (token.empty() || !is_valid_http_header_name(token)) {
+    detail::http_visit_comma_separated_tokens(connection_field_value, [&](std::string_view token) {
+        if (!is_valid_http_header_name(token)) {
             return true;
         }
         if (http_ascii_equals_ignore_case(token, "close")) {
@@ -58,7 +56,7 @@ void http_connection_nominated_fields::update(std::string_view connection_field_
         if (contains(token)) {
             return true;
         }
-        std::pmr::string lower(token, resource);
+        std::string lower(token);
         for (auto& ch : lower) {
             ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
         }
@@ -67,36 +65,12 @@ void http_connection_nominated_fields::update(std::string_view connection_field_
     });
 }
 
-void http_connection_nominated_fields::update_headers(std::span<const http_header> headers) {
-    for (const auto& field : headers) {
+void http_connection_nominated_fields::update_header_range(detail::http_header_range_view headers) {
+    for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Connection")) {
             update(field.value());
         }
     }
-}
-
-void http_connection_nominated_fields::update_headers(std::span<const http_header_view> headers) {
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Connection")) {
-            update(field.value());
-        }
-    }
-}
-
-void http_connection_nominated_fields::update_headers(const http_request& request) {
-    update_headers(request.headers());
-}
-
-void http_connection_nominated_fields::update_headers(const http_response_headers& headers) {
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Connection")) {
-            update(field.value());
-        }
-    }
-}
-
-void http_connection_nominated_fields::update_headers(const http_response& response) {
-    update_headers(response.headers());
 }
 
 bool http_connection_nominated_fields::contains(std::string_view field_name) const noexcept {
@@ -105,11 +79,8 @@ bool http_connection_nominated_fields::contains(std::string_view field_name) con
     });
 }
 
-std::pmr::vector<std::pmr::string> http_connection_nominated_fields::non_standard_options(
-    std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : tokens_.get_allocator().resource());
-    std::pmr::vector<std::pmr::string> result(target_resource);
+std::vector<std::string> http_connection_nominated_fields::non_standard_options() const {
+    std::vector<std::string> result;
     for (const auto& token : tokens_) {
         if (!is_http_standard_connection_option(token)) {
             result.emplace_back(token);
@@ -118,11 +89,9 @@ std::pmr::vector<std::pmr::string> http_connection_nominated_fields::non_standar
     return result;
 }
 
-std::pmr::string http_connection_nominated_fields::rebuild_connection_field(
-    bool retain_upgrade, bool include_non_standard, std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : tokens_.get_allocator().resource());
-    std::pmr::string output(target_resource);
+std::string http_connection_nominated_fields::rebuild_connection_field(
+    bool retain_upgrade, bool include_non_standard) const {
+    std::string output;
     if (retain_upgrade && has_upgrade_) {
         output.append("Upgrade");
     }
@@ -141,47 +110,11 @@ std::pmr::string http_connection_nominated_fields::rebuild_connection_field(
 }
 
 http_connection_nominated_fields parse_http_connection_nominated_fields(
-    std::string_view connection_field_value, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
+    std::string_view connection_field_value) {
+    http_connection_nominated_fields nominated;
     nominated.update(connection_field_value);
     return nominated;
 }
-
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    std::span<const http_header> headers, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
-    nominated.update_headers(headers);
-    return nominated;
-}
-
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    std::span<const http_header_view> headers, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
-    nominated.update_headers(headers);
-    return nominated;
-}
-
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    const http_request& request, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
-    nominated.update_headers(request);
-    return nominated;
-}
-
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    const http_response_headers& headers, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
-    nominated.update_headers(headers);
-    return nominated;
-}
-
-http_connection_nominated_fields parse_http_connection_nominated_fields(
-    const http_response& response, std::pmr::memory_resource* resource) {
-    http_connection_nominated_fields nominated(resource);
-    nominated.update_headers(response);
-    return nominated;
-}
-
 bool is_http_hop_by_hop_or_nominated_field(std::string_view field_name,
     const http_connection_nominated_fields& nominated, bool retain_upgrade) noexcept {
     if (retain_upgrade && nominated.has_upgrade() &&
@@ -203,19 +136,4 @@ bool is_forbidden_http_request_trailer_field_name(std::string_view field_name) n
 bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) noexcept {
     return detail::is_forbidden_response_trailer_name(field_name);
 }
-
-std::pmr::vector<std::pmr::string> extract_http_non_standard_connection_options(
-    std::string_view connection_field_value, std::pmr::memory_resource* resource) {
-    const auto nominated =
-        parse_http_connection_nominated_fields(connection_field_value, resource);
-    return nominated.non_standard_options(resource);
-}
-
-std::pmr::string rebuild_http_connection_field(std::string_view connection_field_value,
-    bool retain_upgrade, bool include_non_standard, std::pmr::memory_resource* resource) {
-    const auto nominated =
-        parse_http_connection_nominated_fields(connection_field_value, resource);
-    return nominated.rebuild_connection_field(retain_upgrade, include_non_standard, resource);
-}
-
 }  // namespace ruvia

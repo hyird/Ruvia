@@ -4,7 +4,6 @@
 
 #include <array>
 #include <concepts>
-#include <memory_resource>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -18,8 +17,6 @@
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client_redirect.h"
 #include "ruvia/http/http_limits.h"
-
-#include "memory_resource_fixture.h"
 
 namespace ruvia::test {
 
@@ -41,57 +38,51 @@ using http1_client_request_prepare_result = std::variant<ruvia::prepared_http1_c
 // exchange state; a test that drives several parsers from the same request
 // prepares it again for each of them.
 inline http1_client_response_parser exchange_parser(
-    http1_client_request_prepare_result prepared_result, std::pmr::memory_resource* resource = nullptr) {
+    http1_client_request_prepare_result prepared_result) {
     auto* prepared = std::get_if<ruvia::prepared_http1_client_request>(&prepared_result);
     if (prepared == nullptr) {
         throw std::runtime_error("test request could not be prepared");
     }
-    return http1_client_response_parser(std::move(*prepared).take_exchange_state(), resource);
+    return http1_client_response_parser(std::move(*prepared).take_exchange_state());
 }
 
 inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
-    const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {},
-    std::pmr::memory_resource* resource = nullptr) {
+    const ruvia::http_client_request_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
     return exchange_parser(
-        ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy), resource);
+        ruvia::http1_client_request_writer().prepare(origin, request, request_head, policy));
 }
 
 inline http1_client_response_parser exchange_parser(const ruvia::http_origin_view& origin,
-    const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {},
-    std::pmr::memory_resource* resource = nullptr) {
+    const ruvia::http1_client_request_head_view& request, http1_client_request_wire_policy policy = {}) {
     std::array<char, 2048> request_head;
     return exchange_parser(
-        ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy),
-        resource);
+        ruvia::http1_client_request_writer().prepare_streaming(origin, request, request_head, policy));
 }
 
 inline http1_client_response_parse_result parse_wire(std::string_view method, std::string_view wire,
     http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {},
-    std::pmr::memory_resource* resource = nullptr) {
+    std::span<const ruvia::http_header_view> request_headers = {}) {
     const auto origin = ruvia::http_origin_view::https({.host_ = "example.test"});
     const http1_client_request_wire_policy policy{.close_policy_ = close_policy};
     if (method == "CONNECT") {
         std::array<char, 2048> request_head;
         return exchange_parser(ruvia::http1_client_request_writer().prepare_connect(
-                                   "example.test:443", request_headers, request_head, policy),
-            resource)
+                                   "example.test:443", request_headers, request_head, policy))
             .parse(wire);
     }
     ruvia::http_client_request_view request;
     request.method_ = method;
     request.headers_ = request_headers;
-    return exchange_parser(origin, request, policy, resource).parse(wire);
+    return exchange_parser(origin, request, policy).parse(wire);
 }
 
 inline http1_client_response_parse_result parse_result(std::string_view method,
     std::string_view header_section, http1_close_policy close_policy = http1_close_policy::allow_reuse,
-    std::span<const ruvia::http_header_view> request_headers = {},
-    std::pmr::memory_resource* resource = nullptr) {
-    std::pmr::string wire(header_section);
+    std::span<const ruvia::http_header_view> request_headers = {}) {
+    std::string wire(header_section);
     wire.append("\r\n\r\n");
-    return parse_wire(method, wire, close_policy, request_headers, resource);
+    return parse_wire(method, wire, close_policy, request_headers);
 }
 
 inline http1_parsed_client_response_head parse_head(std::string_view method,

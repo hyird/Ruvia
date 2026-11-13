@@ -4,13 +4,11 @@
 #include <chrono>
 #include <cstring>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_number_format.h"
@@ -18,8 +16,8 @@
 #include "ruvia/http/ip_address.h"
 
 #include "cookie/cookie_validation.h"
-#include "util/http_address_overlap.h"
-#include "util/http_wire_sink.h"
+#include "memory/http_address_overlap.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia {
 
@@ -110,8 +108,7 @@ set_cookie_plan::set_cookie_plan(
     detail::validate_cookie(name, value, options, secure_, partitioned_);
 }
 
-char* write_cookie_request_pair(
-    char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource) {
+char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value) {
     const std::string_view written(out, cookie_request_pair_size(name, value));
     const bool name_overlaps = detail::http_text_overlaps(name, written);
     const bool value_overlaps = detail::http_text_overlaps(value, written);
@@ -130,10 +127,9 @@ char* write_cookie_request_pair(
             }
             return write_cookie_request_pair(out,
                 name_overlaps ? std::string_view(stack_snapshot.data(), name_bytes) : name,
-                value_overlaps ? std::string_view(stack_snapshot.data() + name_bytes, value_bytes) : value, resource);
+                value_overlaps ? std::string_view(stack_snapshot.data() + name_bytes, value_bytes) : value);
         }
-        auto* const resolved_resource = detail::http_pmr_resource_or_default(resource);
-        std::pmr::string snapshot(resolved_resource);
+        std::string snapshot;
         snapshot.reserve(name_bytes + value_bytes);
         if (name_overlaps) {
             snapshot.append(name);
@@ -143,7 +139,7 @@ char* write_cookie_request_pair(
         }
         return write_cookie_request_pair(out,
             name_overlaps ? std::string_view(snapshot.data(), name_bytes) : name,
-            value_overlaps ? std::string_view(snapshot.data() + name_bytes, value_bytes) : value, resolved_resource);
+            value_overlaps ? std::string_view(snapshot.data() + name_bytes, value_bytes) : value);
     }
     detail::http_raw_wire_sink sink(out);
     sink.append(name);
@@ -292,12 +288,10 @@ http_cookie_jar::http_cookie_jar(const http_origin_view& origin, http_cookie_jar
 
 http_cookie_jar::http_cookie_jar(
     http_scheme scheme, std::string_view host, http_cookie_jar_options options)
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      host_(host, resource_),
+    : host_(host),
       scheme_(scheme),
       max_cookies_(options.max_cookies_),
-      max_cookie_bytes_(options.max_cookie_bytes_),
-      cookies_(resource_) {
+      max_cookie_bytes_(options.max_cookie_bytes_) {
     if (!host_.empty() && host_.front() == '[' && host_.back() == ']') {
         host_.erase(host_.size() - 1, 1);
         host_.erase(0, 1);
@@ -412,7 +406,7 @@ void http_cookie_jar::clear() noexcept {
 }
 
 void http_cookie_jar::add_configured_cookie(std::string_view name, std::string_view value) {
-    cookies_.emplace_back(name, value, resource_);
+    cookies_.emplace_back(name, value);
     cookie_bytes_ += entry_storage_bytes(name, value, "/", {});
 }
 
@@ -424,10 +418,11 @@ std::optional<http_cookie_jar::received_cookie> http_cookie_jar::accept_set_cook
         return std::nullopt;
     }
     const bool secure = parsed->has(http_set_cookie_attribute::secure);
+    const bool partitioned = parsed->has(http_set_cookie_attribute::partitioned);
     if ((secure && scheme_ != http_scheme::https) ||
         !cookie_domain_matches(host_, parsed->domain()) ||
         (parsed->same_site_none() && !secure) ||
-        (parsed->has(http_set_cookie_attribute::partitioned) && !secure) ||
+        (partitioned && !secure) ||
         !satisfies_cookie_name_prefix(*parsed, secure)) {
         return std::nullopt;
     }
@@ -439,6 +434,7 @@ std::optional<http_cookie_jar::received_cookie> http_cookie_jar::accept_set_cook
         .domain_ = parsed->domain(),
         .expires_ = std::nullopt,
         .secure_ = secure,
+        .partitioned_ = partitioned,
     };
     if (const auto max_age_seconds = parsed->max_age_seconds()) {
         cookie.expired_ = *max_age_seconds <= 0;
@@ -464,7 +460,7 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
     const auto cookie_domain = identity_domain(cookie.domain_);
     const auto match = std::ranges::find_if(cookies_, [&](const stored_cookie& stored) {
         return !stored.configured_ && stored.name_ == cookie.name_ &&
-               stored.path_ == cookie.path_ &&
+               stored.path_ == cookie.path_ && stored.partitioned_ == cookie.partitioned_ &&
                http_ascii_equals_ignore_case(identity_domain(stored.domain_), cookie_domain);
     });
     const auto replaced_bytes =
@@ -490,10 +486,10 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
     }
 
     if (match == cookies_.end()) {
-        stored_cookie replacement(
-            cookie.name_, cookie.value_, cookie.path_, cookie.domain_, resource_);
+        stored_cookie replacement(cookie.name_, cookie.value_, cookie.path_, cookie.domain_);
         replacement.expires_ = cookie.expires_;
         replacement.secure_ = cookie.secure_;
+        replacement.partitioned_ = cookie.partitioned_;
         replacement.configured_ = false;
         const auto insertion = std::ranges::find_if(cookies_,
             [&cookie](const stored_cookie& stored) { return stored.path_.size() < cookie.path_.size(); });
@@ -506,13 +502,13 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
         }
     } else {
         const auto old_expires = match->expires_;
-        std::optional<std::pmr::string> replacement_value;
+        std::optional<std::string> replacement_value;
         if (match->value_ != cookie.value_ && cookie.value_.size() > match->value_.capacity()) {
-            replacement_value.emplace(cookie.value_, resource_);
+            replacement_value.emplace(cookie.value_);
         }
-        std::optional<std::pmr::string> replacement_domain;
+        std::optional<std::string> replacement_domain;
         if (match->domain_ != cookie.domain_ && cookie.domain_.size() > match->domain_.capacity()) {
-            replacement_domain.emplace(cookie.domain_, resource_);
+            replacement_domain.emplace(cookie.domain_);
         }
         if (replacement_value.has_value()) {
             match->value_.swap(*replacement_value);
@@ -526,6 +522,7 @@ bool http_cookie_jar::store_received_cookie(const received_cookie& cookie) {
         }
         match->expires_ = cookie.expires_;
         match->secure_ = cookie.secure_;
+        match->partitioned_ = cookie.partitioned_;
         if (cookie.expires_.has_value() &&
             (!next_expiry_.has_value() || *cookie.expires_ <= *next_expiry_)) {
             next_expiry_ = *cookie.expires_;
@@ -587,12 +584,9 @@ void http_cookie_jar::retain_response_cookies(std::string_view request_target,
     }
 }
 
-std::pmr::string http_cookie_jar::cookie_header(std::string_view request_target,
-    bool include_received, std::chrono::system_clock::time_point now,
-    std::pmr::memory_resource* resource) {
-    auto* const target_resource =
-        detail::http_pmr_resource_or_default(resource != nullptr ? resource : resource_);
-    std::pmr::string output(target_resource);
+std::string http_cookie_jar::cookie_header(std::string_view request_target,
+    bool include_received, std::chrono::system_clock::time_point now) {
+    std::string output;
     visit_matching_cookies(request_target, include_received, now,
         [&output](std::string_view name, std::string_view value) {
             append_cookie_request_pair(output, name, value);

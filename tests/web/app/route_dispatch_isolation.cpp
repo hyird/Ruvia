@@ -6,6 +6,7 @@
 #include <semaphore>
 #include <span>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include <asio/io_context.hpp>
@@ -80,7 +81,7 @@ public:
         throw std::runtime_error("unused middleware constructed");
     }
 
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next) {
         co_await next();
     }
 };
@@ -162,7 +163,7 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
     ASSERT_TRUE(started.try_acquire_for(10s));
     ruvia::test::wait_until([&app] {
         try {
-            control_loop().start(app.remove_listener(control_loop().handle(), {.address_ = "0.0.0.0", .port_ = 9})).get();
+            control_loop().start(app.remove_listener(control_loop().worker(), {.address_ = "0.0.0.0", .port_ = 9})).get();
         } catch (const std::invalid_argument&) {
             return true;
         } catch (const std::logic_error&) {
@@ -170,7 +171,7 @@ TEST(Ruvia, adding_first_routed_listener_rejects_conflicts_without_interrupting_
         return false;
     },
         10s);
-    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().handle(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
+    EXPECT_THROW(control_loop().start(app.add_listener(control_loop().worker(), {.address_ = "127.0.0.1", .http_ = routed.endpoint().port()})).get(), std::invalid_argument);
     EXPECT_TRUE(ruvia::test::exchange(io, raw.endpoint(),
         "GET /still-serving HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .ends_with("connection"));

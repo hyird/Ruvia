@@ -5,7 +5,6 @@
 #include <exception>
 #include <map>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -25,7 +24,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/integer.h"
 
 namespace ruvia::test {
@@ -35,7 +33,7 @@ namespace ruvia::test {
 class redis_session_store_peer final {
 public:
     explicit redis_session_store_peer(
-        std::pmr::map<std::pmr::string, std::pmr::string> store = std::pmr::map<std::pmr::string, std::pmr::string>(ruvia::process_resource()))
+        std::map<std::string, std::string> store = std::map<std::string, std::string>())
         : acceptor_(io_, {asio::ip::address_v4::loopback(), 0}),
           work_(asio::make_work_guard(io_)),
           store_(std::move(store)) {
@@ -94,20 +92,20 @@ private:
         }
     }
 
-    static asio::awaitable<std::pmr::string> line(socket_type& socket, std::pmr::string& buffer) {
+    static asio::awaitable<std::string> line(socket_type& socket, std::string& buffer) {
         const auto size = co_await asio::async_read_until(socket, asio::dynamic_buffer(buffer), "\r\n", asio::use_awaitable);
-        auto result = std::pmr::string(std::string_view(buffer).substr(0, size - 2), ruvia::process_resource());
+        auto result = std::string(std::string_view(buffer).substr(0, size - 2));
         buffer.erase(0, size);
         co_return result;
     }
 
-    static asio::awaitable<std::pmr::vector<std::pmr::string>> command(socket_type& socket, std::pmr::string& buffer) {
+    static asio::awaitable<std::vector<std::string>> command(socket_type& socket, std::string& buffer) {
         const auto header = co_await line(socket, buffer);
         if (header.empty() || header.front() != '*') {
             throw std::runtime_error("expected RESP array");
         }
         const auto count = std::get<0>(ruvia::parse_integer<std::size_t>(std::string_view(header).substr(1)));
-        std::pmr::vector<std::pmr::string> args{ruvia::process_resource()};
+        std::vector<std::string> args{};
         for (std::size_t index = 0; index < count; ++index) {
             const auto bulk = co_await line(socket, buffer);
             if (bulk.empty() || bulk.front() != '$') {
@@ -124,35 +122,35 @@ private:
         co_return args;
     }
 
-    std::pmr::string execute(const std::pmr::vector<std::pmr::string>& args) {
+    std::string execute(const std::vector<std::string>& args) {
         if (failure_) {
             std::rethrow_exception(failure_);
         }
         if (args.size() == 2 && args[0] == "GET") {
             const auto found = store_.find(args[1]);
-            return found == store_.end() ? std::pmr::string("$-1\r\n", ruvia::process_resource()) : std::move(std::pmr::string("$", ruvia::process_resource()).append(std::to_string(found->second.size()))) + "\r\n" + found->second + "\r\n";
+            return found == store_.end() ? std::string("$-1\r\n") : std::move(std::string("$").append(std::to_string(found->second.size()))) + "\r\n" + found->second + "\r\n";
         }
         if (args.size() >= 3 && args[0] == "SET") {
             // Session creation uses NX; an existing key must remain unchanged.
-            return std::pmr::string(store_.emplace(args[1], args[2]).second ? "+OK\r\n" : "$-1\r\n", ruvia::process_resource());
+            return std::string(store_.emplace(args[1], args[2]).second ? "+OK\r\n" : "$-1\r\n");
         }
         if (args.size() == 2 && args[0] == "DEL") {
-            return std::move(std::pmr::string(":", ruvia::process_resource()).append(std::to_string(store_.erase(args[1])))) + "\r\n";
+            return std::move(std::string(":").append(std::to_string(store_.erase(args[1])))) + "\r\n";
         }
         if (args.size() == 7 && args[0] == "EVAL" && args[2] == "2") {
             // Atomic compare-and-replace of an existing identity, not a canned
             // script response: missing sources and occupied targets cannot rotate.
             if (!store_.contains(args[3]) || !store_.emplace(args[4], args[5]).second) {
-                return std::pmr::string(":0\r\n", ruvia::process_resource());
+                return std::string(":0\r\n");
             }
             store_.erase(args[3]);
-            return std::pmr::string(":1\r\n", ruvia::process_resource());
+            return std::string(":1\r\n");
         }
         throw std::runtime_error("unsupported session store command");
     }
 
     asio::awaitable<void> serve(std::shared_ptr<socket_type> socket) {
-        std::pmr::string buffer{ruvia::process_resource()};
+        std::string buffer{};
         try {
             for (;;) {
                 const auto args = co_await command(*socket, buffer);
@@ -169,8 +167,8 @@ private:
     asio::io_context io_;
     asio::ip::tcp::acceptor acceptor_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
-    std::pmr::map<std::pmr::string, std::pmr::string> store_;
-    std::pmr::vector<std::shared_ptr<socket_type>> sockets_{ruvia::process_resource()};
+    std::map<std::string, std::string> store_;
+    std::vector<std::shared_ptr<socket_type>> sockets_{};
     std::exception_ptr failure_;
     bool closing_{false};
     std::thread thread_;

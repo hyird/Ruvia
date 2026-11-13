@@ -1,6 +1,6 @@
 // Worker-local state and blocking work: use_worker_state<T> per-worker
 // instances shared by the HTTP and dispatch paths, cross-worker task posting
-// via application::worker_for / web_worker_handle::post, and context::run_blocking() --
+// via application::worker_for / web_worker_ref::post, and context::run_blocking() --
 // the escape hatch for calls that block, which run on application::blocking_pool()'s
 // threads so the worker stays free to serve its other connections.
 // Run ruvia_example_workers_blocking on port 8090; inspect its route macros
@@ -12,14 +12,12 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -58,7 +56,7 @@ private:
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
         auto& state_value = c.worker_state<worker_stats>();
         ++state_value.served_;
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append("served=");
         body.append(std::to_string(state_value.served_));
         body.append(" dispatched=");
@@ -75,11 +73,11 @@ private:
     // blocking_operation_rejected, which the default error path answers with 503.
     ruvia::task<ruvia::http_response> offload(ruvia::context& c) {
         auto result_value = co_await c.run_blocking(
-            [input = std::pmr::string(c.req().query("input").value_or("default"), ruvia::process_resource())] {
+            [input = std::string(c.req().query("input").value_or("default"))] {
                 return slow_checksum(input);
             });
         const auto checksum = std::move(result_value).take_value();
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append("checksum=");
         body.append(std::to_string(checksum));
         body.push_back('\n');
@@ -91,14 +89,14 @@ private:
     // forever.
     ruvia::task<ruvia::http_response> offload_or_shed(ruvia::context& c) {
         auto result_value = co_await c.run_blocking(
-            [input = std::pmr::string("expensive input", ruvia::process_resource())] { return slow_checksum(input); },
+            [input = std::string("expensive input")] { return slow_checksum(input); },
             {.timeout_ = std::chrono::seconds(2)});
         if (!result_value.completed()) {
             co_return c.error({.status_ = ruvia::http_status::service_unavailable,
                 .code_ = "busy",
                 .message_ = ruvia::describe_blocking_status(result_value.status())});
         }
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append("checksum=");
         body.append(std::to_string(std::move(result_value).take_value()));
         body.push_back('\n');
@@ -119,7 +117,7 @@ private:
                 ++accepted;
             }
         }
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append("posted=");
         body.append(std::to_string(accepted));
         body.push_back('\n');

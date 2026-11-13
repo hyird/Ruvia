@@ -3,11 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http1_request_body_plan.h"
 #include "ruvia/http/http1_request_connection_plan.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -85,13 +84,11 @@ class http1_server_request_parse_state final {
 public:
     http1_server_request_parse_state() noexcept;
 
-    // resource 供超出内联容量的请求头描述符及最终请求描述符绑定使用，缺省为默认 PMR；须存活至该请求描述符存储释放（request.reset() 或请求对象析构）。
     // 分配失败以 std::bad_alloc 传出且不发布 head_ready/成功状态；释放资源后可用同一 buffer 与 offset 重试，但部分元数据可能残留。
-    void parse_head(std::string_view buffer, std::size_t header_search_offset = 0,
-        std::pmr::memory_resource* resource = nullptr);
+    void parse_head(std::string_view buffer, std::size_t header_search_offset = 0);
 
     template <detail::http_temporary_owning_char_string buffer_type>
-    void parse_head(buffer_type&&, std::size_t = 0, std::pmr::memory_resource* = nullptr) = delete;
+    void parse_head(buffer_type&&, std::size_t = 0) = delete;
     [[nodiscard]] const http1_server_need_request_head* need_request_head() const& noexcept {
         return std::get_if<http1_server_need_request_head>(&progress_);
     }

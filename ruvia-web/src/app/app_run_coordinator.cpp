@@ -2,7 +2,6 @@
 #include <csignal>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -13,7 +12,6 @@
 #include <asio/signal_set.hpp>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
@@ -203,11 +201,11 @@ private:
             return !listener.connection_.has_value() && !listener.request_stream_ &&
                    !std::holds_alternative<detail::http_server_listener_definition::redirect_http_to_https>(listener.transport_);
         });
-        std::pmr::vector<detail::controller_registrar> controller_registrars(process_resource());
+        std::vector<detail::controller_registrar> controller_registrars;
         if (routes_enabled) {
             controller_registrars = detail::seal_controller_registrars();
         }
-        auto runtime = make_pmr_object<detail::app_runtime_graph>(process_resource());
+        auto runtime = std::make_unique<detail::app_runtime_graph>();
         runtime->routes_enabled_ = routes_enabled;
         auto prepared_options = state_.options_;
         prepared_options.env_ = &state_.env_;
@@ -230,7 +228,7 @@ private:
             const auto precompression = prepared_options.compression_.has_value()
                                             ? document_root.precompression_
                                             : detail::static_root_precompression_options{};
-            runtime->document_root_ = make_pmr_object<detail::document_root_publisher>(process_resource(),
+            runtime->document_root_ = std::make_unique<detail::document_root_publisher>(
                 http_make_path_from_native_path(document_root.root_), document_root.static_options_,
                 document_root.refresh_interval_, precompression, document_root.resident_,
                 state_.options_.server_.worker_count_);
@@ -239,7 +237,7 @@ private:
         }
         if (state_.blocking_pool_.has_value()) {
             runtime->blocking_pool_ =
-                make_pmr_object<blocking_pool>(process_resource(), *state_.blocking_pool_);
+                std::make_unique<blocking_pool>(*state_.blocking_pool_);
         }
 
         const auto validated_configuration =
@@ -259,17 +257,17 @@ private:
             runtime->route_plan_ = detail::compile_route_plan(
                 controller_registrars, first_controllers, state_.configuration_);
         } else {
-            runtime->route_plan_ = make_pmr_object<detail::compiled_route_plan>(process_resource());
+            runtime->route_plan_ = std::make_unique<detail::compiled_route_plan>();
         }
 #if defined(RUVIA_ENABLE_HTTP3)
         if (std::ranges::any_of(validated_configuration.listeners(),
                 [](const auto& listener) { return listener.http3_.has_value(); })) {
-            runtime->http3_directory_ = make_pmr_object<detail::http3_worker_directory>(
-                process_resource(), state_.options_.server_.worker_count_);
+            runtime->http3_directory_ = std::make_unique<detail::http3_worker_directory>(
+                state_.options_.server_.worker_count_);
         }
 #endif
 #if defined(_WIN32)
-        runtime->acceptor_ = make_pmr_object<detail::windows_acceptor>(process_resource(),
+        runtime->acceptor_ = std::make_unique<detail::windows_acceptor>(
             validated_configuration.listeners(), state_.options_.server_.worker_count_,
 #if defined(RUVIA_ENABLE_HTTP3)
             runtime->http3_directory_.get(),
@@ -280,8 +278,8 @@ private:
         for (std::size_t i = 0; i < state_.options_.server_.worker_count_; ++i) {
             auto controllers =
                 i == 0 ? std::move(first_controllers) : detail::controller_store(controller_registrars);
-            auto routes_value = make_pmr_object<detail::route_table>(
-                process_resource(), *runtime->route_plan_, controllers);
+            auto routes_value = std::make_unique<detail::route_table>(
+                *runtime->route_plan_, controllers);
             const detail::worker_capability_definitions capabilities{
 #ifdef RUVIA_ENABLE_DATABASE
                 .databases_ = std::span<const detail::db_definition>(state_.databases_),
@@ -293,7 +291,7 @@ private:
                 .http_clients_ = std::span<const detail::http_client_definition_type>(state_.http_clients_),
             };
 #if defined(RUVIA_ENABLE_HTTP3)
-            auto worker_value = make_pmr_object<detail::web_worker_runtime>(process_resource(),
+            auto worker_value = std::make_unique<detail::web_worker_runtime>(
                 validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i,
                 detail::http3_worker_placement{
                     .directory_ = runtime->http3_directory_.get(),
@@ -303,10 +301,10 @@ private:
 #endif
                 });
             if (runtime->http3_directory_ != nullptr) {
-                runtime->http3_directory_->bind_worker(i, worker_value->runtime().handle());
+                runtime->http3_directory_->bind_worker(i, worker_value->runtime().worker());
             }
 #else
-            auto worker_value = make_pmr_object<detail::web_worker_runtime>(process_resource(),
+            auto worker_value = std::make_unique<detail::web_worker_runtime>(
                 validated_configuration, *routes_value, capabilities, runtime->blocking_pool_.get(), i);
 #endif
 #if defined(_WIN32)
@@ -386,8 +384,7 @@ private:
     }
 
     void retire_runtime() noexcept {
-        std::unique_ptr<detail::app_runtime_graph, pmr_object_deleter<detail::app_runtime_graph>>
-            retired(nullptr, pmr_object_deleter<detail::app_runtime_graph>{process_resource()});
+        std::unique_ptr<detail::app_runtime_graph> retired;
         {
             // run()/stop() remain synchronous main-thread lifecycle drivers.
             // Controls suspend their callers; only this owner waits to retire

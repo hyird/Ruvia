@@ -10,7 +10,6 @@
 #include <zstd_errors.h>
 #undef ZSTD_STATIC_LINKING_ONLY
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_content_codec.h"
 
 #include "coding/http_content_codec.h"
@@ -30,8 +29,8 @@ inline constexpr int http_zstd_window_log_max = 23;
 
 }  // namespace
 
-zstd_decoder_stream::zstd_decoder_stream(std::pmr::memory_resource* resource)
-    : allocation_(resource),
+zstd_decoder_stream::zstd_decoder_stream(std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
       stream_(ZSTD_createDStream_advanced(ZSTD_customMem{
           &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     if (stream_ != nullptr &&
@@ -51,8 +50,8 @@ zstd_decoder_stream::~zstd_decoder_stream() {
     }
 }
 
-zstd_encoder_stream::zstd_encoder_stream(std::pmr::memory_resource* resource)
-    : allocation_(resource),
+zstd_encoder_stream::zstd_encoder_stream(std::size_t max_memory_bytes)
+    : allocation_(max_memory_bytes, max_memory_bytes != (std::numeric_limits<std::size_t>::max)()),
       context_(ZSTD_createCCtx_advanced(ZSTD_customMem{
           &http_c_library_memory::allocate_opaque_first, &http_c_library_memory::deallocate_opaque_first, &allocation_})) {
     // The level picks its own window (and adapts it to a known source size).
@@ -84,7 +83,7 @@ bool zstd_encoder_stream::reset() noexcept {
     return context_ != nullptr && ZSTD_isError(ZSTD_CCtx_reset(context_, ZSTD_reset_session_only)) == 0;
 }
 
-bool zstd_encoder_stream::encode(std::string_view input, std::pmr::string& output,
+bool zstd_encoder_stream::encode(std::string_view input, std::string& output,
     ZSTD_EndDirective operation, std::size_t max_encoded_bytes) {
     if (output.size() > max_encoded_bytes) {
         return false;
@@ -121,10 +120,10 @@ bool zstd_encoder_stream::encode(std::string_view input, std::pmr::string& outpu
     }
 }
 
-std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
-    std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    std::pmr::string output("", http_pmr_resource_or_default(resource));
-    zstd_decoder_stream decoder(output.get_allocator().resource());
+std::variant<std::string, http_content_decode_error> decode_zstd_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    std::string output;
+    zstd_decoder_stream decoder;
     if (!decoder.initialized()) {
         throw http_content_codec_error("zstd decoder initialization failed");
     }
@@ -157,16 +156,16 @@ std::variant<std::pmr::string, http_content_decode_error> decode_zstd_content(
     }
 }
 
-std::optional<std::pmr::string> encode_zstd_content(
+std::optional<std::string> encode_zstd_content(
     zstd_encoder_stream& encoder, std::string_view input,
-    std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
-    return encode_whole_content_with_stream(encoder, ZSTD_e_end, input, max_encoded_bytes, output_resource);
+    std::size_t max_encoded_bytes) {
+    return encode_whole_content_with_stream(encoder, ZSTD_e_end, input, max_encoded_bytes);
 }
 
-std::optional<std::pmr::string> encode_zstd_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+std::optional<std::string> encode_zstd_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content<zstd_encoder_stream>(
-        "zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes, resource);
+        "zstd encoder initialization failed", ZSTD_e_end, input, max_encoded_bytes);
 }
 
 }  // namespace ruvia::detail

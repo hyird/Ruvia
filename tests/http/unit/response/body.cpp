@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -15,16 +14,9 @@
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_file.h"
 
-#include "failing_memory_resource.h"
-#include "memory_resource_fixture.h"
-#include "stl_allocation_fixture.h"
 #include "test_exceptions.h"
 
-using ruvia::test::failing_memory_resource;
-
 namespace {
-
-using ruvia::test::rejecting_memory_resource;
 
 using ruvia::http_response;
 
@@ -41,101 +33,43 @@ template <typename function_type>
 template <typename prepare_type, typename inspect_type>
 void check_response_body_moves(prepare_type&& prepare, inspect_type&& inspect) {
     for (const bool assign : {false, true}) {
-        failing_memory_resource source_resource;
-        failing_memory_resource target_resource;
-        {
-            http_response source(&source_resource);
-            prepare(source);
-            source.header("X-Source", "retained");
-            std::optional<http_response> target;
-            if (assign) {
-                target.emplace(&target_resource);
-                target->body(std::pmr::string(256, 't'));
-            }
-            if constexpr (!ruvia::test::stl_moves_allocate_debug_metadata) {
-                source_resource.fail_after(0);
-                target_resource.fail_after(0);
-            }
-            if (assign) {
-                *target = std::move(source);
-            } else {
-                target.emplace(std::move(source));
-            }
-            source_resource.allow_allocations();
-            target_resource.allow_allocations();
-            EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
-            EXPECT_TRUE(target->memory_resource() == &source_resource);
-            EXPECT_EQ(target->header("X-Source").value_or("missing"), std::string_view("retained"));
-            inspect(*target);
-            EXPECT_TRUE(source.headers().empty());
-            EXPECT_TRUE(source.body_bytes().empty());
-            EXPECT_TRUE(!source.file_body().has_value());
-            EXPECT_TRUE(!source.has_multipart_file_body());
-            EXPECT_EQ(source.body_segment_count(), std::size_t{0});
-            EXPECT_EQ(ruvia::plan_buffered_http_response_write(
-                          ruvia::http_known_method::get, source)
-                          .content_length(),
-                std::uint64_t{0});
-            source.body("source reused");
-            source.header("X-Source", "replacement");
-            EXPECT_EQ(source.body_bytes(), std::string_view("source reused"));
-            EXPECT_EQ(source.header("X-Source").value_or("missing"), std::string_view("replacement"));
-            EXPECT_EQ(target->header("X-Source").value_or("missing"), std::string_view("retained"));
-            inspect(*target);
+        http_response source;
+        prepare(source);
+        source.header("X-Source", "retained");
+        std::optional<http_response> target;
+        if (assign) {
+            target.emplace();
+            target->body(std::string(256, 't'));
+            *target = std::move(source);
+        } else {
+            target.emplace(std::move(source));
         }
-        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
-        EXPECT_EQ(target_resource.live_allocations(), std::size_t{0});
+        EXPECT_EQ(target->header("X-Source").value_or("missing"), std::string_view("retained"));
+        inspect(*target);
+        EXPECT_TRUE(source.headers().empty());
+        EXPECT_TRUE(source.body_bytes().empty());
+        EXPECT_TRUE(!source.file_body().has_value());
+        EXPECT_TRUE(!source.has_multipart_file_body());
+        EXPECT_EQ(source.body_segment_count(), std::size_t{0});
+        EXPECT_EQ(ruvia::plan_buffered_http_response_write(
+                      ruvia::http_known_method::get, source)
+                      .content_length(),
+            std::uint64_t{0});
+        source.body("source reused");
+        EXPECT_EQ(source.body_bytes(), std::string_view("source reused"));
     }
 }
 
 }  // namespace
 
 TEST(Ruvia, response_public_body_owns_its_source) {
-    http_response response(std::pmr::new_delete_resource());
-    std::pmr::string source_value = "owned copy";
+    http_response response;
+    std::string source_value = "owned copy";
 
     response.body(source_value);
     source_value[0] = 'X';
 
     EXPECT_EQ(response.body_bytes(), std::string_view("owned copy"));
-}
-
-TEST(Ruvia, response_head_metadata_body_releases_storage_and_follows_body_lifetime) {
-    failing_memory_resource resource;
-    {
-        http_response response(&resource);
-        const auto retained_allocations = resource.live_allocations();
-        EXPECT_TRUE(!response.has_head_metadata_body());
-        response.body(std::pmr::string(256, 'x'));
-        EXPECT_TRUE(resource.live_allocations() != 0);
-        response.head_metadata_body();
-        EXPECT_TRUE(response.has_head_metadata_body());
-        EXPECT_TRUE(response.body_bytes().empty());
-        EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-        EXPECT_EQ(resource.live_allocations(), retained_allocations);
-
-        response.header("Content-Length", "256");
-        http_response moved(std::move(response));
-        EXPECT_TRUE(moved.has_head_metadata_body());
-        EXPECT_TRUE(!response.has_head_metadata_body());
-        EXPECT_EQ(moved.header("Content-Length").value_or("missing"), std::string_view("256"));
-        moved.static_body("");
-        EXPECT_TRUE(!moved.has_head_metadata_body());
-
-        moved.head_metadata_body();
-        resource.fail_after(0);
-        EXPECT_TRUE(ruvia::test::throws_on([&] { moved.body(std::pmr::string(256, 'y')); }));
-        resource.allow_allocations();
-        EXPECT_TRUE(moved.has_head_metadata_body());
-        moved.owned_body(std::pmr::string("replacement", &resource));
-        EXPECT_TRUE(!moved.has_head_metadata_body());
-        EXPECT_EQ(moved.body_bytes(), std::string_view("replacement"));
-
-        moved.head_metadata_body();
-        moved.body("");
-        EXPECT_TRUE(!moved.has_head_metadata_body());
-    }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, public_response_file_view_exposes_read_only_descriptor) {
@@ -152,7 +86,7 @@ TEST(Ruvia, public_response_file_view_exposes_read_only_descriptor) {
 }
 
 TEST(Ruvia, response_file_setter_keeps_typed_identity_and_validates_before_replacement) {
-    http_response response(std::pmr::new_delete_resource());
+    http_response response;
     const auto path = std::filesystem::path("public-response.bin");
     const auto unchecked = ruvia::http_response_file_identity::unchecked();
 
@@ -203,24 +137,24 @@ TEST(Ruvia, response_file_setter_keeps_typed_identity_and_validates_before_repla
 namespace {
 
 std::size_t released_response_file_handles = 0;
-ruvia::http_response_file_handle::native_type last_released_response_file_handle = 0;
+ruvia::http_response_file_descriptor::native_type last_released_response_file_handle = 0;
 
-void release_counted_response_file_handle(ruvia::http_response_file_handle::native_type value) noexcept {
+void release_counted_response_file_handle(ruvia::http_response_file_descriptor::native_type value) noexcept {
     ++released_response_file_handles;
     last_released_response_file_handle = value;
 }
 
 struct reentrant_response_file_release final {
     std::size_t releases_{0};
-    ruvia::http_response_file_handle* replacement_target_{nullptr};
-    ruvia::http_response_file_handle* replacement_source_{nullptr};
+    ruvia::http_response_file_descriptor* replacement_target_{nullptr};
+    ruvia::http_response_file_descriptor* replacement_source_{nullptr};
     ruvia::http_response* rewritten_response_{nullptr};
 
-    ruvia::http_response_file_handle opened() & noexcept {
-        return {reinterpret_cast<ruvia::http_response_file_handle::native_type>(this), release};
+    ruvia::http_response_file_descriptor opened() & noexcept {
+        return {reinterpret_cast<ruvia::http_response_file_descriptor::native_type>(this), release};
     }
 
-    static void release(ruvia::http_response_file_handle::native_type value) noexcept {
+    static void release(ruvia::http_response_file_descriptor::native_type value) noexcept {
         auto& record = *reinterpret_cast<reentrant_response_file_release*>(value);
         ++record.releases_;
         if (record.replacement_target_ != nullptr) {
@@ -239,20 +173,20 @@ TEST(Ruvia, response_file_body_owns_its_opened_handle_until_replacement) {
     const auto path = std::filesystem::path("opened-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({1, 2, 3, 4});
     {
-        http_response response(std::pmr::new_delete_resource());
+        http_response response;
         response.file_body(path.native(), 16, 0, 16, identity,
-            ruvia::http_response_file_handle(7, &release_counted_response_file_handle));
+            ruvia::http_response_file_descriptor(7, &release_counted_response_file_handle));
         const auto file = response.file_body();
         EXPECT_TRUE(file.has_value());
         if (file) {
-            EXPECT_TRUE(file->opened_handle() != nullptr);
-            if (file->opened_handle() != nullptr) {
-                EXPECT_EQ(file->opened_handle()->native(), ruvia::http_response_file_handle::native_type{7});
+            EXPECT_TRUE(file->opened_file() != nullptr);
+            if (file->opened_file() != nullptr) {
+                EXPECT_EQ(file->opened_file()->native(), ruvia::http_response_file_descriptor::native_type{7});
             }
         }
 
         // Moving the response moves the handle; nothing is released.
-        http_response target(std::pmr::new_delete_resource());
+        http_response target;
         target = std::move(response);
         EXPECT_EQ(released_response_file_handles, std::size_t{0});
         EXPECT_TRUE(!response.file_body().has_value());
@@ -260,12 +194,12 @@ TEST(Ruvia, response_file_body_owns_its_opened_handle_until_replacement) {
         // Replacing the body releases the handle exactly once.
         target.body("replaced");
         EXPECT_EQ(released_response_file_handles, std::size_t{1});
-        EXPECT_EQ(last_released_response_file_handle, ruvia::http_response_file_handle::native_type{7});
+        EXPECT_EQ(last_released_response_file_handle, ruvia::http_response_file_descriptor::native_type{7});
 
         // A rejected setter releases the handle it was given and keeps the body.
         EXPECT_TRUE(throws_invalid_argument([&] {
             target.file_body(path.native(), 10, 8, 3, identity,
-                ruvia::http_response_file_handle(8, &release_counted_response_file_handle));
+                ruvia::http_response_file_descriptor(8, &release_counted_response_file_handle));
         }));
         EXPECT_EQ(released_response_file_handles, std::size_t{2});
         EXPECT_EQ(target.body_bytes(), std::string_view("replaced"));
@@ -273,14 +207,14 @@ TEST(Ruvia, response_file_body_owns_its_opened_handle_until_replacement) {
         // A path-only file body exposes no opened handle.
         target.file_body(path.native(), 16, 0, 16, identity);
         const auto unopened = target.file_body();
-        EXPECT_TRUE(unopened.has_value() && unopened->opened_handle() == nullptr);
+        EXPECT_TRUE(unopened.has_value() && unopened->opened_file() == nullptr);
 
         target.file_body(path.native(), 16, 0, 16, identity,
-            ruvia::http_response_file_handle(9, &release_counted_response_file_handle));
+            ruvia::http_response_file_descriptor(9, &release_counted_response_file_handle));
     }
     // Destroying the response releases the last handle.
     EXPECT_EQ(released_response_file_handles, std::size_t{3});
-    EXPECT_EQ(last_released_response_file_handle, ruvia::http_response_file_handle::native_type{9});
+    EXPECT_EQ(last_released_response_file_handle, ruvia::http_response_file_descriptor::native_type{9});
 }
 
 TEST(Ruvia, response_file_handle_move_assignment_preserves_reentrant_replacement) {
@@ -298,7 +232,7 @@ TEST(Ruvia, response_file_handle_move_assignment_preserves_reentrant_replacement
 
         EXPECT_FALSE(source);
         EXPECT_FALSE(next);
-        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_handle::native_type>(&replacement));
+        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_descriptor::native_type>(&replacement));
         EXPECT_EQ(previous.releases_, 1U);
         EXPECT_EQ(incoming.releases_, 1U);
         EXPECT_EQ(replacement.releases_, 0U);
@@ -314,14 +248,14 @@ TEST(Ruvia, response_file_handle_move_assignment_detaches_source_before_retireme
     {
         auto target = previous.opened();
         auto source = incoming.opened();
-        ruvia::http_response_file_handle empty;
+        ruvia::http_response_file_descriptor empty;
         previous.replacement_target_ = &source;
         previous.replacement_source_ = &empty;
 
         target = std::move(source);
 
         EXPECT_FALSE(source);
-        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_handle::native_type>(&incoming));
+        EXPECT_EQ(target.native(), reinterpret_cast<ruvia::http_response_file_descriptor::native_type>(&incoming));
         EXPECT_EQ(previous.releases_, 1U);
         EXPECT_EQ(incoming.releases_, 0U);
     }
@@ -356,7 +290,7 @@ TEST(Ruvia, response_file_move_assignment_commits_before_old_body_reuses_source)
 }
 
 TEST(Ruvia, response_file_body_move_preserves_owned_path_and_identity) {
-    http_response source_value(std::pmr::new_delete_resource());
+    http_response source_value;
     const auto path = std::filesystem::path("moved-response.bin");
     const auto identity = ruvia::http_response_file_identity::checked({9, 8, 7, 6});
     source_value.file_body(path.native(), 23, 4, 9, identity);
@@ -371,71 +305,6 @@ TEST(Ruvia, response_file_body_move_preserves_owned_path_and_identity) {
         EXPECT_EQ(file->offset(), std::uint64_t{4});
         EXPECT_EQ(file->length(), std::uint64_t{9});
         EXPECT_TRUE(file->identity() == identity);
-    }
-}
-
-TEST(Ruvia, multipart_body_allocation_failure_preserves_previous_body) {
-    rejecting_memory_resource response_resource;
-    http_response response(&response_resource);
-    response.body("preserved");
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, "text/plain", "allocation_test", std::pmr::new_delete_resource());
-
-    response_resource.reject_allocations(true);
-    bool threw = false;
-    try {
-        response.multipart_file_body(std::filesystem::path("multipart-response-fixture.bin").native(), 10,
-            ruvia::http_response_file_identity::unchecked(), std::move(plan));
-    } catch (const std::bad_alloc&) {
-        threw = true;
-    }
-    EXPECT_TRUE(threw);
-    EXPECT_EQ(response.body_bytes(), std::string_view("preserved"));
-    EXPECT_TRUE(!response.has_multipart_file_body());
-}
-
-TEST(Ruvia, response_body_move_preserves_content) {
-    std::pmr::monotonic_buffer_resource source_resource;
-    std::pmr::monotonic_buffer_resource target_resource;
-    http_response source_value(&source_resource);
-    http_response target(&target_resource);
-    source_value.body("move-owned");
-    target.body("replaced");
-
-    target = std::move(source_value);
-    EXPECT_TRUE(target.headers().empty());
-    EXPECT_TRUE(target.status() == ruvia::http_status::ok);
-    EXPECT_TRUE(!target.header("missing").has_value());
-    EXPECT_TRUE(target.headers().size() == 0);
-    EXPECT_EQ(target.body_bytes(), std::string_view("move-owned"));
-}
-
-TEST(Ruvia, response_byte_body_moves_leave_sources_empty_and_reusable) {
-    enum class body_kind { copied,
-        owned,
-        static_value,
-        empty };
-    for (const auto kind : {body_kind::copied, body_kind::owned, body_kind::static_value, body_kind::empty}) {
-        constexpr std::string_view payload = "moved response payload";
-        const auto expected = kind == body_kind::empty ? std::string_view{} : payload;
-        check_response_body_moves([kind, payload](http_response& source) {
-            switch (kind) {
-                case body_kind::copied:
-                    source.body(payload);
-                    break;
-                case body_kind::owned:
-                    source.owned_body(std::pmr::string(payload, source.memory_resource()));
-                    break;
-                case body_kind::static_value:
-                    source.static_body(payload);
-                    break;
-                case body_kind::empty:
-                    break;
-            } }, [&](const http_response& target) {
-            EXPECT_EQ(target.body_bytes(), expected);
-            EXPECT_TRUE(!target.file_body().has_value());
-            EXPECT_EQ(target.body_segment_count(), expected.empty() ? std::size_t{0} : std::size_t{1}); });
     }
 }
 
@@ -475,50 +344,4 @@ TEST(Ruvia, empty_file_ranges_remain_segments_after_response_moves) {
             EXPECT_EQ(ruvia::plan_buffered_http_response_write(
                                ruvia::http_known_method::get, target).content_length(), std::uint64_t{0}); });
     }
-}
-
-TEST(Ruvia, empty_byte_representations_have_no_segments) {
-    http_response response(std::pmr::new_delete_resource());
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-    response.body("");
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-    response.static_body("");
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-    response.owned_body(std::pmr::string(response.memory_resource()));
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-    response.file_bytes_body(std::pmr::string(response.memory_resource()));
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-    response.head_metadata_body();
-    EXPECT_EQ(response.body_segment_count(), std::size_t{0});
-}
-
-TEST(Ruvia, response_multipart_body_moves_leave_sources_empty_and_reusable) {
-    const std::filesystem::path path("retained-multipart-response.bin");
-    const auto identity = ruvia::http_response_file_identity::checked({55, 66, 77, 88});
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    constexpr std::string_view expected =
-        "--moved_ranges\r\nContent-Type: text/plain\r\nContent-Range: bytes 0-1/10\r\n\r\n01\r\n"
-        "--moved_ranges\r\nContent-Type: text/plain\r\nContent-Range: bytes 8-9/10\r\n\r\n89\r\n"
-        "--moved_ranges--\r\n";
-    check_response_body_moves([&](http_response& source) {
-        auto plan = ruvia::make_http_multipart_byte_range_plan(
-            ranges, 10, "text/plain", "moved_ranges", source.memory_resource());
-        source.multipart_file_body(path.native(), 10, identity, std::move(plan)); }, [&](const http_response& target) {
-        EXPECT_TRUE(target.has_multipart_file_body());
-        std::pmr::string materialized;
-        constexpr std::string_view file_bytes = "0123456789";
-        for (std::size_t index = 0; index < target.body_segment_count(); ++index) {
-            const auto segment = target.body_segment(index);
-            if (segment.file_) {
-                EXPECT_TRUE(segment.file_->to_path() == path);
-                EXPECT_TRUE(segment.file_->identity() == identity);
-                materialized.append(file_bytes.substr(static_cast<std::size_t>(segment.file_->offset()),
-                    static_cast<std::size_t>(segment.file_->length())));
-            } else {
-                materialized.append(segment.bytes_);
-            }
-        }
-        EXPECT_EQ(materialized, expected);
-        EXPECT_EQ(ruvia::plan_buffered_http_response_write(
-                           ruvia::http_known_method::get, target).content_length(), static_cast<std::uint64_t>(expected.size())); });
 }

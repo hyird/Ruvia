@@ -8,8 +8,8 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_response.h"
 
+#include "memory/http_address_overlap.h"
 #include "response/http_response_header_state.h"
-#include "util/http_address_overlap.h"
 
 namespace ruvia::detail {
 

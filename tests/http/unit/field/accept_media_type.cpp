@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <initializer_list>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -9,10 +8,10 @@
 
 namespace {
 
-std::pmr::string media_type_with_parameters(int count) {
-    std::pmr::string value = "text/plain";
+std::string media_type_with_parameters(int count) {
+    std::string value = "text/plain";
     for (int index = 0; index < count; ++index) {
-        value += std::pmr::string(";p") + std::to_string(index).c_str() + "=\"a;b\"";
+        value += std::string(";p") + std::to_string(index).c_str() + "=\"a;b\"";
     }
     return value;
 }
@@ -280,7 +279,7 @@ TEST(Ruvia, http_accept_match_plain_text_parameter_exclusions_survive_field_orde
             EXPECT_FALSE(match.matched());
         }
         ruvia::http_accept_match joined;
-        joined.update_media_type(std::pmr::string(general) + ", " + std::pmr::string(excluded), offered);
+        joined.update_media_type(std::string(general) + ", " + std::string(excluded), offered);
         EXPECT_FALSE(joined.matched());
     }
 }

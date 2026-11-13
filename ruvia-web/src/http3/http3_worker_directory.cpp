@@ -18,8 +18,6 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 namespace ruvia::detail {
 #if !defined(_WIN32)
 namespace {
@@ -241,11 +239,11 @@ void attach_reuseport_cbpf(int fd, const http3_secret& secret, std::size_t worke
 #endif
 
 http3_worker_directory::http3_worker_directory(std::size_t worker_count)
-    : slots_(process_resource()),
-      listener_sockets_(process_resource()) {
+    : slots_(),
+      listener_sockets_() {
     slots_.reserve(worker_count);
     for (std::size_t index = 0; index < worker_count; ++index) {
-        slots_.push_back(make_pmr_object<slot>(process_resource()));
+        slots_.push_back(std::make_unique<slot>());
     }
 }
 
@@ -261,7 +259,7 @@ http3_worker_directory::~http3_worker_directory() {
 #endif
 }
 
-void http3_worker_directory::bind_worker(std::size_t index, const worker_handle& worker_value) {
+void http3_worker_directory::bind_worker(std::size_t index, const worker_ref& worker_value) {
     if (index >= slots_.size() || !worker_value.valid()) {
         throw std::invalid_argument("invalid HTTP/3 worker directory slot");
     }
@@ -310,7 +308,7 @@ void http3_worker_directory::open_listener_socket(std::size_t worker_index, std:
         }
         auto& group = listener_sockets_[listener_index];
         if (group.empty()) {
-            std::pmr::vector<unique_udp_fd> opened(process_resource());
+            std::vector<unique_udp_fd> opened;
             opened.reserve(slots_.size());
             if (inherited != nullptr && !inherited->udp().empty()) {
                 // Validated as bound to this endpoint, one per worker in
@@ -381,7 +379,7 @@ bool http3_worker_directory::hand_off(std::size_t owner, std::size_t listener_in
     }
     try {
         const auto status = target.worker_.post_factory([&]() -> move_only_function<void()> {
-            std::pmr::vector<std::byte> copied(bytes.begin(), bytes.end(), process_resource());
+            std::vector<std::byte> copied(bytes.begin(), bytes.end());
             http3_handoff_datagram datagram{
                 .bytes_ = std::move(copied),
                 .remote_ = remote,

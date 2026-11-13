@@ -194,3 +194,28 @@ TEST(Ruvia, parse_http_date_imf_fixdate) {
     EXPECT_EQ(static_cast<long long>(*t), 784111777LL);
     EXPECT_TRUE(!ruvia::parse_http_date("not a date").has_value());
 }
+
+TEST(Ruvia, format_http_vary_cache_key_distinguishes_absent_from_empty_header) {
+    const auto vary = ruvia::parse_http_vary("Accept-Language, X-Mode");
+    const std::array<ruvia::http_header_view, 1> absent{
+        ruvia::http_header_view{"X-Mode", "fast"},
+    };
+    const std::array<ruvia::http_header_view, 2> empty_value{
+        ruvia::http_header_view{"Accept-Language", ""},
+        ruvia::http_header_view{"X-Mode", "fast"},
+    };
+    const std::array<ruvia::http_header_view, 2> ows_only{
+        ruvia::http_header_view{"Accept-Language", " \t "},
+        ruvia::http_header_view{"X-Mode", "fast"},
+    };
+    const auto absent_key = ruvia::format_http_vary_cache_key(vary, absent);
+    const auto empty_key = ruvia::format_http_vary_cache_key(vary, empty_value);
+    const auto ows_key = ruvia::format_http_vary_cache_key(vary, ows_only);
+    ASSERT_TRUE(absent_key.has_value());
+    ASSERT_TRUE(empty_key.has_value());
+    ASSERT_TRUE(ows_key.has_value());
+    EXPECT_NE(*absent_key, *empty_key);
+    EXPECT_EQ(*empty_key, *ows_key);
+    EXPECT_FALSE(ruvia::http_vary_requests_match(vary, absent, empty_value));
+    EXPECT_TRUE(ruvia::http_vary_requests_match(vary, empty_value, ows_only));
+}

@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,7 +14,6 @@
 #include <asio/ip/address.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
@@ -28,9 +26,9 @@ class http_client_response_state;
 
 // The QUIC endpoint and TLS identity of one HTTP/3 connection owner.
 struct http3_client_route final {
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_;
-    std::pmr::string server_name_;
+    std::string server_name_;
 };
 
 // QUIC TLS shared by one pool's HTTP/3 connections: one SSL_CTX and resumption
@@ -51,7 +49,7 @@ public:
     asio::ssl::context context_;
 
 private:
-    std::pmr::vector<ticket> tickets_;
+    std::vector<ticket> tickets_;
     std::size_t capacity_;
     std::uint64_t clock_{};
 };
@@ -115,8 +113,8 @@ private:
     http3_client_tls& tls_;
     http3_client_route route_;
     std::uint64_t serial_;
-    std::unique_ptr<session, pmr_object_deleter<session>> session_;
-    std::unique_ptr<address_race, pmr_object_deleter<address_race>> race_;
+    std::unique_ptr<session> session_;
+    std::unique_ptr<address_race> race_;
 };
 }  // namespace ruvia::detail
 #endif

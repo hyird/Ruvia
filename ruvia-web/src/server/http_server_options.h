@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 
@@ -175,7 +174,7 @@ struct http_server_options final {
     // The validated application server configuration, one copy per worker.
     server_config server_{};
     // Borrowed from the worker runtime, whose shutdown joins every connection;
-    // each connection charges its inbound_buffer_resource against it.
+    // each connection charges its inbound_buffer_account against it.
     inbound_buffer_budget* inbound_budget_{nullptr};
     // Presence enables the policy; absence bypasses it without retaining an
     // inactive configuration state.
@@ -189,7 +188,7 @@ struct http_server_options final {
     document_root_state document_root_{};
     // Peers whose forwarding headers may be believed. Empty by default, so an
     // unconfigured server treats every direct peer as the client.
-    http_client_ip_extractor trusted_proxies_{process_resource()};
+    http_client_ip_extractor trusted_proxies_{};
     access_log_sink access_log_{};
     const env* env_{nullptr};
     worker_failure_sink failure_{};
@@ -227,7 +226,7 @@ struct http_server_options final {
     }
     void set_trusted_proxies(const trusted_proxy_config& config);
     void clear_trusted_proxies() noexcept {
-        trusted_proxies_ = http_client_ip_extractor(process_resource());
+        trusted_proxies_ = http_client_ip_extractor();
     }
 };
 

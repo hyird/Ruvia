@@ -3,16 +3,13 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <new>
 #include <span>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_schema.h"
 
-#include "failing_memory_resource.h"
 #include "test_exceptions.h"
 
 using ruvia::db_data_type;
@@ -24,13 +21,12 @@ using ruvia::db_schema_column;
 using ruvia::db_schema_constraint;
 using ruvia::db_table_definition;
 using ruvia::db_table_option;
-using ruvia::test::failing_memory_resource;
 using ruvia::test::throws_on;
 
 RUVIA_DB_ENTITY(enum_entity_type, "enum_events",
-    ruvia::db_column<"state", std::pmr::string,
+    ruvia::db_column<"state", std::string,
         ruvia::db_column_options{.enum_name_ = ruvia::fixed_string{"app.event_state"}, .default_expression_ = ruvia::fixed_string{"'pending'::app.event_state"}}>,
-    ruvia::db_column<"created_at", std::pmr::string,
+    ruvia::db_column<"created_at", std::string,
         ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .default_expression_ = ruvia::fixed_string{"now()"}}>)
 
 TEST(Ruvia, db_schema_entity_named_enum_and_default_expressions) {
@@ -111,7 +107,7 @@ TEST(Ruvia, db_schema_enum_and_postgresql_only_operations_reject_mariadb) {
 
 RUVIA_DB_ENTITY(app_events_entity_type, "app.events",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>,
-    ruvia::db_column<"payloads", std::pmr::vector<std::pmr::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
+    ruvia::db_column<"payloads", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::jsonb}>)
 
 TEST(Ruvia, db_schema_entity_metadata_preserves_explicit_array_element_types) {
     using entity_type = app_events_entity_type;
@@ -122,8 +118,8 @@ TEST(Ruvia, db_schema_entity_metadata_preserves_explicit_array_element_types) {
 }
 
 RUVIA_DB_ENTITY(char_records_entity_type, "char_records",
-    ruvia::db_column<"code", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 64}>,
-    ruvia::db_column<"codes", std::pmr::vector<std::pmr::string>, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
+    ruvia::db_column<"code", std::string, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 64}>,
+    ruvia::db_column<"codes", std::vector<std::string>, ruvia::db_column_options{.data_type_ = db_data_type::char_value, .length_ = 8}>)
 
 TEST(Ruvia, db_schema_char_entity_and_column_operations_render_with_dialect_limits) {
     using entity_type = char_records_entity_type;
@@ -222,29 +218,29 @@ template <typename value_type, auto options>
 concept declarable_db_column = requires { typename ruvia::db_column<"value", value_type, options>; };
 
 static_assert(declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .generated_ = true}>);
-static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true}>);
-static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true, .create_date_ = true}>);
+static_assert(declarable_db_column<std::string, ruvia::db_column_options{.read_only_ = true}>);
+static_assert(declarable_db_column<std::string, ruvia::db_column_options{.read_only_ = true, .create_date_ = true}>);
 static_assert(declarable_db_column<std::int32_t, ruvia::db_column_options{.version_ = true}>);
-static_assert(declarable_db_column<std::pmr::string, ruvia::db_column_options{.delete_date_ = true}>);
+static_assert(declarable_db_column<std::string, ruvia::db_column_options{.delete_date_ = true}>);
 // Identity and computed generation exclude each other and read-only columns.
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .generated_type_ = db_generated_type::stored}>);
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .read_only_ = true}>);
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .read_only_ = true}>);
 // Identity needs a non-null integer.
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.generated_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.generated_ = true}>);
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.generated_ = true, .nullable_ = true}>);
 // A named enum type replaces the scalar type.
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::text, .enum_name_ = ruvia::fixed_string{"app.state"}}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.data_type_ = db_data_type::text, .enum_name_ = ruvia::fixed_string{"app.state"}}>);
 // version_ is a non-null integer concurrency token.
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.version_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.version_ = true}>);
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.nullable_ = true, .version_ = true}>);
 // Primary keys cannot be nullable or soft-delete markers.
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.primary_key_ = true, .nullable_ = true}>);
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.primary_key_ = true, .delete_date_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.primary_key_ = true, .delete_date_ = true}>);
 // One lifecycle role per column, and repository-stamped roles must be writable.
 static_assert(!declarable_db_column<std::int64_t, ruvia::db_column_options{.update_date_ = true, .version_ = true}>);
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.read_only_ = true, .delete_date_ = true}>);
-static_assert(!declarable_db_column<std::pmr::string, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .update_date_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.read_only_ = true, .delete_date_ = true}>);
+static_assert(!declarable_db_column<std::string, ruvia::db_column_options{.generated_type_ = db_generated_type::stored, .update_date_ = true}>);
 
 }  // namespace db_schema_column_option_test
 
@@ -738,92 +734,6 @@ TEST(Ruvia, db_schema_timescale_options_cover_direct_settings_and_rejections) {
     EXPECT_TRUE(throws_on([&] { maria.remove_retention_policy("t"); }));
 }
 
-// 这两个操作只追加已存在的正文/控制栈，不构造或移动 PMR 容器；
-// Debug 也逐点注入可捕获的存储增长失败。
-TEST(Ruvia, db_procedure_begin_block_failure_preserves_control_state_and_allows_retry) {
-    db_procedure expected;
-    expected.begin_block();
-    expected.end_block();
-    const auto baseline = expected.body();
-    expected.begin_block();
-    expected.end_block();
-    const auto complete = expected.body();
-    bool reached_success = false;
-    for (std::size_t failure_point = 0; failure_point < 16; ++failure_point) {
-        failing_memory_resource resource;
-        {
-            db_procedure procedure(&resource);
-            procedure.begin_block();
-            procedure.end_block();
-            resource.fail_after(failure_point);
-            bool failed = false;
-            try {
-                procedure.begin_block();
-            } catch (const std::bad_alloc&) {
-                failed = true;
-            }
-            resource.allow_allocations();
-            if (failed) {
-                EXPECT_EQ(procedure.body(), baseline);
-                procedure.begin_block();
-            }
-            procedure.end_block();
-            EXPECT_EQ(procedure.body(), complete);
-            if (!failed) {
-                reached_success = true;
-            }
-        }
-        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-        if (reached_success) {
-            break;
-        }
-    }
-    EXPECT_TRUE(reached_success);
-}
-
-TEST(Ruvia, db_procedure_apply_failure_preserves_complete_statements_and_allows_retry) {
-    db_schema schema({.driver_ = db_driver::postgresql});
-    const std::pmr::string first_name(63, 'a', ruvia::process_resource());
-    const std::pmr::string second_name(63, 'b', ruvia::process_resource());
-    schema.create_schema(first_name);
-    schema.create_schema(second_name);
-    db_procedure expected;
-    expected.begin_block();
-    expected.end_block();
-    const auto baseline = expected.body();
-    expected.apply(schema);
-    const auto complete = expected.body();
-    bool reached_success = false;
-    for (std::size_t failure_point = 0; failure_point < 16; ++failure_point) {
-        failing_memory_resource resource;
-        {
-            db_procedure procedure(&resource);
-            procedure.begin_block();
-            procedure.end_block();
-            resource.fail_after(failure_point);
-            bool failed = false;
-            try {
-                procedure.apply(schema);
-            } catch (const std::bad_alloc&) {
-                failed = true;
-            }
-            resource.allow_allocations();
-            if (failed) {
-                EXPECT_EQ(procedure.body(), baseline);
-                procedure.apply(schema);
-            } else {
-                reached_success = true;
-            }
-            EXPECT_EQ(procedure.body(), complete);
-        }
-        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-        if (reached_success) {
-            break;
-        }
-    }
-    EXPECT_TRUE(reached_success);
-}
-
 TEST(Ruvia, db_procedure_public_helpers_render_and_validate) {
     ruvia::db_query expressions;
     ruvia::db_procedure procedure;
@@ -916,7 +826,7 @@ TEST(Ruvia, db_procedure_public_helpers_render_and_validate) {
 
 RUVIA_DB_ENTITY(devices_read_only_entity, "devices",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"protocol_address", std::pmr::string, ruvia::db_column_options{.read_only_ = true}>)
+    ruvia::db_column<"protocol_address", std::string, ruvia::db_column_options{.read_only_ = true}>)
 
 TEST(Ruvia, db_schema_trigger_transition_tables_and_read_only_columns_render_and_validate) {
     using read_only_entity = devices_read_only_entity;
@@ -1008,9 +918,9 @@ TEST(Ruvia, db_schema_rejects_unknown_enum_values_instead_of_defaulting) {
 RUVIA_DB_ENTITY(versioned_articles_entity, "versioned_articles",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
     ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
-    ruvia::db_column<"created_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .create_date_ = true}>,
-    ruvia::db_column<"updated_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .update_date_ = true}>,
-    ruvia::db_column<"deleted_at", std::pmr::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .delete_date_ = true}>)
+    ruvia::db_column<"created_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .create_date_ = true}>,
+    ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .update_date_ = true}>,
+    ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.data_type_ = db_data_type::timestamp_tz, .delete_date_ = true}>)
 
 TEST(Ruvia, db_schema_and_procedure_functions_loops_dynamic_sql_and_table_locks) {
     using versioned_entity = versioned_articles_entity;

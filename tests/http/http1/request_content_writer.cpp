@@ -4,7 +4,6 @@
 #include <array>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <span>
 #include <stdexcept>
@@ -44,7 +43,7 @@ TEST(Ruvia, http1_streaming_request_chunked_upload_and_trailers) {
     EXPECT_TRUE(plan != nullptr);
     EXPECT_EQ(prepared_req->head(), std::string_view("POST / HTTP/1.1\r\nHost: example.com\r\nTransfer-Encoding: chunked\r\n\r\n"));
     ruvia::http1_request_content_writer writer(*plan);
-    const std::pmr::string payload_value = "hello";
+    const std::string payload_value = "hello";
     auto chunk = writer.plan_chunk(payload_value);
     EXPECT_TRUE((chunk.index() == 0));
     EXPECT_EQ(std::get<0>(chunk).prefix(), std::string_view("5\r\n"));
@@ -100,7 +99,7 @@ TEST(Ruvia, http1_streaming_request_known_length_and_continue_gate) {
     EXPECT_TRUE(prepared_req != nullptr);
     EXPECT_TRUE((prepared_req->head().find("Content-Length: 3\r\n") != std::string_view::npos));
     ruvia::http1_request_content_writer writer(*prepared_req->content_plan().streaming());
-    const std::pmr::string payload_value = "abc";
+    const std::string payload_value = "abc";
     EXPECT_TRUE(!(writer.plan_chunk(payload_value).index() == 0));
     writer.release_content();
     EXPECT_TRUE(!(writer.plan_finish({}).index() == 0));
@@ -143,7 +142,7 @@ TEST(Ruvia, http1_streaming_request_finish_accepts_trailers_borrowed_from_output
         buffer.fill('#');
         std::array<ruvia::http_header_view, 2> fields{};
         std::size_t count = 1;
-        std::pmr::string expected = "0\r\nDigest: value\r\n\r\n";
+        std::string expected = "0\r\nDigest: value\r\n\r\n";
         const auto copy = [&](std::size_t offset, std::string_view text) {
             std::copy(text.begin(), text.end(), buffer.begin() + static_cast<std::ptrdiff_t>(offset));
             return std::string_view(buffer.data() + offset, text.size());
@@ -205,13 +204,13 @@ TEST(Ruvia, http1_streaming_request_finish_accepts_trailers_borrowed_from_output
 TEST(Ruvia, http1_streaming_request_finish_accepts_output_alias_at_header_byte_limit) {
     auto writer = chunked_request_writer();
     constexpr std::size_t framing_bytes = std::string_view("0\r\nDigest: \r\n\r\n").size();
-    const std::pmr::string value(ruvia::max_http_header_bytes - framing_bytes, 'v');
-    std::pmr::string buffer(ruvia::max_http_header_bytes, 'v');
+    const std::string value(ruvia::max_http_header_bytes - framing_bytes, 'v');
+    std::string buffer(ruvia::max_http_header_bytes, 'v');
     const std::array trailers{ruvia::http_header_view{"Digest", std::string_view(buffer).substr(0, value.size())}};
     const auto planned = writer.plan_finish(std::span(buffer.data(), buffer.size()), trailers);
     EXPECT_TRUE(planned.index() == 0);
     if (planned.index() == 0) {
-        const std::pmr::string expected = "0\r\nDigest: " + value + "\r\n\r\n";
+        const std::string expected = "0\r\nDigest: " + value + "\r\n\r\n";
         EXPECT_EQ(std::get<0>(planned), std::string_view(expected));
     }
     writer.commit_finish();

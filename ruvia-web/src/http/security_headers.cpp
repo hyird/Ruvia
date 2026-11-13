@@ -1,10 +1,8 @@
 #include "ruvia/web/security_headers.h"
 
-#include <memory_resource>
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
@@ -44,8 +42,10 @@ constexpr std::string_view permissions_policy_name = "Permissions-Policy";
 
 }  // namespace
 
-security_headers_middleware::security_headers_middleware(
-    const security_headers_config& source_value, std::pmr::memory_resource* resource)
+security_headers_middleware::security_headers_middleware()
+    : security_headers_middleware(security_headers_config{}) {}
+
+security_headers_middleware::security_headers_middleware(const security_headers_config& source_value)
     : emit_content_type_options_(emits_default_security_header(source_value.content_type_options_header_)),
       emit_frame_options_(emits_default_security_header(source_value.frame_options_header_)),
       emit_strict_transport_security_(
@@ -60,11 +60,7 @@ security_headers_middleware::security_headers_middleware(
                   throw std::invalid_argument("X-XSS-Protection header policy is invalid");
           }
       }()),
-      replace_existing_(replaces_existing_security_header(source_value.existing_headers_)),
-      content_security_policy_(resource),
-      referrer_policy_(resource),
-      permissions_policy_(resource),
-      custom_headers_(resource) {
+      replace_existing_(replaces_existing_security_header(source_value.existing_headers_)) {
     const auto validate_value = [](std::string_view value) {
         if (!value.empty() && !is_valid_http_header_value(value)) {
             throw std::invalid_argument("security header value is invalid");
@@ -86,17 +82,11 @@ security_headers_middleware::security_headers_middleware(
     permissions_policy_.assign(source_value.permissions_policy_);
     custom_headers_.reserve(source_value.custom_headers_.size());
     for (const auto& header : source_value.custom_headers_) {
-        custom_headers_.emplace_back(header.name_, header.value_, resource);
+        custom_headers_.emplace_back(header.name_, header.value_);
     }
 }
 
-security_headers_middleware::security_headers_middleware()
-    : security_headers_middleware(security_headers_config{}) {}
-
-security_headers_middleware::security_headers_middleware(const security_headers_config& config)
-    : security_headers_middleware(config, process_resource()) {}
-
-task<void> security_headers_middleware::handle(context& context_value, next& next_value) {
+task<void> security_headers_middleware::invoke(context& context_value, next& next_value) {
     const bool secure_transport = context_value.conn().scheme() == http_scheme::https;
     const auto set_header = [&context_value, replace_existing = replace_existing_](
                                 std::string_view name, std::string_view value, bool skip_empty) {

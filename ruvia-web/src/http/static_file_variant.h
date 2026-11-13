@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -65,7 +64,7 @@ private:
 // representation exists.
 [[nodiscard]] std::optional<static_file_representation> select_static_file_representation(
     const static_root& root, std::string_view relative,
-    const http_response_coding_selection& selection, std::pmr::memory_resource* resource,
+    const http_response_coding_selection& selection,
     detail::static_root_entry_view identity);
 
 }  // namespace ruvia

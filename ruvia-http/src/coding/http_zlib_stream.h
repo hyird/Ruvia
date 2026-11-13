@@ -5,16 +5,15 @@
 #include <algorithm>
 #include <cstddef>
 #include <limits>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "util/http_c_library_memory.h"
+#include "memory/http_c_library_memory.h"
 
-// zlib inflate/deflate state whose working memory, including the LZ77 window,
-// comes from one PMR resource. zlib keeps back-pointers to both the z_stream and
-// the allocator context, so these types are pinned: owners embed them in storage
-// whose address never changes.
+// zlib inflate/deflate state with tracked working memory, including the LZ77
+// window. zlib keeps back-pointers to both the z_stream and the allocator
+// context, so these types are pinned: owners embed them in storage whose
+// address never changes.
 //
 // Construction rethrows an allocation failure captured during initialization.
 // Any other zlib refusal leaves the stream uninitialized so each owner maps it
@@ -75,7 +74,9 @@ private:
 
 class zlib_inflate_stream final {
 public:
-    zlib_inflate_stream(std::pmr::memory_resource* resource, int window_bits);
+    explicit zlib_inflate_stream(
+        int window_bits,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zlib_inflate_stream();
     zlib_inflate_stream(const zlib_inflate_stream&) = delete;
     zlib_inflate_stream& operator=(const zlib_inflate_stream&) = delete;
@@ -99,9 +100,12 @@ private:
 class zlib_deflate_stream final {
 public:
     zlib_deflate_stream(
-        std::pmr::memory_resource* resource, int level, int window_bits, int mem_level, int strategy);
+        int level, int window_bits, int mem_level, int strategy,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     // The gzip or deflate content-coding stream with zlib's default parameters.
-    zlib_deflate_stream(std::pmr::memory_resource* resource, zlib_content_format format);
+    explicit zlib_deflate_stream(
+        zlib_content_format format,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zlib_deflate_stream();
     zlib_deflate_stream(const zlib_deflate_stream&) = delete;
     zlib_deflate_stream& operator=(const zlib_deflate_stream&) = delete;
@@ -121,7 +125,7 @@ public:
     // Z_SYNC_FLUSH or Z_FINISH) into output. False means output would exceed
     // `max_encoded_bytes` in total; no byte past that cap is appended. After
     // false or an exception, the owner must reset or discard this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::pmr::string& output, int flush,
+    [[nodiscard]] bool encode(std::string_view input, std::string& output, int flush,
         std::size_t max_encoded_bytes);
 
 private:

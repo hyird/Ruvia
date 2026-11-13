@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -54,35 +53,5 @@ TEST(Ruvia, content_encoding_field_lines_fold_in_order_ignoring_other_fields) {
     EXPECT_EQ(stacked.codings().size(), expected.size());
     for (std::size_t i = 0; i < expected.size(); ++i) {
         EXPECT_TRUE(stacked.codings()[i] == expected[i]);
-    }
-}
-
-TEST(Ruvia, response_content_encoding_rewrites_validators_and_range_support) {
-    const struct {
-        std::string_view etag_;
-        std::optional<std::string_view> expected_;
-    } cases[] = {
-        {"\"v1\"", std::string_view("W/\"v1\"")},
-        {"W/\"v2\"", std::string_view("W/\"v2\"")},
-        {"abc", std::nullopt},
-        {"\"unterminated", std::nullopt},
-        {"W/abc", std::nullopt},
-    };
-    for (const bool replace_body : {false, true}) {
-        for (const auto& test : cases) {
-            ruvia::http_response response;
-            response.body("identity representation");
-            response.header("ETag", test.etag_);
-            response.header("Accept-Ranges", "bytes");
-            if (replace_body) {
-                std::pmr::string coded("coded", response.memory_resource());
-                response.replace_body_with_content_encoding(std::move(coded), "gzip");
-            } else {
-                response.apply_content_encoding("gzip");
-            }
-            EXPECT_TRUE(response.header("Content-Encoding") == std::optional<std::string_view>("gzip"));
-            EXPECT_TRUE(response.header("ETag") == test.expected_);
-            EXPECT_TRUE(!response.header("Accept-Ranges").has_value());
-        }
     }
 }

@@ -20,7 +20,7 @@
 #include "server/http_server_listener.h"
 #include "server/http_server_options.h"
 #include "server/http_server_worker_state.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/static_root_runtime.h"
 #include "server/worker_codecs.h"
 #include "server/worker_connections.h"
@@ -65,7 +65,7 @@ public:
     [[nodiscard]] std::shared_ptr<connection_count> listener_connections(const asio::ip::tcp::endpoint& endpoint) const {
         return connections_.listener_connections(endpoint);
     }
-    [[nodiscard]] web_worker_handle web_worker() const;
+    [[nodiscard]] web_worker_ref web_worker() const;
     // Owner thread, before admitting this run's first routed listener.
     void adopt_route_rate_limiter(rate_limiter& prepared) noexcept {
         capabilities_.adopt_route_rate_limiter(prepared);

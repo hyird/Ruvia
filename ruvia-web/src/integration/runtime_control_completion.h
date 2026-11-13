@@ -12,7 +12,7 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia::detail {
 
@@ -20,14 +20,14 @@ namespace ruvia::detail {
 // cancels early: borrowed command state cannot retire before every receipt.
 class runtime_control_completion final {
     struct state final {
-        explicit state(worker_handle caller)
+        explicit state(worker_ref caller)
             : caller_(std::move(caller)) {}
         ~state() {
             if (failure_ && !observed_) {
                 report_unhandled_failure("runtime control", failure_);
             }
         }
-        worker_handle caller_;
+        worker_ref caller_;
         std::mutex mutex_;
         std::exception_ptr failure_;
         std::coroutine_handle<> continuation_{};
@@ -127,7 +127,7 @@ public:
         bool resumed_{};
         friend class runtime_control_completion;
     };
-    explicit runtime_control_completion(worker_handle caller)
+    explicit runtime_control_completion(worker_ref caller)
         : state_(std::make_shared<state>(std::move(caller))),
           lifetime_(state_.get(), [value = state_](void*) noexcept {
               std::coroutine_handle<> continuation;

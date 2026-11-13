@@ -75,16 +75,15 @@ http1_client_status_line_parse_result_type parse_http1_client_status_line(std::s
 }
 
 http1_client_parsed_response_head::http1_client_parsed_response_head(
-    const http1_client_parsed_status_line& status_line, std::pmr::memory_resource* resource) noexcept
+    const http1_client_parsed_status_line& status_line) noexcept
     : received_status_(status_line.received_status_),
       status_code_(status_line.received_status_.status()),
-      protocol_version_(status_line.protocol_version_),
-      headers_(resource) {}
+      protocol_version_(status_line.protocol_version_) {}
 
 http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     const http1_client_parsed_status_line& status_line, std::string_view field_section,
-    const http1_client_exchange_state& exchange_state, std::pmr::memory_resource* resource) {
-    http1_client_parsed_response_head output(status_line, resource);
+    const http1_client_exchange_state& exchange_state) {
+    http1_client_parsed_response_head output(status_line);
 
     const auto content_semantics = classify_http_response_content_semantics(
         http1_client_exchange_state_access::method(exchange_state), output.status_code_);

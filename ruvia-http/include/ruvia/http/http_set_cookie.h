@@ -6,7 +6,7 @@
 #include <string_view>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 
 namespace ruvia {
 

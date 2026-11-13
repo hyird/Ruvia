@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <type_traits>
@@ -10,7 +9,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_error.h"
 #include "ruvia/http/http_request_body_error.h"
@@ -161,8 +160,6 @@ struct http1_chunked_body_decoder_config final {
     protocol_byte_limit body_limit_{protocol_byte_limit::unlimited()};
     http1_trailer_obs_fold obs_fold_{http1_trailer_obs_fold::reject};
     http1_trailer_message trailer_message_{http1_trailer_message::request};
-    // Owns published trailer fields; nullptr selects the default resource.
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // Incremental sans-I/O HTTP/1 chunk framing decoder. Payload views borrow the
@@ -186,7 +183,7 @@ struct http1_chunked_body_decoder_config final {
 // was not permitted to generate follow trailer_message_.
 // The complete view publishes the remaining fields in received order, names
 // lowercase and values without surrounding OWS. The decoder owns them: storage
-// is allocated from the configured resource only for a section that keeps a
+// is allocated only for a section that keeps a
 // field, and the view stays valid until the next decode() call, or until the
 // decoder is moved from, assigned to or destroyed.
 class http1_chunked_body_decoder final {
@@ -196,8 +193,7 @@ public:
     http1_chunked_body_decoder(const http1_chunked_body_decoder&) = delete;
     http1_chunked_body_decoder& operator=(const http1_chunked_body_decoder&) = delete;
     http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept;
-    // Allocates when the two decoders' trailer resources differ.
-    http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&);
+    http1_chunked_body_decoder& operator=(http1_chunked_body_decoder&&) noexcept;
 
     [[nodiscard]] http1_chunk_decode_result decode(std::string_view available);
     [[nodiscard]] http1_chunk_decode_result decode(std::string_view available, std::size_t max_body_bytes);
@@ -232,7 +228,7 @@ private:
     // max_http_header_bytes.
     std::size_t framing_overhead_bytes_{0};
     http1_trailer_message trailer_message_;
-    std::pmr::vector<http_header> trailers_;
+    std::vector<http_header> trailers_;
 };
 
 [[nodiscard]] inline http_protocol_error http_request_chunk_decode_error(

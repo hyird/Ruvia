@@ -11,7 +11,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
@@ -29,19 +28,14 @@ client_request_policy::client_request_policy(const http_client_config_storage& c
     : config_(config),
       jar_(config.scheme_, config.host_,
           {.max_cookies_ = config.max_cookies_,
-              .max_cookie_bytes_ = config.max_cookie_bytes_,
-              .resource_ = process_resource()}) {
+              .max_cookie_bytes_ = config.max_cookie_bytes_}) {
     for (const auto& cookie : config.cookies_) {
         jar_.add_configured_cookie(cookie.name(), cookie.value());
     }
 }
 
 bool client_request_policy::addresses_origin(const http_client_request_storage& request) const noexcept {
-    if (!request.is_tunnel() || request.is_upgrade()) {
-        return request.route().alias_origin_;
-    }
-    return http_authorities_equal(borrowed_text(request.tunnel_authority()),
-        borrowed_text(std::string_view(config_.authority_)), config_.scheme_ == http_scheme::https ? 443 : 80);
+    return (!request.is_tunnel() || request.is_upgrade()) && request.route().alias_origin_;
 }
 
 http_client_request_view client_request_policy::prepare_request(

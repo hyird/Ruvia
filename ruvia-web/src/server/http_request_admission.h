@@ -3,12 +3,10 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <variant>
 
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_request.h"
@@ -54,7 +52,6 @@ struct http_request_admission_input final {
     // The parser or subrequest supplies the response-coding selection.
     http_response_coding_selection coding_;
     // Request arena for copied rejection diagnostics.
-    std::pmr::memory_resource* resource_;
     // The protocol's Expect plan, when it defers the rejection to Web.
     const http_server_expectation_plan* expectation_{};
     // Start of the request for the access-log duration.
@@ -101,8 +98,7 @@ private:
 // Answers a rejection through the application's error handler, adding the
 // rate-limit headers when that is why the request was refused. The lazy task
 // owns this snapshot; its diagnostic text still borrows static/request storage.
-[[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, http_request_rejection rejection, const context_services& services);
+[[nodiscard]] task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services);
 
 // Result of the synchronous first preparation pass. ready() is null only when
 // a blocking-pool encode or the application error handler must be awaited
@@ -188,28 +184,26 @@ public:
     // an uncommitted response may enter. The common response (no blocking-pool
     // encode, no recovery) completes here without a coroutine frame.
     [[nodiscard]] http_response_preparation prepare(
-        http_response& response, const http_server_options& options, const worker_handle& worker) const;
+        http_response& response, const http_server_options& options, const worker_ref& worker) const;
 
     // Completes a preparation whose ready() is null, with the arguments given
     // to prepare(). The application error handler runs at most once here.
     [[nodiscard]] task<prepared_application_response> finish_prepare(const http_response_preparation& preparation,
-        http_response& response, const http_server_options& options, const route_table& routes,
-        request_memory& memory, const context_services& services) const;
+        http_response& response, const http_server_options& options, const route_table& routes, const context_services& services) const;
 
     [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
-        const http_server_options& options, const worker_handle& worker, const route_table& routes,
-        request_memory& memory, const context_services& services) const {
+        const http_server_options& options, const worker_ref& worker, const route_table& routes, const context_services& services) const {
         const auto first = prepare(response, options, worker);
         if (const auto* ready = first.ready()) {
             co_return *ready;
         }
-        co_return co_await finish_prepare(first, response, options, routes, memory, services);
+        co_return co_await finish_prepare(first, response, options, routes, services);
     }
 
     [[nodiscard]] task<prepared_application_response> prepare_or_finish(http_response& response,
-        const http_server_options& options, const route_table& routes, request_memory& memory,
+        const http_server_options& options, const route_table& routes,
         const context_services& services) const {
-        return prepare_or_finish(response, options, services.worker(), routes, memory, services);
+        return prepare_or_finish(response, options, services.worker(), routes, services);
     }
 
     // Records a terminal outcome whose final status was committed. A single
@@ -374,6 +368,6 @@ private:
 // table or the rejection handler.
 [[nodiscard]] task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
     const http_request_admission_input& input, const http_request_admission_policy& policy,
-    const context_services& services, request_memory& memory, http_response& response);
+    const context_services& services, http_response& response);
 
 }  // namespace ruvia::detail

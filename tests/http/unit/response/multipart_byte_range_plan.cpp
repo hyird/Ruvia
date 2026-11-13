@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <string>
@@ -14,14 +13,10 @@
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/http/http_response.h"
 
-#include "failing_memory_resource.h"
-
-using ruvia::test::failing_memory_resource;
-
 namespace {
 
-std::pmr::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& plan, std::string_view payload_value) {
-    std::pmr::string body;
+std::string materialize_multipart(const ruvia::http_multipart_byte_range_plan& plan, std::string_view payload_value) {
+    std::string body;
     for (const auto& segment : plan.segments()) {
         if (segment.kind_ == ruvia::http_multipart_byte_range_plan::segment_kind::metadata) {
             const auto metadata = plan.metadata();
@@ -46,10 +41,10 @@ std::pmr::string materialize_multipart(const ruvia::http_multipart_byte_range_pl
 
 TEST(Ruvia, multipart_range_plan_serializes_owned_inputs_and_every_segment_exactly) {
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
-    std::pmr::string media_type = "text/plain; charset=utf-8";
-    std::pmr::string boundary = "range boundary";
+    std::string media_type = "text/plain; charset=utf-8";
+    std::string boundary = "range boundary";
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, media_type, boundary, std::pmr::new_delete_resource());
+        ranges, 10, media_type, boundary);
     media_type.assign(media_type.size(), 'x');
     boundary.assign(boundary.size(), 'x');
     const std::string_view expected =
@@ -64,8 +59,8 @@ TEST(Ruvia, multipart_range_plan_serializes_owned_inputs_and_every_segment_exact
 }
 
 TEST(Ruvia, multipart_range_plan_preserves_all_ranges_across_metadata_growth) {
-    std::pmr::string field = "bytes=";
-    std::pmr::string expected;
+    std::string field = "bytes=";
+    std::string expected;
     constexpr std::string_view payload_value = "0123456789abcdefghijklmnopqrstuv";
     for (std::size_t index = 0; index < ruvia::http_byte_range_set::capacity; ++index) {
         char offset_buffer[20];
@@ -84,125 +79,15 @@ TEST(Ruvia, multipart_range_plan_preserves_all_ranges_across_metadata_growth) {
     const auto ranges = ruvia::resolve_http_byte_range_set(field, payload_value.size());
     EXPECT_EQ(ranges.size(), ruvia::http_byte_range_set::capacity);
     const auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, payload_value.size(), "application/octet-stream", "all_ranges", std::pmr::new_delete_resource());
+        ranges, payload_value.size(), "application/octet-stream", "all_ranges");
     EXPECT_EQ(materialize_multipart(plan, payload_value), expected);
     EXPECT_EQ(plan.content_length(), expected.size());
-}
-
-TEST(Ruvia, multipart_range_plan_retains_cloned_storage_until_owner_destruction) {
-    failing_memory_resource source_resource;
-    failing_memory_resource retained_resource;
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    {
-        auto retained = [&] {
-            auto source_value = ruvia::make_http_multipart_byte_range_plan(
-                ranges, 10, "text/plain", "retained_boundary", &source_resource);
-            return source_value.clone(&retained_resource);
-        }();
-        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
-        const auto baseline = retained_resource.live_allocations();
-        EXPECT_TRUE(baseline != 0);
-        const auto metadata = retained.metadata().data();
-        const auto expected = materialize_multipart(retained, "0123456789");
-        for (std::size_t index = 0; index < 32; ++index) {
-            {
-                auto temporary = ruvia::make_http_multipart_byte_range_plan(
-                    ranges, 10, "application/octet-stream", "temporary_boundary", &source_resource);
-                EXPECT_TRUE(temporary.content_length() != 0);
-            }
-            EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
-            EXPECT_EQ(retained_resource.live_allocations(), baseline);
-            EXPECT_EQ(materialize_multipart(retained, "0123456789"), expected);
-        }
-        retained_resource.fail_after(0);
-        auto moved = std::move(retained);
-        retained_resource.allow_allocations();
-        EXPECT_TRUE(moved.resource() == &retained_resource);
-        EXPECT_TRUE(moved.metadata().data() == metadata);
-        EXPECT_EQ(materialize_multipart(moved, "0123456789"), expected);
-    }
-    EXPECT_EQ(retained_resource.live_allocations(), std::size_t{0});
-}
-
-TEST(Ruvia, multipart_range_plan_allocation_failures_release_partial_storage_and_allow_retry) {
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
-    const std::pmr::string boundary(70, 'b');
-    failing_memory_resource resource;
-    bool succeeded = false;
-    for (std::size_t failure = 0; failure < 64 && !succeeded; ++failure) {
-        resource.fail_after(failure);
-        try {
-            const auto plan = ruvia::make_http_multipart_byte_range_plan(
-                ranges, 10, "application/octet-stream; charset=utf-8", boundary, &resource);
-            EXPECT_TRUE(plan.content_length() != 0);
-            succeeded = true;
-        } catch (const std::bad_alloc&) {
-        }
-        resource.allow_allocations();
-        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-    }
-    EXPECT_TRUE(succeeded);
-    {
-        const auto source_value = ruvia::make_http_multipart_byte_range_plan(
-            ranges, 10, "text/plain", "clone_boundary", &resource);
-        const auto baseline = resource.live_allocations();
-        failing_memory_resource clone_resource;
-        succeeded = false;
-        for (std::size_t failure = 0; failure < 64 && !succeeded; ++failure) {
-            clone_resource.fail_after(failure);
-            try {
-                const auto clone = source_value.clone(&clone_resource);
-                EXPECT_EQ(clone.metadata(), source_value.metadata());
-                EXPECT_EQ(clone.content_length(), source_value.content_length());
-                succeeded = true;
-            } catch (const std::bad_alloc&) {
-            }
-            clone_resource.allow_allocations();
-            EXPECT_EQ(clone_resource.live_allocations(), std::size_t{0});
-            EXPECT_EQ(resource.live_allocations(), baseline);
-        }
-        EXPECT_TRUE(succeeded);
-    }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-}
-
-TEST(Ruvia, multipart_range_plan_formats_uint64_edges_and_reclaims_error_storage) {
-    failing_memory_resource resource;
-    const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-    const auto ranges = ruvia::resolve_http_byte_range_set("bytes=18446744073709551613-18446744073709551613,0-0", maximum);
-    const std::pmr::string boundary(70, 'b');
-    {
-        const auto plan = ruvia::make_http_multipart_byte_range_plan(
-            ranges, maximum, "text/plain", boundary, &resource);
-        EXPECT_TRUE(plan.metadata().find("Content-Range: bytes 18446744073709551613-18446744073709551613/18446744073709551615\r\n") != std::string_view::npos);
-        EXPECT_TRUE(plan.metadata().find("Content-Range: bytes 0-0/18446744073709551615\r\n") != std::string_view::npos);
-        EXPECT_EQ(plan.content_length(), plan.metadata().size() + std::uint64_t{2});
-    }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-    bool rejected = false;
-    try {
-        (void)ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", boundary, &resource);
-    } catch (const std::invalid_argument&) {
-        rejected = true;
-    }
-    EXPECT_TRUE(rejected);
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-    const auto overflowing = ruvia::resolve_http_byte_range_set(
-        "bytes=0-9223372036854775806,9223372036854775808-18446744073709551614", maximum);
-    rejected = false;
-    try {
-        (void)ruvia::make_http_multipart_byte_range_plan(overflowing, maximum, "text/plain", boundary, &resource);
-    } catch (const std::length_error&) {
-        rejected = true;
-    }
-    EXPECT_TRUE(rejected);
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, multipart_range_plan_moved_from_and_empty_file_path_are_rejected_cleanly) {
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,4-5", 10);
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, "text/plain", "b", std::pmr::get_default_resource());
+        ranges, 10, "text/plain", "b");
     auto moved = std::move(plan);
     EXPECT_TRUE(plan.content_type().empty());
     EXPECT_TRUE(plan.metadata().empty());

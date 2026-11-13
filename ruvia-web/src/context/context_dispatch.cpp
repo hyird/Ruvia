@@ -9,7 +9,6 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -44,10 +43,9 @@ std::optional<std::string_view> dispatch_response::header(std::string_view name)
 void dispatch_response::copy_head_from(const http_response& response) {
     status_ = response.status();
     if (!response.headers().empty()) {
-        auto* const resource = headers_.get_allocator().resource();
         headers_.reserve(response.headers().size());
         for (const auto& header : response.headers()) {
-            headers_.emplace_back(header.name(), header.value(), resource);
+            headers_.emplace_back(header.name(), header.value());
         }
     }
 }
@@ -88,14 +86,14 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
     // The operation is lazy and the options borrow caller storage: take owned
     // copies now. The subrequest is built directly as a parsed request; it
     // never round-trips through a wire format.
-    std::pmr::string method(options.method_.view(), ruvia::process_resource());
-    std::pmr::string target(options.target_.view(), ruvia::process_resource());
-    std::pmr::string body(options.body_.view(), ruvia::process_resource());
-    std::pmr::vector<http_header> headers(ruvia::process_resource());
+    std::string method(options.method_.view());
+    std::string target(options.target_.view());
+    std::string body(options.body_.view());
+    std::vector<http_header> headers;
     if (!options.headers_.empty()) {
         headers.reserve(options.headers_.size());
         for (const auto& header : options.headers_) {
-            headers.emplace_back(header.name(), header.value(), ruvia::process_resource());
+            headers.emplace_back(header.name(), header.value());
         }
     }
     return ::ruvia::make_scoped_operation(operation_scope_,
@@ -103,14 +101,13 @@ task<dispatch_response> context::dispatch(dispatch_options options) {
             std::move(options.stop_token_)));
 }
 
-task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr::string target,
-    std::pmr::string body_storage, std::pmr::vector<http_header> headers,
+task<dispatch_response> context::dispatch_task(std::string method, std::string target,
+    std::string body_storage, std::vector<http_header> headers,
     ::ruvia::stop_token stop_token_value) {
-    auto memory = memory_.fork();
     const std::string_view body = body_storage;
     std::array<char, http_max_unsigned_decimal_size> content_length_text;
     const auto content_length = http_format_unsigned(content_length_text, body.size());
-    detail::inline_http_header_views<16> active_headers(2U + headers.size(), memory.resource());
+    detail::inline_http_header_views<16> active_headers(2U + headers.size());
     active_headers.push_back(http_header_view("Host", "localhost"));
     for (const auto& header : headers) {
         active_headers.push_back(http_header_view(header.name(), header.value()));
@@ -119,7 +116,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
     const auto request = [&]() {
         try {
             return make_parsed_http_request(method, target, active_headers.view(),
-                std::as_bytes(std::span(body.data(), body.size())), memory.resource());
+                std::as_bytes(std::span(body.data(), body.size())));
         } catch (const http_protocol_error&) {
             throw std::invalid_argument("invalid subrequest");
         }
@@ -145,18 +142,17 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
         .apply_rate_limit_ = false,
         .verify_target_origin_ = false,
     };
-    http_response response(memory.resource());
+    http_response response;
     auto admission = co_await detail::admit_and_dispatch_buffered_request(routes,
         {
             .request_ = request,
             .resolution_ = resolution,
             .coding_ = http_response_coding_selection_for(request),
-            .resource_ = memory.resource(),
         },
-        policy, services().for_subrequest(stop), memory, response);
+        policy, services().for_subrequest(stop), response);
     if (detail::http_response_needs_not_acceptable(admission.tail().coding_policy(), request, response) &&
         !response.status().is_error()) {
-        response = co_await routes.handle_error(request, memory,
+        response = co_await routes.handle_error(request,
             http_error_info(detail::http_not_acceptable_coding_error()), admission.services());
     }
     // The error handler answers the 406 with any response shape, so the file
@@ -171,7 +167,7 @@ task<dispatch_response> context::dispatch_task(std::pmr::string method, std::pmr
         const auto discarded_body = std::move(body_storage);
         const auto discarded_headers = std::move(headers);
     }
-    dispatch_response result(ruvia::process_resource());
+    dispatch_response result;
     result.copy_head_from(response);
     // As on the wire: HEAD and content-forbidden statuses carry no body.
     if (!plan_http_response_body(known_method, response.status()).body_suppressed()) {

@@ -13,13 +13,21 @@
 #include <asio/completion_condition.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia::detail {
 
 class connection_lifecycle;
+
+// Monotonic milliseconds shared by worker-local deadlines (connection scanner,
+// WebSocket liveness, tunnel drain). Values are comparable only with each
+// other, never with wall-clock time.
+[[nodiscard]] inline std::int64_t steady_now_ms() noexcept {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // Worker-owned connection activity tracking options, copied from the server
 // configuration after validate_server_limits has checked every duration.
@@ -289,7 +297,7 @@ public:
     private:
         entry& entry_;
     };
-    connection_scanner(worker_handle worker_value, connection_scanner_options options);
+    connection_scanner(worker_ref worker_value, connection_scanner_options options);
     // Detaches every entry and check. A periodic check may destroy its scanner
     // (or stop and restart it): the running scan visits no further node and
     // releases the remaining scanner state when it returns.
@@ -314,7 +322,7 @@ private:
     friend class guard;
     friend struct impl_type;
     static void detach_entry(entry& entry) noexcept;
-    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 
 // asio::async_write completion condition that records each partial transfer on
@@ -337,7 +345,7 @@ private:
 };
 
 struct connection_scanner::impl_type final {
-    explicit impl_type(connection_scanner* owner_value, worker_handle worker_value, connection_scanner_options options);
+    explicit impl_type(connection_scanner* owner_value, worker_ref worker_value, connection_scanner_options options);
 
     // Detaches every entry and registration and disarms the timer. Returns true
     // when called from inside this scanner's own scan callback: that scan still
@@ -377,7 +385,7 @@ struct connection_scanner::impl_type final {
     };
 
     connection_scanner* owner_;
-    worker_handle worker_;
+    worker_ref worker_;
     worker_timer_registration timer_;
     std::shared_ptr<timer_state_type> timer_state_;
     connection_scanner_options options_;

@@ -4,11 +4,8 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <string>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -115,7 +112,7 @@ namespace {
 }  // namespace
 
 // Consumes the complete view, including checking for embedded NUL. Common
-// address text uses stack storage; unusually long scope names use temporary PMR
+// address text uses stack storage; unusually long scope names use temporary heap
 // storage that is released before returning the independent address value.
 std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
     if (text.find('\0') != std::string_view::npos) {
@@ -135,7 +132,7 @@ std::optional<asio::ip::address> parse_ip_address(std::string_view text) {
             terminated[text.size()] = '\0';
             return asio::ip::make_address_v6(terminated.data(), error);
         }
-        const std::pmr::string owned(text, process_resource());
+        const std::string owned(text);
         return asio::ip::make_address_v6(owned.c_str(), error);
     }();
     if (error || (text.find('%') != std::string_view::npos && address.scope_id() == 0)) {

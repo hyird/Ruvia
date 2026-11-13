@@ -6,18 +6,17 @@
 namespace ruvia {
 
 class http_client;
-class http_client_handle;
+class http_client_ref;
 class stop_token;
 class operation_scope;
 
 #ifdef RUVIA_ENABLE_DATABASE
-class db_handle;
+class db_session;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-class redis_handle;
+class redis_session;
 #endif
-
 namespace detail {
 
 class borrowed_clients;
@@ -69,22 +68,22 @@ public:
 
     // `io_metrics` is the request's counter block, or null outside a request.
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_handle db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
+    [[nodiscard]] db_session db(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
         const stop_token& stop_token) const;
-    [[nodiscard]] db_handle db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    [[nodiscard]] db_session db(std::string_view alias, ::ruvia::operation_scope& operation_scope,
         request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_handle redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
+    [[nodiscard]] redis_session redis(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics,
         const stop_token& stop_token) const;
-    [[nodiscard]] redis_handle redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
+    [[nodiscard]] redis_session redis(std::string_view alias, ::ruvia::operation_scope& operation_scope,
         request_io_metrics* io_metrics, const stop_token& stop_token) const;
 #endif
 
-    [[nodiscard]] http_client_handle client(
+    [[nodiscard]] http_client_ref client(
         ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
-    [[nodiscard]] http_client_handle client(std::string_view alias,
+    [[nodiscard]] http_client_ref client(std::string_view alias,
         ::ruvia::operation_scope& operation_scope, const stop_token& stop_token) const;
 
 private:

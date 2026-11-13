@@ -1,13 +1,11 @@
 #include <gtest/gtest.h>
 
 #include <exception>
-#include <memory_resource>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/http_client.h"
 
 #include "client_operation_fixture.h"
@@ -16,10 +14,10 @@
 
 namespace client_operation_interruption_test {
 
-void exercise(const std::pmr::string& url, ruvia::http_client_versions versions) {
+void exercise(const std::string& url, ruvia::http_client_versions versions) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         ruvia::http_client owner(attachment.loop(), {.base_url_ = url, .versions_ = versions});
@@ -44,9 +42,8 @@ void exercise(const std::pmr::string& url, ruvia::http_client_versions versions)
 TEST(Ruvia, http_client_operations_end_one_wait_or_abort_their_stream_over_http1_and_http2) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    const std::pmr::string url("http://127.0.0.1:" + std::pmr::string(std::to_string(server.endpoint().port()), ruvia::process_resource()),
-        ruvia::process_resource());
-    std::pmr::vector<ruvia::http_client_versions> protocols({ruvia::http_client_versions{.http2_ = false}}, ruvia::process_resource());
+    const std::string url("http://127.0.0.1:" + std::string(std::to_string(server.endpoint().port())));
+    std::vector<ruvia::http_client_versions> protocols({ruvia::http_client_versions{.http2_ = false}});
 #ifdef RUVIA_ENABLE_HTTP2
     protocols.push_back(ruvia::http_client_versions{.http1_ = false});
 #endif

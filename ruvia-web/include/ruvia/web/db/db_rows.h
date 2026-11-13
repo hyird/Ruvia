@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
@@ -273,8 +271,8 @@ public:
     [[nodiscard]] const db_row& front() const&& = delete;
     [[nodiscard]] const db_row& back() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_row& back() const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const&& = delete;
+    [[nodiscard]] std::span<const std::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::string> column_names() const&& = delete;
 
 private:
     friend struct detail::db_result_access;
@@ -290,12 +288,11 @@ private:
         void (*release_)(void*) noexcept;
     };
 
-    explicit db_rows(std::pmr::memory_resource* resource = nullptr);
-    db_rows(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    db_rows() noexcept;
 
-    std::pmr::vector<db_row> rows_;
-    std::pmr::vector<db_field> fields_;
-    std::pmr::vector<std::pmr::string> column_names_;
+    std::vector<db_row> rows_;
+    std::vector<db_field> fields_;
+    std::vector<std::string> column_names_;
     std::variant<no_raw_result_type, owned_raw_result_type> raw_result_;
 };
 
@@ -312,8 +309,8 @@ public:
     [[nodiscard]] bool active() const noexcept;
     // Available when query_stream() completes, including empty row sets.
     // Names remain valid through reads, EOF and close, until this state dies.
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const& RUVIA_LIFETIMEBOUND;
-    std::span<const std::pmr::string> column_names() const&& = delete;
+    [[nodiscard]] std::span<const std::string> column_names() const& RUVIA_LIFETIMEBOUND;
+    std::span<const std::string> column_names() const&& = delete;
     // Each read has one operation deadline, including any EOF/trailing-result
     // drain needed before returning nullopt. A separate close starts its own
     // deadline. Both end no later than the stream's overall deadline
@@ -334,21 +331,19 @@ public:
     task<void> close(operation_options = {}) && = delete;
 
 private:
-    friend class db_handle;
+    friend class db_session;
     template <typename driver_type>
     friend class detail::db_pool;
 
     // The driver's result handle lives in the pool slot, so the pool alone
     // frees it, including when the stream's deadline expires between reads.
     struct lease_type final {
-        lease_type(detail::db_pool_ref_type client, std::size_t slot,
-            std::pmr::memory_resource* resource, operation_options options) noexcept;
+        lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept;
         void abort() noexcept;
 
         detail::db_pool_ref_type client_;
         std::size_t slot_;
-        std::pmr::memory_resource* resource_;
-        std::pmr::vector<db_field> fields_;
+        std::vector<db_field> fields_;
         operation_options options_;
     };
 
@@ -356,21 +351,21 @@ private:
     using operation_guard_type = detail::db_operation_guard<lease_type>;
 
     struct state_type final {
-        state_type(lease_type lease, std::pmr::vector<std::pmr::string> column_names) noexcept;
-        std::pmr::vector<std::pmr::string> column_names_;
+        state_type(lease_type lease, std::vector<std::string> column_names) noexcept;
+        std::vector<std::string> column_names_;
         operation_state_type operation_;
     };
-    using state_owner_type = std::unique_ptr<state_type, pmr_object_deleter<state_type>>;
+    using state_owner_type = std::unique_ptr<state_type>;
 
     db_stream_result() noexcept = default;
-    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::pmr::vector<std::pmr::string> column_names,
-        std::pmr::memory_resource* resource, operation_options options);
+    db_stream_result(detail::db_pool_ref_type client, std::size_t slot, std::vector<std::string> column_names,
+        operation_options options);
     void reset() noexcept;
     // `io_metrics` is the request's counter block, or null outside a request.
     void bind_operation_scope(::ruvia::operation_scope& scope, detail::request_io_metrics* io_metrics) noexcept;
     static void expire_capability(void* target) noexcept;
     static task<std::optional<db_row>> read_task(detail::request_io_metrics* io_metrics,
-        operation_guard_type operation, std::pmr::vector<std::pmr::string>& column_names, operation_options operation_value);
+        operation_guard_type operation, std::vector<std::string>& column_names, operation_options operation_value);
     static task<void> close_task(detail::request_io_metrics* io_metrics, operation_guard_type operation, operation_options operation_value);
 
     state_owner_type state_;
@@ -385,14 +380,14 @@ namespace detail {
 // friend declaration per driver.
 struct db_result_access final {
     template <typename entity_type>
-    [[nodiscard]] static entity_rows<entity_type> make_entity_rows(std::pmr::memory_resource* resource, std::size_t size) {
-        entity_rows<entity_type> result(resource);
+    [[nodiscard]] static entity_rows<entity_type> make_entity_rows(std::size_t size) {
+        entity_rows<entity_type> result;
         result.reserve(size);
         return result;
     }
 
-    [[nodiscard]] static db_rows make_result(std::pmr::memory_resource* resource) {
-        return db_rows(resource);
+    [[nodiscard]] static db_rows make_result() noexcept {
+        return db_rows();
     }
 
     [[nodiscard]] static constexpr db_exec_result make_exec_result(std::uint64_t affected_rows,
@@ -400,15 +395,15 @@ struct db_result_access final {
         return db_exec_result(affected_rows, last_insert_id);
     }
 
-    [[nodiscard]] static std::pmr::vector<db_row>& rows(db_rows& result_value) noexcept {
+    [[nodiscard]] static std::vector<db_row>& rows(db_rows& result_value) noexcept {
         return result_value.rows_;
     }
 
-    [[nodiscard]] static std::pmr::vector<db_field>& fields(db_rows& result_value) noexcept {
+    [[nodiscard]] static std::vector<db_field>& fields(db_rows& result_value) noexcept {
         return result_value.fields_;
     }
 
-    [[nodiscard]] static std::pmr::vector<std::pmr::string>& column_names(db_rows& result_value) noexcept {
+    [[nodiscard]] static std::vector<std::string>& column_names(db_rows& result_value) noexcept {
         return result_value.column_names_;
     }
 
@@ -428,22 +423,20 @@ struct db_result_access final {
         result_value.raw_result_.template emplace<db_rows::owned_raw_result_type>(raw, release);
     }
 
-    [[nodiscard]] static db_field null_field(std::pmr::memory_resource* resource) {
-        return db_field(nullptr, resource);
+    [[nodiscard]] static db_field null_field() noexcept {
+        return db_field(nullptr);
     }
 
-    [[nodiscard]] static db_field owned_field(
-        std::string_view value, std::pmr::memory_resource* resource) {
-        return db_field(value, resource);
+    [[nodiscard]] static db_field owned_field(std::string_view value) {
+        return db_field(value);
     }
 
-    [[nodiscard]] static db_field borrowed_field(
-        std::string_view value, std::pmr::memory_resource* resource) {
-        return db_field::borrowed(value, resource);
+    [[nodiscard]] static db_field borrowed_field(std::string_view value) noexcept {
+        return db_field::borrowed(value);
     }
 
     [[nodiscard]] static db_row borrowed_row(const db_field* fields_value, std::size_t size,
-        const std::pmr::string* column_names, std::size_t column_count) noexcept {
+        const std::string* column_names, std::size_t column_count) noexcept {
         return db_row(fields_value, size, column_names, column_count);
     }
 
@@ -459,16 +452,16 @@ struct db_result_access final {
     }
 
     template <typename field_at_type>
-    [[nodiscard]] static db_row materialize_stream_row(std::pmr::vector<db_field>& fields_value,
-        const std::pmr::vector<std::pmr::string>& column_names, std::size_t field_count,
-        std::pmr::memory_resource* resource, field_at_type&& field_at) {
+    [[nodiscard]] static db_row materialize_stream_row(std::vector<db_field>& fields_value,
+        const std::vector<std::string>& column_names, std::size_t field_count,
+        field_at_type&& field_at) {
         fields_value.clear();
         fields_value.reserve(field_count);
         for (std::size_t field = 0; field < field_count; ++field) {
             if (const auto value = field_at(field); value.has_value()) {
-                fields_value.push_back(owned_field(*value, resource));
+                fields_value.push_back(owned_field(*value));
             } else {
-                fields_value.push_back(null_field(resource));
+                fields_value.push_back(null_field());
             }
         }
         return borrowed_row(fields_value.data(), fields_value.size(), column_names.data(), column_names.size());

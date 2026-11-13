@@ -2,10 +2,9 @@
 
 #include <cstddef>
 #include <list>
-#include <memory_resource>
 #include <optional>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/http_client.h"
 
 namespace ruvia::detail {
@@ -15,8 +14,8 @@ class http_client_advertisement_memory;
 // retained-bytes accounting, not the client pool or its transport lifecycle.
 class http_client_advertisement_queue final {
 public:
-    http_client_advertisement_queue(const worker_handle& worker_value, http_client_advertisement_config config);
-    http_client_advertisement_queue(worker_handle&&, http_client_advertisement_config) = delete;
+    http_client_advertisement_queue(const worker_ref& worker_value, http_client_advertisement_config config);
+    http_client_advertisement_queue(worker_ref&&, http_client_advertisement_config) = delete;
     ~http_client_advertisement_queue();
     http_client_advertisement_queue(const http_client_advertisement_queue&) = delete;
     http_client_advertisement_queue& operator=(const http_client_advertisement_queue&) = delete;
@@ -33,10 +32,10 @@ public:
 private:
     void require_current() const noexcept;
     [[nodiscard]] bool admit(std::size_t bytes) noexcept;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     http_client_advertisement_config config_;
     http_client_advertisement_memory* memory_{};
-    std::pmr::list<http_client_advertisement> pending_;
+    std::list<http_client_advertisement> pending_;
     std::size_t dropped_{};
 };
 }  // namespace ruvia::detail

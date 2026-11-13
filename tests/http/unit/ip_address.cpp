@@ -5,7 +5,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <string_view>
 #include <type_traits>
 
@@ -85,12 +84,8 @@ TEST(RuviaHttp, ip_address_rejects_nonliteral_and_malformed_input) {
     EXPECT_FALSE(ruvia::ip_address::parse(bounded).has_value());
 }
 
-TEST(RuviaHttp, ip_address_formatting_uses_requested_memory_resource) {
-    std::array<std::byte, 256> storage{};
-    std::pmr::monotonic_buffer_resource resource(storage.data(), storage.size(), std::pmr::null_memory_resource());
+TEST(RuviaHttp, ip_address_formats_maximal_scoped_ipv6) {
     const auto address = ruvia::ip_address::parse("ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295");
     ASSERT_TRUE(address.has_value());
-    const auto text = address->to_string(&resource);
-    EXPECT_EQ(text.get_allocator().resource(), &resource);
-    EXPECT_EQ(text, "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295");
+    EXPECT_EQ(address->to_string(), "ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff%4294967295");
 }

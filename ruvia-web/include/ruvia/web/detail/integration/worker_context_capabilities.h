@@ -7,7 +7,7 @@
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
@@ -18,16 +18,16 @@ class worker_state_registry;
 // dispatcher or cancellation ownership is copied until an explicit offload.
 class worker_context_capabilities final {
 public:
-    worker_context_capabilities(const worker_handle& worker_value, const ruvia::stop_token& stop_token_value,
+    worker_context_capabilities(const worker_ref& worker_value, const ruvia::stop_token& stop_token_value,
         const worker_state_registry* worker_states) noexcept
         : worker_(worker_value),
           stop_token_(stop_token_value),
           worker_states_(worker_states) {}
-    worker_context_capabilities(worker_handle&&, const ruvia::stop_token&, const worker_state_registry*) = delete;
-    worker_context_capabilities(const worker_handle&, ruvia::stop_token&&, const worker_state_registry*) = delete;
-    worker_context_capabilities(worker_handle&&, ruvia::stop_token&&, const worker_state_registry*) = delete;
+    worker_context_capabilities(worker_ref&&, const ruvia::stop_token&, const worker_state_registry*) = delete;
+    worker_context_capabilities(const worker_ref&, ruvia::stop_token&&, const worker_state_registry*) = delete;
+    worker_context_capabilities(worker_ref&&, ruvia::stop_token&&, const worker_state_registry*) = delete;
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -66,7 +66,7 @@ public:
 private:
     template <typename callable_type>
     [[nodiscard]] static task<blocking_result<std::invoke_result_t<callable_type&>>> run_blocking_combined(
-        worker_handle worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
+        worker_ref worker_value, ruvia::stop_token worker_token, operation_options options, callable_type callable) {
         const stop_group stop_owner(worker_token, options.stop_token_);
         options.stop_token_ = stop_owner.token();
         co_return co_await ruvia::run_blocking(std::move(worker_value), std::move(options), std::move(callable));
@@ -74,7 +74,7 @@ private:
 
     [[nodiscard]] void* worker_state_instance(const void* type_key) const;
 
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     const ruvia::stop_token& stop_token_;
     const worker_state_registry* worker_states_;
 };

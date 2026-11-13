@@ -14,7 +14,7 @@ void require_sql_state(std::string_view state_value) {
 }
 class procedure_append_guard final {
 public:
-    explicit procedure_append_guard(std::pmr::string& target, std::size_t extra_reserve = 48U)
+    explicit procedure_append_guard(std::string& target, std::size_t extra_reserve = 48U)
         : target_(target),
           initial_size_(target.size()) {
         if (target_.capacity() - initial_size_ < extra_reserve) {
@@ -36,19 +36,14 @@ public:
     }
 
 private:
-    std::pmr::string& target_;
+    std::string& target_;
     std::size_t initial_size_;
     bool committed_{false};
 };
 }  // namespace
 
-db_procedure::db_procedure(std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      declarations_(resource_),
-      statements_(resource_),
-      variables_(resource_),
-      blocks_(resource_) {}
-void db_procedure::append_expression(std::pmr::string& output, db_expression value) const {
+db_procedure::db_procedure() noexcept = default;
+void db_procedure::append_expression(std::string& output, db_expression value) const {
     detail::append_db_expression(output, value, pg);
 }
 void db_procedure::require_unique_variable(std::string_view name) const {
@@ -102,7 +97,7 @@ void db_procedure::select_into(const db_query& query, std::span<const std::strin
     if (targets.empty() || !query.returns_rows()) {
         throw std::invalid_argument("SELECT INTO requires returned rows and target variables");
     }
-    const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
+    const auto statement = query.compile(pg, db_parameter_mode::literal);
     procedure_append_guard guard(statements_, statement.sql().size() + 16U + targets.size() * 16U);
     statements_ += statement.sql();
     statements_ += strict ? " INTO STRICT " : " INTO ";
@@ -121,7 +116,7 @@ void db_procedure::execute(const db_query& query) {
     if (query.returns_rows()) {
         throw std::invalid_argument("procedure execute requires a command; consume returned rows with select_into");
     }
-    const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
+    const auto statement = query.compile(pg, db_parameter_mode::literal);
     procedure_append_guard guard(statements_, statement.sql().size() + 2U);
     statements_ += statement.sql();
     statements_ += ";\n";
@@ -212,7 +207,7 @@ void db_procedure::begin_for_query(std::string_view target, const db_query& quer
     if (!query.returns_rows()) {
         throw std::invalid_argument("FOR IN query loop requires a row-returning query");
     }
-    const auto statement = query.compile(pg, resource_, db_parameter_mode::literal);
+    const auto statement = query.compile(pg, db_parameter_mode::literal);
     procedure_append_guard guard(statements_, 16U + target.size() + statement.sql().size());
     statements_.append("FOR ");
     detail::append_db_identifier(statements_, target, pg);
@@ -285,13 +280,13 @@ void db_procedure::raise_exception(std::string_view message, std::string_view sq
     statements_ += ";\n";
     guard.commit();
 }
-std::pmr::string db_procedure::body(std::pmr::memory_resource* resource) const {
+std::string db_procedure::body() const {
     if (!blocks_.empty()) {
         throw std::invalid_argument("procedure has unclosed control-flow blocks");
     }
     const std::string_view statements =
         statements_.empty() ? std::string_view("NULL;\n") : std::string_view(statements_);
-    std::pmr::string result(pmr_resource_or_default(resource));
+    std::string result;
     result.reserve((!declarations_.empty() ? 8U + declarations_.size() : 0U) + 6U + statements.size() + 3U);
     if (!declarations_.empty()) {
         result.append("DECLARE\n");

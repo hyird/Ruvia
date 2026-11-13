@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -65,7 +64,7 @@ struct postgresql_array_text final {
 }
 
 template <typename visitor_type, typename reserve_type = void (*)(std::size_t)>
-void for_each_postgresql_array_element(std::string_view source, std::pmr::memory_resource* resource, visitor_type&& visit, reserve_type&& reserve = +[](std::size_t) noexcept {}) {
+void for_each_postgresql_array_element(std::string_view source, visitor_type&& visit, reserve_type&& reserve = +[](std::size_t) noexcept {}) {
     const auto array = parse_postgresql_array_text(source);
     const auto contents = array.contents_;
     if (array.elements_) {
@@ -76,7 +75,7 @@ void for_each_postgresql_array_element(std::string_view source, std::pmr::memory
         }
         reserve(*array.elements_);
     }
-    std::pmr::string escaped_token(resource);
+    std::string escaped_token;
     std::size_t element_count = 0;
     std::size_t token_start = 1;
     std::size_t chunk_start = 1;
@@ -164,17 +163,17 @@ void for_each_postgresql_array_element(std::string_view source, std::pmr::memory
 }
 
 template <db_mapped_value t_type>
-[[nodiscard]] t_type decode_array_element(std::string_view text, std::pmr::memory_resource* resource) {
+[[nodiscard]] t_type decode_array_element(std::string_view text) {
     if constexpr (is_optional<t_type>::value) {
         using v_type = typename is_optional<t_type>::value_type;
-        return decode_array_element<v_type>(text, resource);
+        return decode_array_element<v_type>(text);
     } else {
-        return convert_db_text<t_type>(text, resource);
+        return convert_db_text<t_type>(text);
     }
 }
 
 template <db_mapped_value t_type>
-void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resource* resource) {
+void decode_db_field(const db_field& field, t_type& out) {
     using u_type = std::remove_cv_t<t_type>;
     if constexpr (is_optional<u_type>::value) {
         using v_type = typename is_optional<u_type>::value_type;
@@ -182,18 +181,18 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
             out.reset();
             return;
         }
-        auto& inner = out.emplace(entity_value_slot<v_type>::make_value(resource));
-        decode_db_field(field, inner, resource);
-    } else if constexpr (is_pmr_vector<u_type>::value) {
-        using v_type = typename is_pmr_vector<u_type>::value_type;
+        auto& inner = out.emplace(entity_value_slot<v_type>::make_value());
+        decode_db_field(field, inner);
+    } else if constexpr (is_std_vector<u_type>::value) {
+        using v_type = typename is_std_vector<u_type>::value_type;
         const auto source_value = field.value();
         if (!source_value) {
             throw_invalid_postgresql_array();
         }
         out.clear();
         for_each_postgresql_array_element(
-            *source_value, resource,
-            [&out, resource](std::optional<std::string_view> element) {
+            *source_value,
+            [&out](std::optional<std::string_view> element) {
                 if (!element) {
                     if constexpr (is_optional<v_type>::value) {
                         out.emplace_back(std::nullopt);
@@ -202,11 +201,11 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
                             db_conversion_error::code_type::invalid_format, "NULL array element");
                     }
                 } else {
-                    out.push_back(decode_array_element<v_type>(*element, resource));
+                    out.push_back(decode_array_element<v_type>(*element));
                 }
             },
             [&out](std::size_t count) { out.reserve(count); });
-    } else if constexpr (std::is_same_v<u_type, std::pmr::string>) {
+    } else if constexpr (std::is_same_v<u_type, std::string>) {
         if (auto value = field.as<std::string_view>()) {
             out.assign(*value);
         } else {
@@ -228,11 +227,10 @@ void decode_db_field(const db_field& field, t_type& out, std::pmr::memory_resour
                 db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
         }
     }
-    (void)resource;
 }
 
 template <typename e_type, typename c_type>
-void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory_resource* resource) {
+void decode_entity_field(e_type& entity, const db_field& field) {
     const auto raw = field.value();
     if (!raw) {
         if constexpr (c_type::options.nullable_) {
@@ -244,12 +242,11 @@ void decode_entity_field(e_type& entity, const db_field& field, std::pmr::memory
         }
     }
     using value_type = typename c_type::value_type;
-    if constexpr (std::is_same_v<value_type, std::pmr::string> || std::is_same_v<value_type, string>) {
-        (void)resource;
+    if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, string>) {
         entity.template set<c_type::name>(*raw);
     } else {
-        auto value = entity_value_slot<value_type>::make_value(resource);
-        decode_db_field(field, value, resource);
+        auto value = entity_value_slot<value_type>::make_value();
+        decode_db_field(field, value);
         entity.template set<c_type::name>(std::move(value));
     }
 }
@@ -261,7 +258,7 @@ struct db_result_column_lookup final {
 };
 
 [[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(
-    std::span<const std::pmr::string> names, std::string_view name) noexcept {
+    std::span<const std::string> names, std::string_view name) noexcept {
     db_result_column_lookup result;
     for (std::size_t index = 0; index < names.size(); ++index) {
         if (names[index] == name) {
@@ -285,7 +282,7 @@ public:
         : selected_(selected),
           wildcard_(wildcard) {}
 
-    e_type decode(const db_row& row, std::pmr::memory_resource* resource) {
+    e_type decode(const db_row& row) {
         const auto names = row.column_names();
         if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
             // Entity column names are unique, so a result naming exactly the
@@ -312,7 +309,7 @@ public:
             });
             schema_ = names;
         }
-        e_type result(resource);
+        e_type result;
         for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
             if (!selected_[i] && (!wildcard_ || indices_[i] == missing_column)) {
                 return;
@@ -321,7 +318,7 @@ public:
                 throw db_conversion_error(
                     db_conversion_error::code_type::missing_column, "database result has no such column");
             }
-            decode_entity_field<e_type, column_type>(result, row[indices_[i]], resource);
+            decode_entity_field<e_type, column_type>(result, row[indices_[i]]);
         });
         return result;
     }
@@ -331,18 +328,18 @@ private:
     std::array<std::size_t, column_count> indices_;
     bool wildcard_{false};
     // Used only while synchronously mapping a live, immutable db_rows result.
-    std::optional<std::span<const std::pmr::string>> schema_{};
+    std::optional<std::span<const std::string>> schema_{};
 };
 
 template <typename t_type>
-void append_entity_array_value(std::pmr::string& output, const t_type& value) {
+void append_entity_array_value(std::string& output, const t_type& value) {
     if constexpr (is_optional<t_type>::value) {
         if (value) {
             append_entity_array_value(output, *value);
         } else {
             output += "NULL";
         }
-    } else if constexpr (std::is_same_v<t_type, std::pmr::string> || std::is_same_v<t_type, string>) {
+    } else if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
         output.push_back('"');
         auto remaining = std::string_view(value);
         while (!remaining.empty()) {
@@ -383,13 +380,13 @@ void append_entity_array_value(std::pmr::string& output, const t_type& value) {
 }
 
 template <typename t_type>
-db_value entity_db_value(const t_type& value, [[maybe_unused]] std::pmr::memory_resource* resource) {
-    if constexpr (std::is_same_v<t_type, std::pmr::string> || std::is_same_v<t_type, string>) {
+db_value entity_db_value(const t_type& value) {
+    if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
         return db_value(std::string_view(value));
     } else if constexpr (std::is_same_v<t_type, bool> || std::is_arithmetic_v<t_type>) {
         return db_value(value);
-    } else if constexpr (is_pmr_vector<t_type>::value) {
-        std::pmr::string encoded(resource);
+    } else if constexpr (is_std_vector<t_type>::value) {
+        std::string encoded;
         encoded.reserve(2U + value.size() * 4U);
         encoded.push_back('{');
         bool first = true;
@@ -398,7 +395,7 @@ db_value entity_db_value(const t_type& value, [[maybe_unused]] std::pmr::memory_
                 encoded.push_back(',');
             }
             first = false;
-            if constexpr (std::is_same_v<typename is_pmr_vector<t_type>::value_type, bool>) {
+            if constexpr (std::is_same_v<typename is_std_vector<t_type>::value_type, bool>) {
                 append_entity_array_value(encoded, static_cast<bool>(item));
             } else {
                 append_entity_array_value(encoded, item);

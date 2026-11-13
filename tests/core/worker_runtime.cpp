@@ -8,7 +8,6 @@
 #include <future>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <semaphore>
 #include <stdexcept>
@@ -21,7 +20,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/core/worker_signal.h"
@@ -121,7 +119,7 @@ TEST(Ruvia, worker_runtime_finalize_hook_move_can_reenter_finalize) {
 
 TEST(Ruvia, worker_runtime_drains_accepted_work_before_start) {
     ruvia::worker_runtime runtime;
-    const auto worker_value = runtime.handle();
+    const auto worker_value = runtime.worker();
     const auto caller = std::this_thread::get_id();
     bool owner_affine{};
     bool ran{};
@@ -141,7 +139,7 @@ TEST(Ruvia, worker_runtime_drains_accepted_work_before_start) {
 
 TEST(Ruvia, worker_runtime_cold_stop_cancels_io_and_reclaims_inputs_before_shutdown) {
     ruvia::worker_runtime runtime;
-    const auto worker = runtime.handle();
+    const auto worker = runtime.worker();
     asio::steady_timer timer(runtime.io_context());
     // 上下文分配的控制块在 worker 释放强引用，在调用线程释放最后的弱引用。
     auto payload = std::allocate_shared<int>(asio::execution_context::allocator<int>(runtime.io_context()), 42);
@@ -171,13 +169,13 @@ TEST(Ruvia, worker_runtime_cold_stop_cancels_io_and_reclaims_inputs_before_shutd
 
 TEST(Ruvia, worker_runtime_keeps_owner_until_external_producers_quiesce) {
     ruvia::worker_runtime runtime({.io_policy_ = ruvia::worker_io_policy::single_owner});
-    const auto worker_value = runtime.handle();
+    const auto worker_value = runtime.worker();
     std::promise<void> ready;
     std::promise<void> admission_stopped;
     std::atomic<bool> stopped_on_owner{};
     bool finalized_on_owner{};
     bool shutdown_on_owner{};
-    std::pmr::vector<int> phases(ruvia::process_resource());
+    std::vector<int> phases;
     runtime.configure({
         .startup_ = [&] {
             phases.push_back(1);
@@ -206,19 +204,19 @@ TEST(Ruvia, worker_runtime_keeps_owner_until_external_producers_quiesce) {
     runtime.join();
     EXPECT_TRUE(finalized_on_owner);
     EXPECT_TRUE(shutdown_on_owner);
-    EXPECT_EQ(phases, (std::pmr::vector<int>{{1, 2, 3, 4}, ruvia::process_resource()}));
+    EXPECT_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
     EXPECT_TRUE(!worker_value.valid());
 }
 
 TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     ruvia::worker_runtime runtime;
-    const auto worker_value = runtime.handle();
+    const auto worker_value = runtime.worker();
     asio::steady_timer timer(runtime.io_context());
     bool failure_on_owner{};
     bool completion_on_owner{};
     bool shutdown_after_completion{};
     std::exception_ptr reported;
-    std::pmr::vector<int> phases(ruvia::process_resource());
+    std::vector<int> phases;
     runtime.configure({
         .startup_ = [&] {
             timer.expires_after(std::chrono::hours(1));
@@ -244,7 +242,7 @@ TEST(Ruvia, worker_runtime_failure_cancels_then_drains_io_before_shutdown) {
     EXPECT_TRUE(failure_on_owner);
     EXPECT_TRUE(shutdown_after_completion);
     EXPECT_EQ(reported, runtime.take_failure());
-    EXPECT_EQ(phases, (std::pmr::vector<int>{{1, 2, 3, 4}, ruvia::process_resource()}));
+    EXPECT_EQ(phases, (std::vector<int>{1, 2, 3, 4}));
     EXPECT_TRUE(runtime.take_failure() != nullptr);
     EXPECT_TRUE(ruvia::test::throws_on([&] { (void)runtime.start(); }));
 }
@@ -281,7 +279,7 @@ TEST(Ruvia, worker_runtime_concurrent_stop_and_join_share_one_barrier) {
 
 TEST(Ruvia, worker_runtime_finalize_before_start_retires_on_owner) {
     ruvia::worker_runtime runtime;
-    const auto worker_value = runtime.handle();
+    const auto worker_value = runtime.worker();
     bool startup_ran{};
     bool stop_ran{};
     bool finalizer_ran{};
@@ -320,7 +318,7 @@ TEST(Ruvia, worker_runtime_cold_shutdown_can_repeat_stop_and_rejects_self_join) 
     runtime.configure({.shutdown_ = [&] {
         ++shutdowns;
         runtime.request_stop();
-        admission_closed = !runtime.handle().accepting();
+        admission_closed = !runtime.worker().accepting();
         self_join_rejected = ruvia::test::throws_on([&] { runtime.join(); });
     }});
     runtime.request_stop();
@@ -333,7 +331,7 @@ TEST(Ruvia, worker_runtime_cold_shutdown_can_repeat_stop_and_rejects_self_join) 
 
 TEST(Ruvia, worker_runtime_serves_only_after_owner_published_readiness) {
     ruvia::worker_runtime runtime;
-    const auto worker_value = runtime.handle();
+    const auto worker_value = runtime.worker();
     std::atomic<bool> served_on_owner{};
     std::atomic<int> serves{};
     runtime.configure({
@@ -390,7 +388,7 @@ TEST(Ruvia, worker_runtime_first_failure_wakes_waiters_and_reaches_hook_once) {
         .failure_ = [&](std::exception_ptr) noexcept { ++reports; },
     });
     EXPECT_TRUE(runtime.start());
-    std::pmr::string message(ruvia::process_resource());
+    std::string message;
     try {
         (void)runtime.wait_until_ready();
     } catch (const std::runtime_error& failure) {
@@ -420,7 +418,7 @@ TEST(Ruvia, worker_group_coordinates_startup_serving_and_retirement) {
     ruvia::worker_runtime first;
     ruvia::worker_runtime second;
     std::mutex order_mutex;
-    std::pmr::vector<std::pmr::string> order(ruvia::process_resource());
+    std::vector<std::string> order;
     const auto record = [&](std::string_view event) {
         const std::lock_guard lock(order_mutex);
         order.emplace_back(event);
@@ -502,7 +500,7 @@ TEST(Ruvia, worker_group_stop_during_startup_aborts_readiness_and_retires_member
     second.configure({
         .serve_ = [&] { second_served = true; },
         .shutdown_ = [&] {
-            second_retired = group.stop_requested() && second.handle().is_current();
+            second_retired = group.stop_requested() && second.worker().is_current();
             group.request_stop(); },
     });
     group.add(first);
@@ -538,7 +536,7 @@ TEST(Ruvia, worker_group_cold_retirement_waits_for_producer_shutdown) {
     std::thread observer([&] {
         shutdown_started.acquire();
         group.request_stop();
-        admissions_closed = !producer.handle().accepting() && !consumer.handle().accepting();
+        admissions_closed = !producer.worker().accepting() && !consumer.worker().accepting();
         finish_shutdown.release();
     });
     const auto failure = group.join();
@@ -565,16 +563,16 @@ TEST(Ruvia, worker_group_external_failure_preserves_cause_while_hook_reenters_st
             group.request_stop();
             failure_started.release();
             finish_failure.acquire(); },
-        .shutdown_ = [&] { shutdown_on_owner = producer.handle().is_current(); },
+        .shutdown_ = [&] { shutdown_on_owner = producer.worker().is_current(); },
     });
     group.add(producer);
     group.add(consumer);
-    EXPECT_TRUE(producer.handle().post([&] { accepted_work_ran = true; }).accepted());
+    EXPECT_TRUE(producer.worker().post([&] { accepted_work_ran = true; }).accepted());
     std::thread reporter([&] { static_cast<void>(producer.fail(error)); });
     failure_started.acquire();
     group.request_stop();
-    const bool admissions_closed = !producer.handle().accepting() && !consumer.handle().accepting();
-    std::pmr::string message(ruvia::process_resource());
+    const bool admissions_closed = !producer.worker().accepting() && !consumer.worker().accepting();
+    std::string message;
     try {
         (void)group.start();
     } catch (const std::runtime_error& failure) {
@@ -600,7 +598,7 @@ TEST(Ruvia, worker_group_rethrows_the_first_member_failure) {
     ruvia::worker_group group;
     group.add(healthy);
     group.add(failing);
-    std::pmr::string message(ruvia::process_resource());
+    std::string message;
     try {
         (void)group.start();
     } catch (const std::runtime_error& failure) {
@@ -654,7 +652,7 @@ TEST(Ruvia, worker_group_serve_failure_closes_every_members_admission) {
     group.add(consumer);
     group.add(producer);
     const bool started = group.start();
-    std::pmr::string message(ruvia::process_resource());
+    std::string message;
     try {
         (void)group.serve();
     } catch (const std::runtime_error& failure) {
@@ -663,9 +661,9 @@ TEST(Ruvia, worker_group_serve_failure_closes_every_members_admission) {
     const bool group_stopping = group.stop_requested();
     const auto producer_state = producer.state();
     const auto consumer_state = consumer.state();
-    const bool producer_accepting = producer.handle().accepting();
-    const bool consumer_accepting = consumer.handle().accepting();
-    const bool consumer_accepted_work = consumer.handle().post([] {}).accepted();
+    const bool producer_accepting = producer.worker().accepting();
+    const bool consumer_accepting = consumer.worker().accepting();
+    const bool consumer_accepted_work = consumer.worker().post([] {}).accepted();
     consumer.finalize();
     const auto failure = group.join();
 
@@ -730,7 +728,7 @@ TEST(Ruvia, worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
                 group.request_stop();
             }
         });
-        std::pmr::string message(ruvia::process_resource());
+        std::string message;
         bool started = false;
         try {
             started = group.start();
@@ -740,7 +738,7 @@ TEST(Ruvia, worker_group_member_exit_wakes_an_earlier_asynchronous_startup) {
         start_returned.set_value();
         watchdog.join();
         const bool group_stopping = group.stop_requested();
-        const bool pending_accepting = pending.handle().accepting();
+        const bool pending_accepting = pending.worker().accepting();
         const auto failure = group.join();
 
         EXPECT_TRUE(!watchdog_fired.load());
@@ -814,7 +812,7 @@ TEST(Ruvia, worker_group_destruction_releases_observations_and_preserves_runtime
     const bool members_still_running = member.state() == state::running && peer.state() == state::running;
     const auto error = std::make_exception_ptr(std::runtime_error("independent runtime failure"));
     const bool failure_recorded = member.fail(error);
-    const bool peer_accepting = peer.handle().post([] {}).accepted();
+    const bool peer_accepting = peer.worker().post([] {}).accepted();
     member.join();
     peer.join();
     EXPECT_TRUE(members_still_running);
@@ -832,7 +830,7 @@ TEST(Ruvia, worker_group_failure_hook_can_release_completed_member_observations)
     bool stop_observed = false;
     failing.configure({.failure_ = [&](std::exception_ptr) noexcept {
         ++failure_reports;
-        stop_observed = group->stop_requested() && !peer.handle().accepting();
+        stop_observed = group->stop_requested() && !peer.worker().accepting();
         // Member observations have retired before invoking the public hook.
         group.reset();
     }});
@@ -855,20 +853,20 @@ ruvia::task<void> hold_retirement(ruvia::worker_signal& gate_value, std::promise
 }
 
 struct cleanup_payload final {
-    cleanup_payload(const ruvia::worker_handle& worker_value, bool& destroyed)
+    cleanup_payload(const ruvia::worker_ref& worker_value, bool& destroyed)
         : worker_(worker_value),
           destroyed_(destroyed) {}
     ~cleanup_payload() {
         destroyed_ = worker_.is_current();
     }
-    const ruvia::worker_handle& worker_;
+    const ruvia::worker_ref& worker_;
     bool& destroyed_;
 };
 
 TEST(Ruvia, event_loop_cleanup_drains_owned_inputs_after_business_admission_closes) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     const auto loop = pool.loop(0);
-    const auto worker_value = loop.handle();
+    const auto worker_value = loop.worker();
     ruvia::worker_signal gate(worker_value);
     std::promise<void> retirement_started;
     auto stop_callback_value = loop.on_stop([&] { return hold_retirement(gate, retirement_started); });
@@ -877,7 +875,7 @@ TEST(Ruvia, event_loop_cleanup_drains_owned_inputs_after_business_admission_clos
     retirement_started.get_future().get();
     bool ran{};
     bool inputs_destroyed_on_owner{};
-    EXPECT_TRUE(!loop.handle().accepting());
+    EXPECT_TRUE(!loop.worker().accepting());
     EXPECT_TRUE(loop.defer_cleanup([payload = std::make_unique<cleanup_payload>(worker_value, inputs_destroyed_on_owner), &gate, &ran, &worker_value] {
         ran = worker_value.is_current();
         gate.notify();
@@ -891,22 +889,22 @@ TEST(Ruvia, event_loop_cleanup_drains_owned_inputs_after_business_admission_clos
 TEST(Ruvia, event_loop_cleanup_can_be_drained_without_starting_business_workers) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     const auto loop = pool.loop(0);
-    const auto worker_value = loop.handle();
+    const auto worker_value = loop.worker();
     bool ran{};
     EXPECT_TRUE(loop.defer_cleanup([&] { ran = worker_value.is_current(); }));
     pool.join();
     EXPECT_TRUE(ran);
-    EXPECT_TRUE(!loop.handle().valid());
+    EXPECT_TRUE(!loop.worker().valid());
 }
 
 TEST(Ruvia, event_loop_draining_post_can_schedule_defer_cleanup_after_stop) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
     const auto loop = pool.loop(0);
-    const auto worker_value = loop.handle();
+    const auto worker_value = loop.worker();
     bool post_ran = false;
     bool cleanup_scheduled = false;
     bool cleanup_ran = false;
-    EXPECT_EQ(loop.handle().post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
+    EXPECT_EQ(loop.worker().post([loop, worker_value, &post_ran, &cleanup_scheduled, &cleanup_ran] {
         post_ran = worker_value.is_current();
         cleanup_scheduled = loop.defer_cleanup([worker_value, &cleanup_ran] {
             cleanup_ran = worker_value.is_current();
@@ -970,7 +968,7 @@ TEST(Ruvia, worker_runtime_and_group_reject_repeated_start_and_invalid_serve) {
     }
 }
 
-ruvia::task<int> sleep_then_finish(ruvia::worker_handle worker_value, std::atomic_bool& finished) {
+ruvia::task<int> sleep_then_finish(ruvia::worker_ref worker_value, std::atomic_bool& finished) {
     // Worker shutdown cuts the sleep short; the root still finishes normally.
     static_cast<void>(co_await ruvia::sleep_for(worker_value, std::chrono::seconds(30)));
     finished = true;
@@ -993,11 +991,11 @@ TEST(Ruvia, WorkerRuntimeLoopGatesStopAdmissionOnItsRoots) {
     });
     const auto loop = runtime.loop();
     EXPECT_TRUE(loop.valid());
-    EXPECT_EQ(loop.handle().id(), runtime.handle().id());
-    EXPECT_EQ(runtime.loop().handle().id(), loop.handle().id());
+    EXPECT_EQ(loop.worker().id(), runtime.worker().id());
+    EXPECT_EQ(runtime.loop().worker().id(), loop.worker().id());
     ASSERT_TRUE(runtime.start());
     ASSERT_TRUE(runtime.wait_until_ready());
-    auto root = loop.start(sleep_then_finish(loop.handle(), root_finished));
+    auto root = loop.start(sleep_then_finish(loop.worker(), root_finished));
     runtime.request_stop();
     runtime.join();
     EXPECT_TRUE(admission_ran);
@@ -1022,9 +1020,9 @@ TEST(Ruvia, WorkerRuntimeLoopReportsFailuresToItsRuntime) {
     EXPECT_NE(refused.rejected(), nullptr);
 }
 
-TEST(Ruvia, WorkerHandlePostPayloadReturnsRefusedPayload) {
+TEST(Ruvia, WorkerRefPostPayloadReturnsRefusedPayload) {
     ruvia::event_loop_pool loops({.loop_count_ = 1, .queue_capacity_ = 1});
-    const auto worker_value = loops.loop(0).handle();
+    const auto worker_value = loops.loop(0).worker();
     std::promise<int> ran;
     auto accepted = worker_value.post_payload(std::make_unique<int>(3),
         [&ran](std::unique_ptr<int>&& value) -> ruvia::move_only_function<void()> {
@@ -1042,7 +1040,7 @@ TEST(Ruvia, WorkerHandlePostPayloadReturnsRefusedPayload) {
     EXPECT_FALSE(wrapped_refused);
     ASSERT_NE(refused.rejected(), nullptr);
     EXPECT_EQ(**refused.rejected(), 4);
-    auto unbound = ruvia::worker_handle{}.post_payload(std::make_unique<int>(5),
+    auto unbound = ruvia::worker_ref{}.post_payload(std::make_unique<int>(5),
         [](std::unique_ptr<int>&&) -> ruvia::move_only_function<void()> { return [] {}; });
     EXPECT_EQ(unbound.status(), ruvia::post_status::worker_stopping);
     EXPECT_EQ(*std::move(unbound).take_rejected(), 5);

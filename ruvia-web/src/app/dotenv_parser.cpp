@@ -55,7 +55,7 @@ namespace {
     });
 }
 
-[[nodiscard]] std::pmr::string location_message(
+[[nodiscard]] std::string location_message(
     const std::filesystem::path& path, std::size_t line_number, std::string_view message) {
     auto result_value = dotenv_path_message("invalid dotenv entry in ", path);
     result_value += ':';
@@ -95,9 +95,9 @@ namespace {
     }
 }
 
-[[nodiscard]] std::pmr::string parse_double_quoted_value(std::string_view value,
+[[nodiscard]] std::string parse_double_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
-    std::pmr::string result(process_resource());
+    std::string result;
     std::size_t literal_start = 1;
     bool has_escape = false;
     for (std::size_t index = 1; index < value.size(); ++index) {
@@ -109,7 +109,7 @@ namespace {
         if (current == '"') {
             consumed = index + 1;
             if (!has_escape) {
-                return std::pmr::string(value.substr(1, index - 1), process_resource());
+                return std::string(value.substr(1, index - 1));
             }
             result.append(value.substr(literal_start, index - literal_start));
             return result;
@@ -139,12 +139,12 @@ namespace {
         location_message(path, line_number, "unterminated double-quoted value").c_str());
 }
 
-[[nodiscard]] std::pmr::string parse_single_quoted_value(std::string_view value,
+[[nodiscard]] std::string parse_single_quoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number, std::size_t& consumed) {
     for (std::size_t index = 1; index < value.size(); ++index) {
         if (value[index] == '\'') {
             consumed = index + 1;
-            return std::pmr::string(value.substr(1, index - 1), process_resource());
+            return std::string(value.substr(1, index - 1));
         }
         if (static_cast<unsigned char>(value[index]) >= 0x80) {
             index += dotenv_utf8_sequence_length(value, index, path, line_number) - 1;
@@ -163,7 +163,7 @@ void validate_quoted_remainder(
     }
 }
 
-[[nodiscard]] std::pmr::string parse_unquoted_value(std::string_view value,
+[[nodiscard]] std::string parse_unquoted_value(std::string_view value,
     const std::filesystem::path& path, std::size_t line_number) {
     std::size_t end = value.size();
     for (std::size_t index = 0; index < value.size(); ++index) {
@@ -176,10 +176,10 @@ void validate_quoted_remainder(
         }
     }
 
-    return std::pmr::string(trim(value.substr(0, end)), process_resource());
+    return std::string(trim(value.substr(0, end)));
 }
 
-[[nodiscard]] std::pmr::string parse_value(
+[[nodiscard]] std::string parse_value(
     std::string_view value, const std::filesystem::path& path, std::size_t line_number) {
     value = trim_left(value);
     if (value.empty()) {
@@ -239,17 +239,17 @@ void strip_utf8_bom(std::string_view& line) noexcept {
 
 }  // namespace
 
-std::pmr::vector<env_variable> read_dotenv_entries(
+std::vector<env_variable> read_dotenv_entries(
     std::istream& input, const std::filesystem::path& path) {
-    std::pmr::vector<env_variable> entries(process_resource());
+    std::vector<env_variable> entries;
     // Indices into entries ordered by name: duplicate detection stays
     // O(log N) per line and never borrows a name that a reallocation of
     // entries could move (small-string storage relocates with the element).
-    std::pmr::vector<std::size_t> entries_by_name(process_resource());
+    std::vector<std::size_t> entries_by_name;
     const auto entry_name = [&entries](std::size_t index) noexcept {
         return std::string_view(entries[index].name_);
     };
-    std::pmr::string line(process_resource());
+    std::string line;
     std::size_t line_number = 0;
 
     while (std::getline(input, line)) {

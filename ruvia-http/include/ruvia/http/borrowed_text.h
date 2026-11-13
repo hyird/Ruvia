@@ -6,7 +6,7 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 
 #ifndef RUVIA_LIFETIMEBOUND
 #if defined(__has_cpp_attribute)
@@ -118,7 +118,7 @@ static_assert(sizeof(borrowed_text) == sizeof(std::string_view));
 
 // Zero-copy element span held by an option or message-view struct. Accepts
 // borrowed spans and contiguous owning-container lvalues while rejecting
-// temporary owning containers (std::vector, std::pmr::vector, std::array) and
+// temporary owning containers (std::vector, std::array) and
 // initializer_list values whose backing storage would expire before the struct
 // is consumed.
 template <typename element_type>

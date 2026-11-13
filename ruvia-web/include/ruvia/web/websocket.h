@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -17,11 +16,10 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_status.h"
@@ -49,7 +47,7 @@ struct websocket_lifecycle_options final {
 
 struct websocket_route_config final {
     // Server preference order. Every entry must be a nonempty, unique HTTP token.
-    std::pmr::vector<std::pmr::string> subprotocols_{process_resource()};
+    std::vector<std::string> subprotocols_{};
     // By default a client offering none of subprotocols_ is still accepted,
     // with no Sec-WebSocket-Protocol response field (RFC 6455 4.2.2). When
     // set, such an upgrade is refused with 400 before any middleware or
@@ -75,7 +73,7 @@ class websocket;
 
 namespace detail {
 template <typename connection_type>
-[[nodiscard]] websocket make_websocket_facade(connection_type& connection, std::pmr::memory_resource& resource);
+[[nodiscard]] websocket make_websocket_facade(connection_type& connection);
 struct websocket_accept_access;
 class websocket_state;
 // Whether a write submits a whole message or one fragment of one.
@@ -152,9 +150,8 @@ public:
     [[nodiscard]] task<std::optional<websocket_message>> read(operation_options operation = {}) &;
     task<std::optional<websocket_message>> read(operation_options = {}) && = delete;
 
-    /// The string_view overloads copy payloads into owner-worker PMR storage
-    /// before returning. PMR-string inputs with the matching owner allocator
-    /// can transfer their existing allocation; incompatible inputs are copied.
+    /// The string_view overloads copy payloads into owned storage before
+    /// returning. std::string&& inputs transfer their existing allocation.
     /// Output operations share one write lane: starting a second before the
     /// current operation completes throws std::logic_error. A stop request or
     /// timeout in `operation` aborts the session (a partly written frame
@@ -164,11 +161,11 @@ public:
     task<void> text(std::string_view, websocket_send_options = {}, operation_options = {}) && = delete;
 
     /// Zero-copy text frame: takes ownership of an already-allocated payload.
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> text(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
         return write_owned(websocket_opcode::text, std::move(payload), options.compress_, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> text(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
 
     [[nodiscard]] task<void> binary(std::string_view payload, websocket_send_options options = {}, operation_options operation = {}) &;
@@ -178,33 +175,33 @@ public:
     task<void> binary(std::span<const std::byte>, websocket_send_options = {}, operation_options = {}) && = delete;
 
     /// Zero-copy binary frame.
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> binary(string_type&& payload, websocket_send_options options = {}, operation_options operation = {}) & {
         return write_owned(websocket_opcode::binary, std::move(payload), options.compress_, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> binary(string_type&&, websocket_send_options = {}, operation_options = {}) && = delete;
 
     [[nodiscard]] task<void> pong(std::string_view payload = {}, operation_options operation = {}) &;
     task<void> pong(std::string_view = {}, operation_options = {}) && = delete;
 
     /// Zero-copy pong frame.
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> pong(string_type&& payload, operation_options operation = {}) & {
         return write_owned(websocket_opcode::pong, std::move(payload), true, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> pong(string_type&&, operation_options = {}) && = delete;
 
     [[nodiscard]] task<void> ping(std::string_view payload = {}, operation_options operation = {}) &;
     task<void> ping(std::string_view = {}, operation_options = {}) && = delete;
 
     /// Zero-copy ping frame.
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> ping(string_type&& payload, operation_options operation = {}) & {
         return write_owned(websocket_opcode::ping, std::move(payload), true, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> ping(string_type&&, operation_options = {}) && = delete;
 
     /// Zero-copy send of a message returned by this connection's read(), with
@@ -254,15 +251,15 @@ public:
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
 
     [[nodiscard]] bool connected() const noexcept;
-    [[nodiscard]] const worker_handle& worker() const& RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
 
 private:
     friend class http_client_websocket_request;
     template <typename connection_type>
-    friend websocket detail::make_websocket_facade(connection_type&, std::pmr::memory_resource&);
+    friend websocket detail::make_websocket_facade(connection_type&);
     explicit websocket(std::shared_ptr<detail::websocket_state> state) noexcept;
-    [[nodiscard]] task<void> write_owned(websocket_opcode, std::pmr::string&&, bool, operation_options);
+    [[nodiscard]] task<void> write_owned(websocket_opcode, std::string&&, bool, operation_options);
     std::shared_ptr<detail::websocket_state> state_;
 };
 
@@ -290,21 +287,21 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> chunk, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& chunk, operation_options operation = {}) & {
         return submit_owned(std::move(chunk), false, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(std::string_view last_chunk = {}, operation_options operation = {}) &;
     task<void> finish(std::string_view = {}, operation_options = {}) && = delete;
     [[nodiscard]] task<void> finish(std::span<const std::byte> last_chunk, operation_options operation = {}) &;
     task<void> finish(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> finish(string_type&& last_chunk, operation_options operation = {}) & {
         return submit_owned(std::move(last_chunk), true, std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> finish(string_type&&, operation_options = {}) && = delete;
     void abort() & noexcept;
     void abort() && = delete;
@@ -314,7 +311,7 @@ private:
     websocket_message_writer(detail::websocket_state& owner, websocket_opcode opcode, bool compress) noexcept;
     [[nodiscard]] task<void> submit(std::string_view chunk, bool final, operation_options operation);
     [[nodiscard]] task<void> submit_owned(
-        std::pmr::string&& chunk, bool final, operation_options operation);
+        std::string&& chunk, bool final, operation_options operation);
     [[nodiscard]] bool message_open() const noexcept;
     static void expire_capability(void* target) noexcept;
 

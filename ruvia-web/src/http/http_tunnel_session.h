@@ -2,7 +2,6 @@
 #include <chrono>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -16,27 +15,29 @@
 
 #include "context/context_access.h"
 #include "http/http_stream_end.h"
+#include "integration/operation_interrupt.h"
 #include "server/connection_scanner.h"
 #include "server/http_server_options.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
-#include "util/operation_interrupt.h"
-#include "util/steady_clock.h"
 
 namespace ruvia::detail {
 // A tunnel over an HTTP/1 socket transport or one HTTP/2 or HTTP/3 stream. Received
-// chunks use the connection's inbound budget; sent data and facade state
-// use the worker resource. The transport owns protocol-specific flow control.
+// chunks charge the connection's and worker's inbound buffer budgets.
 template <typename transport_type>
 class http_tunnel_session final {
 public:
-    http_tunnel_session(transport_type transport, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, std::pmr::memory_resource& inbound, bool datagrams,
-        std::string_view pending = {})
+    http_tunnel_session(transport_type transport, const worker_ref& worker_value,
+        inbound_buffer_account* inbound, bool datagrams, std::string_view pending = {})
         : transport_(std::move(transport)),
           inbound_(inbound),
-          read_buffer_(&inbound),
-          pending_(pending, &inbound),
-          facade_(resource, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
+          read_reservation_(inbound),
+          pending_reservation_(inbound),
+          delivered_reservation_(inbound),
+          facade_(inbound, worker_value, this, &read_thunk, &write_thunk, &finish_thunk, &abort_thunk, datagrams) {
+        if (!pending.empty()) {
+            inbound_append(pending_, pending_reservation_, pending);
+        }
         if constexpr (requires(transport_type& value, std::string_view bytes) {
                           value.read_datagram([] {}, asio::cancellation_slot{});
                           value.write_datagram(bytes);
@@ -45,8 +46,7 @@ public:
             facade_.write_datagram_ = &write_datagram_thunk;
         }
     }
-    http_tunnel_session(transport_type, worker_handle&&, std::pmr::memory_resource&,
-        std::pmr::memory_resource&, bool, std::string_view = {}) = delete;
+    http_tunnel_session(transport_type, worker_ref&&, inbound_buffer_account*, bool, std::string_view = {}) = delete;
     [[nodiscard]] http_tunnel& tunnel() noexcept {
         return facade_;
     }
@@ -69,12 +69,11 @@ public:
         return aborted_;
     }
     [[nodiscard]] task<void> drain() {
+        delivered_reservation_.clear();
         while (!receive_ended_) {
             receive_ended_ = !(co_await read_some());
         }
     }
-    // The transport must be stopped before joining if an operation remains
-    // suspended. Cold operations expire while their borrowed owner is alive.
     [[nodiscard]] task<void> join() {
         if (facade_.read_active_ || facade_.write_active_) {
             abort();
@@ -85,34 +84,50 @@ public:
 private:
     [[nodiscard]] task<bool> read_some() {
         if (!pending_.empty()) {
-            pending_ = std::pmr::string(&inbound_);
+            inbound_discard(pending_, pending_reservation_);
             co_return true;
         }
         read_buffer_.clear();
-        co_return co_await transport_.read_more(read_buffer_);
+        if constexpr (requires { transport_.read_more(read_buffer_, &read_reservation_); }) {
+            co_return co_await transport_.read_more(read_buffer_, &read_reservation_);
+        } else {
+            co_return co_await transport_.read_more(read_buffer_);
+        }
     }
     static void wake_read(void* raw) noexcept {
         static_cast<asio::cancellation_signal*>(raw)->emit(asio::cancellation_type::terminal);
     }
-    // A read interrupt wakes the transport wait; input it did not consume stays queued.
-    static task<std::optional<std::pmr::string>> read_thunk(void* raw, operation_options operation) {
+    static task<std::optional<std::string>> read_thunk(void* raw, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.delivered_reservation_.clear();
         operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation,
             &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
         if (!owner_value.pending_.empty()) {
-            co_return std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_));
+            owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
+            co_return std::exchange(owner_value.pending_, std::string{});
         }
         if (owner_value.receive_ended_) {
             co_return std::nullopt;
         }
         owner_value.read_buffer_.clear();
-        if (!(co_await owner_value.transport_.read_more(owner_value.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); }, owner_value.read_cancellation_.slot()))) {
+        bool has_more = false;
+        if constexpr (requires(transport_type& t, std::string& b, asio::cancellation_slot sl, inbound_buffer_reservation* r) { t.read_more(b, [] {}, sl, r); }) {
+            has_more = co_await owner_value.transport_.read_more(
+                owner_value.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); },
+                owner_value.read_cancellation_.slot(), &owner_value.read_reservation_);
+        } else {
+            has_more = co_await owner_value.transport_.read_more(
+                owner_value.read_buffer_, [&interrupt] { interrupt.throw_if_interrupted(); },
+                owner_value.read_cancellation_.slot());
+        }
+        if (!has_more) {
             owner_value.receive_ended_ = true;
             co_return std::nullopt;
         }
-        co_return std::pmr::string(owner_value.read_buffer_, &owner_value.inbound_);
+        std::string chunk;
+        inbound_append(chunk, owner_value.delivered_reservation_, owner_value.read_buffer_);
+        co_return chunk;
     }
-    // An output interrupt aborts the tunnel: a partial write cannot be withdrawn.
     static task<void> write_thunk(void* raw, std::string_view bytes_value, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
         if (owner_value.ended_) {
@@ -128,10 +143,12 @@ private:
     }
     static task<std::optional<http_tunnel_input>> read_datagram_thunk(void* raw, operation_options operation) {
         auto& owner_value = *static_cast<http_tunnel_session*>(raw);
+        owner_value.delivered_reservation_.clear();
         operation_interrupt interrupt(owner_value.interrupts_, owner_value.facade_.worker_, operation,
             &owner_value.read_cancellation_, &wake_read, "HTTP tunnel read");
         if (!owner_value.pending_.empty()) {
-            co_return http_tunnel_input{std::exchange(owner_value.pending_, std::pmr::string(&owner_value.inbound_)), false};
+            owner_value.delivered_reservation_.swap(owner_value.pending_reservation_);
+            co_return http_tunnel_input{std::exchange(owner_value.pending_, std::string{}), false};
         }
         if (owner_value.receive_ended_) {
             co_return std::nullopt;
@@ -169,9 +186,12 @@ private:
         static_cast<http_tunnel_session*>(raw)->abort();
     }
     transport_type transport_;
-    std::pmr::memory_resource& inbound_;
-    std::pmr::string read_buffer_;
-    std::pmr::string pending_;
+    inbound_buffer_account* inbound_;
+    std::string read_buffer_;
+    inbound_buffer_reservation read_reservation_;
+    std::string pending_;
+    inbound_buffer_reservation pending_reservation_;
+    inbound_buffer_reservation delivered_reservation_;
     bool ended_{false};
     bool receive_ended_{false};
     bool aborted_{false};
@@ -194,36 +214,30 @@ template <typename transport_type>
     connection_scanner::entry& scanner, timeout_duration timeout) {
     if (failure != nullptr) {
         session_value.abort();
-    }
-    co_await session_value.join();
-    if (failure == nullptr && !session_value.aborted()) {
+    } else if (!session_value.aborted()) {
         struct drain_deadline final {
             http_tunnel_session<transport_type>& session_;
             std::int64_t deadline_;
             connection_scanner::periodic_check_registration registration_;
             static void tick(void* raw, std::int64_t now) noexcept {
-                auto& owner_value = *static_cast<drain_deadline*>(raw);
-                if (now >= owner_value.deadline_) {
-                    owner_value.registration_.reset();
-                    owner_value.session_.abort();
+                auto& self = *static_cast<drain_deadline*>(raw);
+                if (now >= self.deadline_) {
+                    self.session_.abort();
                 }
             }
-        } deadline_value{session_value, 0, {}};
-        const auto now = steady_now_ms();
-        deadline_value.deadline_ = timeout.value().count() > (std::numeric_limits<std::int64_t>::max)() - now
-                                       ? (std::numeric_limits<std::int64_t>::max)()
-                                       : now + timeout.value().count();
-        scanner.register_periodic_check(deadline_value.registration_, &deadline_value, &drain_deadline::tick);
+        } deadline{session_value, steady_now_ms() + timeout.value().count(), {}};
+        scanner.register_periodic_check(deadline.registration_, &deadline, &drain_deadline::tick);
         try {
             co_await session_value.finish();
             co_await session_value.drain();
         } catch (...) {
-            failure = std::current_exception();
+            session_value.abort();
         }
     }
+    co_await session_value.join();
     if (failure != nullptr) {
-        session_value.abort();
         sink_value.invoke(remote, failure);
+        std::rethrow_exception(failure);
     }
 }
 }  // namespace ruvia::detail

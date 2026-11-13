@@ -10,9 +10,8 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_syntax.h"
 
 #include "parser/field_line_folding.h"
@@ -312,19 +311,18 @@ struct multipart_part_access final {
     using text_storage_type = multipart_part::text_storage_type;
 
     // Unmodified fields borrow the caller-owned body; unfolded or escaped fields
-    // own PMR storage.
+    // own string storage.
     [[nodiscard]] static multipart_part make_decoded(multipart_part::text_storage_type name,
         multipart_part::text_storage_type filename,
         multipart_part::text_storage_type content_type_value, std::string_view body,
-        bool filename_present, std::pmr::memory_resource* resource) noexcept {
+        bool filename_present) noexcept {
         return multipart_part(std::move(name), std::move(filename),
-            std::move(content_type_value), body, filename_present, resource);
+            std::move(content_type_value), body, filename_present);
     }
 
     template <http_temporary_owning_char_string body_type>
     static multipart_part make_decoded(multipart_part::text_storage_type,
-        multipart_part::text_storage_type, multipart_part::text_storage_type, body_type&&, bool,
-        std::pmr::memory_resource*) = delete;
+        multipart_part::text_storage_type, multipart_part::text_storage_type, body_type&&, bool) = delete;
 };
 
 struct multipart_stream_part_access final {
@@ -414,54 +412,6 @@ multipart_boundary_parse_result parse_multipart_boundary(std::string_view conten
     return multipart_boundary_parse_result(std::move(*boundary));
 }
 
-multipart_part::text_storage_type multipart_part::copy_text(
-    const text_storage_type& text, std::pmr::memory_resource* resource) {
-    if (const auto* borrowed = std::get_if<std::string_view>(&text)) {
-        return *borrowed;
-    }
-    return std::pmr::string(std::get<std::pmr::string>(text), resource);
-}
-
-multipart_part::multipart_part(const multipart_part& other)
-    : multipart_part(other, other.resource_) {}
-
-multipart_part::multipart_part(const multipart_part& other, std::pmr::memory_resource* resource)
-    : resource_(resource),
-      name_(copy_text(other.name_, resource)),
-      filename_(copy_text(other.filename_, resource)),
-      content_type_(copy_text(other.content_type_, resource)),
-      body_(other.body_),
-      filename_present_(other.filename_present_) {}
-
-void multipart_part::swap(multipart_part& other) noexcept {
-    // Assignment candidates use this same resource, including owned text variants.
-    name_.swap(other.name_);
-    filename_.swap(other.filename_);
-    content_type_.swap(other.content_type_);
-    std::swap(body_, other.body_);
-    std::swap(filename_present_, other.filename_present_);
-}
-
-multipart_part& multipart_part::operator=(const multipart_part& other) {
-    if (this != &other) {
-        multipart_part candidate(other, resource_);
-        swap(candidate);
-    }
-    return *this;
-}
-
-multipart_part& multipart_part::operator=(multipart_part&& other) {
-    if (this != &other) {
-        if (resource_ == other.resource_) {
-            multipart_part candidate(std::move(other));
-            swap(candidate);
-        } else {
-            *this = other;
-        }
-    }
-    return *this;
-}
-
 namespace {
 
 constexpr std::size_t max_multipart_preamble_bytes = std::size_t{64} * 1024;
@@ -470,7 +420,7 @@ constexpr std::size_t max_multipart_delimiter_line_bytes = std::size_t{64} * 102
 
 // Appends a validated token or quoted-string parameter value with its
 // quoted-pairs (RFC 9110 section 5.6.4) decoded.
-void append_mime_parameter_value(std::pmr::string& out, std::string_view value) {
+void append_mime_parameter_value(std::string& out, std::string_view value) {
     if (value.empty() || value.front() != '"') {
         out.append(value);
         return;
@@ -483,21 +433,20 @@ void append_mime_parameter_value(std::pmr::string& out, std::string_view value) 
 }
 
 [[nodiscard]] std::string_view multipart_text_view(
-    const std::variant<std::string_view, std::pmr::string>& storage) noexcept {
+    const std::variant<std::string_view, std::string>& storage) noexcept {
     if (const auto* borrowed = std::get_if<std::string_view>(&storage)) {
         return *borrowed;
     }
-    return std::get<std::pmr::string>(storage);
+    return std::get<std::string>(storage);
 }
 
-std::pmr::string& emplace_owned_multipart_text(
-    std::variant<std::string_view, std::pmr::string>& storage,
-    std::pmr::memory_resource* resource) {
-    if (auto* owned = std::get_if<std::pmr::string>(&storage)) {
+std::string& emplace_owned_multipart_text(
+    std::variant<std::string_view, std::string>& storage) {
+    if (auto* owned = std::get_if<std::string>(&storage)) {
         owned->clear();
         return *owned;
     }
-    return storage.emplace<std::pmr::string>(resource);
+    return storage.emplace<std::string>();
 }
 
 [[nodiscard]] http_protocol_error multipart_protocol_error(multipart_parse_error error) noexcept {
@@ -544,27 +493,23 @@ http_protocol_error multipart_poll_failure::protocol_error() const noexcept {
 }
 
 multipart_parser::multipart_parser(multipart_parse_options options)
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      boundary_(std::move(options.boundary_)),
-      input_(std::in_place_type<http_io_buffer>, http_io_buffer::allocator_type(resource_)),
-      current_headers_(resource_),
+    : boundary_(std::move(options.boundary_)),
+      input_(std::in_place_type<http_io_buffer>),
       remaining_parts_(options.max_parts_),
       remaining_metadata_bytes_(options.max_metadata_bytes_) {}
 
 multipart_parser::multipart_parser(
     std::string_view complete_body, multipart_parse_options options, complete_input_tag_type)
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      boundary_(std::move(options.boundary_)),
+    : boundary_(std::move(options.boundary_)),
       input_(complete_body),
-      current_headers_(resource_),
       remaining_parts_(options.max_parts_),
       remaining_metadata_bytes_(options.max_metadata_bytes_),
       input_eof_(true) {}
-std::pmr::vector<multipart_part> parse_multipart_body(std::string_view body, multipart_parse_options options) {
-    auto* const resource = detail::http_pmr_resource_or_default(options.resource_);
-    options.resource_ = resource;
+
+std::vector<multipart_part> parse_multipart_body(
+    std::string_view body, multipart_parse_options options) {
     multipart_parser parser(body, std::move(options), multipart_parser::complete_input_tag_type{});
-    std::pmr::vector<multipart_part> parts(resource);
+    std::vector<multipart_part> parts;
     for (;;) {
         auto result_value = parser.poll();
         if (const auto* part = result_value.part()) {
@@ -572,7 +517,7 @@ std::pmr::vector<multipart_part> parse_multipart_body(std::string_view body, mul
                 std::exchange(parser.current_name_, std::string_view{}),
                 std::exchange(parser.current_filename_, std::string_view{}),
                 std::exchange(parser.current_content_type_, std::string_view{}), part->body(),
-                part->has_filename(), resource));
+                part->has_filename()));
             continue;
         }
         if (result_value.done() != nullptr) {
@@ -805,7 +750,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
         current_name_ = http_trim_quoted_field_value(part_headers->name());
     } else {
         append_mime_parameter_value(
-            emplace_owned_multipart_text(current_name_, resource_), part_headers->name());
+            emplace_owned_multipart_text(current_name_), part_headers->name());
     }
     has_current_filename_ = part_headers->has_filename();
     if (has_current_filename_ && !http_trim_quoted_field_value(part_headers->filename()).empty()) {
@@ -813,7 +758,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
             current_filename_ = http_trim_quoted_field_value(part_headers->filename());
         } else {
             append_mime_parameter_value(
-                emplace_owned_multipart_text(current_filename_, resource_), part_headers->filename());
+                emplace_owned_multipart_text(current_filename_), part_headers->filename());
         }
     } else {
         current_filename_ = std::string_view{};
@@ -823,7 +768,7 @@ multipart_parser::step_result_type multipart_parser::process_headers() {
     } else if (borrowed_headers) {
         current_content_type_ = part_headers->content_type();
     } else {
-        emplace_owned_multipart_text(current_content_type_, resource_)
+        emplace_owned_multipart_text(current_content_type_)
             .assign(part_headers->content_type().data(), part_headers->content_type().size());
     }
     --remaining_parts_;

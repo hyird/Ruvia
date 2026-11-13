@@ -4,16 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_base64.h"
 
 #include "auth/hmac.h"
-#include "util/inline_text_concat.h"
+#include "http/inline_text_concat.h"
 
 namespace ruvia::detail {
 
@@ -26,10 +24,9 @@ static_assert(cookie_signature_size == http_base64_encoded_size(hmac_digest_size
 // for one cookie is not a valid signature for another under the same secret.
 // Throws std::invalid_argument on an empty secret and std::length_error when
 // the secret or length-framed message cannot be represented by OpenSSL's HMAC
-// length parameters. Temporary message storage uses the caller's resource.
+// length parameters.
 inline void write_cookie_signature(
-    char* output, std::string_view secret, std::string_view name, std::string_view value,
-    std::pmr::memory_resource* resource) {
+    char* output, std::string_view secret, std::string_view name, std::string_view value) {
     if (secret.empty()) {
         throw std::invalid_argument("signed cookie secret must not be empty");
     }
@@ -51,15 +48,13 @@ inline void write_cookie_signature(
         static_cast<char>(name_len & 0xFF),
     };
     // Assemble lenPrefix||name||value for the one-shot HMAC. Inline storage keeps
-    // signing a typical cookie allocation-free; larger messages use the request's
-    // recyclable pool.
+    // signing a typical cookie allocation-free.
     if (name.size() > hmac_max_input_size - name_len_bytes.size() ||
         value.size() > hmac_max_input_size - name_len_bytes.size() - name.size()) {
         throw std::length_error("signed cookie message is too large for HMAC");
     }
     const inline_text_concat<512> message(
-        {std::string_view(name_len_bytes.data(), name_len_bytes.size()), name, value},
-        pmr_resource_or_default(resource));
+        {std::string_view(name_len_bytes.data(), name_len_bytes.size()), name, value});
 
     std::array<std::uint8_t, hmac_digest_size(hmac_digest::sha256)> digest;
     if (!compute_hmac(hmac_digest::sha256, secret, message.view(), digest)) {

@@ -6,7 +6,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia::detail {
 
@@ -78,11 +78,11 @@ public:
         }
 
     private:
-        acquire_operation(runtime_control_gate& gate, worker_handle caller) noexcept
+        acquire_operation(runtime_control_gate& gate, worker_ref caller) noexcept
             : gate_(gate),
               caller_(std::move(caller)) {}
         runtime_control_gate& gate_;
-        worker_handle caller_;
+        worker_ref caller_;
         acquire_operation* next_{};
         std::coroutine_handle<> continuation_{};
         bool started_{};
@@ -98,14 +98,14 @@ public:
             std::terminate();
         }
     }
-    [[nodiscard]] acquire_operation acquire(worker_handle caller) & noexcept {
+    [[nodiscard]] acquire_operation acquire(worker_ref caller) & noexcept {
         return acquire_operation(*this, std::move(caller));
     }
-    acquire_operation acquire(worker_handle) && = delete;
+    acquire_operation acquire(worker_ref) && = delete;
 
 private:
     void release() noexcept {
-        worker_handle caller;
+        worker_ref caller;
         std::coroutine_handle<> continuation;
         {
             std::lock_guard lock(mutex_);

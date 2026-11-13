@@ -4,15 +4,14 @@
 #include <memory>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/http_client.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #endif
 
 #include "app/web_worker_dispatch.h"
@@ -21,14 +20,14 @@
 
 namespace ruvia {
 
-web_worker_context::web_worker_context(const worker_handle& worker_value,
+web_worker_context::web_worker_context(const worker_ref& worker_value,
     const detail::worker_client_registry_view& client_registries,
     const detail::worker_state_registry* worker_states, const ::ruvia::stop_token& stop_token_value) noexcept
     : capabilities_(worker_value, stop_token_value, worker_states),
       client_registries_(client_registries) {
     operation_scope_.bind_worker(worker_value);
 }
-const worker_handle& web_worker_context::worker() const& noexcept {
+const worker_ref& web_worker_context::worker() const& noexcept {
     return capabilities_.worker();
 }
 
@@ -37,63 +36,63 @@ const worker_handle& web_worker_context::worker() const& noexcept {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_handle web_worker_context::db() const {
+db_session web_worker_context::db() const {
     return client_registries_.db(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
-db_handle web_worker_context::db(std::string_view alias) const {
+db_session web_worker_context::db(std::string_view alias) const {
     return client_registries_.db(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif
 
-http_client_handle web_worker_context::client() const {
+http_client_ref web_worker_context::client() const {
     return client_registries_.client(operation_scope_, capabilities_.stop_token());
 }
 
-http_client_handle web_worker_context::client(std::string_view alias) const {
+http_client_ref web_worker_context::client(std::string_view alias) const {
     return client_registries_.client(alias, operation_scope_, capabilities_.stop_token());
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_handle web_worker_context::redis() const {
+redis_session web_worker_context::redis() const {
     return client_registries_.redis(operation_scope_, nullptr, capabilities_.stop_token());
 }
 
-redis_handle web_worker_context::redis(std::string_view alias) const {
+redis_session web_worker_context::redis(std::string_view alias) const {
     return client_registries_.redis(alias, operation_scope_, nullptr, capabilities_.stop_token());
 }
 #endif
 
-web_worker_handle::web_worker_handle(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept
+web_worker_ref::web_worker_ref(std::shared_ptr<detail::web_worker_dispatch> dispatch) noexcept
     : dispatch_(std::move(dispatch)) {}
 
-bool web_worker_handle::valid() const noexcept {
+bool web_worker_ref::valid() const noexcept {
     return dispatch_ && dispatch_->valid();
 }
 
-bool web_worker_handle::accepting() const noexcept {
+bool web_worker_ref::accepting() const noexcept {
     return dispatch_ && dispatch_->accepting();
 }
 
-bool web_worker_handle::is_current() const noexcept {
+bool web_worker_ref::is_current() const noexcept {
     return dispatch_ && dispatch_->is_current();
 }
 
-worker_id_type web_worker_handle::id() const noexcept {
+worker_id_type web_worker_ref::id() const noexcept {
     return dispatch_ ? dispatch_->id() : 0;
 }
 
-web_worker_stats web_worker_handle::stats() const noexcept {
+web_worker_stats web_worker_ref::stats() const noexcept {
     return dispatch_ ? dispatch_->stats() : web_worker_stats{};
 }
 
-web_worker_post_result web_worker_handle::post_task(
+web_worker_post_result web_worker_ref::post_task(
     move_only_function<task<void>(web_worker_context&)> task_value) const {
     if (dispatch_) {
         return dispatch_->post(std::move(task_value));
     }
     // A handle without a worker refuses with worker_stopping and returns the task.
-    return worker_handle().post_payload(std::move(task_value),
+    return worker_ref().post_payload(std::move(task_value),
         [](move_only_function<task<void>(web_worker_context&)>&&) -> move_only_function<void()> {
             std::terminate();  // An empty handle never admits.
         });
@@ -121,15 +120,15 @@ using abandon_reservation_type = std::unique_ptr<web_worker_dispatch, abandon_re
 
 web_worker_dispatch::web_worker_dispatch(ruvia::worker_runtime& runtime,
     worker_capabilities& capabilities, task_scope& jobs, const stop_token& stop_token_value)
-    : worker_(runtime.handle()),
+    : worker_(runtime.worker()),
       runtime_(runtime),
       client_registries_(capabilities.client_registries()),
       worker_states_(capabilities.worker_states()),
       jobs_(jobs),
       stop_token_(stop_token_value) {}
 
-web_worker_handle web_worker_dispatch::handle(std::shared_ptr<web_worker_dispatch> dispatch) noexcept {
-    return web_worker_handle(std::move(dispatch));
+web_worker_ref web_worker_dispatch::make_ref(std::shared_ptr<web_worker_dispatch> dispatch) noexcept {
+    return web_worker_ref(std::move(dispatch));
 }
 
 bool web_worker_dispatch::valid() const noexcept {

@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_request_target.h"
@@ -40,9 +39,9 @@ std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options
     return detail::http_scheme_default_port(scheme);
 }
 
-void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
+void remove_http_client_last_path_segment(std::string& path) noexcept {
     const auto slash = path.rfind('/');
-    if (slash == std::pmr::string::npos) {
+    if (slash == std::string::npos) {
         path.clear();
         return;
     }
@@ -53,7 +52,7 @@ void remove_http_client_last_path_segment(std::pmr::string& path) noexcept {
 // reference path or base directory, so only the '/'-led dot-segment cases of
 // RFC 3986 section 5.2.4 can occur.
 void normalize_http_client_absolute_path(
-    std::string_view path, std::size_t extra_reserve, std::pmr::string& normalized) {
+    std::string_view path, std::size_t extra_reserve, std::string& normalized) {
     normalized.clear();
     normalized.reserve((path.empty() ? 1U : path.size()) + extra_reserve);
     if (!path.empty() && path.find("/.") == std::string_view::npos) {
@@ -96,8 +95,7 @@ void normalize_http_client_absolute_path(
 // `reference` is the URI-reference with any scheme/authority prefix and the
 // fragment already removed.
 [[nodiscard]] bool resolve_http_client_redirect_path_and_query(bool has_authority,
-    std::string_view reference, std::string_view current_target,
-    std::pmr::memory_resource* target_resource, std::pmr::string& resolved) {
+    std::string_view reference, std::string_view current_target, std::string& resolved) {
     const auto query_at = reference.find('?');
     const bool has_reference_query = query_at != std::string_view::npos;
     const auto reference_path = has_reference_query ? reference.substr(0, query_at) : reference;
@@ -111,7 +109,7 @@ void normalize_http_client_absolute_path(
 
     static constexpr std::size_t inline_path_capacity = 256;
     std::array<char, inline_path_capacity> inline_merged_path{};
-    std::pmr::string merged_path_storage(target_resource);
+    std::string merged_path_storage;
     std::string_view merged_path;
     std::string_view selected_query;
     bool has_selected_query = has_reference_query;
@@ -216,11 +214,10 @@ http_origin_view http_origin_view::https(http_origin_options options) {
         http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
 }
 
-std::pmr::string make_http_origin_authority(const http_origin_view& origin,
-    std::pmr::memory_resource* resource) {
+std::string make_http_origin_authority(const http_origin_view& origin) {
     const auto host = origin.host();
     const bool include_port = !http_origin_uses_default_port(origin);
-    std::pmr::string authority(detail::http_pmr_resource_or_default(resource));
+    std::string authority;
     authority.reserve(host.size() + (include_port ? 6 : 0));
     authority.append(host);
     if (include_port) {
@@ -250,9 +247,9 @@ http_client_response_header_lookup lookup_unique_http_client_response_header(
     return {.status_ = http_unique_header_status::found, .value_ = found};
 }
 
-http_client_redirect_request_plan::http_client_redirect_request_plan(std::string_view method,
-    http_client_redirect_content_disposition content_disposition, std::pmr::memory_resource* resource)
-    : method_(method, detail::http_pmr_resource_or_default(resource)),
+http_client_redirect_request_plan::http_client_redirect_request_plan(
+    std::string_view method, http_client_redirect_content_disposition content_disposition)
+    : method_(method),
       content_disposition_(content_disposition) {}
 
 http_client_redirect_request_plan plan_http_client_redirect_request(
@@ -260,16 +257,16 @@ http_client_redirect_request_plan plan_http_client_redirect_request(
     if (options.status_ == http_status::see_other) {
         return http_client_redirect_request_plan(
             request.method_ == "HEAD" ? request.method_.view() : std::string_view("GET"),
-            http_client_redirect_content_disposition::drop, options.resource_);
+            http_client_redirect_content_disposition::drop);
     }
     if ((options.status_ == http_status::moved_permanently ||
             options.status_ == http_status::found) &&
         request.method_ == "POST") {
         return http_client_redirect_request_plan(
-            "GET", http_client_redirect_content_disposition::drop, options.resource_);
+            "GET", http_client_redirect_content_disposition::drop);
     }
     return http_client_redirect_request_plan(
-        request.method_.view(), http_client_redirect_content_disposition::preserve, options.resource_);
+        request.method_.view(), http_client_redirect_content_disposition::preserve);
 }
 
 http_client_origin_authority_status classify_http_client_origin_authority(
@@ -331,7 +328,6 @@ resolve_http_client_redirect_target(
         has_authority = true;
     }
 
-    auto* const target_resource = detail::http_pmr_resource_or_default(options.resource_);
     std::string_view resolved_host = origin.host();
     auto port = origin.port();
     bool cross_origin = target_scheme != origin.scheme();
@@ -350,13 +346,13 @@ resolve_http_client_redirect_target(
                                                             : reference.substr(authority_end);
     }
 
-    std::pmr::string resolved(target_resource);
+    std::string resolved;
     if (!resolve_http_client_redirect_path_and_query(
-            has_authority, reference, current_target, target_resource, resolved)) {
+            has_authority, reference, current_target, resolved)) {
         return http_client_redirect_resolution_error::invalid_location;
     }
 
-    std::pmr::string host(resolved_host.data(), resolved_host.size(), target_resource);
+    std::string host(resolved_host.data(), resolved_host.size());
     return http_client_resolved_redirect(
         target_scheme, std::move(host), port, std::move(resolved), cross_origin);
 }

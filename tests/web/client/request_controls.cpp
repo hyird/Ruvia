@@ -3,7 +3,6 @@
 #include <array>
 #include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -19,6 +18,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/web/http_client.h"
+#include "ruvia/web/http_client_websocket_request.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
@@ -32,7 +32,7 @@ namespace http_client_request_controls_test {
 
 class peer final {
 public:
-    peer(asio::io_context& io, const ruvia::worker_handle& worker, bool http2, bool silent)
+    peer(asio::io_context& io, const ruvia::worker_ref& worker, bool http2, bool silent)
         : acceptor_(io, {asio::ip::make_address("127.0.0.1"), 0}),
           socket_(io),
           gate_(io),
@@ -41,7 +41,7 @@ public:
           silent_(silent) {
         gate_.expires_at(std::chrono::steady_clock::time_point::max());
         encoded_ = *ruvia::encode_http_content(ruvia::http_content_coding::gzip, "streamed representation",
-            {.max_encoded_bytes_ = 1024, .resource_ = ruvia::process_resource()});
+            {.max_encoded_bytes_ = 1024});
     }
     std::string url() const {
         return "http://127.0.0.1:" + std::to_string(acceptor_.local_endpoint().port());
@@ -73,8 +73,8 @@ public:
             std::rethrow_exception(failure_);
         }
     }
-    std::pmr::string encoded_{ruvia::process_resource()};
-    std::pmr::string received_{ruvia::process_resource()};
+    std::string encoded_{};
+    std::string received_{};
     bool final_sent_{};
     bool tail_sent_{};
 
@@ -120,7 +120,7 @@ private:
         std::array<char, ruvia::http2_client_preface.size()> preface;
         co_await asio::async_read(socket_, asio::buffer(preface), asio::use_awaitable);
         EXPECT_EQ(std::string_view(preface.data(), preface.size()), ruvia::http2_client_preface);
-        std::pmr::string wire(ruvia::process_resource());
+        std::string wire;
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
         co_await asio::async_write(socket_, asio::buffer(wire), asio::use_awaitable);
         std::uint32_t stream = 0;
@@ -131,13 +131,13 @@ private:
             if (!header) {
                 throw std::runtime_error("invalid HTTP/2 request frame");
             }
-            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+            std::string payload(header->length_, '\0');
             if (!payload.empty()) {
                 co_await asio::async_read(socket_, asio::buffer(payload), asio::use_awaitable);
             }
             if (header->type_ == static_cast<std::uint8_t>(ruvia::http2_frame_type::headers)) {
                 stream = header->stream_id_;
-                ruvia::hpack_decoder decoder({.resource_ = ruvia::process_resource()});
+                ruvia::hpack_decoder decoder;
                 EXPECT_FALSE(decoder.decode(payload, [this](std::string_view name, std::string_view value) {
                                         received_.append(name).append(": ").append(value).append("\n");
                                         return true;
@@ -149,7 +149,7 @@ private:
             co_return;
         }
         wire.clear();
-        std::pmr::string fields(ruvia::process_resource());
+        std::string fields;
         ruvia::hpack_encoder::encode_header(fields, ":status", "103");
         ruvia::hpack_encoder::encode_header(fields, "link", "</style.css>; rel=preload");
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, stream, fields);
@@ -185,7 +185,7 @@ private:
 void raw_stream(bool http2, bool configured_raw) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     peer upstream(io, worker, http2, false);
     const auto url = upstream.url();
     upstream.start();
@@ -218,7 +218,7 @@ void raw_stream(bool http2, bool configured_raw) {
             const auto first = co_await response.read();
             EXPECT_TRUE(first.has_value());
             EXPECT_FALSE(upstream.tail_sent_);
-            std::pmr::string bytes(ruvia::process_resource());
+            std::string bytes;
             if (first) {
                 bytes.append(reinterpret_cast<const char*>(first->data()), first->size());
             }
@@ -248,7 +248,7 @@ void raw_stream(bool http2, bool configured_raw) {
 void read_timeout(bool http2, bool total_only) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     peer upstream(io, worker, http2, true);
     const auto url = upstream.url();
     upstream.start();
@@ -325,7 +325,7 @@ TEST(Ruvia, http_client_http2_raw_stream_forwarded_fields_and_request_timeouts) 
 TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_streams) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
     asio::ip::tcp::socket socket(io);
     ruvia::worker_signal peer_done(worker);
@@ -335,7 +335,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
         co_await acceptor.async_accept(socket, asio::use_awaitable);
         std::array<char, ruvia::http2_client_preface.size()> preface;
         co_await asio::async_read(socket, asio::buffer(preface), asio::use_awaitable);
-        std::pmr::string wire(ruvia::process_resource());
+        std::string wire;
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
         co_await asio::async_write(socket, asio::buffer(wire), asio::use_awaitable);
         unsigned requests = 0;
@@ -346,7 +346,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
             if (!header) {
                 throw std::runtime_error("invalid multiplexed frame");
             }
-            std::pmr::string payload(header->length_, '\0', ruvia::process_resource());
+            std::string payload(header->length_, '\0');
             if (!payload.empty()) {
                 co_await asio::async_read(socket, asio::buffer(payload), asio::use_awaitable);
             }
@@ -354,7 +354,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
                 continue;
             }
             wire.clear();
-            std::pmr::string fields(ruvia::process_resource());
+            std::string fields;
             if (++requests == 1) {
                 ruvia::hpack_encoder::encode_header(fields, ":status", "103");
                 ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 4, header->stream_id_, fields);
@@ -456,7 +456,7 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
     const auto authority = std::string("[2001:db8::1]:") + std::to_string(port);
     const auto logical_url = "http://" + authority;
     auto attachment = ruvia::attach_event_loop(io);
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     ruvia::task_scope peers(worker);
     std::exception_ptr failure;
     std::string received;
@@ -580,4 +580,187 @@ TEST(Ruvia, http_client_dial_and_dns_ports_reject_invalid_original_integer_domai
     auto root = attachment.loop().start(run());
     attachment.run();
     std::move(root).get();
+}
+
+TEST(Ruvia, http_client_builders_enforce_consumed_state_websocket_options_and_digest_redirect_strip) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    const auto url = "http://127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+
+    std::string second_hop_request;
+    const auto serve_redirect = [&]() -> ruvia::task<void> {
+        asio::ip::tcp::socket socket(io);
+        const auto accepted = co_await ruvia::async_asio([&](auto handler) {
+            acceptor.async_accept(socket, std::move(handler));
+        });
+        if (accepted.error_code()) {
+            co_return;
+        }
+        std::string first_hop;
+        (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+            asio::async_read_until(socket, asio::dynamic_buffer(first_hop), "\r\n\r\n", std::move(handler));
+        });
+        // Drain the 4-byte body ("body") if not yet in first_hop.
+        const auto header_end = first_hop.find("\r\n\r\n");
+        const std::size_t body_have = header_end == std::string::npos ? 0 : first_hop.size() - (header_end + 4);
+        if (body_have < 4) {
+            std::array<char, 4> rest{};
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_read(socket, asio::buffer(rest.data(), 4 - body_have), std::move(handler));
+            });
+        }
+        constexpr std::string_view redirect_reply =
+            "HTTP/1.1 303 See Other\r\nLocation: /landed\r\nContent-Length: 0\r\n\r\n";
+        (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+            asio::async_write(socket, asio::buffer(redirect_reply), std::move(handler));
+        });
+        (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+            asio::async_read_until(socket, asio::dynamic_buffer(second_hop_request), "\r\n\r\n", std::move(handler));
+        });
+        constexpr std::string_view final_reply =
+            "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+        (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+            asio::async_write(socket, asio::buffer(final_reply), std::move(handler));
+        });
+    };
+
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto worker = attachment.loop().worker();
+        ruvia::task_scope peers(worker);
+        peers.spawn(serve_redirect());
+
+        ruvia::http_client client(attachment.loop(), {.base_url_ = url});
+        auto builder = client.client().post("/submit");
+        builder.header("Content-Type", "text/plain")
+            .header("Digest", "SHA-256=abc=")
+            .header("Repr-Digest", "sha-256=:abc=:")
+            .header("X-Trace", "keep-me")
+            .body("body");
+        auto pending = builder.send();
+        EXPECT_THROW(builder.redirects(1), std::logic_error);
+        auto response = co_await std::move(pending);
+        EXPECT_EQ(response.status(), ruvia::http_status::ok);
+        const auto body = co_await response.text();
+        EXPECT_EQ(body.text(), "ok");
+
+        EXPECT_THROW(
+            client.client().websocket("/ws").configure({.dial_port_ = 0}),
+            std::invalid_argument);
+        EXPECT_THROW(
+            client.client().websocket("/ws").configure({.authority_ = "user@example.test"}),
+            std::invalid_argument);
+
+        co_await client.shutdown();
+        co_await peers.join();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+
+    EXPECT_TRUE(second_hop_request.starts_with("GET /landed HTTP/1.1\r\n"));
+    EXPECT_NE(second_hop_request.find("X-Trace: keep-me\r\n"), std::string::npos);
+    EXPECT_EQ(second_hop_request.find("Digest:"), std::string::npos);
+    EXPECT_EQ(second_hop_request.find("Repr-Digest:"), std::string::npos);
+    EXPECT_EQ(second_hop_request.find("Content-Type:"), std::string::npos);
+}
+
+TEST(Ruvia, http_client_plain_connect_omits_origin_cookies_even_for_matching_authority) {
+    auto& io = ruvia::test::new_test_io_context();
+    auto attachment = ruvia::attach_event_loop(io);
+    asio::ip::tcp::acceptor acceptor(io, {asio::ip::make_address("127.0.0.1"), 0});
+    const auto authority = "127.0.0.1:" + std::to_string(acceptor.local_endpoint().port());
+    const auto url = "http://" + authority;
+
+    std::string get_request_head;
+    std::string connect_request_head;
+    const auto serve_origin_and_proxy = [&]() -> ruvia::task<void> {
+        // Connection 1: two ordinary origin GET requests to seed and verify cookie jar.
+        {
+            asio::ip::tcp::socket socket(io);
+            const auto accepted = co_await ruvia::async_asio([&](auto handler) {
+                acceptor.async_accept(socket, std::move(handler));
+            });
+            if (accepted.error_code()) {
+                co_return;
+            }
+            std::string first_get;
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_read_until(socket, asio::dynamic_buffer(first_get), "\r\n\r\n", std::move(handler));
+            });
+            constexpr std::string_view seed_reply =
+                "HTTP/1.1 200 OK\r\nSet-Cookie: jar_secret=stored; Path=/\r\nContent-Length: 2\r\n\r\nok";
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(socket, asio::buffer(seed_reply), std::move(handler));
+            });
+
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_read_until(socket, asio::dynamic_buffer(get_request_head), "\r\n\r\n", std::move(handler));
+            });
+            constexpr std::string_view verify_reply =
+                "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok";
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(socket, asio::buffer(verify_reply), std::move(handler));
+            });
+        }
+        // Connection 2: plain CONNECT tunnel whose tunnel_authority matches the client's authority.
+        {
+            asio::ip::tcp::socket socket(io);
+            const auto accepted = co_await ruvia::async_asio([&](auto handler) {
+                acceptor.async_accept(socket, std::move(handler));
+            });
+            if (accepted.error_code()) {
+                co_return;
+            }
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_read_until(socket, asio::dynamic_buffer(connect_request_head), "\r\n\r\n", std::move(handler));
+            });
+            constexpr std::string_view connect_reply =
+                "HTTP/1.1 200 Connection Established\r\n\r\n";
+            (void)co_await ruvia::async_asio<std::size_t>([&](auto handler) {
+                asio::async_write(socket, asio::buffer(connect_reply), std::move(handler));
+            });
+        }
+    };
+
+    const auto run = [&]() -> ruvia::task<void> {
+        const auto worker = attachment.loop().worker();
+        ruvia::task_scope peers(worker);
+        peers.spawn(serve_origin_and_proxy());
+
+        ruvia::http_client client(attachment.loop(), {
+                                                         .base_url_ = url,
+                                                         .versions_ = ruvia::http_client_versions{.http2_ = false},
+                                                         .received_cookies_ = ruvia::http_client_received_cookie_policy::retain_and_send,
+                                                         .cookies_ = {{"configured_secret", "1"}},
+                                                     });
+        auto seeded = co_await client.client().get("/seed").send();
+        const auto seeded_body = co_await seeded.text();
+        EXPECT_EQ(seeded_body.text(), "ok");
+
+        auto verified = co_await client.client().get("/verify").send();
+        const auto verified_body = co_await verified.text();
+        EXPECT_EQ(verified_body.text(), "ok");
+
+        auto opened = co_await client.client().connect(authority).open();
+        EXPECT_NE(opened.tunnel(), nullptr);
+        if (opened.tunnel() != nullptr) {
+            co_await opened.tunnel()->finish();
+        }
+
+        co_await client.shutdown();
+        co_await peers.join();
+        attachment.stop();
+    };
+    auto root = attachment.loop().start(run());
+    attachment.run();
+    std::move(root).get();
+
+    EXPECT_NE(get_request_head.find("cookie: configured_secret=1; jar_secret=stored\r\n"), std::string::npos);
+    EXPECT_TRUE(connect_request_head.starts_with("CONNECT " + authority + " HTTP/1.1\r\n"));
+    EXPECT_EQ(connect_request_head.find("Cookie:"), std::string::npos);
+    EXPECT_EQ(connect_request_head.find("cookie:"), std::string::npos);
+    EXPECT_EQ(connect_request_head.find("configured_secret"), std::string::npos);
+    EXPECT_EQ(connect_request_head.find("jar_secret"), std::string::npos);
 }

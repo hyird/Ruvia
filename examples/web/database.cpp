@@ -19,6 +19,7 @@
 #include <iostream>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/http_number_format.h"
@@ -68,14 +69,14 @@ private:
     ruvia::task<ruvia::http_response> find_user(ruvia::context& c) {
         bool found = false;
         co_await load_user_found(c, found);
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append(found ? "found\n" : "not found\n");
         c.draft().status(found ? ruvia::http_status::ok : ruvia::http_status::not_found);
         co_return c.text(std::move(body));
     }
 
     ruvia::task<ruvia::http_response> stream_users(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         co_await append_users(c, body);
         co_return c.text(std::move(body));
     }
@@ -84,7 +85,7 @@ private:
         const auto name = co_await c.req().text();
         std::uint64_t id = 0;
         co_await insert_user(c, name, id);
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("created id=");
         ruvia::http_append_unsigned(body, id);
         body.push_back('\n');
@@ -106,7 +107,7 @@ private:
         co_return;
     }
 
-    static ruvia::task<void> append_users(ruvia::context& c, std::pmr::string& body) {
+    static ruvia::task<void> append_users(ruvia::context& c, std::string& body) {
         auto rows = co_await c.db().query_stream("SELECT name FROM users ORDER BY id");
         while (auto row = co_await rows.read()) {
             if (!row->empty()) {

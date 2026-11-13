@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -26,16 +25,12 @@ RUVIA_MODEL(import_record,
 
 int main() {
     try {
-        // Every model/result using this allocator must die before the pool.
-        // In a handler, use c.arena() for request data and process_resource()
-        // for individually reclaimable storage.
-        std::pmr::unsynchronized_pool_resource memory(ruvia::process_resource());
-        std::pmr::string input(R"({"name":"sample","count":7,"ratio":1.25,"enabled":true,"labels":["a","b"],"metadata":{"revision":2}})", &memory);
-        auto owned = ruvia::from_json<import_record>(input, {.resource_ = &memory});
+        std::string input(R"({"name":"sample","count":7,"ratio":1.25,"enabled":true,"labels":["a","b"],"metadata":{"revision":2}})");
+        auto owned = ruvia::from_json<import_record>(input);
         {
-            // parse() borrows input even when a PMR resource is supplied.
-            // Keep input unchanged and keep nested views inside this scope.
-            auto object = ruvia::json_object::parse(input, {.resource_ = &memory});
+            // parse() borrows input. Keep input unchanged and keep nested
+            // views inside this scope.
+            auto object = ruvia::json_object::parse(input);
             if (!object.for_each_field([](std::string_view name, const ruvia::json_value& value) {
                     std::cout << name << "=" << value.view() << '\n';
                     return true;  // false intentionally stops traversal.
@@ -61,7 +56,7 @@ int main() {
         }
         // from_json() owns strings and dynamic tokens, unlike parse() above.
         input.assign("the original buffer is now reused");
-        ruvia::validator validation({.resource_ = &memory});
+        ruvia::validator validation;
         // Validator accepts optional values, just like query/header lookups.
         const std::optional<std::string_view> name{owned.get<"name">().view()};
         const std::optional<std::int64_t> count{static_cast<std::int64_t>(owned.get<"count">())};
@@ -69,24 +64,24 @@ int main() {
         validation.throw_if_invalid();
         // Field validation runs in from_json/from_form; business rules can also
         // use validator directly. to_json() never silently validates or applies defaults.
-        std::cout << ruvia::to_json(owned, {.resource_ = &memory}) << '\n';
+        std::cout << ruvia::to_json(owned) << '\n';
 
-        auto form = ruvia::from_form<import_record>("name=form+record&count=8", {.resource_ = &memory});
-        std::cout << ruvia::to_json(form, {.resource_ = &memory}) << '\n';
+        auto form = ruvia::from_form<import_record>("name=form+record&count=8");
+        std::cout << ruvia::to_json(form) << '\n';
 
         // Scalar and array codecs do not require a wrapper model. Integer
         // conversion is exact: no fraction, overflow, or trailing junk.
-        auto numbers = ruvia::from_json<ruvia::array<ruvia::uint64>>("[1,2,3]", {.resource_ = &memory});
+        auto numbers = ruvia::from_json<ruvia::array<ruvia::uint64>>("[1,2,3]");
         bool overflow_rejected = false;
         try {
-            (void)ruvia::from_json<ruvia::uint8>("256", {.resource_ = &memory});
+            (void)ruvia::from_json<ruvia::uint8>("256");
         } catch (const std::invalid_argument&) {
             overflow_rejected = true;
         }
         if (!overflow_rejected) {
             throw std::runtime_error("integer bounds were not enforced");
         }
-        std::cout << ruvia::to_json(numbers, {.resource_ = &memory}) << '\n';
+        std::cout << ruvia::to_json(numbers) << '\n';
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';
         return 1;

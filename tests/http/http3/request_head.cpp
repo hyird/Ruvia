@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -21,7 +20,6 @@
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_trailers.h"
 
-#include "failing_memory_resource.h"
 #include "http3_relay.h"
 #include "http3_wire.h"
 
@@ -31,7 +29,7 @@ static_assert(std::is_nothrow_move_constructible_v<ruvia::http3_request_head>);
 static_assert(!std::is_move_assignable_v<ruvia::http3_request_head>);
 // Only a server connection creates validated heads.
 static_assert(!std::is_constructible_v<ruvia::http3_request_head, std::int64_t,
-    std::pmr::vector<ruvia::http_header>, bool, bool, std::pmr::memory_resource*>);
+    std::vector<ruvia::http_header>, bool, bool>);
 
 using field_list = std::initializer_list<ruvia::test::http3_wire_field>;
 
@@ -46,7 +44,7 @@ struct received_request final {
 // server published. The wire reaches field sections a client never sends.
 [[nodiscard]] received_request receive_request(ruvia::test::http3_peers& peers,
     std::span<const ruvia::test::http3_wire_field> fields, bool stream_ended, std::int64_t stream_id = 0) {
-    std::pmr::string wire;
+    std::string wire;
     ruvia::test::append_http3_wire_headers(wire, fields);
     received_request received;
     received.result_ = peers.server_.read_stream(stream_id, ruvia::test::http3_bytes(wire), stream_ended, peers.timestamp_++);
@@ -105,8 +103,6 @@ TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
     };
     EXPECT_TRUE(peers.client_.submit_request_head(0, ruvia::http3_regular_request_head_view{
                                                          .authority_ = "example.test", .target_ = "/search?q=h3&page=2", .headers_ = request_fields}) == ruvia::http3_submit_status::accepted);
-
-    std::pmr::unsynchronized_pool_resource resource;
     std::optional<ruvia::http3_request_head> head;
     EXPECT_TRUE(peers.to_server([&](ruvia::http3_event& event) {
         if (auto* received = event.request_head()) {
@@ -125,7 +121,7 @@ TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
     EXPECT_FALSE(head->early_data());
     EXPECT_TRUE(head->content() == ruvia::http_request_content_indication::no_content);
 
-    const auto request = head->build_request(&resource);
+    const auto request = head->build_request();
     EXPECT_TRUE(request.method() == "GET");
     EXPECT_TRUE(request.known_method() == ruvia::http_known_method::get);
     EXPECT_TRUE(request.protocol_version() == ruvia::http_protocol_version::http3);
@@ -145,8 +141,8 @@ TEST(Ruvia, http3_request_head_parses_get_received_over_nghttp3) {
 }
 
 TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
-    const std::pmr::string long_cookie = "session=" + std::pmr::string(128, 'x');
-    const std::pmr::string long_joined = long_cookie + "; b=2";
+    const std::string long_cookie = "session=" + std::string(128, 'x');
+    const std::string long_joined = long_cookie + "; b=2";
     struct cookie_case final {
         std::array<std::string_view, 3> crumbs_;
         std::string_view expected_;
@@ -163,12 +159,10 @@ TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
     };
     for (const auto& test_case : cases) {
         SCOPED_TRACE(test_case.expected_);
-        ruvia::test::failing_memory_resource field_resource;
-        ruvia::test::failing_memory_resource projection_resource;
         {
             std::optional<ruvia::http3_request_head> head;
             {
-                ruvia::test::http3_peers peers({.resource_ = &field_resource});
+                ruvia::test::http3_peers peers;
                 ASSERT_TRUE(peers.bind());
                 const std::array fields{
                     ruvia::test::http3_wire_field{":method", "GET"},
@@ -184,15 +178,13 @@ TEST(Ruvia, http3_request_head_keeps_cookie_crumbs_after_moving) {
                 head.emplace(std::move(*received.head_));
             }
             // The head outlives the connection that produced it.
-            const auto request = head->build_request(&projection_resource);
+            const auto request = head->build_request();
             if (test_case.expected_.empty()) {
                 EXPECT_TRUE(!request.header("cookie").has_value());
             } else {
                 EXPECT_TRUE(request.header("cookie") == test_case.expected_);
             }
         }
-        EXPECT_EQ(field_resource.live_allocations(), std::size_t{0});
-        EXPECT_EQ(projection_resource.live_allocations(), std::size_t{0});
     }
 }
 
@@ -201,12 +193,11 @@ TEST(Ruvia, http3_request_head_bounds_single_and_joined_cookie_values) {
         for (const std::size_t excess : {std::size_t{0}, std::size_t{1}}) {
             SCOPED_TRACE(split);
             SCOPED_TRACE(excess);
-            std::pmr::unsynchronized_pool_resource resource;
             // The field section limit stays above the per-field bound.
             ruvia::test::http3_peers peers({.max_field_section_size_ = 4 * ruvia::max_http_header_bytes});
             ASSERT_TRUE(peers.bind());
-            const std::pmr::string first = "a=" + std::pmr::string(ruvia::max_http_header_bytes - 2 - (split ? 5 : 0) + excess, 'x');
-            std::pmr::vector<ruvia::test::http3_wire_field> fields{
+            const std::string first = "a=" + std::string(ruvia::max_http_header_bytes - 2 - (split ? 5 : 0) + excess, 'x');
+            std::vector<ruvia::test::http3_wire_field> fields{
                 {":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
                 {"cookie", first}};
             if (split) {
@@ -223,7 +214,7 @@ TEST(Ruvia, http3_request_head_bounds_single_and_joined_cookie_values) {
                 EXPECT_TRUE(ruvia::test::has_local_message_error(received.log_, 0));
             } else {
                 ASSERT_TRUE(received.head_.has_value());
-                const auto request = received.head_->build_request(&resource);
+                const auto request = received.head_->build_request();
                 EXPECT_TRUE(request.header("cookie") == first + (split ? "; b=2" : ""));
             }
         }
@@ -233,7 +224,6 @@ TEST(Ruvia, http3_request_head_bounds_single_and_joined_cookie_values) {
 // RFC 9114 §4.4: CONNECT carries only :method and :authority, and its target
 // is the authority form.
 TEST(Ruvia, http3_request_head_parses_connect_authority_target) {
-    std::pmr::unsynchronized_pool_resource resource;
     ruvia::test::http3_peers peers;
     ASSERT_TRUE(peers.bind());
     ASSERT_EQ(peers.client_.submit_request_head(0, ruvia::http3_connect_request_head_view{.authority_ = "proxy.test:443"}),
@@ -251,7 +241,7 @@ TEST(Ruvia, http3_request_head_parses_connect_authority_target) {
     EXPECT_TRUE(head->scheme().empty());
     EXPECT_TRUE(head->path().empty());
 
-    const auto request = head->build_request(&resource, "tunnel");
+    const auto request = head->build_request("tunnel");
     EXPECT_TRUE(request.known_method() == ruvia::http_known_method::connect);
     EXPECT_TRUE(request.protocol_version() == ruvia::http_protocol_version::http3);
     EXPECT_TRUE(request.target() == "proxy.test:443");
@@ -286,7 +276,7 @@ TEST(Ruvia, http3_request_head_rejects_asterisk_path_outside_options) {
 // STOP_SENDING and RESET_STREAM, no message event, and the connection keeps
 // serving other streams.
 TEST(Ruvia, http3_server_resets_only_the_stream_of_a_semantically_malformed_request) {
-    const std::array<std::pmr::vector<ruvia::test::http3_wire_field>, 2> malformed{{
+    const std::array<std::vector<ruvia::test::http3_wire_field>, 2> malformed{{
         {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"},
             {"host", "other.test"}},
         {{":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/%zz"}},
@@ -298,10 +288,10 @@ TEST(Ruvia, http3_server_resets_only_the_stream_of_a_semantically_malformed_requ
         EXPECT_EQ(received.result_.status_, ruvia::http3_transport_status::accepted);
         EXPECT_TRUE(ruvia::test::has_local_message_error(received.log_, 0));
         EXPECT_FALSE(received.head_.has_value());
-        EXPECT_EQ(received.log_.sequence_, std::pmr::string("TT"));
+        EXPECT_EQ(received.log_.sequence_, std::string("TT"));
         EXPECT_FALSE(peers.server_.connection_error().has_value());
         // Content and the end of the rejected stream stay unpublished.
-        std::pmr::string tail;
+        std::string tail;
         ruvia::test::append_http3_wire_frame(tail, 0, "late");
         ruvia::test::http3_event_log late;
         EXPECT_EQ(ruvia::test::receive_http3_wire(peers.server_, 0, tail, true, peers.timestamp_, late).status_,
@@ -334,8 +324,7 @@ TEST(Ruvia, http3_request_head_requires_authority_or_host_for_https) {
     };
     const auto received = receive_request(peers, fields, true);
     ASSERT_TRUE(received.head_.has_value());
-    std::pmr::unsynchronized_pool_resource resource;
-    const auto request = received.head_->build_request(&resource);
+    const auto request = received.head_->build_request();
     EXPECT_TRUE(request.authority() == "example.test");
     EXPECT_TRUE(request.header("host") == std::string_view("example.test"));
 }
@@ -417,14 +406,13 @@ TEST(Ruvia, http3_request_head_plans_expectations) {
 // RFC 9110 §6.5.1: framing and routing fields are discarded from a trailer
 // section; RFC 9114 §4.3: a pseudo-header field there is malformed.
 TEST(Ruvia, http3_request_trailers_drop_forbidden_names_and_reject_pseudo_fields) {
-    std::pmr::unsynchronized_pool_resource resource;
-    std::pmr::vector<ruvia::http_header> fields(&resource);
-    fields.emplace_back("content-length", "5", &resource);
-    fields.emplace_back("x-checksum", "sha-256=abc", &resource);
-    fields.emplace_back("host", "example.test", &resource);
-    fields.emplace_back("server-timing", "db;dur=5", &resource);
+    std::vector<ruvia::http_header> fields;
+    fields.emplace_back("content-length", "5");
+    fields.emplace_back("x-checksum", "sha-256=abc");
+    fields.emplace_back("host", "example.test");
+    fields.emplace_back("server-timing", "db;dur=5");
 
-    ruvia::http_request_trailers trailers(&resource);
+    ruvia::http_request_trailers trailers;
     EXPECT_TRUE(!trailers.append_received(fields).has_value());
     EXPECT_EQ(trailers.fields().size(), std::size_t{2});
     EXPECT_TRUE(trailers.field("x-checksum") == std::string_view("sha-256=abc"));
@@ -432,23 +420,22 @@ TEST(Ruvia, http3_request_trailers_drop_forbidden_names_and_reject_pseudo_fields
     EXPECT_TRUE(!trailers.field("content-length").has_value());
     EXPECT_TRUE(!trailers.field("host").has_value());
 
-    std::pmr::vector<ruvia::http_header> pseudo(&resource);
-    pseudo.emplace_back("x-extra", "1", &resource);
-    pseudo.emplace_back(":path", "/", &resource);
+    std::vector<ruvia::http_header> pseudo;
+    pseudo.emplace_back("x-extra", "1");
+    pseudo.emplace_back(":path", "/");
     EXPECT_TRUE(trailers.append_received(pseudo) ==
                 std::optional<ruvia::http_request_trailer_error>(ruvia::http_request_trailer_error::invalid_field));
     EXPECT_EQ(trailers.fields().size(), std::size_t{2});
     EXPECT_TRUE(!trailers.field("x-extra").has_value());
 
-    std::pmr::vector<ruvia::http_header> invalid_value(&resource);
-    invalid_value.emplace_back("x-extra", "bad\r\nvalue", &resource);
+    std::vector<ruvia::http_header> invalid_value;
+    invalid_value.emplace_back("x-extra", "bad\r\nvalue");
     EXPECT_TRUE(trailers.append_received(invalid_value) ==
                 std::optional<ruvia::http_request_trailer_error>(ruvia::http_request_trailer_error::invalid_field));
     EXPECT_EQ(trailers.fields().size(), std::size_t{2});
 }
 
 TEST(Ruvia, http3_request_head_enforces_materialized_field_count_limit) {
-    std::pmr::unsynchronized_pool_resource resource;
     // Host synthesis and a nonempty Cookie each consume one materialized field.
     for (const bool with_cookie : {false, true}) {
         const auto regular_limit = ruvia::max_http_header_fields - 1 - static_cast<std::size_t>(with_cookie);
@@ -456,7 +443,7 @@ TEST(Ruvia, http3_request_head_enforces_materialized_field_count_limit) {
             SCOPED_TRACE(regular_count);
             ruvia::test::http3_peers peers;
             ASSERT_TRUE(peers.bind());
-            std::pmr::vector<ruvia::test::http3_wire_field> fields{
+            std::vector<ruvia::test::http3_wire_field> fields{
                 {":method", "GET"}, {":scheme", "https"}, {":authority", "example.test"}, {":path", "/"}};
             fields.resize(fields.size() + regular_count, {"x-field", "v"});
             if (with_cookie) {
@@ -465,7 +452,7 @@ TEST(Ruvia, http3_request_head_enforces_materialized_field_count_limit) {
             const auto received = receive_request(peers, fields, true);
             if (regular_count == regular_limit) {
                 ASSERT_TRUE(received.head_.has_value());
-                const auto request = received.head_->build_request(&resource);
+                const auto request = received.head_->build_request();
                 EXPECT_EQ(request.headers().size(), ruvia::max_http_header_fields);
             } else {
                 EXPECT_TRUE(rejected(received, peers.server_));
@@ -532,7 +519,7 @@ TEST(Ruvia, http3_all_request_head_forms_obey_local_and_negotiated_section_budge
         ASSERT_TRUE(peers.bind());
         ruvia::test::http3_event_log client;
         ASSERT_TRUE(peers.to_client(client));
-        const std::pmr::string large_value(1024, 'x');
+        const std::string large_value(1024, 'x');
         const std::array oversized{ruvia::http_header_view{"x-large", large_value}};
         ruvia::http3_regular_request_head_view ordinary{
             .authority_ = "example.test", .headers_ = oversized};
@@ -664,4 +651,33 @@ TEST(Ruvia, http3_typed_streaming_request_sends_validated_trailers_after_exact_c
     EXPECT_TRUE(end->field("x-checksum") == "sha-256=abc");
     EXPECT_TRUE(end->field("server-timing") == "db;dur=5");
     EXPECT_EQ(server.sequence_, "HDE");
+}
+
+TEST(Ruvia, http3_connect_rejects_nonzero_content_length_with_open_stream) {
+    EXPECT_TRUE(parses({
+                           {":method", "CONNECT"},
+                           {":authority", "example.test:443"},
+                           {"content-length", "0"},
+                       },
+        false));
+    EXPECT_FALSE(parses({
+                            {":method", "CONNECT"},
+                            {":authority", "example.test:443"},
+                            {"content-length", "5"},
+                        },
+        false));
+
+    ruvia::test::http3_peers peers({.enable_connect_protocol_ = true});
+    ASSERT_TRUE(peers.bind());
+    const std::array extended_nonzero{
+        ruvia::test::http3_wire_field{":method", "CONNECT"},
+        ruvia::test::http3_wire_field{":protocol", "connect-udp"},
+        ruvia::test::http3_wire_field{":scheme", "https"},
+        ruvia::test::http3_wire_field{":authority", "example.test"},
+        ruvia::test::http3_wire_field{":path", "/.well-known/masque/udp/192.0.2.1/443/"},
+        ruvia::test::http3_wire_field{"capsule-protocol", "?1"},
+        ruvia::test::http3_wire_field{"content-length", "5"},
+    };
+    const auto received = receive_request(peers, extended_nonzero, false);
+    EXPECT_TRUE(rejected(received, peers.server_));
 }

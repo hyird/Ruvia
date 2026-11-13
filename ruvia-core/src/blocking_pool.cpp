@@ -3,7 +3,6 @@
 #include <algorithm>
 #include <condition_variable>
 #include <limits>
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -12,7 +11,6 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "local_ring_queue.h"
 
@@ -80,9 +78,9 @@ struct blocking_pool::impl_type final {
     explicit impl_type(const blocking_pool_options& options)
         : thread_count_(resolve_thread_count(options.thread_count_)),
           queue_capacity_(resolve_queue_capacity(options.queue_capacity_, thread_count_)),
-          queue_(queue_capacity_, process_resource()),
-          nodes_(process_resource()),
-          threads_(process_resource()) {
+          queue_(queue_capacity_),
+          nodes_(),
+          threads_() {
         // Reserved/queued submissions occupy at most queue_capacity_ nodes;
         // each thread may also hold one node while moving its callable out.
         nodes_.resize(queue_capacity_ + thread_count_);
@@ -213,7 +211,7 @@ struct blocking_pool::impl_type final {
             throw std::logic_error("cannot join a blocking pool from one of its threads");
         }
         stop();
-        std::pmr::vector<std::thread> joining_threads(process_resource());
+        std::vector<std::thread> joining_threads;
         {
             std::unique_lock lock(mutex_);
             condition_.wait(lock, [this] { return !joining_; });
@@ -243,7 +241,7 @@ struct blocking_pool::impl_type final {
     }
 
     void detach_threads() noexcept {
-        std::pmr::vector<std::thread> detached_threads(process_resource());
+        std::vector<std::thread> detached_threads;
         {
             std::lock_guard lock(mutex_);
             detached_threads.swap(threads_);
@@ -262,8 +260,8 @@ struct blocking_pool::impl_type final {
     // Queue operations move only pointers under mutex_. A claimed node stays
     // exclusive while user callable moves/destruction run outside the lock.
     local_ring_queue<node_type*> queue_;
-    std::pmr::vector<node_type> nodes_;
-    std::pmr::vector<std::thread> threads_;
+    std::vector<node_type> nodes_;
+    std::vector<std::thread> threads_;
     node_type* free_head_{nullptr};
     std::size_t queued_{0};
     std::size_t reserved_{0};
@@ -279,8 +277,7 @@ struct blocking_pool::impl_type final {
 };
 
 blocking_pool::blocking_pool(blocking_pool_options options)
-    : impl_(std::allocate_shared<impl_type>(
-          std::pmr::polymorphic_allocator<impl_type>(process_resource()), options)) {
+    : impl_(std::make_shared<impl_type>(options)) {
     impl_->start(impl_);
 }
 

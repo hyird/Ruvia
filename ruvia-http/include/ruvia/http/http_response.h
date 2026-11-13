@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_multipart_byte_range_plan.h"
 #include "ruvia/http/http_native_path.h"
@@ -224,8 +222,8 @@ public:
     using value_type = http_response_header;
     using const_iterator = const http_response_header*;
 
-    // Moving transfers every descriptor and the index. The source keeps its
-    // resource and remains usable, independent, and empty.
+    // Moving transfers every descriptor and the index. The source remains
+    // usable, independent, and empty.
     http_response_headers(http_response_headers&& other) noexcept;
     http_response_headers(const http_response_headers&) = delete;
     http_response_headers& operator=(const http_response_headers&) = delete;
@@ -304,7 +302,7 @@ private:
     // publishes them later without allocation or failure.
     class descriptor_stage;
 
-    http_response_headers(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    http_response_headers() noexcept;
 
     // Mutable iteration for the owning block and its friends. Named apart from
     // the public const begin()/end() so a non-const block still iterates
@@ -317,8 +315,7 @@ private:
         return data() + size();
     }
 
-    // Header-only transaction publication. `staged` must be a clone of a block
-    // sharing this resource; it is left empty and independent.
+    // Header-only transaction publication. `staged` is left empty and independent.
     void commit(http_response_headers&& staged) noexcept;
     // Appends the source's fields in place when none can interact with an
     // existing field. Returns false, leaving this block unchanged, otherwise.
@@ -392,8 +389,7 @@ private:
     void spill(std::size_t min_capacity);
     void move_from(http_response_headers&& other) noexcept;
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<http_response_header> heap_;
+    std::vector<http_response_header> heap_;
     std::array<inline_storage_type, inline_capacity> inline_;
     std::size_t size_{0};
     bool spilled_{false};
@@ -448,15 +444,14 @@ public:
 private:
     friend class http_response_body;
 
-    http_owned_response_bytes(std::pmr::memory_resource* resource, std::string_view bytes_value)
-        : bytes_(bytes_value, resource) {}
+    explicit http_owned_response_bytes(std::string_view bytes_value)
+        : bytes_(bytes_value) {}
 
-    http_owned_response_bytes(
-        std::pmr::memory_resource* resource, std::pmr::string&& bytes_value, bool file_representation)
-        : bytes_(std::move(bytes_value), resource),
+    http_owned_response_bytes(std::string&& bytes_value, bool file_representation) noexcept
+        : bytes_(std::move(bytes_value)),
           file_representation_(file_representation) {}
 
-    std::pmr::string bytes_;
+    std::string bytes_;
     bool file_representation_{false};
 };
 
@@ -476,7 +471,7 @@ private:
 
     http_owned_response_file(http_native_path_string_type&& native_path,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_handle opened) noexcept
+        http_response_file_identity identity, http_response_file_descriptor opened) noexcept
         : native_path_(std::move(native_path)),
           size_(size),
           offset_(offset),
@@ -484,26 +479,26 @@ private:
           identity_(identity),
           opened_(std::move(opened)) {}
 
-    http_owned_response_file(std::pmr::memory_resource* resource, http_native_path_view_type file,
+    http_owned_response_file(http_native_path_view_type file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_handle opened)
-        : http_owned_response_file(http_native_path_string_type(file, resource), size, offset,
+        http_response_file_identity identity, http_response_file_descriptor opened)
+        : http_owned_response_file(http_native_path_string_type(file), size, offset,
               length, identity, std::move(opened)) {}
     http_native_path_string_type native_path_;
     std::uint64_t size_;
     std::uint64_t offset_;
     std::uint64_t length_;
     http_response_file_identity identity_;
-    http_response_file_handle opened_;
+    http_response_file_descriptor opened_;
 };
 
 class http_multipart_response_body final {
 public:
-    http_multipart_response_body(std::pmr::memory_resource* resource, http_native_path_view_type path,
+    http_multipart_response_body(http_native_path_view_type path,
         std::uint64_t size, http_response_file_identity identity, http_multipart_byte_range_plan plan,
-        http_response_file_handle opened)
-        : native_path_(path, resource),
-          plan_(plan.resource() == resource ? std::move(plan) : plan.clone(resource)),
+        http_response_file_descriptor opened)
+        : native_path_(path),
+          plan_(std::move(plan)),
           size_(size),
           identity_(identity),
           opened_(std::move(opened)) {
@@ -548,7 +543,7 @@ private:
 
     http_multipart_response_body(http_native_path_string_type&& native_path,
         http_multipart_byte_range_plan&& plan, std::uint64_t size,
-        http_response_file_identity identity, http_response_file_handle opened) noexcept
+        http_response_file_identity identity, http_response_file_descriptor opened) noexcept
         : native_path_(std::move(native_path)),
           plan_(std::move(plan)),
           size_(size),
@@ -559,7 +554,7 @@ private:
     http_multipart_byte_range_plan plan_;
     std::uint64_t size_{};
     http_response_file_identity identity_{http_response_file_identity::unchecked()};
-    http_response_file_handle opened_;
+    http_response_file_descriptor opened_;
 };
 
 // Owns exactly one legal buffered response-body representation. The common
@@ -666,12 +661,12 @@ private:
         replace(http_empty_response_body(true));
     }
 
-    void set_copy(std::pmr::memory_resource* resource, std::string_view bytes_value) {
+    void set_copy(std::string_view bytes_value) {
         if (bytes_value.empty()) {
             set_empty();
             return;
         }
-        http_owned_response_bytes body(resource, bytes_value);
+        http_owned_response_bytes body(bytes_value);
         replace(std::move(body));
     }
 
@@ -683,33 +678,33 @@ private:
         replace(http_static_response_bytes(bytes_value));
     }
 
-    void set_owned(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value) {
+    void set_owned(std::string&& bytes_value) noexcept {
         if (bytes_value.empty()) {
             set_empty();
             return;
         }
-        http_owned_response_bytes body(resource, std::move(bytes_value), false);
+        http_owned_response_bytes body(std::move(bytes_value), false);
         replace(std::move(body));
     }
 
     // Kept even when empty: an empty file is still a file representation.
-    void set_file_bytes(std::pmr::memory_resource* resource, std::pmr::string&& bytes_value) {
-        http_owned_response_bytes body(resource, std::move(bytes_value), true);
+    void set_file_bytes(std::string&& bytes_value) noexcept {
+        http_owned_response_bytes body(std::move(bytes_value), true);
         replace(std::move(body));
     }
 
-    void set_owned_file(std::pmr::memory_resource* resource, http_native_path_view_type file,
+    void set_owned_file(http_native_path_view_type file,
         std::uint64_t size, std::uint64_t offset, std::uint64_t length,
-        http_response_file_identity identity, http_response_file_handle opened) {
-        http_owned_response_file body(resource, file, size, offset, length, identity, std::move(opened));
+        http_response_file_identity identity, http_response_file_descriptor opened) {
+        http_owned_response_file body(file, size, offset, length, identity, std::move(opened));
         replace(std::move(body));
     }
 
-    void set_multipart(std::pmr::memory_resource* resource, http_native_path_view_type file,
+    void set_multipart(http_native_path_view_type file,
         std::uint64_t size, http_response_file_identity identity,
-        http_multipart_byte_range_plan plan, http_response_file_handle opened) {
+        http_multipart_byte_range_plan plan, http_response_file_descriptor opened) {
         http_multipart_response_body replacement(
-            resource, file, size, identity, std::move(plan), std::move(opened));
+            file, size, identity, std::move(plan), std::move(opened));
         replace(std::move(replacement));
     }
 
@@ -726,12 +721,12 @@ static_assert(std::is_nothrow_move_constructible_v<http_multipart_response_body>
 // http_response_headers; this type only publishes body and headers together.
 class http_response final {
 public:
-    explicit http_response(std::pmr::memory_resource* resource = nullptr);
+    http_response() noexcept;
 
     http_response(const http_response&) = delete;
     http_response& operator=(const http_response&) = delete;
-    // Moving transfers headers and body. The source keeps its resource and
-    // remains reusable with empty headers and body.
+    // Moving transfers headers and body. The source remains reusable with
+    // empty headers and body.
     http_response(http_response&& other) noexcept;
     http_response& operator=(http_response&& other) noexcept;
 
@@ -786,29 +781,28 @@ public:
     [[nodiscard]] http_response_body_segment_view body_segment(std::size_t index) const& RUVIA_LIFETIMEBOUND;
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
-    void owned_body(std::pmr::string&& value);
+    void owned_body(std::string&& value) noexcept;
     void static_body(std::string_view value) noexcept;
     // Own bytes read from a file: all of it, a byte range, or a multipart
     // byte-range payload of it. Unlike owned_body(), the body remains a file
     // representation, even when empty.
-    void file_bytes_body(std::pmr::string&& value);
-    // Own the native path in this response's PMR storage and preserve the
-    // runtime's opaque identity token. `opened`, when engaged, is the handle the
+    void file_bytes_body(std::string&& value) noexcept;
+    // Own the native path and preserve the
+    // runtime's opaque identity token. `opened`, when engaged, is the descriptor the
     // runtime framed the response from; the body owns it and releases it on
     // destruction or replacement. Path and range validation precede body
     // replacement; a rejected call releases `opened`.
     void file_body(http_native_path_view_type file, http_content_length size,
         http_content_length offset, http_content_length length, http_response_file_identity identity,
-        http_response_file_handle opened = {});
+        http_response_file_descriptor opened = {});
     void multipart_file_body(http_native_path_view_type file, http_content_length size,
         http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
-        http_response_file_handle opened = {});
+        http_response_file_descriptor opened = {});
     void content_range(
         http_content_length offset, http_content_length length, http_content_length size);
     void content_range_unsatisfied(http_content_length size);
     void add_vary_token(std::string_view token);
     void reserve_headers(std::size_t count);
-    [[nodiscard]] std::pmr::memory_resource* memory_resource() const noexcept;
     // Apply a streaming coding, or atomically replace a buffered representation
     // and its coding-dependent metadata. The coding must be a nonempty HTTP coding list;
     // outer SP/HTAB are removed before storing its field value.
@@ -818,15 +812,14 @@ public:
     // this response unchanged.
     void apply_content_encoding(std::string_view content_encoding);
     void replace_body_with_content_encoding(
-        std::pmr::string&& value, std::string_view content_encoding);
+        std::string&& value, std::string_view content_encoding);
 
 private:
     friend std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_response(http_response, http_protocol_version);
     friend http1_response_head_plan prepare_http1_upgrade_response_head(http_response&, const http_request&);
     friend struct detail::http_response_body_access;
 
-    void apply_encoded_representation(std::string_view content_encoding, std::pmr::string* body);
-    http_response(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    void apply_encoded_representation(std::string_view content_encoding, std::string* body);
 
     http_status_code status_code_{http_status::ok};
     http_response_headers headers_;

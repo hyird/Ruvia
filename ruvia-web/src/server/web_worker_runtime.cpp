@@ -44,13 +44,13 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
           .io_policy_ = ruvia::worker_io_policy::single_owner,
           .blocking_pool_ = pool}),
       io_context_(runtime_.io_context()),
-      finalize_signal_(runtime_.handle()),
+      finalize_signal_(runtime_.worker()),
       routes_(routes_value),
       inbound_budget_(validated_options.server_.max_inbound_buffer_bytes_per_worker_),
-      background_tasks_(runtime_.handle(), {.resource_ = process_resource()}),
+      background_tasks_(runtime_.worker()),
       options_(std::move(validated_options)),
-      static_roots_(options_, runtime_.handle(), worker_state_),
-      capabilities_(io_context_, runtime_.handle(), capabilities,
+      static_roots_(options_, runtime_.worker(), worker_state_),
+      capabilities_(io_context_, runtime_.worker(), capabilities,
           worker_capability_options{
               .default_rate_limit_ = options_.default_rate_limit_per_worker_,
               .route_rate_limits_ = routes_.has_route_rate_limit() ? route_rate_limit_presence::present
@@ -65,7 +65,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
               .file_io_timeout_ = options_.server_.write_timeout_,
               .connection_failure_ = &options_.connection_failure_,
           }),
-      connections_(io_context_, runtime_.handle(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
+      connections_(io_context_, runtime_.worker(), routes_, capabilities_, options_, stop_token_, worker_state_, background_tasks_, listeners,
           worker_failure_sink{.target_ = &runtime_,
               .invoke_ = [](void* target, const std::exception_ptr& failure) noexcept {
                   (void)static_cast<ruvia::worker_runtime*>(target)->fail(failure);
@@ -76,7 +76,7 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
           http3_placement
 #endif
           ),
-      web_worker_dispatch_(std::allocate_shared<web_worker_dispatch>(std::pmr::polymorphic_allocator<web_worker_dispatch>(process_resource()), runtime_, capabilities_, background_tasks_, stop_token_)) {
+      web_worker_dispatch_(std::make_shared<web_worker_dispatch>(runtime_, capabilities_, background_tasks_, stop_token_)) {
     options_.inbound_budget_ = &inbound_budget_;
     options_.codecs_ = &codecs_;
     runtime_.configure({
@@ -114,8 +114,8 @@ http_server_stats web_worker_runtime::stats() const {
     return stats;
 }
 
-web_worker_handle web_worker_runtime::web_worker() const {
-    return web_worker_dispatch::handle(web_worker_dispatch_);
+web_worker_ref web_worker_runtime::web_worker() const {
+    return web_worker_dispatch::make_ref(web_worker_dispatch_);
 }
 
 void web_worker_runtime::serve_on_context() {

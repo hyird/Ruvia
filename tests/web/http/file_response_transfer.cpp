@@ -8,7 +8,6 @@
 #include <fstream>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <semaphore>
 #include <string>
@@ -24,7 +23,6 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -55,8 +53,8 @@ constexpr std::size_t large_size = 300 * 1024 + 17;
     return active;
 }
 
-[[nodiscard]] std::pmr::string file_bytes(std::size_t size, char seed) {
-    std::pmr::string bytes(size, '\0', ruvia::process_resource());
+[[nodiscard]] std::string file_bytes(std::size_t size, char seed) {
+    std::string bytes(size, '\0');
     for (std::size_t index = 0; index < size; ++index) {
         bytes[index] = static_cast<char>(seed + static_cast<char>(index % 23));
     }
@@ -115,7 +113,7 @@ class file_transfer_routes final {
     }
 
     ruvia::task<ruvia::http_response> held(ruvia::context& c) {
-        const auto path = transfer_dir() / std::pmr::string(c.req().param("name").value_or(""), ruvia::process_resource());
+        const auto path = transfer_dir() / std::string(c.req().param("name").value_or(""));
         auto response = co_await c.file({.path_ = path});
         held_response_framed.release();
         for (int wait = 0; wait < 1000 && !rewritten.load(); ++wait) {
@@ -126,9 +124,9 @@ class file_transfer_routes final {
 };
 
 struct parsed_response final {
-    std::pmr::string status_{ruvia::process_resource()};
-    std::pmr::string head_{ruvia::process_resource()};
-    std::pmr::string body_{ruvia::process_resource()};
+    std::string status_{};
+    std::string head_{};
+    std::string body_{};
 };
 
 [[nodiscard]] std::optional<std::size_t> content_length(std::string_view head) {
@@ -147,8 +145,8 @@ struct parsed_response final {
 
 // Splits a stream of Content-Length framed responses. `bodyless` marks the
 // responses to HEAD requests, whose Content-Length carries no body.
-[[nodiscard]] std::pmr::vector<parsed_response> split_responses(std::string_view stream, std::initializer_list<bool> bodyless) {
-    std::pmr::vector<parsed_response> responses{ruvia::process_resource()};
+[[nodiscard]] std::vector<parsed_response> split_responses(std::string_view stream, std::initializer_list<bool> bodyless) {
+    std::vector<parsed_response> responses{};
     while (!stream.empty() && responses.size() < bodyless.size()) {
         const auto head_end = stream.find("\r\n\r\n");
         if (head_end == std::string_view::npos) {
@@ -171,8 +169,8 @@ struct parsed_response final {
 
 using ruvia::test::exchange;
 
-[[nodiscard]] std::pmr::string get(std::string_view target, std::string_view extra = {}) {
-    std::pmr::string request("GET ", ruvia::process_resource());
+[[nodiscard]] std::string get(std::string_view target, std::string_view extra = {}) {
+    std::string request("GET ");
     request.append(target);
     request.append(" HTTP/1.1\r\nHost: localhost\r\n");
     request.append(extra);
@@ -202,7 +200,7 @@ TEST(Ruvia, pipelined_file_responses_arrive_complete_and_in_order) {
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
 
-    std::pmr::string requests{ruvia::process_resource()};
+    std::string requests{};
     requests += get("/file-transfer/small");
     requests += get("/file-transfer/large");
     requests += get("/file-transfer/text");
@@ -219,21 +217,21 @@ TEST(Ruvia, pipelined_file_responses_arrive_complete_and_in_order) {
 
     EXPECT_EQ(responses.size(), std::size_t{10});
     if (responses.size() == 10) {
-        EXPECT_EQ(responses[0].status_, std::pmr::string("200", ruvia::process_resource()));
+        EXPECT_EQ(responses[0].status_, std::string("200"));
         EXPECT_TRUE(responses[0].body_ == small_bytes);
-        EXPECT_EQ(responses[1].status_, std::pmr::string("200", ruvia::process_resource()));
+        EXPECT_EQ(responses[1].status_, std::string("200"));
         EXPECT_TRUE(responses[1].body_ == large_bytes);
-        EXPECT_EQ(responses[2].body_, std::pmr::string("between", ruvia::process_resource()));
+        EXPECT_EQ(responses[2].body_, std::string("between"));
         EXPECT_TRUE(responses[3].body_ == medium_bytes);
-        EXPECT_EQ(responses[4].status_, std::pmr::string("206", ruvia::process_resource()));
+        EXPECT_EQ(responses[4].status_, std::string("206"));
         EXPECT_TRUE(responses[4].body_ == std::string_view(large_bytes).substr(10, 10));
-        EXPECT_EQ(responses[5].status_, std::pmr::string("206", ruvia::process_resource()));
+        EXPECT_EQ(responses[5].status_, std::string("206"));
         EXPECT_TRUE(responses[5].body_ == std::string_view(large_bytes).substr(100000, 200000));
-        EXPECT_EQ(responses[6].status_, std::pmr::string("206", ruvia::process_resource()));
-        EXPECT_TRUE(responses[6].head_.find("multipart/byteranges") != std::pmr::string::npos);
-        EXPECT_TRUE(responses[6].body_.find(std::string_view(medium_bytes).substr(0, 5)) != std::pmr::string::npos);
-        EXPECT_TRUE(responses[6].body_.find(std::string_view(medium_bytes).substr(10, 5)) != std::pmr::string::npos);
-        EXPECT_EQ(responses[7].status_, std::pmr::string("200", ruvia::process_resource()));
+        EXPECT_EQ(responses[6].status_, std::string("206"));
+        EXPECT_TRUE(responses[6].head_.find("multipart/byteranges") != std::string::npos);
+        EXPECT_TRUE(responses[6].body_.find(std::string_view(medium_bytes).substr(0, 5)) != std::string::npos);
+        EXPECT_TRUE(responses[6].body_.find(std::string_view(medium_bytes).substr(10, 5)) != std::string::npos);
+        EXPECT_EQ(responses[7].status_, std::string("200"));
         EXPECT_EQ(content_length(responses[7].head_), std::optional<std::size_t>(large_size));
         EXPECT_TRUE(responses[8].body_ == small_bytes);
         EXPECT_TRUE(responses[9].body_ == large_bytes);
@@ -262,7 +260,7 @@ TEST(Ruvia, empty_file_responses_preserve_pipeline_framing) {
 
     auto& io = ruvia::test::new_test_io_context();
     ruvia::test::http_server_fixture server(io);
-    std::pmr::string requests = get("/file-transfer/small");
+    std::string requests = get("/file-transfer/small");
     requests += get("/file-transfer/indexed-small");
     requests += "HEAD /file-transfer/small HTTP/1.1\r\nHost: localhost\r\n\r\n";
     requests += "HEAD /file-transfer/indexed-small HTTP/1.1\r\nHost: localhost\r\n\r\n";
@@ -272,12 +270,12 @@ TEST(Ruvia, empty_file_responses_preserve_pipeline_framing) {
     EXPECT_EQ(responses.size(), std::size_t{5});
     if (responses.size() == 5) {
         for (std::size_t index = 0; index != 4; ++index) {
-            EXPECT_EQ(responses[index].status_, std::pmr::string("200", ruvia::process_resource()));
+            EXPECT_EQ(responses[index].status_, std::string("200"));
             EXPECT_EQ(content_length(responses[index].head_), std::optional<std::size_t>(0));
             EXPECT_TRUE(responses[index].body_.empty());
         }
-        EXPECT_EQ(responses.back().status_, std::pmr::string("200", ruvia::process_resource()));
-        EXPECT_EQ(responses.back().body_, std::pmr::string("between", ruvia::process_resource()));
+        EXPECT_EQ(responses.back().status_, std::string("200"));
+        EXPECT_EQ(responses.back().body_, std::string("between"));
     }
     std::size_t framed = 0;
     for (const auto& response : responses) {
@@ -340,7 +338,7 @@ TEST(Ruvia, empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     EXPECT_TRUE(held);
     write_file(path, "changed");
     rewritten = true;
-    std::pmr::string wire{ruvia::process_resource()};
+    std::string wire{};
     asio::read(socket, asio::dynamic_buffer(wire), ignored);
     // The stale zero-length 200 never leaves: the first response becomes an
     // error response that closes the connection, so the pipelined request
@@ -348,9 +346,9 @@ TEST(Ruvia, empty_file_changed_after_framing_does_not_commit_a_pipeline_head) {
     const auto responses = split_responses(wire, {false});
     EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        EXPECT_EQ(responses.front().status_, std::pmr::string("500", ruvia::process_resource()));
+        EXPECT_EQ(responses.front().status_, std::string("500"));
     }
-    EXPECT_TRUE(wire.find("between") == std::pmr::string::npos);
+    EXPECT_TRUE(wire.find("between") == std::string::npos);
     server.finish();
     fs::remove_all(transfer_dir(), ignored);
 }
@@ -397,7 +395,7 @@ TEST(Ruvia, file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         rewritten = false;
         asio::ip::tcp::socket socket(io);
         socket.connect(server.endpoint());
-        const auto request = get("/file-transfer/held/" + std::pmr::string(name, ruvia::process_resource()), "Connection: close\r\n");
+        const auto request = get("/file-transfer/held/" + std::string(name), "Connection: close\r\n");
         asio::write(socket, asio::buffer(request));
         // The handler framed the response from the file's current size and
         // identity and still holds it.
@@ -408,17 +406,17 @@ TEST(Ruvia, file_changed_in_place_after_framing_is_never_sent_under_its_head) {
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const auto replacement = file_bytes(size, 'x');
         {
-            std::fstream output(transfer_dir() / std::pmr::string(name, ruvia::process_resource()), std::ios::binary | std::ios::in | std::ios::out);
+            std::fstream output(transfer_dir() / std::string(name), std::ios::binary | std::ios::in | std::ios::out);
             output.write(replacement.data(), static_cast<std::streamsize>(replacement.size()));
         }
         rewritten = true;
-        std::pmr::string response{ruvia::process_resource()};
+        std::string response{};
         std::error_code error;
         asio::read(socket, asio::dynamic_buffer(response), error);
         // Every platform reads (or, for a kernel transfer, re-checks) the
         // framing handle before the head: the rewritten bytes never leave and
         // the client gets an error response.
-        EXPECT_TRUE(response.find(std::string_view(replacement).substr(0, 64)) == std::pmr::string::npos);
+        EXPECT_TRUE(response.find(std::string_view(replacement).substr(0, 64)) == std::string::npos);
         EXPECT_TRUE(response.starts_with("HTTP/1.1 500 "));
     }
 
@@ -453,12 +451,12 @@ TEST(Ruvia, file_response_keeps_its_opened_file_after_path_replacement) {
     fs::create_directories(transfer_dir());
     write_file(path, file_bytes(large_size, 'x'));
     rewritten = true;
-    std::pmr::string wire{ruvia::process_resource()};
+    std::string wire{};
     asio::read(socket, asio::dynamic_buffer(wire), ignored);
     const auto responses = split_responses(wire, {false});
     EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        EXPECT_EQ(responses.front().status_, std::pmr::string("200", ruvia::process_resource()));
+        EXPECT_EQ(responses.front().status_, std::string("200"));
         EXPECT_TRUE(responses.front().body_ == original);
     }
     server.finish();
@@ -490,7 +488,7 @@ TEST(Ruvia, abandoned_file_response_does_not_hold_the_worker) {
     const auto responses = split_responses(wire, {false});
     EXPECT_EQ(responses.size(), std::size_t{1});
     if (responses.size() == 1) {
-        EXPECT_EQ(responses.front().body_, std::pmr::string("between", ruvia::process_resource()));
+        EXPECT_EQ(responses.front().body_, std::string("between"));
     }
     server.finish();
     fs::remove_all(transfer_dir(), ignored);

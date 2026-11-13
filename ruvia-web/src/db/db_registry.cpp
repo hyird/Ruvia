@@ -4,13 +4,10 @@
 #include <chrono>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
 #include <utility>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "client/client_host_resolver.h"
 #ifdef RUVIA_ENABLE_REDIS
@@ -39,25 +36,25 @@ namespace {
 
 }  // namespace
 
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_handle& worker_value,
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
     const db_config& default_config)
-    : entries_(process_resource()),
-      alias_index_(process_resource()) {
+    : entries_(),
+      alias_index_() {
     alias_index_.build({default_capability_alias});
     entries_.reserve(1);
-    add(io_context, worker_value, db_config_storage(default_config, process_resource()));
+    add(io_context, worker_value, db_config_storage(default_config));
 }
 
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_handle& worker_value,
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
     std::span<const detail::db_definition> databases, redis_registry* redis)
-    : entries_(process_resource()),
-      alias_index_(process_resource()) {
+    : entries_(),
+      alias_index_() {
     detail::validate_capability_aliases(
         databases, "database alias must not be empty", "duplicate database alias");
     alias_index_.build(databases);
     entries_.reserve(databases.size());
     for (const auto& definition : databases) {
-        add(io_context, worker_value, db_config_storage(definition.config_, process_resource()));
+        add(io_context, worker_value, db_config_storage(definition.config_));
 #ifdef RUVIA_ENABLE_REDIS
         if (definition.query_cache_) {
             if (redis == nullptr) {
@@ -74,22 +71,22 @@ detail::db_registry::db_registry(asio::io_context& io_context, const worker_hand
 }
 
 #ifdef RUVIA_ENABLE_REDIS
-detail::db_registry::db_registry(asio::io_context& io_context, const worker_handle& worker_value,
+detail::db_registry::db_registry(asio::io_context& io_context, const worker_ref& worker_value,
     const db_config& config,
-    const redis_handle& redis, const db_cache_config& policy)
+    const redis_session& redis, const db_cache_config& policy)
     : db_registry(io_context, worker_value, config) {
-    attach_cache(0, worker_value, redis, db_cache_config_storage(policy, process_resource()),
+    attach_cache(0, worker_value, redis, db_cache_config_storage(policy),
         pool_config(entries_[0].pool_), default_capability_alias);
 }
 
-void detail::db_registry::attach_cache(std::size_t index, const worker_handle& worker_value,
-    const redis_handle& redis, const db_cache_config_storage& policy,
+void detail::db_registry::attach_cache(std::size_t index, const worker_ref& worker_value,
+    const redis_session& redis, const db_cache_config_storage& policy,
     const db_config_storage& config, std::string_view alias) {
     if (redis.worker().id() != worker_value.id()) {
         throw std::invalid_argument("database query cache Redis capability must belong to the same worker");
     }
-    auto prefix = db_cache_prefix(policy.key_prefix_, alias, config, process_resource());
-    entries_[index].cache_ = make_pmr_object<db_query_cache_state>(process_resource(), redis, policy, std::move(prefix));
+    auto prefix = db_cache_prefix(policy.key_prefix_, alias, config);
+    entries_[index].cache_ = std::make_unique<db_query_cache_state>(redis, policy, std::move(prefix));
 }
 #endif
 
@@ -99,7 +96,7 @@ detail::db_registry::entry_type::entry_type(pool_owner_type pool) noexcept
     : pool_(std::move(pool)) {}
 
 void detail::db_registry::add(
-    asio::io_context& io_context, const worker_handle& worker_value, db_config_storage config) {
+    asio::io_context& io_context, const worker_ref& worker_value, db_config_storage config) {
     require_client_host_lookup(config.host_, worker_value);
     pool_owner_type owner;
     switch (config.driver_) {
@@ -107,16 +104,14 @@ void detail::db_registry::add(
             std::terminate();
         case db_driver::mariadb:
 #ifdef RUVIA_ENABLE_MARIADB
-            owner = make_pmr_object<db_pool<mariadb_driver>>(
-                process_resource(), io_context, worker_value, std::move(config));
+            owner = std::make_unique<db_pool<mariadb_driver>>(io_context, worker_value, std::move(config));
             break;
 #else
             std::terminate();
 #endif
         case db_driver::postgresql:
 #ifdef RUVIA_ENABLE_POSTGRESQL
-            owner = make_pmr_object<db_pool<postgresql_driver>>(
-                process_resource(), io_context, worker_value, std::move(config));
+            owner = std::make_unique<db_pool<postgresql_driver>>(io_context, worker_value, std::move(config));
             break;
 #else
             std::terminate();
@@ -143,34 +138,34 @@ void detail::db_registry::close_now() noexcept {
     }
 }
 
-db_handle detail::db_registry::handle(
+db_session detail::db_registry::session(
     const entry_type& entry, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
 #ifdef RUVIA_ENABLE_REDIS
     detail::db_query_cache_state* const cache = entry.cache_.get();
 #else
     detail::db_query_cache_state* const cache = nullptr;
 #endif
-    return db_handle(pool_ref(entry.pool_), process_resource(), operation_scope, io_metrics, cache);
+    return db_session(pool_ref(entry.pool_), operation_scope, io_metrics, cache);
 }
 
 bool detail::db_registry::empty() const noexcept {
     return entries_.empty();
 }
 
-db_handle detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+db_session detail::db_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw db_error(
             db_error::code_type::not_configured, std::nullopt, "default database is not configured");
     }
-    return handle(entries_[*default_pool_index], operation_scope, io_metrics);
+    return session(entries_[*default_pool_index], operation_scope, io_metrics);
 }
 
-db_handle detail::db_registry::get(
+db_session detail::db_registry::get(
     std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return handle(entries_[*match], operation_scope, io_metrics);
+        return session(entries_[*match], operation_scope, io_metrics);
     }
     throw db_error(db_error::code_type::not_configured, std::nullopt, "database is not configured");
 }

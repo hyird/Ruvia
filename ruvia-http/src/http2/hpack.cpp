@@ -5,25 +5,20 @@
 #include <array>
 #include <cstddef>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
-
-#include "http2/http2_header_rules.h"
-#include "util/http_address_overlap.h"
-#include "util/http_c_library_memory.h"
+#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
+#include "response/http_response_header_bits.h"
 
 namespace ruvia {
 namespace detail {
 
 class hpack_decoder final {
 public:
-    explicit hpack_decoder(std::pmr::memory_resource* resource)
-        : memory_(resource),
-          memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
+    hpack_decoder()
+        : memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
         const int result = nghttp2_hd_inflate_new2(&inflater_, &memory_table_);
         if (result == NGHTTP2_ERR_NOMEM) {
             memory_.rethrow_allocation_failure();
@@ -37,10 +32,6 @@ public:
     }
     hpack_decoder(const hpack_decoder&) = delete;
     hpack_decoder& operator=(const hpack_decoder&) = delete;
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return memory_.resource();
-    }
 
     void set_max_dynamic_table_size(std::uint32_t bytes) {
         if (decoding_) {
@@ -117,14 +108,11 @@ private:
 
 namespace {
 
-// Uses a stack buffer with PMR fallback so encoding neither maintains
-// thread_local state nor touches the global C heap.
+// Uses a per-call deflater so encoding maintains no shared state.
 class hpack_field_deflater final {
 public:
-    explicit hpack_field_deflater(std::pmr::memory_resource* resource)
-        : inline_resource_(inline_storage_.data(), inline_storage_.size(), resource),
-          memory_(&inline_resource_),
-          memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
+    hpack_field_deflater()
+        : memory_table_(make_c_library_mem_table<nghttp2_mem>(memory_)) {
         const int result = nghttp2_hd_deflate_new2(&deflater_, 0, &memory_table_);
         if (result == NGHTTP2_ERR_NOMEM) {
             memory_.rethrow_allocation_failure();
@@ -147,7 +135,7 @@ public:
     hpack_field_deflater(const hpack_field_deflater&) = delete;
     hpack_field_deflater& operator=(const hpack_field_deflater&) = delete;
 
-    void encode(std::pmr::string& output, std::string_view name, std::string_view value, bool sensitive) {
+    void encode(std::string& output, std::string_view name, std::string_view value, bool sensitive) {
         nghttp2_nv field{
             .name = reinterpret_cast<std::uint8_t*>(const_cast<char*>(name.data())),
             .value = reinterpret_cast<std::uint8_t*>(const_cast<char*>(value.data())),
@@ -174,8 +162,6 @@ public:
     }
 
 private:
-    alignas(std::max_align_t) std::array<std::byte, 512> inline_storage_;
-    std::pmr::monotonic_buffer_resource inline_resource_;
     http_c_library_memory memory_;
     nghttp2_mem memory_table_;
     nghttp2_hd_deflater* deflater_{nullptr};
@@ -183,17 +169,8 @@ private:
 }  // namespace
 }  // namespace detail
 
-void hpack_decoder::impl_deleter_type::operator()(detail::hpack_decoder* value) const noexcept {
-    if (value != nullptr) {
-        detail::destroy_http_pmr_object(detail::http_resolved_pmr_resource_tag{}, value, value->resource());
-    }
-}
-
-hpack_decoder::hpack_decoder(hpack_decoder_options options) {
-    auto* resource = detail::http_pmr_resource_or_default(options.resource_);
-    impl_.reset(detail::construct_http_pmr_object<detail::hpack_decoder>(
-        detail::http_resolved_pmr_resource_tag{}, resource, resource));
-}
+hpack_decoder::hpack_decoder()
+    : impl_(std::make_unique<detail::hpack_decoder>()) {}
 hpack_decoder::~hpack_decoder() = default;
 hpack_decoder::hpack_decoder(hpack_decoder&&) noexcept = default;
 hpack_decoder& hpack_decoder::operator=(hpack_decoder&&) noexcept = default;
@@ -207,10 +184,10 @@ std::optional<hpack_decode_error> hpack_decoder::decode_with_callback(
     return impl_->decode(block, target, callback_value);
 }
 
-void hpack_encoder::encode_header(std::pmr::string& output, std::string_view name, std::string_view value) {
-    // Resizing output may invalidate borrowed views; own them in output's resource first.
-    std::pmr::string owned_name(output.get_allocator());
-    std::pmr::string owned_value(output.get_allocator());
+void hpack_encoder::encode_header(std::string& output, std::string_view name, std::string_view value) {
+    // Resizing output may invalidate borrowed views; own them first.
+    std::string owned_name;
+    std::string owned_value;
     if (detail::http_text_aliases_string(name, output)) {
         owned_name.assign(name);
         name = owned_name;
@@ -219,11 +196,11 @@ void hpack_encoder::encode_header(std::pmr::string& output, std::string_view nam
         owned_value.assign(value);
         value = owned_value;
     }
-    detail::hpack_field_deflater deflater(output.get_allocator().resource());
+    detail::hpack_field_deflater deflater;
     deflater.encode(output, name, value, detail::http_field_never_indexed(name));
 }
 
-void hpack_encoder::encode_status(std::pmr::string& output, http_status_code status) {
+void hpack_encoder::encode_status(std::string& output, http_status_code status) {
     const auto token = detail::http_status_code_token(status);
     encode_header(output, ":status", detail::http_status_code_token_view(token));
 }

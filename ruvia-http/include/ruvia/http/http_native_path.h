@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -10,7 +9,7 @@ namespace ruvia {
 // Platform-native path text (wchar_t on Windows, char elsewhere), as carried
 // by response file bodies.
 using http_native_path_char_type = std::filesystem::path::value_type;
-using http_native_path_string_type = std::pmr::basic_string<http_native_path_char_type>;
+using http_native_path_string_type = std::basic_string<http_native_path_char_type>;
 using http_native_path_view_type = std::basic_string_view<http_native_path_char_type>;
 
 [[nodiscard]] inline http_native_path_view_type http_native_path_view(const std::filesystem::path& path) noexcept {

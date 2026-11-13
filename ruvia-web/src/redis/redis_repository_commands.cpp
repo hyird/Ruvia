@@ -101,15 +101,14 @@ const redis_orm_script& redis_orm_delete_script() {
 }
 
 redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id,
-    std::string_view mode, redis_write_options options, std::size_t extra_arguments,
-    std::pmr::memory_resource* resource) {
+    std::string_view mode, redis_write_options options, std::size_t extra_arguments) {
     if (options.ttl_ && (options.persist_ || options.ttl_->count() <= 0 || options.ttl_->count() > 9007199254740991LL)) {
         throw std::invalid_argument("entity TTL must be positive, at most 2^53-1 milliseconds, and cannot combine with persist");
     }
-    redis_orm_arguments_type args(resource);
+    redis_orm_arguments_type args;
     args.reserve(7 + extra_arguments);
     append_redis_orm_script_call(args, redis_orm_write_script());
-    args.push_back(redis_entity_key(storage_prefix, id, resource));
+    args.push_back(redis_entity_key(storage_prefix, id));
     args.emplace_back(mode);
     args.emplace_back(options.ttl_ ? "expire" : options.persist_ ? "persist"
                                                                  : "keep");
@@ -122,21 +121,20 @@ redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_pref
 }
 
 redis_orm_arguments_type redis_orm_delete_arguments(
-    std::string_view storage_prefix, std::string_view id, std::pmr::memory_resource* resource) {
-    redis_orm_arguments_type args(resource);
+    std::string_view storage_prefix, std::string_view id) {
+    redis_orm_arguments_type args;
     args.reserve(4);
     append_redis_orm_script_call(args, redis_orm_delete_script());
-    args.push_back(redis_entity_key(storage_prefix, id, resource));
+    args.push_back(redis_entity_key(storage_prefix, id));
     return args;
 }
 
 task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script,
-    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options,
-    std::pmr::memory_resource* resource) {
+    redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     const operation_deadline deadline(options.timeout_);
     {
-        auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, resource, options, deadline);
+        auto reply = co_await pool.execute_borrowed(redis_command_args_view{args}, options, deadline);
         if (reply.kind() != redis_value::kind_type::error || !reply.error().starts_with("NOSCRIPT")) {
             co_return reply;
         }
@@ -147,10 +145,10 @@ task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_scr
     // EVAL runs the body and caches it under the same digest for later calls.
     args[0].assign("EVAL");
     args[1].assign(script.body_);
-    co_return co_await pool.execute_owned(std::move(args), resource, std::move(options), std::nullopt, nullptr, deadline);
+    co_return co_await pool.execute_owned(std::move(args), std::move(options), std::nullopt, nullptr, deadline);
 }
 
-redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_resource*) {
+redis_write_result redis_orm_exec_result(redis_value&& reply) {
     const auto value = redis_value_integer(reply);
     switch (value) {
         case 0:
@@ -164,7 +162,7 @@ redis_write_result redis_orm_exec_result(redis_value&& reply, std::pmr::memory_r
     }
 }
 
-redis_write_result redis_orm_delete_result(redis_value&& reply, std::pmr::memory_resource*) {
+redis_write_result redis_orm_delete_result(redis_value&& reply) {
     const auto value = redis_value_integer(reply);
     if (value == 0 || value == 1) {
         return redis_write_result(static_cast<std::uint64_t>(value));
@@ -173,7 +171,7 @@ redis_write_result redis_orm_delete_result(redis_value&& reply, std::pmr::memory
         "invalid entity delete affected-row reply");
 }
 
-void redis_orm_status_result(redis_value&& reply, std::pmr::memory_resource*) {
+void redis_orm_status_result(redis_value&& reply) {
     if (redis_value_string(reply) != "OK") {
         throw redis_error(redis_error::code_type::protocol_error, "invalid entity index status reply");
     }
@@ -187,7 +185,7 @@ std::uint64_t redis_orm_count(const redis_value& reply) {
     return static_cast<std::uint64_t>(count);
 }
 
-std::uint64_t redis_orm_count_result(redis_value&& reply, std::pmr::memory_resource*) {
+std::uint64_t redis_orm_count_result(redis_value&& reply) {
     const auto values = redis_value_array(reply);
     if (values.size() != 1) {
         throw redis_error(redis_error::code_type::protocol_error, "invalid entity count reply");
@@ -195,8 +193,8 @@ std::uint64_t redis_orm_count_result(redis_value&& reply, std::pmr::memory_resou
     return redis_orm_count(values.front());
 }
 
-bool redis_orm_exists_result(redis_value&& reply, std::pmr::memory_resource*) {
-    return redis_orm_count_result(std::move(reply), nullptr) != 0;
+bool redis_orm_exists_result(redis_value&& reply) {
+    return redis_orm_count_result(std::move(reply)) != 0;
 }
 
 }  // namespace ruvia::detail

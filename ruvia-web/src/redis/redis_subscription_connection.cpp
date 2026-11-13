@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <exception>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -11,15 +10,14 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/worker_timer.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 
+#include "integration/operation_lane_lease.h"
 #include "redis/redis_protocol.h"
 #include "redis/redis_reply_parsers.h"
 #include "redis/redis_types_access.h"
-#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 namespace {
@@ -33,7 +31,7 @@ redis_subscription_connection::redis_subscription_connection(redis_subscription_
     : owner_(owner),
       options_(std::move(options)),
       connection_(owner.io_context_, owner.tls_context_, owner.worker_, owner.config_, owner.wire_counters_),
-      current_reply_(redis_types_access::null_value(process_resource())),
+      current_reply_(redis_types_access::null_value()),
       ping_written_(owner.worker_),
       cancellation_(owner.cancellation_target_, cancellation_id_) {
     owner_.link(*this);
@@ -53,7 +51,7 @@ redis_subscription_connection::~redis_subscription_connection() {
     owner_.unlink(*this);
 }
 
-const worker_handle& redis_subscription_connection::worker() const noexcept {
+const worker_ref& redis_subscription_connection::worker() const noexcept {
     return owner_.worker_;
 }
 
@@ -108,7 +106,7 @@ task<void> redis_subscription_connection::send(redis_owned_command command) {
         auto& write_buffer = connection_.write_buffer();
         write_buffer.assign(command.wire_);
         // The serialized request owns the bytes needed by the write.
-        std::pmr::string(command.wire_.get_allocator()).swap(command.wire_);
+        std::string(command.wire_.get_allocator()).swap(command.wire_);
         // Stamped before the write: the reply may arrive before this
         // coroutine resumes and must still count as newer than the request.
         last_request_ = clock_type::now();
@@ -137,14 +135,14 @@ task<std::optional<redis_pubsub_event>> redis_subscription_connection::read(oper
     }
     const operation_deadline timeout_value(override_operation_options(options_, {.timeout_ = operation.timeout_}).timeout_);
     std::exception_ptr failure;
-    task_scope ping_writes(owner_.worker_, {.resource_ = process_resource()});
+    task_scope ping_writes(owner_.worker_);
     begin_idle_probe(ping_writes, timeout_value);
     try {
         for (;;) {
             // The previous event's views end here; its storage returns to the
             // pool before the next reply is allocated.
-            current_reply_ = redis_types_access::null_value(process_resource());
-            current_reply_ = co_await connection_.read_reply(timeout_value, process_resource(), &last_input_);
+            current_reply_ = redis_types_access::null_value();
+            current_reply_ = co_await connection_.read_reply(timeout_value, &last_input_);
             if (pending_pings_ == 0 || !is_redis_subscription_pong(current_reply_)) {
                 break;
             }
@@ -314,7 +312,7 @@ task<void> redis_subscription_connection::write_ping(operation_deadline timeout)
 }
 
 redis_subscription_set::redis_subscription_set(asio::io_context& io_context, asio::ssl::context& tls_context,
-    const redis_config_storage& config, const worker_handle& worker_value)
+    const redis_config_storage& config, const worker_ref& worker_value)
     : io_context_(io_context),
       tls_context_(tls_context),
       config_(config),
@@ -333,7 +331,7 @@ redis_subscription_set::~redis_subscription_set() {
 }
 
 redis_subscription_set::connection_owner_type redis_subscription_set::open(operation_options options) {
-    return make_pmr_object<redis_subscription_connection>(process_resource(), *this, std::move(options));
+    return std::make_unique<redis_subscription_connection>(*this, std::move(options));
 }
 
 void redis_subscription_set::close_now() noexcept {
@@ -399,7 +397,7 @@ task<void> redis_subscription::send(
         throw std::invalid_argument("redis subscription requires at least one channel or pattern");
     }
     return make_scoped_operation(registration_.scope(),
-        connection_->send(detail::make_owned_redis_command(process_resource(), command, names)));
+        connection_->send(detail::make_owned_redis_command(command, names)));
 }
 
 task<void> redis_subscription::subscribe(std::span<const std::string_view> channels) & {

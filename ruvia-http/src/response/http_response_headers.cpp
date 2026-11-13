@@ -3,14 +3,12 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
 
 #include "ruvia/http/cookies.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
@@ -21,22 +19,17 @@
 #include "response/http_response_header_bits.h"
 #include "response/http_response_header_storage.h"
 #include "response/http_response_static_headers.h"
-#include "util/http_wire_sink.h"
+#include "wire/http_wire_sink.h"
 
 namespace ruvia {
 
-http_response_headers::http_response_headers(
-    detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-    : resource_(resource),
-      heap_(resource_) {}
+http_response_headers::http_response_headers() noexcept = default;
 
 http_response_headers::~http_response_headers() {
     clear();
 }
 
-http_response_headers::http_response_headers(http_response_headers&& other) noexcept
-    : resource_(other.resource_),
-      heap_(resource_) {
+http_response_headers::http_response_headers(http_response_headers&& other) noexcept {
     move_from(std::move(other));
 }
 
@@ -53,7 +46,7 @@ void http_response_headers::reserve(std::size_t count) {
         return;
     }
     // Only descriptors move; field bytes retain their existing ownership.
-    std::pmr::vector<http_response_header> replacement(resource_);
+    std::vector<http_response_header> replacement;
     replacement.reserve(count);
     replacement.insert(replacement.end(), heap_.begin(), heap_.end());
     heap_.swap(replacement);
@@ -153,7 +146,7 @@ http_response_header http_response_headers::make_owned_header(
     const auto total = name.size() + value.size();
     char* bytes_value = nullptr;
     if (total > 0) {
-        bytes_value = static_cast<char*>(resource_->allocate(total, 1));
+        bytes_value = new char[total];
         std::memcpy(bytes_value, name.data(), name.size());
         std::memcpy(bytes_value + name.size(), value.data(), value.size());
     }
@@ -167,7 +160,7 @@ http_response_header http_response_headers::make_uninitialized_header(
     const auto total = name.size() + value_size;
     char* bytes_value = nullptr;
     if (total > 0) {
-        bytes_value = static_cast<char*>(resource_->allocate(total, 1));
+        bytes_value = new char[total];
         std::memcpy(bytes_value, name.data(), name.size());
     }
     return detail::http_response_header_access::make(bytes_value, static_cast<std::uint32_t>(name.size()),
@@ -203,8 +196,7 @@ std::optional<http_response_header> http_response_headers::make_shared_header(
 
 void http_response_headers::release_header(http_response_header& header_value) noexcept {
     if (header_value.owned_ && header_value.bytes_ != nullptr) {
-        resource_->deallocate(const_cast<char*>(header_value.bytes_),
-            static_cast<std::size_t>(header_value.name_size_) + header_value.value_size_, 1);
+        delete[] const_cast<char*>(header_value.bytes_);
     }
     header_value.bytes_ = nullptr;
     header_value.name_size_ = 0;
@@ -225,7 +217,7 @@ void http_response_headers::truncate(iterator new_end) noexcept {
 http_response_header& http_response_headers::append_header(http_response_header header_value) {
     // `header` may own a separately allocated name/value block.  The vector
     // stores the small descriptor by value, so an exception while spilling or
-    // appending must release that block here; otherwise a failed PMR
+    // appending must release that block here; otherwise a failed heap
     // allocation leaks the response header and leaves the next retry with a
     // different ownership picture.
     try {

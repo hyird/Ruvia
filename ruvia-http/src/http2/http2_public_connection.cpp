@@ -3,7 +3,6 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,8 +12,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client_response_head.h"
 #include "ruvia/http/http_header.h"
@@ -39,13 +36,13 @@ http2_setting_entry http2_received_settings::at(std::size_t index) const {
 namespace {
 
 [[nodiscard]] http_client_response_head response_head_from_stream(
-    const detail::http2_stream_state& stream, std::pmr::memory_resource* resource) {
+    const detail::http2_stream_state& stream) {
     const auto* status = stream.response_status();
     if (status == nullptr) {
         throw std::logic_error("HTTP/2 final response event has no status");
     }
     auto result_value =
-        detail::http_client_response_head_access::make(*status, http_protocol_version::http2, resource);
+        detail::http_client_response_head_access::make(*status, http_protocol_version::http2);
     if (const auto* known = stream.remote_content().allowed_known_length()) {
         detail::http_client_response_head_access::content_length(result_value, known->declared_length());
     } else if (const auto* metadata = stream.remote_content().metadata_only_known_length()) {
@@ -57,7 +54,7 @@ namespace {
         headers.reserve(header_count);
         for (std::size_t index = 0; index < header_count; ++index) {
             const auto field = stream.remote_header_at(index);
-            headers.emplace_back(field.name_, field.value_, resource);
+            headers.emplace_back(field.name_, field.value_);
         }
     }
     return result_value;
@@ -81,9 +78,8 @@ namespace detail {
 class http2_connection_owner_endpoint final {
 public:
     http2_connection_owner_endpoint(
-        std::pmr::memory_resource* resource, http2_role role, const http2_connection_options& options)
-        : resource_(resource),
-          connection_(resource, role, options.enable_push_, options.receive_origin_advertisements_,
+        http2_role role, const http2_connection_options& options)
+        : connection_(role, options.enable_push_, options.receive_origin_advertisements_,
               options.receive_frame_metadata_, options.frame_observer_, options.header_observer_,
               options.observer_context_) {}
     http2_connection_owner_endpoint(const http2_connection_owner_endpoint&) = delete;
@@ -98,7 +94,7 @@ public:
             std::terminate();
         }
         if (--references_ == 0) {
-            destroy_http_pmr_object(this, resource_);
+            delete this;
         }
     }
 
@@ -117,7 +113,7 @@ public:
                 throw std::logic_error("HTTP/2 response event has no stream");
             }
             return ::ruvia::http2_event::response_head(value.stream_id_,
-                response_head_from_stream(*stream, resource_), value.request_content_signal_, !value.body_open_);
+                response_head_from_stream(*stream), value.request_content_signal_, !value.body_open_);
         }
         if (stream == nullptr) {
             throw std::logic_error("HTTP/2 request event has no stream");
@@ -181,7 +177,6 @@ public:
         }
     }
     std::size_t references_{1};
-    std::pmr::memory_resource* resource_;
     detail::http2_connection connection_;
 };
 
@@ -258,8 +253,7 @@ http2_server_request_view http2_request_head_event::request_view() const& noexce
     return endpoint_->connection_.server_request_view(stream_id_).value_or(http2_server_request_view{});
 }
 
-http_request http2_request_head_event::build_request(
-    std::pmr::memory_resource* resource, borrowed_text body) const& {
+http_request http2_request_head_event::build_request(borrowed_text body) const& {
     if (endpoint_ == nullptr || stream_id_ == 0) {
         throw std::logic_error("HTTP/2 request head event is not active");
     }
@@ -287,7 +281,7 @@ http_request http2_request_head_event::build_request(
         .standard_connect_ = pending != nullptr && pending->form() == detail::http2_connect_form::standard,
         .failure_message_ = "validated HTTP/2 request cannot be materialized",
     };
-    return detail::materialize_binary_http_request(resource, spec, [stream](std::size_t index) noexcept {
+    return detail::materialize_binary_http_request(spec, [stream](std::size_t index) noexcept {
         const auto header_value = stream->remote_header_at(index);
         return std::pair{http_header_view{header_value.name_, header_value.value_}, header_value.kind_};
     });
@@ -299,9 +293,7 @@ void http2_connection::impl_deleter_type::operator()(detail::http2_connection_ow
 }
 
 http2_connection::http2_connection(http2_role role, const http2_connection_options& options) {
-    auto* resolved = detail::http_pmr_resource_or_default(options.resource_);
-    impl_.reset(detail::construct_http_pmr_object<detail::http2_connection_owner_endpoint>(
-        resolved, resolved, role, options));
+    impl_.reset(new detail::http2_connection_owner_endpoint(role, options));
     impl_->connection_.begin_connection();
 }
 http2_connection http2_connection::server(http2_connection_options options) {
@@ -374,7 +366,7 @@ std::optional<http2_event> http2_connection::next_event() {
 }
 
 http2_output_batch_result http2_connection::take_output_batch(std::size_t max_bytes,
-    std::pmr::string& output, http2_data_output_observer_type observer, void* observer_context) {
+    std::string& output, http2_data_output_observer_type observer, void* observer_context) {
     impl_->connection_.retry_deferred_stream_leases();
     return impl_->connection_.take_output_batch(max_bytes, output, observer, observer_context);
 }

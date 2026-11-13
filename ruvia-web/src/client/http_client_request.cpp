@@ -4,7 +4,6 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_base64.h"
 #include "ruvia/http/http_client_redirect.h"
@@ -28,9 +27,8 @@ namespace ruvia {
 namespace detail {
 
 http_client_websocket_handshake::http_client_websocket_handshake(
-    websocket_client_negotiation_config_view config, std::pmr::memory_resource* resource)
-    : negotiation_(config, resource),
-      selected_subprotocol_(resource) {
+    websocket_client_negotiation_config_view config)
+    : negotiation_(config) {
     std::array<std::uint8_t, 16> nonce;
     if (!fill_random_bytes(nonce)) {
         throw std::runtime_error("failed to generate WebSocket handshake key");
@@ -44,27 +42,22 @@ http_client_output_queue* http_client_request_storage::output() const noexcept {
 }
 
 http_client_request_storage::http_client_request_storage(std::string_view method,
-    std::string_view target, std::span<const http_header_view> fields, std::pmr::memory_resource* resource)
-    : http_client_request_storage(method, target, resource) {
+    std::string_view target, std::span<const http_header_view> fields)
+    : http_client_request_storage(method, target) {
     if (fields.empty()) {
         return;
     }
     headers_.reserve(fields.size());
-    auto* const field_resource = this->resource();
     for (const auto& field : fields) {
-        headers_.emplace_back(field.name(), field.value(), field_resource);
+        headers_.emplace_back(field.name(), field.value());
     }
 }
 
 http_client_request_storage::http_client_request_storage(
-    std::string_view method, std::string_view target, std::pmr::memory_resource* resource)
-    : method_(method, pmr_resource_or_default(resource)),
-      target_(target, method_.get_allocator().resource()),
-      headers_(method_.get_allocator().resource()),
-      body_(std::string_view{}, method_.get_allocator().resource()),
-      tunnel_authority_(method_.get_allocator().resource()),
-      tunnel_protocol_(method_.get_allocator().resource()),
-      route_authority_(method_.get_allocator().resource()) {}
+    std::string_view method, std::string_view target)
+    : method_(method),
+      target_(target),
+      route_authority_(method_) {}
 
 http_client_request_storage::http_client_request_storage(http_client_request_storage&& other) noexcept
     : options_(std::move(other.options_)),
@@ -83,7 +76,7 @@ http_client_request_storage::http_client_request_storage(http_client_request_sto
       tunnel_(std::exchange(other.tunnel_, nullptr)),
       has_body_(std::exchange(other.has_body_, false)),
       upload_(std::exchange(other.upload_, nullptr)),
-      route_authority_(other.route_authority_.get_allocator().resource()) {
+      route_authority_(other.route_authority_) {
     static_assert(std::is_nothrow_move_constructible_v<decltype(method_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(target_)>);
     static_assert(std::is_nothrow_move_constructible_v<decltype(headers_)>);
@@ -132,8 +125,7 @@ std::shared_ptr<http_client_informational_callback> share_http_client_informatio
     if (!callback) {
         return nullptr;
     }
-    return std::allocate_shared<http_client_informational_callback>(
-        std::pmr::polymorphic_allocator<http_client_informational_callback>(process_resource()), std::move(callback));
+    return std::make_shared<http_client_informational_callback>(std::move(callback));
 }
 
 void validate_http_client_route_options(const http_client_request_options& options) {
@@ -188,7 +180,7 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
         const auto parsed = parse_route_authority(*options_.authority_);
         const http_origin_options origin{.host_ = parsed.host(), .port_ = parsed.effective_port(default_port)};
         authority_origin = https ? http_origin_view::https(origin) : http_origin_view::http(origin);
-        route_authority_ = make_http_origin_authority(*authority_origin, route_authority_.get_allocator().resource());
+        route_authority_ = make_http_origin_authority(*authority_origin);
         authority_host = parsed.host();
         if (authority_host.starts_with('[')) {
             authority_host = authority_host.substr(1, authority_host.size() - 2);
@@ -237,7 +229,7 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
 }  // namespace detail
 
 namespace {
-void append_query_component(std::pmr::string& output, std::string_view value) {
+void append_query_component(std::string& output, std::string_view value) {
     for (const unsigned char byte : value) {
         if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') ||
             (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~') {
@@ -248,8 +240,8 @@ void append_query_component(std::pmr::string& output, std::string_view value) {
     }
 }
 
-void replace_field(std::pmr::vector<http_header>& fields, std::string_view name, std::string_view value) {
-    http_header replacement(name, value, fields.get_allocator().resource());
+void replace_field(std::vector<http_header>& fields, std::string_view name, std::string_view value) {
+    http_header replacement(name, value);
     const auto found = std::ranges::find_if(fields, [name](const http_header& field) {
         return http_ascii_equals_ignore_case(field.name(), name);
     });
@@ -298,7 +290,7 @@ bool connection_named_field(std::span<const http_header> fields, std::string_vie
 // One bound for the whole forward: commit, body and end share the deadline
 // started here and the caller's stop token.
 task<void> pipe_response(http_client_response response, detail::http_client_response_state& state,
-    response_stream_writer& output, std::pmr::memory_resource* resource, operation_options operation) {
+    response_stream_writer& output, operation_options operation) {
     if (operation.stop_token_.stop_requested()) {
         throw http_client_error(std::make_error_code(std::errc::operation_canceled), "HTTP client operation cancelled", std::nullopt, &state.connection_info_, state.request_written_);
     }
@@ -311,7 +303,7 @@ task<void> pipe_response(http_client_response response, detail::http_client_resp
     }
     if (committed == stream_commit_result::body) {
         co_await state.consume_body<void>(state.downstream_step(steps), &output);
-        std::pmr::vector<http_header_view> trailers(pmr_resource_or_default(resource));
+        std::vector<http_header_view> trailers;
         trailers.reserve(response.trailers().size());
         for (const auto& field : response.trailers()) {
             if (!hop_field(field.name()) && !connection_named_field(response.headers(), field.name())) {
@@ -328,7 +320,7 @@ task<void> pipe_response(http_client_response response, detail::http_client_resp
 
 // The origin a request addresses: its authority override, else the alias.
 // Redirect targets resolve against it.
-[[nodiscard]] http_origin_view request_origin(const http_client_handle& client, const http_client_request_options& options) {
+[[nodiscard]] http_origin_view request_origin(const http_client_ref& client, const http_client_request_options& options) {
     if (!options.authority_) {
         return client.origin();
     }
@@ -352,12 +344,12 @@ task<void> pipe_response_in_destination(task<void> source) {
 }
 }  // namespace
 
-http_client_request::http_client_request(const http_client_handle& client, std::string_view method, std::string_view path)
+http_client_request::http_client_request(const http_client_ref& client, std::string_view method, std::string_view path)
     : client_(client),
-      method_(method, process_resource()),
-      target_(path, process_resource()),
-      headers_(process_resource()),
-      body_(process_resource()) {
+      method_(method),
+      target_(path),
+      headers_(),
+      body_() {
     client_.registration_.require_active();
     if (!is_valid_http_method_token(method) ||
         (!is_valid_http_origin_form_target(path) && !(method == "OPTIONS" && path == "*"))) {
@@ -365,29 +357,29 @@ http_client_request::http_client_request(const http_client_handle& client, std::
     }
 }
 
-http_client_request http_client_handle::request(std::string_view method, std::string_view path) const {
+http_client_request http_client_ref::request(std::string_view method, std::string_view path) const {
     registration_.require_active();
     return http_client_request(*this, method, path);
 }
-http_client_request http_client_handle::get(std::string_view path) const {
+http_client_request http_client_ref::get(std::string_view path) const {
     return request("GET", path);
 }
-http_client_request http_client_handle::post(std::string_view path) const {
+http_client_request http_client_ref::post(std::string_view path) const {
     return request("POST", path);
 }
-http_client_request http_client_handle::put(std::string_view path) const {
+http_client_request http_client_ref::put(std::string_view path) const {
     return request("PUT", path);
 }
-http_client_request http_client_handle::patch(std::string_view path) const {
+http_client_request http_client_ref::patch(std::string_view path) const {
     return request("PATCH", path);
 }
-http_client_request http_client_handle::del(std::string_view path) const {
+http_client_request http_client_ref::del(std::string_view path) const {
     return request("DELETE", path);
 }
-http_client_request http_client_handle::head(std::string_view path) const {
+http_client_request http_client_ref::head(std::string_view path) const {
     return request("HEAD", path);
 }
-http_client_request http_client_handle::options(std::string_view path) const {
+http_client_request http_client_ref::options(std::string_view path) const {
     return request("OPTIONS", path);
 }
 
@@ -406,7 +398,7 @@ http_client_request& http_client_request::headers(std::span<const http_header_vi
     headers_.reserve(old_size + fields.size());
     try {
         for (const auto& field : fields) {
-            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+            headers_.emplace_back(field.name(), field.value());
         }
     } catch (...) {
         while (headers_.size() > old_size) {
@@ -440,7 +432,7 @@ http_client_request& http_client_request::body(std::string_view value) {
     if (consumed_) {
         throw std::logic_error("HTTP request builder was consumed");
     }
-    std::pmr::string owned(value, body_.get_allocator().resource());
+    std::string owned(value);
     body_.swap(owned);
     has_body_ = true;
     return *this;
@@ -472,6 +464,13 @@ http_client_request& http_client_request::on_redirect(
     async_redirect_observer_ = std::move(observer);
     return *this;
 }
+http_client_request& http_client_request::redirects(std::size_t maximum) {
+    if (consumed_) {
+        throw std::logic_error("HTTP request builder was consumed");
+    }
+    max_redirects_ = maximum;
+    return *this;
+}
 
 task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_config config) {
     if (consumed_) {
@@ -481,8 +480,8 @@ task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_
     if (config.max_chunk_bytes_ == 0 || config.max_chunk_bytes_ > default_max_buffered_body_bytes) {
         throw std::invalid_argument("invalid HTTP Upgrade tunnel policy");
     }
-    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
-    detail::http_client_request_storage request(method_, target_, fields.view(), client_.resource_);
+    const detail::inline_http_header_views<16> fields(headers_);
+    detail::http_client_request_storage request(method_, target_, fields.view());
     request.options_ = detail::copy_http_client_request_settings(request_options_);
     request.informational_ = informational_callback_;
     request.pool_owner_ = client_.pool_owner_;
@@ -494,15 +493,15 @@ task<http_client_tunnel_result> http_client_request::upgrade(http_client_tunnel_
     auto operation = make_scoped_operation(client_.registration_.scope(),
         client_.pool_->open_tunnel(std::move(request), config, client_.options_));
     consumed_ = true;
-    std::pmr::string(method_.get_allocator()).swap(method_);
-    std::pmr::string(target_.get_allocator()).swap(target_);
-    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
-    std::pmr::string(body_.get_allocator()).swap(body_);
+    std::string(method_.get_allocator()).swap(method_);
+    std::string(target_.get_allocator()).swap(target_);
+    std::vector<http_header>(headers_.get_allocator()).swap(headers_);
+    std::string(body_.get_allocator()).swap(body_);
     return operation;
 }
 
-std::pmr::vector<http_header_view> http_client_request::field_views() const {
-    std::pmr::vector<http_header_view> fields(headers_.get_allocator().resource());
+std::vector<http_header_view> http_client_request::field_views() const {
+    std::vector<http_header_view> fields;
     fields.reserve(headers_.size());
     for (const auto& field : headers_) {
         fields.emplace_back(field.name(), field.value());
@@ -521,13 +520,12 @@ task<http_client_response> http_client_request::send() {
 
 namespace {
 
-[[nodiscard]] std::pmr::string format_origin_target_url(
-    const http_origin_view& origin, std::string_view target, std::pmr::memory_resource* resource) {
-    auto* const target_resource = pmr_resource_or_default(resource);
-    const auto authority = make_http_origin_authority(origin, target_resource);
+[[nodiscard]] std::string format_origin_target_url(
+    const http_origin_view& origin, std::string_view target) {
+    const auto authority = make_http_origin_authority(origin);
     const std::string_view scheme_prefix =
         origin.scheme() == http_scheme::https ? "https://" : "http://";
-    std::pmr::string url(target_resource);
+    std::string url;
     url.reserve(scheme_prefix.size() + authority.size() + target.size());
     url.append(scheme_prefix);
     url.append(authority);
@@ -567,8 +565,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             request.client_.options_.timeout_ = total.timeout();
             std::optional<task<http_client_response>> dispatched;
             {
-                const detail::inline_http_header_views<16> fields(
-                    request.headers_, request.headers_.get_allocator().resource());
+                const detail::inline_http_header_views<16> fields(request.headers_);
                 const http_client_request_view view{
                     .method_ = request.method_,
                     .target_ = request.target_,
@@ -580,11 +577,11 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                     view, request.request_options_, request.informational_callback_));
             }
             if (redirects == request.max_redirects_) {
-                std::pmr::string(request.method_.get_allocator()).swap(request.method_);
-                std::pmr::string(request.target_.get_allocator()).swap(request.target_);
-                std::pmr::vector<http_header>(request.headers_.get_allocator())
+                std::string(request.method_.get_allocator()).swap(request.method_);
+                std::string(request.target_.get_allocator()).swap(request.target_);
+                std::vector<http_header>(request.headers_.get_allocator())
                     .swap(request.headers_);
-                std::pmr::string(request.body_.get_allocator()).swap(request.body_);
+                std::string(request.body_.get_allocator()).swap(request.body_);
                 try {
                     co_return co_await std::move(*dispatched);
                 } catch (const http_client_error& error) {
@@ -620,7 +617,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
             .content_ = request.has_body_ ? http_client_request_content_view::bytes(request.body_)
                                           : http_client_request_content_view::none()};
         const auto plan = plan_http_client_redirect_request(
-            current_view, {.status_ = response.status(), .resource_ = request.client_.resource_});
+            current_view, {.status_ = response.status()});
         if (upload_initial_hop && redirects == 0 &&
             plan.content_disposition() != http_client_redirect_content_disposition::drop) {
             co_return response;
@@ -643,8 +640,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
         const auto current_origin = request_origin(request.client_, request.request_options_);
         auto resolved = resolve_http_client_redirect_target(current_origin,
             {.current_target_ = request.target_,
-                .location_ = *location,
-                .resource_ = request.client_.resource_});
+                .location_ = *location});
         auto* next = std::get_if<http_client_resolved_redirect>(&resolved);
         if (next == nullptr) {
             co_return response;
@@ -652,9 +648,9 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
 
         if (request.redirect_observer_ || request.async_redirect_observer_) {
             const auto source_url = format_origin_target_url(
-                current_origin, request.target_, request.client_.resource_);
+                current_origin, request.target_);
             const auto target_url = format_origin_target_url(
-                next->origin(), next->target(), request.client_.resource_);
+                next->origin(), next->target());
             const http_client_redirect_hop hop_event(redirects, current_origin, request.target_,
                 source_url, response.connection_info(), response.status(), *location,
                 next->origin(), next->target(), target_url, next->cross_origin());
@@ -710,7 +706,7 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                 co_return response;
             }
             auto authority =
-                make_http_origin_authority(next->origin(), request.client_.resource_);
+                make_http_origin_authority(next->origin());
             // Route overrides belong to the origin that set them.
             clear_route_overrides(request.request_options_);
             if (!request.client_.pool_->config().fixed_origin_ && has_custom_policy &&
@@ -746,13 +742,15 @@ task<http_client_response> http_client_request::follow_redirects(http_client_req
                            http_ascii_equals_ignore_case(name, "proxy-authorization") ||
                            http_ascii_equals_ignore_case(name, "cookie"))) ||
                    (drop && (http_ascii_equals_ignore_case(name.substr(0, 8), "content-") ||
+                                http_ascii_equals_ignore_case(name, "digest") ||
+                                http_ascii_equals_ignore_case(name, "repr-digest") ||
                                 http_ascii_equals_ignore_case(name, "transfer-encoding") ||
                                 http_ascii_equals_ignore_case(name, "trailer") ||
                                 http_ascii_equals_ignore_case(name, "expect")));
         });
         if (drop) {
             request.has_body_ = false;
-            std::pmr::string(request.body_.get_allocator()).swap(request.body_);
+            std::string(request.body_.get_allocator()).swap(request.body_);
         }
         request.client_.pool_owner_ = std::move(next_pool);
         request.client_.pool_ = request.client_.pool_owner_.get();
@@ -782,10 +780,9 @@ task<http_client_exchange> http_client_request::upload_owned(
     http_client_request request, http_client_upload_config config) {
     std::optional<task<http_client_exchange>> dispatched;
     {
-        const detail::inline_http_header_views<16> fields(
-            request.headers_, request.headers_.get_allocator().resource());
+        const detail::inline_http_header_views<16> fields(request.headers_);
         detail::http_client_request_storage storage(
-            request.method_, request.target_, fields.view(), request.client_.resource_);
+            request.method_, request.target_, fields.view());
         storage.options_ = detail::copy_http_client_request_settings(request.request_options_);
         storage.informational_ = request.informational_callback_;
         storage.pool_owner_ = request.client_.pool_owner_;
@@ -797,24 +794,24 @@ task<http_client_exchange> http_client_request::upload_owned(
     if (request.max_redirects_ != 0 && exchange.body().state_ != nullptr &&
         exchange.body().state_->upload_) {
         exchange.body().state_->upload_->redirect_request_ =
-            make_pmr_object<http_client_request>(process_resource(), std::move(request));
+            std::make_unique<http_client_request>(std::move(request));
     }
     co_return exchange;
 }
 
-http_client_connect_request::http_client_connect_request(const http_client_handle& client,
+http_client_connect_request::http_client_connect_request(const http_client_ref& client,
     std::string_view authority, std::string_view target, bool udp)
     : client_(client),
-      authority_(authority, process_resource()),
-      protocol_(process_resource()),
-      target_(target, process_resource()),
-      headers_(process_resource()),
+      authority_(authority),
+      protocol_(),
+      target_(target),
+      headers_(),
       udp_(udp) {}
-http_client_connect_request http_client_handle::connect(std::string_view authority) const {
+http_client_connect_request http_client_ref::connect(std::string_view authority) const {
     registration_.require_active();
     return http_client_connect_request(*this, authority, {}, false);
 }
-http_client_connect_request http_client_handle::udp(std::string_view path) const {
+http_client_connect_request http_client_ref::udp(std::string_view path) const {
     registration_.require_active();
     return http_client_connect_request(*this, pool_->config().authority_, path, true);
 }
@@ -833,7 +830,7 @@ http_client_connect_request& http_client_connect_request::headers(std::span<cons
     headers_.reserve(old_size + fields.size());
     try {
         for (const auto& field : fields) {
-            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+            headers_.emplace_back(field.name(), field.value());
         }
     } catch (...) {
         while (headers_.size() > old_size) {
@@ -870,16 +867,16 @@ task<http_client_tunnel_result> http_client_connect_request::open(http_client_tu
     if (consumed_) {
         throw std::logic_error("CONNECT builder was consumed");
     }
-    const detail::inline_http_header_views<16> fields(headers_, headers_.get_allocator().resource());
+    const detail::inline_http_header_views<16> fields(headers_);
     auto dispatched = udp_
                           ? client_.dispatch_udp({.target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_)
                           : client_.dispatch_connect(
                                 {.authority_ = authority_, .protocol_ = protocol_, .target_ = target_, .headers_ = fields.view()}, config, request_options_, informational_callback_);
     consumed_ = true;
-    std::pmr::string(authority_.get_allocator()).swap(authority_);
-    std::pmr::string(protocol_.get_allocator()).swap(protocol_);
-    std::pmr::string(target_.get_allocator()).swap(target_);
-    std::pmr::vector<http_header>(headers_.get_allocator()).swap(headers_);
+    std::string(authority_.get_allocator()).swap(authority_);
+    std::string(protocol_.get_allocator()).swap(protocol_);
+    std::string(target_.get_allocator()).swap(target_);
+    std::vector<http_header>(headers_.get_allocator()).swap(headers_);
     return dispatched;
 }
 
@@ -913,24 +910,24 @@ task<void> http_client_response::pipe_to_destination(context_response_editor dra
         }
     }
     auto source = make_scoped_operation(state_->body_operation_scope_,
-        pipe_response(http_client_response(state_), *state_, writer, state_->resource_, std::move(operation)));
+        pipe_response(http_client_response(state_), *state_, writer, std::move(operation)));
     return make_scoped_operation(destination, pipe_response_in_destination(std::move(source)));
 }
 
 #ifdef RUVIA_ENABLE_HTTP3
 namespace {
 task<void> migrate_client_pool(std::shared_ptr<detail::http_client_pool> pool,
-    std::pmr::string address, std::uint16_t port, operation_options options, stop_token host_stop) {
+    std::string address, std::uint16_t port, operation_options options, stop_token host_stop) {
     co_await pool->migrate_http3(std::move(address), port, std::move(options), std::move(host_stop));
 }
 }  // namespace
 #endif
 
-task<void> http_client_handle::migrate(std::string_view local_address, std::uint16_t port) const {
+task<void> http_client_ref::migrate(std::string_view local_address, std::uint16_t port) const {
     registration_.require_active();
 #ifdef RUVIA_ENABLE_HTTP3
     return make_scoped_operation(registration_.scope(),
-        migrate_client_pool(pool_owner_, std::pmr::string(local_address, process_resource()), port, options_, host_stop_token_));
+        migrate_client_pool(pool_owner_, std::string(local_address), port, options_, host_stop_token_));
 #else
     (void)local_address;
     (void)port;

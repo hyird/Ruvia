@@ -3,7 +3,6 @@
 #include <gtest/gtest.h>
 
 #include <concepts>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>

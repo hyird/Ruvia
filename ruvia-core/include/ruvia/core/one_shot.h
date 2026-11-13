@@ -5,7 +5,6 @@
 #include <coroutine>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -13,10 +12,9 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/core/worker_wait_result.h"
 
@@ -32,10 +30,6 @@ enum class one_shot_complete_status : std::uint8_t {
 
 template <typename t_type>
 class one_shot_completion;
-
-struct one_shot_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
 
 template <typename t_type>
 using one_shot_complete_result =
@@ -53,7 +47,7 @@ struct one_shot_ready final {};
 
 template <typename t_type>
 struct one_shot_state final {
-    explicit one_shot_state(worker_handle target)
+    explicit one_shot_state(worker_ref target)
         : worker_(std::move(target)) {
         if (!worker_.valid()) {
             throw std::invalid_argument("one-shot requires a valid worker");
@@ -65,7 +59,7 @@ struct one_shot_state final {
     [[nodiscard]] std::unique_lock<std::mutex> lock_state() {
         return std::unique_lock(mutex_);
     }
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
     [[nodiscard]] worker_wait_slot<std::monostate, one_shot_state>& wait_slot() noexcept {
@@ -83,7 +77,7 @@ struct one_shot_state final {
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_registration shutdown_registration_;
-    worker_handle worker_;
+    worker_ref worker_;
     std::mutex mutex_;
     using lifecycle_type = std::variant<one_shot_pending, one_shot_completing, one_shot_ready,
         one_shot_consumed, one_shot_receiver_closed, one_shot_worker_stopping>;
@@ -185,7 +179,7 @@ private:
         : state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
-    friend auto make_one_shot(worker_handle, one_shot_options);
+    friend auto make_one_shot(worker_ref);
 };
 
 template <typename t_type>
@@ -237,8 +231,8 @@ public:
             return wait_.complete_or_publish("one-shot supports one pending receiver");
         }
 
-        bool await_suspend(std::coroutine_handle<> handle) {
-            return wait_.suspend(handle);
+        bool await_suspend(std::coroutine_handle<> continuation) {
+            return wait_.suspend(continuation);
         }
 
         [[nodiscard]] worker_wait_result<t_type> await_resume() {
@@ -272,13 +266,13 @@ public:
     // The worker every wait must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
     // receiver has no bound worker and cannot answer this query.
-    [[nodiscard]] const worker_handle& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept {
         if (!state_) {
             std::terminate();
         }
         return state_->worker_;
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     // Closing discards an unconsumed value before returning and closes every
     // future wait. Its destruction may reenter this receiver or its completion.
@@ -308,16 +302,15 @@ private:
         : state_(std::move(state_value)) {}
     std::shared_ptr<detail::one_shot_state<t_type>> state_;
     template <typename u_type>
-    friend auto make_one_shot(worker_handle, one_shot_options);
+    friend auto make_one_shot(worker_ref);
 };
 
 template <typename t_type>
-// The value parameter accepts both lvalue handles and rvalue handles before
+// The value parameter accepts both lvalue and rvalue worker refs before
 // transferring the stable dispatcher endpoint into the one-shot state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
-[[nodiscard]] auto make_one_shot(worker_handle worker_value, one_shot_options options = {}) {
-    auto state_value = make_worker_wait_state<detail::one_shot_state<t_type>>(
-        pmr_resource_or_default(options.resource_), std::move(worker_value));
+[[nodiscard]] auto make_one_shot(worker_ref worker_value) {
+    auto state_value = make_worker_wait_state<detail::one_shot_state<t_type>>(std::move(worker_value));
     one_shot_completion<t_type> completion(state_value);
     return std::pair(std::move(completion), one_shot_receiver<t_type>(std::move(state_value)));
 }

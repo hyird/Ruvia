@@ -5,7 +5,6 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "client/http_client_pool.h"
@@ -49,24 +48,24 @@ constexpr std::size_t connection_read_buffer_retained_bytes = std::size_t{16} * 
 http_client_connection::http_client_connection(http_client_pool& pool, std::size_t index, std::uint64_t serial,
     std::string_view dial_host, std::uint16_t dial_port, std::string_view server_name, bool alias_route,
     client_alpn alpn)
-    : dial_host_(dial_host, process_resource()),
-      server_name_(server_name, process_resource()),
+    : dial_host_(dial_host),
+      server_name_(server_name),
       transport_(pool.io_context(), pool.tls_context(), pool.worker(),
           http_client_endpoint(pool, dial_host_, dial_port, server_name_, alpn), pool.wire_counters()),
-      read_buffer_(process_resource()),
-      write_buffer_(process_resource()),
+      read_buffer_(),
+      write_buffer_(),
 #ifdef RUVIA_ENABLE_HTTP2
       http2_(*this, transport_, pool.tasks(), pool.worker(), pool.config().http2_ping_interval_),
 #endif
-      connect_scheduler_(1, pool.worker(), process_resource()),
-      http1_scheduler_(1, pool.worker(), process_resource()),
+      connect_scheduler_(1, pool.worker()),
+      http1_scheduler_(1, pool.worker()),
       alpn_(alpn),
       pool_(pool),
       index_(index),
       serial_(serial),
       alias_route_(alias_route),
 #ifdef RUVIA_ENABLE_HTTP2
-      http2_streams_(process_resource()),
+      http2_streams_(),
 #endif
       idle_watch_signal_(pool.worker()) {
 }

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -13,7 +12,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_entity.h"
@@ -39,8 +37,8 @@ enum class db_migration_atomicity : std::uint8_t {
 };
 
 struct db_migration_options final {
-    std::pmr::string id_{process_resource()};
-    std::pmr::string sql_{process_resource()};
+    std::string id_{};
+    std::string sql_{};
     db_migration_atomicity atomicity_{db_migration_atomicity::transactional};
 };
 
@@ -62,13 +60,13 @@ struct db_migration_options final {
 class db_migration final {
 public:
     explicit db_migration(db_migration_options options)
-        : id_(std::move(options.id_), process_resource()),
-          sql_(std::move(options.sql_), process_resource()),
+        : id_(std::move(options.id_)),
+          sql_(std::move(options.sql_)),
           atomicity_(options.atomicity_) {}
 
     db_migration(const db_migration& other)
-        : id_(other.id_, other.id_.get_allocator()),
-          sql_(other.sql_, other.sql_.get_allocator()),
+        : id_(other.id_),
+          sql_(other.sql_),
           atomicity_(other.atomicity_) {}
     db_migration(db_migration&&) = default;
     db_migration& operator=(const db_migration&) = default;
@@ -89,8 +87,8 @@ public:
     }
 
 private:
-    std::pmr::string id_;
-    std::pmr::string sql_;
+    std::string id_;
+    std::string sql_;
     db_migration_atomicity atomicity_;
 };
 
@@ -99,7 +97,6 @@ struct db_migrator_options final {
     // Positive lock wait; integer counts mean milliseconds. MariaDB rounds up
     // to whole seconds; PostgreSQL rejects values beyond its int32 millisecond range.
     timeout_duration lock_timeout_{std::chrono::seconds(30)};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 class db_migration_report final {
@@ -109,21 +106,20 @@ public:
     db_migration_report(db_migration_report&&) noexcept = default;
     db_migration_report& operator=(db_migration_report&& other);
 
-    [[nodiscard]] std::span<const std::pmr::string> applied() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::span<const std::pmr::string> applied() const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::span<const std::pmr::string> skipped() const&& = delete;
+    [[nodiscard]] std::span<const std::string> applied() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::string> applied() const&& = delete;
+    [[nodiscard]] std::span<const std::string> skipped() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::string> skipped() const&& = delete;
     [[nodiscard]] bool changed() const noexcept;
 
 private:
     friend class db_migrator;
     friend class detail::db_migration_runner;
 
-    explicit db_migration_report(std::pmr::memory_resource* resource);
-    db_migration_report(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    db_migration_report() noexcept;
 
-    std::pmr::vector<std::pmr::string> applied_;
-    std::pmr::vector<std::pmr::string> skipped_;
+    std::vector<std::string> applied_;
+    std::vector<std::string> skipped_;
 };
 
 // Applies pending migrations on the caller's event loop, holding a backend lock
@@ -176,7 +172,6 @@ public:
 private:
     class storage_type;
     struct storage_deleter_type final {
-        std::pmr::memory_resource* resource_{nullptr};
         void operator()(storage_type* storage) const noexcept;
     };
     using storage_owner_type = std::unique_ptr<storage_type, storage_deleter_type>;
@@ -216,7 +211,7 @@ struct db_variable_definition final {
 // unchanged, so allocation failures may be caught and the operation retried.
 class db_procedure final {
 public:
-    explicit db_procedure(std::pmr::memory_resource* resource = nullptr);
+    db_procedure() noexcept;
     db_procedure(const db_procedure&) = delete;
     db_procedure& operator=(const db_procedure&) = delete;
     db_procedure(db_procedure&&) noexcept = default;
@@ -247,7 +242,7 @@ public:
     void lock_table(std::string_view table, db_table_lock_mode mode = db_table_lock_mode::access_exclusive, bool nowait = false);
     void return_value(db_expression expression = {});
     void raise_exception(std::string_view message, std::string_view sql_state = "P0001");
-    [[nodiscard]] std::pmr::string body(std::pmr::memory_resource* resource = nullptr) const;
+    [[nodiscard]] std::string body() const;
 
 private:
     enum class block_type : std::uint8_t { if_value,
@@ -258,12 +253,11 @@ private:
     // Declarations publish the name only after their text is appended, so a
     // failed declaration leaves no variable behind.
     void require_unique_variable(std::string_view name) const;
-    void append_expression(std::pmr::string& output, db_expression value) const;
-    std::pmr::memory_resource* resource_;
-    std::pmr::string declarations_;
-    std::pmr::string statements_;
-    std::pmr::vector<std::pmr::string> variables_;
-    std::pmr::vector<block_type> blocks_;
+    void append_expression(std::string& output, db_expression value) const;
+    std::string declarations_;
+    std::string statements_;
+    std::vector<std::string> variables_;
+    std::vector<block_type> blocks_;
 };
 
 }  // namespace ruvia
@@ -311,7 +305,7 @@ struct db_function_parameter final {
 
 struct db_function_definition final {
     borrowed_text name_{};
-    std::pmr::vector<db_function_parameter> parameters_{process_resource()};
+    std::vector<db_function_parameter> parameters_{};
     db_type_definition return_type_{};
     bool returns_set_{false};
     db_function_language language_{db_function_language::plpgsql};
@@ -326,13 +320,13 @@ struct db_trigger_definition final {
     borrowed_text table_{};
     borrowed_text function_{};
     db_trigger_timing timing_{db_trigger_timing::before};
-    std::pmr::vector<db_trigger_event> events_{process_resource()};
+    std::vector<db_trigger_event> events_{};
     bool for_each_row_{true};
-    std::pmr::vector<borrowed_text> update_columns_{process_resource()};
+    std::vector<borrowed_text> update_columns_{};
     borrowed_text old_table_{};
     borrowed_text new_table_{};
     db_expression when_{};
-    std::pmr::vector<borrowed_text> arguments_{process_resource()};
+    std::vector<borrowed_text> arguments_{};
 };
 
 struct db_schema_column final {
@@ -350,9 +344,9 @@ struct db_schema_column final {
 struct db_schema_constraint final {
     borrowed_text name_{};
     db_constraint_kind kind_{db_constraint_kind::check};
-    std::pmr::vector<borrowed_text> columns_{process_resource()};
+    std::vector<borrowed_text> columns_{};
     borrowed_text referenced_table_{};
-    std::pmr::vector<borrowed_text> referenced_columns_{process_resource()};
+    std::vector<borrowed_text> referenced_columns_{};
     db_referential_action on_delete_{db_referential_action::no_action};
     db_referential_action on_update_{db_referential_action::no_action};
     bool deferrable_{false};
@@ -363,8 +357,8 @@ struct db_schema_constraint final {
 
 struct db_table_definition final {
     borrowed_text name_{};
-    std::pmr::vector<db_schema_column> columns_{process_resource()};
-    std::pmr::vector<db_schema_constraint> constraints_{process_resource()};
+    std::vector<db_schema_column> columns_{};
+    std::vector<db_schema_constraint> constraints_{};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -381,18 +375,17 @@ struct db_index_key final {
 struct db_index_definition final {
     borrowed_text name_{};
     borrowed_text table_{};
-    std::pmr::vector<db_index_key> keys_{process_resource()};
+    std::vector<db_index_key> keys_{};
     bool unique_{false};
     bool if_not_exists_{false};
     bool concurrently_{false};
     db_index_method method_{db_index_method::btree};
-    std::pmr::vector<borrowed_text> include_{process_resource()};
+    std::vector<borrowed_text> include_{};
     db_expression where_{};
 };
 
 struct db_schema_options final {
     db_driver driver_{db_driver::unspecified};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 struct db_column_default final {
@@ -404,9 +397,9 @@ struct db_column_generated final {
     db_expression expression_{};
 };
 struct db_entity_table_options final {
-    std::pmr::vector<db_column_default> defaults_{process_resource()};
-    std::pmr::vector<db_column_generated> generated_columns_{process_resource()};
-    std::pmr::vector<db_schema_constraint> constraints_{process_resource()};
+    std::vector<db_column_default> defaults_{};
+    std::vector<db_column_generated> generated_columns_{};
+    std::vector<db_schema_constraint> constraints_{};
     bool if_not_exists_{false};
     bool temporary_{false};
     bool unlogged_{false};
@@ -430,8 +423,8 @@ struct db_compression_order final {
 };
 struct db_compression_options final {
     bool enabled_{true};
-    std::pmr::vector<borrowed_text> segment_by_{process_resource()};
-    std::pmr::vector<db_compression_order> order_by_{process_resource()};
+    std::vector<borrowed_text> segment_by_{};
+    std::vector<db_compression_order> order_by_{};
 };
 
 // Explicit, versioned schema changes. Each operation consumes its borrowed
@@ -498,7 +491,7 @@ public:
     // PostgreSQL batches are one atomic DO statement. A nontransactional
     // operation must be the batch's only operation. MariaDB DDL has implicit
     // commits, so each generated statement receives a stable numbered id.
-    [[nodiscard]] std::pmr::vector<db_migration> compile(std::string_view id) const;
+    [[nodiscard]] std::vector<db_migration> compile(std::string_view id) const;
     [[nodiscard]] db_driver driver() const noexcept {
         return driver_;
     }
@@ -506,23 +499,23 @@ public:
 private:
     friend class db_procedure;
     struct statement_type final {
-        std::pmr::string sql_;
+        std::string sql_;
         db_migration_atomicity atomicity_{db_migration_atomicity::transactional};
         bool procedural_{false};
     };
-    void append(std::pmr::string sql, db_migration_atomicity atomicity = db_migration_atomicity::transactional, bool procedural = false);
+    void append(std::string sql, db_migration_atomicity atomicity = db_migration_atomicity::transactional, bool procedural = false);
     void require_postgresql() const;
-    void append_type(std::pmr::string& sql, const db_type_definition& type) const;
-    void append_column(std::pmr::string& sql, const db_schema_column& column) const;
-    void append_constraint(std::pmr::string& sql, const db_schema_constraint& constraint) const;
-    void append_expression(std::pmr::string& sql, db_expression expression) const;
-    void append_drop_behavior(std::pmr::string& sql, db_drop_behavior behavior) const;
-    [[nodiscard]] std::pmr::string constraint_name(std::string_view table, std::string_view relation, std::string_view suffix) const;
+    void append_type(std::string& sql, const db_type_definition& type) const;
+    void append_column(std::string& sql, const db_schema_column& column) const;
+    void append_constraint(std::string& sql, const db_schema_constraint& constraint) const;
+    void append_expression(std::string& sql, db_expression expression) const;
+    void append_drop_behavior(std::string& sql, db_drop_behavior behavior) const;
+    [[nodiscard]] std::string constraint_name(std::string_view table, std::string_view relation, std::string_view suffix) const;
     template <typename column_type>
     static db_type_definition entity_column_type() {
         db_type_definition type{.data_type_ = column_type::data_type, .length_ = column_type::options.length_, .precision_ = column_type::options.precision_, .scale_ = column_type::options.scale_};
-        if constexpr (detail::is_pmr_vector<typename column_type::value_type>::value) {
-            using item_type = typename detail::is_pmr_vector<typename column_type::value_type>::value_type;
+        if constexpr (detail::is_std_vector<typename column_type::value_type>::value) {
+            using item_type = typename detail::is_std_vector<typename column_type::value_type>::value_type;
             if constexpr (column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array) {
                 type.data_type_ = detail::db_entity_type_traits<item_type>::data_type;
             }
@@ -536,18 +529,17 @@ private:
     }
 
     db_driver driver_;
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<statement_type> statements_;
+    std::vector<statement_type> statements_;
 };
 
 template <typename entity_type>
 void db_schema::create_table(const db_entity_table_options& options) {
-    db_table_definition table_value{.name_ = entity_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(resource_), .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
+    db_table_definition table_value{.name_ = entity_type::table_name(), .columns_ = std::vector<db_schema_column>{}, .constraints_ = std::vector<db_schema_constraint>{}, .if_not_exists_ = options.if_not_exists_, .temporary_ = options.temporary_, .unlogged_ = options.unlogged_};
     table_value.columns_.reserve(std::tuple_size_v<typename entity_type::columns_type>);
     table_value.constraints_.reserve(options.constraints_.size() + 1U + std::tuple_size_v<typename entity_type::relations_type> * 2U);
     table_value.constraints_.assign(options.constraints_.begin(), options.constraints_.end());
-    db_query defaults(resource_);
-    std::pmr::vector<borrowed_text> primary(resource_);
+    db_query defaults;
+    std::vector<borrowed_text> primary;
     primary.reserve(detail::db_primary_key_count<entity_type>());
     detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
         db_schema_column column{.name_ = c_type::name.view(),
@@ -627,11 +619,11 @@ void db_schema::create_table(const db_entity_table_options& options) {
         }
     }
     // Constraints borrow their names, so the reserve keeps these strings in place.
-    std::pmr::vector<std::pmr::string> generated_names(resource_);
+    std::vector<std::string> generated_names;
     generated_names.reserve(1 + std::tuple_size_v<typename entity_type::relations_type> * 2);
     if (!primary.empty()) {
         const auto& pkey_name = generated_names.emplace_back(constraint_name(entity_type::table_name(), {}, "pkey"));
-        table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)});
+        table_value.constraints_.push_back({.name_ = pkey_name, .kind_ = db_constraint_kind::primary_key, .columns_ = std::move(primary), .referenced_columns_ = std::vector<borrowed_text>{}});
     }
     detail::for_each_descriptor<typename entity_type::relations_type>([&]<typename r_type, std::size_t> {
         if constexpr (!r_type::is_collection && r_type::is_owning) {
@@ -639,7 +631,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
             using mapping_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
             const auto& fkey_name = generated_names.emplace_back(constraint_name(entity_type::table_name(), r_type::name.view(), "fkey"));
-            db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .columns_ = std::pmr::vector<borrowed_text>(resource_), .referenced_table_ = target_type::table_name(), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
+            db_schema_constraint fk{.name_ = fkey_name, .kind_ = db_constraint_kind::foreign_key, .columns_ = std::vector<borrowed_text>{}, .referenced_table_ = target_type::table_name(), .referenced_columns_ = std::vector<borrowed_text>{}};
             constexpr std::size_t join_col_count = std::tuple_size_v<typename mapping_type::join_columns_type>;
             fk.columns_.reserve(join_col_count);
             fk.referenced_columns_.reserve(join_col_count);
@@ -647,7 +639,7 @@ void db_schema::create_table(const db_entity_table_options& options) {
             table_value.constraints_.push_back(std::move(fk));
             if constexpr (r_type::kind == db_relation_kind::one_to_one) {
                 const auto& key_name = generated_names.emplace_back(constraint_name(entity_type::table_name(), r_type::name.view(), "key"));
-                table_value.constraints_.push_back({.name_ = key_name, .kind_ = db_constraint_kind::unique, .columns_ = std::pmr::vector<borrowed_text>(table_value.constraints_.back().columns_, resource_), .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)});
+                table_value.constraints_.push_back({.name_ = key_name, .kind_ = db_constraint_kind::unique, .columns_ = table_value.constraints_.back().columns_, .referenced_columns_ = std::vector<borrowed_text>{}});
             }
         }
     });
@@ -661,18 +653,18 @@ void db_schema::create_relation_tables() {
             detail::validate_db_relation<entity_type, r_type>();
             using m_type = detail::db_relation_mapping<entity_type, r_type>;
             using target_type = typename r_type::target_entity_type;
-            db_table_definition table_value{.name_ = m_type::table_name(), .columns_ = std::pmr::vector<db_schema_column>(resource_), .constraints_ = std::pmr::vector<db_schema_constraint>(resource_)};
+            db_table_definition table_value{.name_ = m_type::table_name(), .columns_ = std::vector<db_schema_column>{}, .constraints_ = std::vector<db_schema_constraint>{}};
             table_value.columns_.reserve(std::tuple_size_v<typename m_type::source_columns_type> + std::tuple_size_v<typename m_type::target_columns_type>);
             table_value.constraints_.reserve(3U);
             const auto owner_fk_name = constraint_name(m_type::table_name(), {}, "owner_fkey");
             const auto inverse_fk_name = constraint_name(m_type::table_name(), {}, "inverse_fkey");
             const auto pkey_name = constraint_name(m_type::table_name(), {}, "pkey");
-            const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(const std::pmr::string& fk_name) {
+            const auto add_side = [&]<typename referenced_entity_type, typename columns_type>(const std::string& fk_name) {
                 db_schema_constraint fk{.name_ = fk_name,
                     .kind_ = db_constraint_kind::foreign_key,
-                    .columns_ = std::pmr::vector<borrowed_text>(resource_),
+                    .columns_ = std::vector<borrowed_text>{},
                     .referenced_table_ = referenced_entity_type::table_name(),
-                    .referenced_columns_ = std::pmr::vector<borrowed_text>(resource_)};
+                    .referenced_columns_ = std::vector<borrowed_text>{}};
                 constexpr std::size_t side_count = std::tuple_size_v<columns_type>;
                 fk.columns_.reserve(side_count);
                 fk.referenced_columns_.reserve(side_count);
@@ -686,7 +678,7 @@ void db_schema::create_relation_tables() {
             };
             add_side.template operator()<entity_type, typename m_type::source_columns_type>(owner_fk_name);
             add_side.template operator()<target_type, typename m_type::target_columns_type>(inverse_fk_name);
-            std::pmr::vector<borrowed_text> primary(resource_);
+            std::vector<borrowed_text> primary;
             primary.reserve(table_value.columns_.size());
             for (const auto& column : table_value.columns_) {
                 primary.push_back(column.name_);

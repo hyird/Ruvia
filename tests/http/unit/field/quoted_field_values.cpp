@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -36,7 +35,7 @@ TEST(Ruvia, public_quoted_field_visitors_preserve_quoted_delimiters) {
 }
 
 TEST(Ruvia, public_quoted_string_cursor_validates_and_decodes) {
-    std::pmr::string decoded;
+    std::string decoded;
     ruvia::http_quoted_string_cursor cursor(R"("a\"b\\c";rest)");
     unsigned char byte = 0;
     while (cursor.next(byte)) {
@@ -92,16 +91,16 @@ TEST(Ruvia, accept_quality_quoted_comma_does_not_split_item) {
 static_assert(std::is_constructible_v<ruvia::http_quoted_string_cursor, const std::string&>);
 static_assert(std::is_constructible_v<ruvia::http_quoted_string_cursor, std::string_view>);
 static_assert(!std::is_constructible_v<ruvia::http_quoted_string_cursor, std::string>);
-static_assert(!std::is_constructible_v<ruvia::http_quoted_string_cursor, std::pmr::string>);
+static_assert(!std::is_constructible_v<ruvia::http_quoted_string_cursor, std::string>);
 
 TEST(Ruvia, quoted_field_members_keep_escaped_quotes_delimiters_and_empty_items) {
     constexpr std::string_view input = R"( first , "second,\"still quoted",, last, )";
-    std::pmr::vector<std::string_view> items;
+    std::vector<std::string_view> items;
     ruvia::http_visit_comma_separated_quoted_field_items(input, [&](std::string_view item) {
         items.push_back(item);
         return true;
     });
-    EXPECT_EQ(items, (std::pmr::vector<std::string_view>{"first", R"("second,\"still quoted")", "", "last", ""}));
+    EXPECT_EQ(items, (std::vector<std::string_view>{"first", R"("second,\"still quoted")", "", "last", ""}));
     EXPECT_EQ(items.front().data(), input.data() + 1);
     int empty_visits{};
     ruvia::http_visit_comma_separated_quoted_field_items({}, [&](std::string_view item) {
@@ -114,26 +113,26 @@ TEST(Ruvia, quoted_field_members_keep_escaped_quotes_delimiters_and_empty_items)
 
 TEST(Ruvia, quoted_field_parameters_preserve_quotes_and_skip_non_parameters) {
     constexpr std::string_view input = R"( text/plain ; name = "a;\"still quoted" ; ignored ; empty= ;=value; )";
-    std::pmr::vector<std::pair<std::string_view, std::string_view>> parameters;
+    std::vector<std::pair<std::string_view, std::string_view>> parameters;
     ruvia::http_visit_semicolon_parameters_quoted_field(input, [&](std::string_view name, std::string_view value) {
         parameters.emplace_back(name, value);
         return true;
     });
-    EXPECT_EQ(parameters, (std::pmr::vector<std::pair<std::string_view, std::string_view>>{
+    EXPECT_EQ(parameters, (std::vector<std::pair<std::string_view, std::string_view>>{
                               {"name", R"("a;\"still quoted")"}, {"empty", ""}, {"", "value"}}));
 }
 
 TEST(Ruvia, quoted_field_visitors_stop_without_visiting_remaining_segments) {
-    std::pmr::vector<std::string_view> members;
+    std::vector<std::string_view> members;
     ruvia::http_visit_comma_separated_quoted_field_items("first,second,third", [&](std::string_view item) {
         members.push_back(item);
         return members.size() != 2;
     });
-    EXPECT_EQ(members, (std::pmr::vector<std::string_view>{"first", "second"}));
-    std::pmr::vector<std::string_view> names;
+    EXPECT_EQ(members, (std::vector<std::string_view>{"first", "second"}));
+    std::vector<std::string_view> names;
     ruvia::http_visit_semicolon_parameters_quoted_field("ignored;a=1;b=2;c=3", [&](std::string_view name, std::string_view) {
         names.push_back(name);
         return false;
     });
-    EXPECT_EQ(names, (std::pmr::vector<std::string_view>{"a"}));
+    EXPECT_EQ(names, (std::vector<std::string_view>{"a"}));
 }

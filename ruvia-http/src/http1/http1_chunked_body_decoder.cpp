@@ -4,10 +4,10 @@
 #include <limits>
 #include <optional>
 #include <stdexcept>
+#include <string>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_hex.h"
@@ -234,12 +234,11 @@ http1_chunk_decode_result http1_chunk_decode_result::make_failure(
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder_config config)
     : body_limit_(config.body_limit_),
       obs_fold_(config.obs_fold_),
-      trailer_message_(config.trailer_message_),
-      trailers_(detail::http_pmr_resource_or_default(config.resource_)) {}
+      trailer_message_(config.trailer_message_) {}
 
 http1_chunked_body_decoder::~http1_chunked_body_decoder() = default;
 http1_chunked_body_decoder::http1_chunked_body_decoder(http1_chunked_body_decoder&&) noexcept = default;
-http1_chunked_body_decoder& http1_chunked_body_decoder::operator=(http1_chunked_body_decoder&&) = default;
+http1_chunked_body_decoder& http1_chunked_body_decoder::operator=(http1_chunked_body_decoder&&) noexcept = default;
 
 http1_chunk_decode_result http1_chunked_body_decoder::decode(std::string_view available) {
     return decode(available, std::numeric_limits<std::size_t>::max());
@@ -384,20 +383,19 @@ bool http1_chunked_body_decoder::publish_trailers(std::string_view trailers) {
         return message == http1_trailer_message::request ? detail::is_forbidden_http_request_trailer_name(name)
                                                          : detail::is_forbidden_response_trailer_name(name);
     };
-    auto* const resource = trailers_.get_allocator().resource();
-    const auto publish = [this, &discarded, resource](std::string_view name, std::string_view value) {
+    const auto publish = [this, &discarded](std::string_view name, std::string_view value) {
         if (discarded(name)) {
             return;
         }
         // RFC 9112 section 5.2: each accepted obs-fold becomes SP before the
         // value is interpreted.
         if (const auto fold = detail::find_field_line_fold(value); fold != std::string_view::npos) {
-            std::pmr::string unfolded(resource);
+            std::string unfolded;
             detail::copy_unfolded_field_lines(value, fold, detail::field_line_folding_policy::http, unfolded);
-            trailers_.push_back(http_header::copy_with_lowercase_name(name, unfolded, resource));
+            trailers_.push_back(http_header::copy_with_lowercase_name(name, unfolded));
             return;
         }
-        trailers_.push_back(http_header::copy_with_lowercase_name(name, value, resource));
+        trailers_.push_back(http_header::copy_with_lowercase_name(name, value));
     };
     bool valid = false;
     try {

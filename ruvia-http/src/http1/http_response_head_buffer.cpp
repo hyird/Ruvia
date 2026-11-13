@@ -7,16 +7,15 @@
 #include <utility>
 #include <variant>
 
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_pmr_string.h"
 
-#include "util/http_address_overlap.h"
+#include "memory/http_address_overlap.h"
 
 namespace ruvia {
 
 http_response_head_buffer::http_response_head_buffer(const http_response_head_buffer& other)
-    : heap_(other.heap_, other.heap_.get_allocator()) {
-    copy_committed_state(other);
+    : heap_(other.heap_) {
 }
 
 http_response_head_buffer::http_response_head_buffer(http_response_head_buffer&& other) noexcept
@@ -28,7 +27,7 @@ http_response_head_buffer& http_response_head_buffer::operator=(const http_respo
     if (this != &other) {
         if (other.heap_.size() > heap_.capacity()) {
             // Retire the old allocation only after the complete state is published.
-            std::pmr::string prepared(other.heap_, heap_.get_allocator());
+            std::string prepared(other.heap_);
             heap_.swap(prepared);
             copy_committed_state(other);
             return *this;
@@ -39,20 +38,10 @@ http_response_head_buffer& http_response_head_buffer::operator=(const http_respo
     return *this;
 }
 
-http_response_head_buffer& http_response_head_buffer::operator=(http_response_head_buffer&& other) {
+http_response_head_buffer& http_response_head_buffer::operator=(
+    http_response_head_buffer&& other) noexcept {
     if (this != &other) {
-        if (heap_.get_allocator() == other.heap_.get_allocator()) {
-            heap_ = std::move(other.heap_);
-        } else if (other.heap_.size() > heap_.capacity()) {
-            std::pmr::string prepared(other.heap_, heap_.get_allocator());
-            heap_.swap(prepared);
-            other.heap_.clear();
-            copy_committed_state(other);
-            return *this;
-        } else {
-            heap_ = other.heap_;
-            other.heap_.clear();
-        }
+        heap_ = std::move(other.heap_);
         copy_committed_state(other);
     }
     return *this;
@@ -69,7 +58,7 @@ void http_response_head_buffer::copy_committed_state(const http_response_head_bu
 void http_response_head_buffer::reset() noexcept {
     // Publish the empty inline state before retiring storage can reenter this buffer.
     state_.emplace<stack_state_type>();
-    http_clear_pmr_string_retaining_small(heap_, response_head_retained_heap_bytes);
+    http_clear_string_retaining_small(heap_, response_head_retained_heap_bytes);
 }
 
 void http_response_head_buffer::spill_to_heap(std::size_t min_capacity) {
@@ -99,7 +88,7 @@ void http_response_head_buffer::append(std::string_view value) {
         throw std::length_error("HTTP response head is too large");
     }
     if (detail::http_text_aliases_string(value, heap_)) {
-        std::pmr::string copy(value, heap_.get_allocator());
+        std::string copy(value);
         heap_.append(copy);
         return;
     }

@@ -23,7 +23,7 @@ public:
     }
 
 private:
-    // Borrows the dispatcher kept alive by the awaiter's stable worker_handle.
+    // Borrows the dispatcher kept alive by the awaiter's stable worker_ref.
     // Stop callback teardown synchronizes the borrow; cancellation dispatch owns
     // any continuation it posts.
     worker_timer_cancellation(
@@ -46,7 +46,7 @@ enum class worker_timer_outcome : std::uint8_t {
     cancelled,
 };
 
-// Result of worker_handle::schedule_timer(). Shutdown is a normal state, not a
+// Result of worker_ref::schedule_timer(). Shutdown is a normal state, not a
 // failure: once the worker's timer queue has stopped, scheduling returns
 // worker_stopping, stores nothing, never invokes the completion, and leaves the
 // registration unbound. That is the same terminal point a pending timer reaches
@@ -96,7 +96,7 @@ private:
     void release() noexcept;
     [[nodiscard]] bool pending() const noexcept;
 
-    // The handle supplied to schedule_timer() must outlive this registration.
+    // The worker_ref supplied to schedule_timer() must outlive this registration.
     // Destruction only removes it; it never queues a callback referencing the
     // destroyed owner.
     detail::worker_dispatcher* dispatcher_{nullptr};

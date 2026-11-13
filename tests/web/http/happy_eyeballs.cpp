@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -22,7 +21,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/http_client.h"
@@ -71,14 +69,14 @@ void open_acceptor(tcp::acceptor& acceptor, bool v6) {
 // while the first attempt remains unresolved or refused.
 class opposite_family_peer final {
 public:
-    opposite_family_peer(asio::io_context& io, const ruvia::worker_handle& worker, bool first_is_v6)
+    opposite_family_peer(asio::io_context& io, const ruvia::worker_ref& worker, bool first_is_v6)
         : io_(io),
           listening_(io),
           unavailable_(io),
           socket_(io),
           done_(worker) {
         const bool listening_is_v6 = !first_is_v6;
-        std::pmr::vector<tcp::acceptor> skipped{ruvia::process_resource()};
+        std::vector<tcp::acceptor> skipped{};
         for (std::size_t attempt = 0;; ++attempt) {
             open_acceptor(listening_, listening_is_v6);
             listening_.bind(loopback_endpoint(listening_is_v6, 0));
@@ -154,8 +152,8 @@ private:
 [[nodiscard]] ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
     opposite_family_peer& peer, std::string_view host,
     std::chrono::milliseconds connect_timeout) {
-    const std::pmr::string authority = host.find(':') == std::string_view::npos ? std::pmr::string(host, ruvia::process_resource()) : "[" + std::pmr::string(host, ruvia::process_resource()) + "]";
-    const std::pmr::string base_url = std::pmr::string("http://", ruvia::process_resource()) + authority + std::move(std::pmr::string(":", ruvia::process_resource()).append(std::to_string(peer.port())));
+    const std::string authority = host.find(':') == std::string_view::npos ? std::string(host) : "[" + std::string(host) + "]";
+    const std::string base_url = std::string("http://") + authority + std::move(std::string(":").append(std::to_string(peer.port())));
     ruvia::http_client client(attachment.loop(),
         {.base_url_ = base_url,
             .connect_timeout_ = connect_timeout,
@@ -204,7 +202,7 @@ TEST(Ruvia, http_client_fast_address_failure_immediately_starts_the_next_family)
     ruvia::blocking_pool lookups({.thread_count_ = 1});
     auto attachment = ruvia::attach_event_loop(io, {.blocking_pool_ = &lookups});
     auto loop = attachment.loop();
-    auto worker = loop.handle();
+    auto worker = loop.worker();
     opposite_family_peer peer(io, worker, *first_is_v6);
     peer.start();
     // Windows can leave a connect to a bound, non-listening socket pending
@@ -229,7 +227,7 @@ TEST(Ruvia, http_client_connects_to_an_ipv6_literal) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     auto loop = attachment.loop();
-    auto worker = loop.handle();
+    auto worker = loop.worker();
     opposite_family_peer peer(io, worker, false);
     peer.start();
     auto root = loop.start(exercise(attachment, peer, "::1", 3s));

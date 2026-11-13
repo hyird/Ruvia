@@ -4,7 +4,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -57,7 +56,7 @@ enum class url_decode_mode : std::uint8_t { percent,
 
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
 // policy deciding which bytes need escaping. Failure leaves output unchanged.
-inline void http_append_percent_byte(std::pmr::string& output, unsigned char byte) {
+inline void http_append_percent_byte(std::string& output, unsigned char byte) {
     const char triplet[]{'%', http_upper_hex_digit(byte >> 4), http_upper_hex_digit(byte)};
     output.append(triplet, sizeof(triplet));
 }
@@ -76,7 +75,7 @@ inline void http_append_percent_byte(std::pmr::string& output, unsigned char byt
 // `reference` may alias `storage`. Keep the input owner alive until the result
 // is consumed; owning-string temporaries are rejected even when their particular
 // contents would require transformation.
-[[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::pmr::string& storage);
+[[nodiscard]] std::string_view percent_encode_uri_reference(borrowed_text reference, std::string& storage);
 
 namespace detail {
 template <typename visitor_type>
@@ -117,7 +116,7 @@ template <typename visitor_type>
 // may alias `storage`. Keep its owner alive until the result is consumed;
 // owning-string temporaries are rejected regardless of their contents.
 [[nodiscard]] std::optional<std::string_view> decode_url_component(
-    borrowed_text text, std::pmr::string& storage, url_decode_mode mode = url_decode_mode::percent);
+    borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
 
 // Origin-form path identity, the one canonical form shared by route matching,
 // path-scoped middleware and fallbacks, and decoded route parameters. A path

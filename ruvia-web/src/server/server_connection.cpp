@@ -1,7 +1,6 @@
 #include "ruvia/web/server_connection.h"
 
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -9,17 +8,15 @@
 #include <utility>
 
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 
 #include "http/tls_tunnel_output.h"
-#include "server/inbound_buffer_resource.h"
+#include "integration/operation_lane_lease.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/peer_address.h"
 #include "server/server_connection_session.h"
 #include "server/server_tls_stream.h"
 #include "server/worker_connections.h"
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
 
 namespace ruvia {
 namespace {
@@ -34,7 +31,7 @@ task<std::optional<std::span<const std::byte>>> read_connection(void* target,
 }
 
 task<void> write_connection(void* target, task<void> (*write)(void*, std::string_view, operation_options),
-    std::pmr::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
+    std::string bytes, bool& write_active, const bool& send_ended, operation_options operation) {
     auto lease = detail::claim_operation_lane(write_active, connection_lane_in_progress);
     if (send_ended) {
         throw std::logic_error("server connection send direction has ended");
@@ -54,7 +51,7 @@ task<void> finish_connection(void* target, task<void> (*finish_value)(void*, ope
 }  // namespace
 
 server_connection::server_connection(const detail::server_connection_fields& fields,
-    const ::ruvia::stop_token& stop_token_value, const worker_handle& worker_value, void* target, read_type read,
+    const ::ruvia::stop_token& stop_token_value, const worker_ref& worker_value, void* target, read_type read,
     write_type write, finish_type finish_value, abort_type abort_value) noexcept
     : worker_(worker_value),
       target_(target),
@@ -95,21 +92,20 @@ task<void> server_connection::write(std::string_view bytes, operation_options op
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    return write_owned(std::pmr::string(bytes, process_resource()), std::move(operation));
+    return write_owned(std::string(bytes), std::move(operation));
 }
 
 task<void> server_connection::write(std::span<const std::byte> bytes, operation_options operation) & {
     return write(as_chars(bytes), std::move(operation));
 }
 
-task<void> server_connection::write_owned(std::pmr::string&& bytes, operation_options operation) {
+task<void> server_connection::write_owned(std::string&& bytes, operation_options operation) {
     require_active();
     if (send_ended_) {
         throw std::logic_error("server connection send direction has ended");
     }
-    auto owned = detail::rebind_owned_storage(bytes, process_resource());
-    return ::ruvia::make_scoped_operation(operations_,
-        write_connection(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
+    auto owned = std::move(bytes);
+    return ::ruvia::make_scoped_operation(operations_, write_connection(target_, write_, std::move(owned), write_active_, send_ended_, std::move(operation)));
 }
 
 task<void> server_connection::finish(operation_options operation) & {
@@ -142,7 +138,7 @@ task<void> worker_connections::serve_connection(
     if (!http_server_worker_running(state_) || !socket.is_open()) {
         co_return;
     }
-    std::pmr::string local_address(process_resource());
+    std::string local_address;
     std::error_code local_error;
     if (const auto local = socket.local_endpoint(local_error); !local_error) {
         assign_peer_address(local_address, local.address());
@@ -152,11 +148,11 @@ task<void> worker_connections::serve_connection(
     connection_scanner::entry scanner_entry;
     scanner_entry.bind_lifecycle(fields.lifecycle_);
     connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
-    inbound_buffer_resource connection_buffers(
+    inbound_buffer_account connection_buffers(
         *options_.inbound_budget_, options_.server_.max_inbound_buffer_bytes_per_connection_);
     std::optional<tls_tunnel_output> tls_output;
     if constexpr (requires { stream.next_layer(); }) {
-        tls_output.emplace(*stream.native_handle(), socket, worker_, *process_resource(), fields.lifecycle_);
+        tls_output.emplace(*stream.native_handle(), socket, worker_, fields.lifecycle_);
         tls_output->start();
     }
     std::exception_ptr failure;

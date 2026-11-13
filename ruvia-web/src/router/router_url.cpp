@@ -35,7 +35,7 @@ namespace {
     return size;
 }
 
-void append_url_for_value(std::pmr::string& output, std::string_view value, bool keep_slashes) {
+void append_url_for_value(std::string& output, std::string_view value, bool keep_slashes) {
     while (!value.empty()) {
         const auto escaped = std::ranges::find_if_not(value, [keep_slashes](char byte) noexcept {
             return is_url_for_segment_byte(byte) || (keep_slashes && byte == '/');
@@ -73,8 +73,8 @@ void append_url_for_value(std::pmr::string& output, std::string_view value, bool
 
 }  // namespace
 
-std::pmr::string detail::route_table::url_for(std::string_view pattern,
-    std::span<const std::string_view> values, std::pmr::memory_resource* resource) const {
+std::string detail::route_table::url_for(std::string_view pattern,
+    std::span<const std::string_view> values) const {
     if (!std::ranges::binary_search(plan_->url_patterns_, pattern)) {
         throw std::invalid_argument("url_for pattern is not a registered route");
     }
@@ -132,8 +132,7 @@ std::pmr::string detail::route_table::url_for(std::string_view pattern,
         throw std::invalid_argument("url_for received more values than the pattern has parameters");
     }
 
-    auto* const target_resource = pmr_resource_or_default(resource);
-    std::pmr::string url(target_resource);
+    std::string url;
     if (estimated_size > 15U) {
         url.reserve(estimated_size);
     }

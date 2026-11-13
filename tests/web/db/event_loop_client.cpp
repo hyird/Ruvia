@@ -8,7 +8,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
 
@@ -123,7 +123,7 @@ TEST(Ruvia, db_client_cold_connect_can_be_discarded_before_pool_start) {
         (void)cold;
     }
     pool.join();
-    EXPECT_TRUE(!pool.loop(0).handle().accepting());
+    EXPECT_TRUE(!pool.loop(0).worker().accepting());
 }
 
 TEST(Ruvia, db_client_event_loop_stop_awaits_retirement_of_pending_authentication) {

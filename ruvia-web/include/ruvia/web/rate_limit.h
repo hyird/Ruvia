@@ -4,12 +4,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/ip_address.h"
@@ -114,12 +112,9 @@ void apply_rate_limit_headers(http_response& response, const rate_limit_decision
 // locks on the decision path.
 class sliding_window_rate_limiter final {
 public:
-    explicit sliding_window_rate_limiter(const rate_limit_config& config,
-        std::pmr::memory_resource* resource = process_resource());
+    explicit sliding_window_rate_limiter(const rate_limit_config& config);
     explicit sliding_window_rate_limiter(
-        std::size_t capacity_per_worker = default_rate_limit_capacity_per_worker,
-        std::pmr::memory_resource* resource = process_resource());
-
+        std::size_t capacity_per_worker = default_rate_limit_capacity_per_worker);
     sliding_window_rate_limiter(const sliding_window_rate_limiter&) = delete;
     sliding_window_rate_limiter& operator=(const sliding_window_rate_limiter&) = delete;
     sliding_window_rate_limiter(sliding_window_rate_limiter&&) noexcept;
@@ -143,7 +138,7 @@ public:
 
 private:
     struct impl_type;
-    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 namespace detail {
 // `declaration` identifies the rule's declaration: stacked rules on one route
@@ -183,7 +178,7 @@ public:
 
     static constexpr bool ruvia_uses_route_rate_limit = true;
 
-    task<void> handle(context& context_value, next& next_value) {
+    task<void> invoke(context& context_value, next& next_value) {
         detail::enforce_route_rate_limit(context_value, this, rule_);
         co_await next_value();
     }

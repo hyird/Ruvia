@@ -2,7 +2,6 @@
 
 #include <ctime>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -21,15 +20,14 @@ using ruvia::http_request;
 
 http_request request(std::string_view method) {
     return ruvia::make_parsed_http_request(
-        method, method == "CONNECT" ? "example.test:443" : "/", {}, {},
-        std::pmr::get_default_resource());
+        method, method == "CONNECT" ? "example.test:443" : "/", {}, {});
 }
 
 void add(http_request& req, std::string_view name, std::string_view value) {
-    std::pmr::vector<http_header_view> fields(req.headers().begin(), req.headers().end());
+    std::vector<http_header_view> fields(req.headers().begin(), req.headers().end());
     fields.emplace_back(name, value);
     req = ruvia::make_parsed_http_request(
-        req.method(), req.target(), fields, req.body_bytes(), std::pmr::get_default_resource());
+        req.method(), req.target(), fields, req.body_bytes());
 }
 
 constexpr ruvia::http_selected_representation_metadata representation{
@@ -91,7 +89,8 @@ TEST(Ruvia, representation_response_plan_resolves_supported_range_outcomes) {
     EXPECT_EQ(unsat.status(), ruvia::http_status::range_not_satisfiable);
 
     const auto empty = ruvia::plan_http_representation_response(partial_req, {}, options);
-    EXPECT_TRUE(empty.full() != nullptr);
+    EXPECT_TRUE(empty.range_unsatisfiable() != nullptr);
+    EXPECT_EQ(empty.status(), ruvia::http_status::range_not_satisfiable);
     const auto disabled = ruvia::plan_http_representation_response(partial_req, representation);
     EXPECT_TRUE(disabled.full() != nullptr);
 
@@ -116,7 +115,7 @@ TEST(Ruvia, representation_response_plan_resolves_supported_range_outcomes) {
 TEST(Ruvia, representation_response_plan_preserves_unsatisfiable_ranges_after_empty_members) {
     const auto options = ruvia::http_representation_response_options{
         .range_policy_ = ruvia::http_range_request_policy::honor_byte_ranges};
-    const auto prefix = std::pmr::string("bytes=") + std::pmr::string(32, ',');
+    const auto prefix = std::string("bytes=") + std::string(32, ',');
     for (const auto tail : {"20-", "20-29", "-0"}) {
         const auto value = prefix + tail;
         auto req = request("GET");
@@ -312,12 +311,12 @@ TEST(Ruvia, representation_response_plan_ignores_repeated_date_conditions) {
                 EXPECT_TRUE(semantic.full() != nullptr);
                 EXPECT_EQ(semantic.status(), ruvia::http_status::ok);
 
-                std::pmr::string wire(method);
+                std::string wire(method);
                 wire.append(" / HTTP/1.1\r\nHost: example.test\r\n");
                 wire.append(field.name()).append(": ").append(first_value).append("\r\n");
                 wire.append(field.name()).append(": ").append(field.value()).append("\r\n\r\n");
                 ruvia::http1_server_request_parse_state parsed;
-                parsed.parse_head(wire, 0, std::pmr::get_default_resource());
+                parsed.parse_head(wire, 0);
                 EXPECT_TRUE(parsed.head_ready() != nullptr);
                 if (parsed.head_ready() != nullptr) {
                     const auto plan = ruvia::plan_http_representation_response(parsed.request(), representation);
@@ -444,8 +443,8 @@ TEST(Ruvia, representation_response_plan_folds_repeated_entity_tag_lines) {
 
 TEST(Ruvia, representation_response_plan_keeps_resolved_values_after_input_lifetimes_end) {
     const auto plan = [] {
-        std::pmr::string range = "bytes=2-4";
-        std::pmr::string etag = R"("temporary")";
+        std::string range = "bytes=2-4";
+        std::string etag = R"("temporary")";
         auto req = request("GET");
         add(req, "Range", range);
         add(req, "If-Range", etag);
@@ -515,12 +514,11 @@ TEST(Ruvia, representation_response_plan_reports_if_range_authorization) {
 }
 
 TEST(Ruvia, multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
-    std::pmr::monotonic_buffer_resource resource;
     auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-2,7-9", 10);
-    std::pmr::string media_type = "text/plain";
-    std::pmr::string boundary = "unit_boundary_42";
+    std::string media_type = "text/plain";
+    std::string boundary = "unit_boundary_42";
     auto plan = ruvia::make_http_multipart_byte_range_plan(
-        ranges, 10, media_type, boundary, &resource);
+        ranges, 10, media_type, boundary);
     media_type.assign(media_type.size(), 'x');
     boundary.assign(boundary.size(), 'y');
 
@@ -538,24 +536,22 @@ TEST(Ruvia, multipart_range_plan_owns_rfc_framing_and_reports_exact_length) {
 }
 
 TEST(Ruvia, multipart_range_plan_quotes_boundary_parameters) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=8-9,0-1", 10);
-    auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", "range boundary", &resource);
+    auto plan = ruvia::make_http_multipart_byte_range_plan(ranges, 10, "text/plain", "range boundary");
     EXPECT_EQ(plan.content_type(), "multipart/byteranges; boundary=\"range boundary\"");
     EXPECT_TRUE(plan.metadata().find("Content-Range: bytes 8-9/10") <
                 plan.metadata().find("Content-Range: bytes 0-1/10"));
-    auto clone = plan.clone(std::pmr::new_delete_resource());
+    auto clone = plan.clone();
     EXPECT_EQ(clone.content_type(), plan.content_type());
     EXPECT_EQ(clone.metadata(), plan.metadata());
 }
 
 TEST(Ruvia, multipart_range_plan_rejects_invalid_media_type) {
-    std::pmr::monotonic_buffer_resource resource;
     const auto ranges = ruvia::resolve_http_byte_range_set("bytes=0-1,8-9", 10);
     bool threw = false;
     try {
         static_cast<void>(ruvia::make_http_multipart_byte_range_plan(
-            ranges, 10, "text/plain\r\nX-Evil: yes", "valid_boundary", &resource));
+            ranges, 10, "text/plain\r\nX-Evil: yes", "valid_boundary"));
     } catch (const std::invalid_argument&) {
         threw = true;
     }
@@ -567,12 +563,11 @@ TEST(Ruvia, multipart_range_plan_rejects_content_length_overflow) {
         "bytes=0-9223372036854775806,9223372036854775808-18446744073709551614",
         (std::numeric_limits<std::uint64_t>::max)());
     EXPECT_EQ(ranges.size(), std::size_t{2});
-    std::pmr::monotonic_buffer_resource resource;
     bool threw = false;
     try {
         static_cast<void>(ruvia::make_http_multipart_byte_range_plan(
             ranges, (std::numeric_limits<std::uint64_t>::max)(), "application/octet-stream",
-            "overflow_check", &resource));
+            "overflow_check"));
     } catch (const std::length_error&) {
         threw = true;
     }
@@ -592,7 +587,7 @@ TEST(Ruvia, representation_response_plan_rejects_unknown_policy) {
 
 TEST(Ruvia, representation_response_plan_accepts_named_owner_etag_and_evaluates_preconditions) {
     std::string std_etag(R"("named-etag")");
-    std::pmr::string pmr_etag(R"(W/"named-etag")");
+    std::string pmr_etag(R"(W/"named-etag")");
     const ruvia::http_selected_representation_metadata std_metadata{
         .length_ = 10,
         .etag_ = std_etag,

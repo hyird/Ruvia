@@ -5,7 +5,7 @@
 
 #include "app/app_state.h"
 #include "http/static_root_options_validation.h"
-#include "util/config_validation.h"
+#include "server/config_validation.h"
 
 namespace ruvia {
 
@@ -43,8 +43,7 @@ application& application::document_root(document_root_config config) & {
             const auto precompression = make_static_root_precompression_options(config);
 
             detail::app_document_root_config replacement(
-                process_resource(), detail::store_validated_static_root_config(
-                                        config.static_options_, process_resource()));
+                detail::store_validated_static_root_config(config.static_options_));
             http_assign_native_path(replacement.root_, config.root_);
             replacement.refresh_interval_ = config.refresh_interval_;
             replacement.precompression_ = precompression;

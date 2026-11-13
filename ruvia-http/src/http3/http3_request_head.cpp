@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_known_method.h"
@@ -18,26 +17,23 @@
 #include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
+#include "memory/geometric_reserve.h"
 #include "parser/http_request_target.h"
 #include "request/http_request_access.h"
-#include "util/geometric_reserve.h"
 #include "websocket/http_websocket_handshake_fields.h"
 
 namespace ruvia {
 
-http3_request_head::http3_request_head(std::int64_t stream_id, std::pmr::vector<http_header> fields,
-    bool stream_ended, bool early_data, std::pmr::memory_resource* resource)
+http3_request_head::http3_request_head(std::int64_t stream_id, std::vector<http_header> fields,
+    bool stream_ended, bool early_data)
     : fields_(std::move(fields)),
-      regular_(resource),
-      cookie_(resource),
       stream_id_(stream_id),
       stream_ended_(stream_ended),
       early_data_(early_data) {}
 
 std::optional<http3_request_head> http3_request_head::try_create(std::int64_t stream_id,
-    std::pmr::vector<http_header> fields, bool stream_ended, bool early_data, std::pmr::memory_resource* resource) {
-    http3_request_head head(stream_id, std::move(fields), stream_ended, early_data,
-        detail::http_pmr_resource_or_default(resource));
+    std::vector<http_header> fields, bool stream_ended, bool early_data) {
+    http3_request_head head(stream_id, std::move(fields), stream_ended, early_data);
     if (!head.validate()) {
         return std::nullopt;
     }
@@ -211,8 +207,8 @@ bool http3_request_head::validate() {
     }
     if (content_length_seen) {
         declared_content_length_ = content_length.value();
-        // A HEADERS frame that ended the stream carries no content.
-        if (stream_ended_ && declared_content_length_ != std::uint64_t{0}) {
+        // A HEADERS frame that ended the stream or a CONNECT request carries no content.
+        if ((stream_ended_ || connect_method) && declared_content_length_ != std::uint64_t{0}) {
             return false;
         }
     }
@@ -226,7 +222,7 @@ bool http3_request_head::validate() {
     return true;
 }
 
-http_request http3_request_head::build_request(std::pmr::memory_resource* resource, borrowed_text body) const& {
+http_request http3_request_head::build_request(borrowed_text body) const& {
     const auto cookie_value = cookie_.empty() ? field_value(first_cookie_) : std::string_view(cookie_);
     const detail::binary_request_materialization_spec spec{
         .version_ = http_protocol_version::http3,
@@ -247,7 +243,7 @@ http_request http3_request_head::build_request(std::pmr::memory_resource* resour
         .standard_connect_ = connect() && protocol_ == absent,
         .failure_message_ = "validated HTTP/3 request cannot be materialized",
     };
-    return detail::materialize_binary_http_request(resource, spec, [this](std::size_t index) noexcept {
+    return detail::materialize_binary_http_request(spec, [this](std::size_t index) noexcept {
         const auto& field = regular_[index];
         return std::pair{
             http_header_view{fields_[field.index_].name(), fields_[field.index_].value()},

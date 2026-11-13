@@ -12,7 +12,6 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/worker_cancellation.h"
 #include "ruvia/http/http_ascii.h"
@@ -27,8 +26,8 @@
 #include "client/http_client_response_state.h"
 #include "client/http_client_result_budget.h"
 #include "client/http_client_transport_error.h"
+#include "integration/operation_lane_lease.h"
 #include "server/peer_address.h"
-#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 namespace {
@@ -42,12 +41,12 @@ void throw_if_abandoned(const http_client_response_state& state_value) {
 // Position for a new connection owner: the first free entry, else appended.
 // Existing owners never move; only the vector of owner pointers may grow.
 template <typename owner_type>
-[[nodiscard]] std::size_t free_connection_position(std::pmr::vector<owner_type>& owners) {
+[[nodiscard]] std::size_t free_connection_position(std::vector<owner_type>& owners) {
     const auto free = std::ranges::find(owners, nullptr);
     if (free != owners.end()) {
         return static_cast<std::size_t>(free - owners.begin());
     }
-    owners.emplace_back(nullptr, typename owner_type::deleter_type{process_resource()});
+    owners.emplace_back(nullptr, typename owner_type::deleter_type{});
     return owners.size() - 1;
 }
 
@@ -57,12 +56,6 @@ constexpr std::chrono::minutes alternative_service_retry_delay{5};
 
 // RFC 7838 field members: commas and semicolons inside quoted strings do not
 // delimit members. Unsupported ALPN identifiers are skipped, never downgraded.
-std::string_view take_component(std::string_view& text, char delimiter) noexcept {
-    const auto end = http_find_unquoted_delimiter(text, 0, delimiter);
-    const auto result = http_trim_ows(text.substr(0, end));
-    text.remove_prefix((std::min)(text.size(), end + 1));
-    return result;
-}
 #endif
 }  // namespace
 
@@ -129,7 +122,7 @@ struct http_client_pool::admission_waiter final {
     http_client_response_cancellation<http_client_cancellation_target> cancellation_;
 };
 
-http_client_pool::http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
+http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ref& worker_value,
     http_client_config_storage config, const http_client_worker_services& services)
     : io_context_(io_context),
       worker_(worker_value),
@@ -137,13 +130,13 @@ http_client_pool::http_client_pool(asio::io_context& io_context, const worker_ha
       origin_(config_.fixed_origin_ ? std::optional(config_.origin()) : std::nullopt),
       policy_(config_),
       advertisements_(worker_, config_.advertisements_),
-      pushes_(process_resource()),
+      pushes_(),
       result_budget_domain_(services.result_budget_),
       worker_limits_(services.limits_),
       tls_context_(asio::ssl::context::tls_client),
       cancellation_target_(make_worker_cancellation_target(*this, worker_)),
-      background_tasks_(worker_, {.resource_ = process_resource()}),
-      connections_(process_resource()),
+      background_tasks_(worker_),
+      connections_(),
       admission_signal_(worker_),
       reclaim_signal_(worker_),
       dns_changed_(worker_) {
@@ -168,8 +161,8 @@ std::uint64_t http_client_pool::next_connection_id() noexcept {
     return id;
 }
 
-std::pmr::vector<http_client_endpoint_address> http_client_pool::dns_snapshot() const {
-    std::pmr::vector<http_client_endpoint_address> result(process_resource());
+std::vector<http_client_endpoint_address> http_client_pool::dns_snapshot() const {
+    std::vector<http_client_endpoint_address> result;
     const auto append = [&result](const asio::ip::tcp::endpoint& endpoint) {
         result.emplace_back(to_ip_address(endpoint.address()).normalized_ipv4(), endpoint.port());
     };
@@ -247,7 +240,7 @@ void http_client_pool::update_dns(std::span<const http_client_endpoint_address> 
     if (addresses.empty()) {
         throw std::invalid_argument("HTTP DNS snapshot must not be empty");
     }
-    std::pmr::vector<asio::ip::tcp::endpoint> endpoints(process_resource());
+    std::vector<asio::ip::tcp::endpoint> endpoints;
     endpoints.reserve(addresses.size());
     for (const auto& value : addresses) {
         if (value.port_.value() == 0) {
@@ -382,7 +375,7 @@ void http_client_pool::retire_unresolved(std::string_view host, std::uint16_t po
 task<void> http_client_pool::refresh_live_routes() {
     // Distinct DNS dial targets of the live connections; IP literals and
     // routes without a connection cost no query.
-    std::pmr::vector<std::pair<std::pmr::string, std::uint16_t>> targets(process_resource());
+    std::vector<std::pair<std::string, std::uint16_t>> targets;
     const auto add = [&targets](std::string_view host, std::uint16_t port) {
         if (!client_host_needs_lookup(host)) {
             return;
@@ -392,7 +385,7 @@ task<void> http_client_pool::refresh_live_routes() {
                 return;
             }
         }
-        targets.emplace_back(std::pmr::string(host, process_resource()), port);
+        targets.emplace_back(std::string(host), port);
     };
     for (const auto& connection : connections_) {
         if (connection && (connection->connected_ || connection->users_ != 0)) {
@@ -543,12 +536,12 @@ task<void> http_client_pool::join() {
     advertisements_.retire();
     response_memory_.reset();
     {
-        decltype(connections_) retired_connections(process_resource());
+        decltype(connections_) retired_connections;
         retired_connections.swap(connections_);
 #ifdef RUVIA_ENABLE_HTTP3
-        decltype(http3_connections_) retired_http3(process_resource());
+        decltype(http3_connections_) retired_http3;
         retired_http3.swap(http3_connections_);
-        decltype(alternative_services_) retired_alternatives(process_resource());
+        decltype(alternative_services_) retired_alternatives;
         retired_alternatives.swap(alternative_services_);
 #endif
     }
@@ -668,7 +661,7 @@ task<http_client_tunnel_result> http_client_pool::open_tunnel(
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    state_value.tunnel_.emplace(state_value.memory_domain().worker(), state_value.resource_, config);
+    state_value.tunnel_.emplace(state_value.memory_domain().worker(), config);
     state_value.tunnel_->udp_ = request.udp_tunnel();
     spawn_request(std::move(request), std::move(options), state_value);
     co_await state_value.await_head("CONNECT handshake failed");
@@ -683,7 +676,7 @@ task<http_client_exchange> http_client_pool::open_request(
     require_accepting();
     http_client_response response(*this);
     auto& state_value = *response.state_;
-    state_value.upload_.emplace(state_value.memory_domain().worker(), state_value.resource_, upload);
+    state_value.upload_.emplace(state_value.memory_domain().worker(), upload);
     state_value.upload_->content_released_ = upload.expectation_ == http_client_request_expectation::none;
     spawn_request(std::move(request), std::move(options), state_value);
     co_return http_client_exchange(std::move(response));
@@ -1053,7 +1046,7 @@ task<http_client_connection*> http_client_pool::acquire_tcp_connection(const htt
         if (selected == nullptr && !negotiating && admits_new_connection()) {
             start_reclaimer();
             const auto index = free_connection_position(connections_);
-            connections_[index] = make_pmr_object<http_client_connection>(process_resource(), *this, index,
+            connections_[index] = std::make_unique<http_client_connection>(*this, index,
                 ++next_connection_serial_, route.dial_host_, route.dial_port_, route.server_name_, route.alias_transport_,
                 offer);
             ++open_connections_;
@@ -1391,7 +1384,7 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
     // Only TLS-authenticated responses, for requests that may use HTTP/3 beside
     // a TCP version, advertise alternatives. Entries are keyed by the actual
     // route, so an alias without a fixed origin learns them per destination.
-    if (config_.scheme_ != http_scheme::https || !route.versions_.http3_ ||
+    if (config_.scheme_ != http_scheme::https || (!config_.versions_.http3_ && !route.versions_.http3_) ||
         (!route.versions_.http1_ && !route.versions_.http2_)) {
         return;
     }
@@ -1400,7 +1393,7 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                http_ascii_equals_ignore_case(service.server_name_, route.server_name_);
     };
     // The route's failed alternatives stay unavailable across a re-advertisement.
-    std::pmr::vector<alternative_service> previous(process_resource());
+    std::vector<alternative_service> previous;
     bool first = true;
     for (const auto& field : fields) {
         if (!http_ascii_equals_ignore_case(field.name(), "alt-svc")) {
@@ -1417,23 +1410,28 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
         }
         auto value = http_trim_ows(field.value());
         if (value == "clear") {
+            std::erase_if(alternative_services_, names_route);
             return;
         }
-        while (!value.empty()) {
-            auto member = take_component(value, ',');
-            auto authority = take_component(member, ';');
+        http_visit_comma_separated_quoted_field_items(value, [&](std::string_view member) {
+            if (member.empty()) {
+                return true;
+            }
+            const auto first_semi = http_find_unquoted_delimiter(member, 0, ';');
+            auto authority = http_trim_ows(member.substr(0, first_semi));
+            auto params_tail = first_semi < member.size() ? member.substr(first_semi + 1) : std::string_view{};
             const auto equals = authority.find('=');
             if (equals == std::string_view::npos || http_trim_ows(authority.substr(0, equals)) != "h3") {
-                continue;
+                return true;
             }
             authority = http_trim_ows(authority.substr(equals + 1));
             if (authority.size() < 4 || authority.front() != '"' || authority.back() != '"') {
-                continue;
+                return true;
             }
             authority.remove_prefix(1);
             authority.remove_suffix(1);
             if (authority.find_first_of("\\\" \t\r\n/@?#") != std::string_view::npos) {
-                continue;
+                return true;
             }
             std::string_view host;
             std::uint16_t port = 0;
@@ -1444,7 +1442,7 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                     port_text.data(), port_text.data() + port_text.size(), parsed_port);
                 if (parsed.ec != std::errc{} || parsed.ptr != port_text.data() + port_text.size() ||
                     parsed_port == 0 || parsed_port > 65535) {
-                    continue;
+                    return true;
                 }
                 port = static_cast<std::uint16_t>(parsed_port);
                 host = route.dial_host_;
@@ -1452,7 +1450,7 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                 const auto parsed_authority = parse_http_authority(authority);
                 if (!parsed_authority || parsed_authority->port_kind() != http_authority_port_kind::value ||
                     *parsed_authority->port() == 0) {
-                    continue;
+                    return true;
                 }
                 port = *parsed_authority->port();
                 host = parsed_authority->host();
@@ -1465,13 +1463,16 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                 }
             }
             if (host.size() > 253) {
-                continue;
+                return true;
             }
             std::uint64_t age = 86400;
             bool valid = true;
             bool age_seen = false;
-            while (!member.empty()) {
-                const auto parameter = take_component(member, ';');
+            std::size_t param_start = 0;
+            while (param_start < params_tail.size()) {
+                const auto param_end = param_start + http_find_unquoted_delimiter(params_tail.substr(param_start), 0, ';');
+                const auto parameter = http_trim_ows(params_tail.substr(param_start, param_end - param_start));
+                param_start = param_end + 1;
                 const auto separator = parameter.find('=');
                 if (separator == std::string_view::npos) {
                     continue;
@@ -1500,19 +1501,18 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                 }
             }
             if (!valid || age == 0) {
-                continue;
+                return true;
             }
             const auto now = std::chrono::steady_clock::now();
             const auto maximum = std::chrono::duration_cast<std::chrono::seconds>((std::chrono::steady_clock::time_point::max)() - now).count();
             const auto seconds = (std::min)(age, static_cast<std::uint64_t>(maximum));
             if (alternative_services_.size() == config_.http3_.max_alt_svc_entries_) {
-                // One bound across routes: the least recently used entry goes.
                 alternative_services_.erase(std::ranges::min_element(alternative_services_, {}, &alternative_service::used_));
             }
-            alternative_service entry{.route_host_ = std::pmr::string(route.dial_host_, process_resource()),
+            alternative_service entry{.route_host_ = std::string(route.dial_host_),
                 .route_port_ = route.dial_port_,
-                .server_name_ = std::pmr::string(route.server_name_, process_resource()),
-                .host_ = std::pmr::string(host, process_resource()),
+                .server_name_ = std::string(route.server_name_),
+                .host_ = std::string(host),
                 .port_ = port,
                 .expires_ = now + std::chrono::seconds(seconds),
                 .broken_until_ = {},
@@ -1523,7 +1523,8 @@ void http_client_pool::observe_alt_svc(const http_client_route& route, std::span
                 }
             }
             alternative_services_.push_back(std::move(entry));
-        }
+            return true;
+        });
     }
 #else
     (void)route;
@@ -1572,7 +1573,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
     // Another response can replace the cache while DNS or the handshake waits,
     // so the selected endpoint is owned across suspension. TLS verifies the
     // route's server name, never the advertised transport name.
-    std::pmr::string host(process_resource());
+    std::string host;
     std::uint16_t port = 0;
     if (required) {
         host.assign(route.dial_host_);
@@ -1607,10 +1608,10 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
             if (selected == nullptr && admits_new_connection()) {
                 start_reclaimer();
                 if (!http3_tls_) {
-                    http3_tls_ = make_pmr_object<http3_client_tls>(process_resource(), *this);
+                    http3_tls_ = std::make_unique<http3_client_tls>(*this);
                 }
                 const auto index = free_connection_position(http3_connections_);
-                http3_connections_[index] = make_pmr_object<http3_client_connection>(process_resource(), *this,
+                http3_connections_[index] = std::make_unique<http3_client_connection>(*this,
                     *http3_tls_, index, ++next_connection_serial_, host, port, route.server_name_);
                 ++open_connections_;
                 selected = http3_connections_[index].get();
@@ -1644,7 +1645,7 @@ task<bool> http_client_pool::execute_http3(const http_client_request_storage& re
         // RFC 7838 section 2.4: the request falls back to TCP, and the failed
         // alternative is not tried again for a while.
         for (auto& service : alternative_services_) {
-            if (service.port_ == port && service.host_ == host && service.route_port_ == route.dial_port_ &&
+            if (service.port_ == port && http_ascii_equals_ignore_case(service.host_, host) && service.route_port_ == route.dial_port_ &&
                 http_ascii_equals_ignore_case(service.route_host_, route.dial_host_) &&
                 http_ascii_equals_ignore_case(service.server_name_, route.server_name_)) {
                 service.broken_until_ = std::chrono::steady_clock::now() + alternative_service_retry_delay;
@@ -1673,12 +1674,12 @@ task<std::optional<http_tunnel_input>> http_client_pool::read_http3_tunnel_input
     for (;;) {
         state.release_consumed_body_prefix();
         if (state.offset_ < state.buffered_.size()) {
-            http_tunnel_input result{std::pmr::string(std::string_view(state.buffered_).substr(state.offset_), state.resource_), false};
+            http_tunnel_input result{std::string(std::string_view(state.buffered_).substr(state.offset_)), false};
             state.offset_ = state.buffered_.size();
             co_return result;
         }
         if (!state.pending_.empty()) {
-            http_tunnel_input result{std::pmr::string(state.resource_), false};
+            http_tunnel_input result{{}, false};
             result.bytes_.swap(state.pending_);
             release_response_data(state);
             co_return result;
@@ -1722,7 +1723,7 @@ task<bool> http_client_pool::send_http3_datagram(
 }
 #endif
 
-task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::uint16_t port,
+task<void> http_client_pool::migrate_http3(std::string local_address, std::uint16_t port,
     operation_options options, stop_token host_stop) {
 #ifdef RUVIA_ENABLE_HTTP3
     require_accepting();
@@ -1737,7 +1738,7 @@ task<void> http_client_pool::migrate_http3(std::pmr::string local_address, std::
     }
     // Connections may be created or reclaimed while one migrates: each is
     // found again by position and serial.
-    std::pmr::vector<std::pair<std::size_t, std::uint64_t>> active(process_resource());
+    std::vector<std::pair<std::size_t, std::uint64_t>> active;
     for (std::size_t index = 0; index != http3_connections_.size(); ++index) {
         if (http3_connections_[index] && http3_connections_[index]->active()) {
             active.emplace_back(index, http3_connections_[index]->serial());

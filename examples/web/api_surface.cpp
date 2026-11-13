@@ -11,7 +11,6 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -37,7 +36,7 @@ ruvia::task<ruvia::http_response> surface_not_found(ruvia::context& c) {
 
 class surface_context_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         if (c.committed()) {
             co_return;
@@ -68,7 +67,7 @@ public:
 
 class surface_return_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
         c.draft().status(ruvia::http_status::accepted);
         c.respond(c.text("returned by middleware\n"));
         co_return;
@@ -77,7 +76,7 @@ public:
 
 class surface_pre_direct_response_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         c.policy().header("X-Surface-Pre-Direct", "true");
         co_await next_value();
     }
@@ -85,7 +84,7 @@ public:
 
 class surface_res_slot_only_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
         c.draft().header("X-Surface-Res-Slot-Only", "true");
         c.respond(c.body());
         co_return;
@@ -139,7 +138,7 @@ public:
 private:
     ruvia::task<ruvia::http_response> request_info(ruvia::context& c) {
         const auto& request = c.req();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("method=");
         body.append(request.method());
         body.append("\npath=");
@@ -180,7 +179,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> context_info(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         // Session capability requires session_middleware; see sessions.cpp for
         // its Redis setup. This standalone example only installs application services.
         body.append("env-vars=");
@@ -199,7 +198,7 @@ private:
 
     ruvia::task<ruvia::http_response> response_slot(ruvia::context& c) {
         c.policy().header("X-Response-Prepared", "true");
-        ruvia::http_response response(c.arena());
+        ruvia::http_response response;
         response.status(ruvia::http_status::non_authoritative_information);
         response.header("X-Response-Remove", "drop");
         response.body("response slot\n");
@@ -219,7 +218,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> json_response(ruvia::context& c) {
-        surface_json_message response({.resource_ = c.arena()});
+        surface_json_message response;
         response.set<"message">("json response");
         co_return c.json(response);
     }
@@ -297,7 +296,7 @@ private:
 
     ruvia::task<ruvia::http_response> assigned_prepared_response(ruvia::context& c) {
         c.policy().header("X-Surface-Prepared-Assigned", "true");
-        ruvia::http_response response(c.arena());
+        ruvia::http_response response;
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.body("assigned prepared response\n");
         co_return response;
@@ -305,7 +304,7 @@ private:
 
     ruvia::task<ruvia::http_response> buffered_multipart(ruvia::context& c) {
         auto parts = co_await c.req().multipart();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("parts=");
         ruvia::http_append_unsigned(body, parts.size());
         for (const auto& part : parts) {
@@ -324,7 +323,7 @@ private:
 
     ruvia::task<ruvia::http_response> bytes_body(ruvia::context& c) {
         const auto bytes_value = co_await c.req().bytes();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("bytes bytes=");
         ruvia::http_append_unsigned(body, bytes_value.size());
         body.append("\ncontent-type=");
@@ -336,7 +335,7 @@ private:
     ruvia::task<ruvia::http_response> json_message(ruvia::context& c) {
         const auto& json = c.req().validated<surface_json_message>();
         const auto raw = co_await c.req().text();
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("json-value bytes=");
         ruvia::http_append_unsigned(body, raw.size());
         if (const auto& message = json.get<"message">()) {
@@ -355,7 +354,7 @@ private:
 
     ruvia::task<ruvia::http_response> replace_item(ruvia::context& c) {
         const auto body = co_await c.req().text();
-        std::pmr::string output(c.allocator<char>());
+        std::string output;
         output.append("replace id=");
         output.append(c.req().param("id").value_or(""));
         output.append(" bytes=");
@@ -366,7 +365,7 @@ private:
 
     ruvia::task<ruvia::http_response> patch_item(ruvia::context& c) {
         const auto body = co_await c.req().text();
-        std::pmr::string output(c.allocator<char>());
+        std::string output;
         output.append("patch id=");
         output.append(c.req().param("id").value_or(""));
         output.append(" bytes=");
@@ -376,7 +375,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> delete_item(ruvia::context& c) {
-        std::pmr::string output(c.allocator<char>());
+        std::string output;
         output.append("deleted id=");
         output.append(c.req().param("id").value_or(""));
         output.push_back('\n');
@@ -411,7 +410,7 @@ private:
         });
         const auto deleted = c.req().cookie("legacy-session");
         c.draft().delete_cookie({.name_ = "legacy-session"});
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("cookies set\nlegacy-session=");
         body.append(deleted.value_or(""));
         body.push_back('\n');
@@ -419,7 +418,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> any_method(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("all method=");
         body.append(c.req().method());
         body.push_back('\n');
@@ -427,7 +426,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> on_item(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("on method=");
         body.append(c.req().method());
         body.append(" id=");
@@ -441,7 +440,7 @@ private:
         c.draft().set_signed_cookie({.name_ = "signed-session", .value_ = "signed-value", .secret_ = secret});
         const auto verified = c.req().signed_cookie({.name_ = "signed-session", .secret_ = secret});
         const auto absent = c.req().signed_cookie({.name_ = "absent", .secret_ = secret});
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("signed=");
         body.append(verified.value_or("missing"));
         body.append("\nabsent=");
@@ -451,7 +450,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> manual_body(ruvia::context& c) {
-        ruvia::http_response response(c.arena());
+        ruvia::http_response response;
         response.status(ruvia::http_status::accepted);
         response.header("Content-Type", "text/plain; charset=UTF-8");
         response.header("X-Manual-Body", "owned");
@@ -475,7 +474,7 @@ private:
             bytes_value += chunk->size();
         }
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append(verb);
         body.append(" stream id=");
         body.append(c.req().param("id").value_or(""));

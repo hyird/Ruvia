@@ -30,7 +30,7 @@ void worker_stop_chain::request_stop() noexcept {
         // close() can lose the race to a dispatcher failure that is still
         // notifying listeners. Keep the work guard until all of them have
         // published their cleanup.
-        worker_handle_access::when_shutdown_notifications_complete(context_.handle(), [this] {
+        worker_ref_access::when_shutdown_notifications_complete(context_.worker(), [this] {
             const std::lock_guard lock(mutex_);
             defer_stop_control_locked();
         });
@@ -57,7 +57,7 @@ bool worker_stop_chain::post_control(move_only_function<void()> control) noexcep
     if (work_released_) {
         return false;
     }
-    worker_handle_access::defer_or_terminate(context_.handle(), std::move(control));
+    worker_ref_access::defer_or_terminate(context_.worker(), std::move(control));
     return true;
 }
 
@@ -73,7 +73,7 @@ void worker_stop_chain::abandon() noexcept {
 }
 
 void worker_stop_chain::defer_stop_control_locked() noexcept {
-    worker_handle_access::defer_or_terminate(context_.handle(), [this] { apply_stop(); });
+    worker_ref_access::defer_or_terminate(context_.worker(), [this] { apply_stop(); });
 }
 
 void worker_stop_chain::apply_stop() noexcept {

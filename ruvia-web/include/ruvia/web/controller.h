@@ -3,14 +3,12 @@
 #include <array>
 #include <concepts>
 #include <cstddef>
-#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_known_method.h"
@@ -71,7 +69,7 @@ class controller_registration_access final {
     template <typename t_type>
     friend void register_controller_routes(void* controller_value, router& router_value);
 
-    using middleware_list_type = std::pmr::vector<controller_middleware_descriptor>;
+    using middleware_list_type = std::vector<controller_middleware_descriptor>;
 
     [[nodiscard]] static constexpr std::string_view group_prefix() noexcept {
         if constexpr (requires { controller_type::ruvia_controller_group_prefix(); }) {
@@ -150,7 +148,7 @@ class controller_registration_access final {
 
     template <route_modifier... modifier_types>
     [[nodiscard]] static middleware_list_type make_middlewares() {
-        middleware_list_type middlewares(process_resource());
+        middleware_list_type middlewares;
         if constexpr (sizeof...(modifier_types) > 0) {
             middlewares.reserve(sizeof...(modifier_types));
             (middlewares.push_back(make_route_modifier_descriptor<modifier_types>()), ...);

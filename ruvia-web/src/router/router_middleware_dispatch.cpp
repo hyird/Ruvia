@@ -30,10 +30,9 @@ namespace {
 void store_next_misuse_error(context& context_value, const char* message, std::string_view code) {
     detail::context_access::set_error(context_value, std::make_exception_ptr(std::logic_error(message)));
     detail::context_access::set_response(
-        context_value, detail::make_default_error_response(context_value.arena(),
-                           http_error_info({.status_ = ruvia::http_status::internal_server_error,
-                               .code_ = code,
-                               .message_ = message})));
+        context_value, detail::make_default_error_response(http_error_info({.status_ = ruvia::http_status::internal_server_error,
+                           .code_ = code,
+                           .message_ = message})));
 }
 
 [[nodiscard]] bool validate_next_invocation(const detail::next_state& state_value) {
@@ -114,7 +113,7 @@ task<void> run_chain_hop(detail::next_state state_value) {
             co_await chain.terminal_(context_value);
         } else {
             auto* storage = static_cast<std::byte*>(
-                context_value.arena()->allocate(next_hop_layout::size, next_hop_layout::alignment));
+                detail::context_access::allocate_request_storage(context_value, next_hop_layout::size, next_hop_layout::alignment));
             auto& control = *std::construct_at(reinterpret_cast<detail::next_state::control_type*>(storage));
             const next_control_scope control_scope(control);
             auto& next_value = detail::next_access::make_at(storage + next_hop_layout::next_offset,

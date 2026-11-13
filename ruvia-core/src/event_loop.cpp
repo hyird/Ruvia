@@ -128,14 +128,14 @@ attached_context::attached_context(asio::io_context& io_context, std::size_t que
       runtime_(io_context, queue_capacity, pool),
       stop_(runtime_),
       failure_(std::move(failure)) {
-    worker_handle_access::enable_external_runner(runtime_.handle());
+    worker_ref_access::enable_external_runner(runtime_.worker());
 }
 
 // The callback owner is kept alive by the completion handler until both the
 // returned task frame and its completion chain have retired.
 class event_loop_stop_listener final : public std::enable_shared_from_this<event_loop_stop_listener> {
 public:
-    event_loop_stop_listener(worker_handle worker_value, asio::io_context::executor_type executor,
+    event_loop_stop_listener(worker_ref worker_value, asio::io_context::executor_type executor,
         move_only_function<task<void>()> callback_value, std::weak_ptr<event_loop_state> loop)
         : worker_(std::move(worker_value)),
           executor_(std::move(executor)),
@@ -190,7 +190,7 @@ public:
             start_callback(std::move(self));
             return;
         }
-        worker_handle_access::defer_or_terminate(worker_,
+        worker_ref_access::defer_or_terminate(worker_,
             [self = std::move(self)]() mutable noexcept { self->start_callback(std::move(self)); });
     }
 
@@ -240,7 +240,7 @@ private:
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_registration shutdown_registration_;
-    worker_handle worker_;
+    worker_ref worker_;
     asio::io_context::executor_type executor_;
     std::mutex mutex_;
     bool retirement_begun_{false};
@@ -304,10 +304,10 @@ void event_loop_state::shutdown_external_context() noexcept {
     stopping_.store(true, std::memory_order_release);
     attached.stop_.abandon();
     runtime_.detach();
-    worker_handle_access::wait_for_reservations(runtime_.handle());
+    worker_ref_access::wait_for_reservations(runtime_.worker());
 }
 void event_loop_state::install_shutdown_registration() {
-    if (runtime_.handle().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) !=
+    if (runtime_.worker().register_shutdown(shared_from_this(), &event_loop_state::shutdown_registration_) !=
         worker_registration_status::registered) {
         throw std::runtime_error("cannot register an event loop on a stopping worker");
     }
@@ -372,18 +372,18 @@ void event_loop_state::complete_stop_admission() noexcept {
 }
 
 void event_loop_state::schedule_finalize_when_idle() noexcept {
-    if (!runtime_.handle().valid()) {
+    if (!runtime_.worker().valid()) {
         return;
     }
     const std::weak_ptr<event_loop_state> weak = weak_from_this();
     try {
-        worker_handle_access::when_idle(runtime_.handle(), [weak] {
+        worker_ref_access::when_idle(runtime_.worker(), [weak] {
             if (const auto idle_state = weak.lock()) {
                 idle_state->retirement_.seal();
             }
         });
     } catch (...) {
-        if (!runtime_.handle().valid()) {
+        if (!runtime_.worker().valid()) {
             return;
         }
         fail_teardown_start(std::current_exception());
@@ -391,7 +391,7 @@ void event_loop_state::schedule_finalize_when_idle() noexcept {
 }
 
 void event_loop_state::defer_finalize_stop(std::shared_ptr<event_loop_state> self) noexcept {
-    const auto worker_value = runtime_.handle();
+    const auto worker_value = runtime_.worker();
     try {
         // A detached context ran shutdown_external_context(), which
         // already abandoned the stop chain this would finalize.
@@ -456,11 +456,11 @@ event_loop::event_loop(std::shared_ptr<detail::event_loop_state> state_value) no
     : state_(std::move(state_value)) {}
 
 bool event_loop::valid() const noexcept {
-    return handle().valid();
+    return worker().valid();
 }
 
 asio::io_context& event_loop::io_context() const& {
-    if (!state_ || !state_->runtime_.handle().valid()) {
+    if (!state_ || !state_->runtime_.worker().valid()) {
         if (state_) {
             throw std::logic_error("event loop execution context is detached");
         }
@@ -474,16 +474,16 @@ asio::io_context::executor_type event_loop::executor() const {
     return state_->executor_;
 }
 
-const worker_handle& event_loop::handle() const& noexcept {
+const worker_ref& event_loop::worker() const& noexcept {
     if (state_) {
-        return state_->runtime_.handle();
+        return state_->runtime_.worker();
     }
-    static const worker_handle empty_handle;
-    return empty_handle;
+    static const worker_ref empty_worker;
+    return empty_worker;
 }
 
-worker_handle event_loop::handle() const&& noexcept {
-    return handle();
+worker_ref event_loop::worker() const&& noexcept {
+    return worker();
 }
 
 void event_loop::report_failure(std::exception_ptr failure) const noexcept {
@@ -534,7 +534,7 @@ bool event_loop::defer_cleanup_task(move_only_function<void()> task_value) const
             }
         }
     };
-    return state_->runtime_.handle().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
+    return state_->runtime_.worker().defer_completion([control = cleanup_control(state_, std::move(task_value))]() mutable { control.task_(); });
 }
 
 event_loop_stop_registration event_loop::register_stop_callback(
@@ -545,12 +545,11 @@ event_loop_stop_registration event_loop::register_stop_callback(
     if (!callback_value) {
         throw std::invalid_argument("event loop stop callback must be callable");
     }
-    if (!state_->runtime_.handle().accepting()) {
+    if (!state_->runtime_.worker().accepting()) {
         throw std::runtime_error("cannot register a stop callback on a stopping event loop");
     }
-    auto listener_value = std::allocate_shared<detail::event_loop_stop_listener>(
-        std::pmr::polymorphic_allocator<detail::event_loop_stop_listener>(process_resource()),
-        state_->runtime_.handle(), state_->executor_, std::move(callback_value), state_);
+    auto listener_value = std::make_shared<detail::event_loop_stop_listener>(
+        state_->runtime_.worker(), state_->executor_, std::move(callback_value), state_);
     listener_value->install_shutdown_registration();
     return event_loop_stop_registration(std::move(listener_value));
 }
@@ -566,7 +565,7 @@ event_loop_attachment::event_loop_attachment(event_loop_attachment&& other) noex
     : state_(std::move(other.state_)) {}
 
 bool event_loop_attachment::valid() const noexcept {
-    return state_ != nullptr && state_->runtime_.handle().valid();
+    return state_ != nullptr && state_->runtime_.worker().valid();
 }
 
 event_loop event_loop_attachment::loop() const noexcept {
@@ -578,7 +577,7 @@ void event_loop_attachment::run() {
     if (!state_value) {
         throw std::logic_error("cannot run an invalid event loop attachment");
     }
-    if (!state_value->runtime_.handle().valid()) {
+    if (!state_value->runtime_.worker().valid()) {
         throw std::logic_error("event loop execution context is detached");
     }
     state_value->runtime_.run();
@@ -592,8 +591,7 @@ void event_loop_attachment::stop() noexcept {
 
 event_loop_attachment attach_event_loop(
     asio::io_context& io_context, event_loop_attachment_options options) {
-    auto state_value = std::allocate_shared<detail::event_loop_state>(
-        std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
+    auto state_value = std::make_shared<detail::event_loop_state>(
         io_context, options.queue_capacity_, options.blocking_pool_, std::move(options.failure_));
     const std::weak_ptr<detail::event_loop_state> weak_state = state_value;
     // root_task uses this sink directly; it must not call event_loop_state::route_failure,

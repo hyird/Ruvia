@@ -1,7 +1,6 @@
 #pragma once
 
 #include <ctime>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -97,6 +96,5 @@ struct http_etag_preconditions final {
 [[nodiscard]] bool is_strong_http_entity_tag(std::string_view value) noexcept;
 [[nodiscard]] bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept;
 [[nodiscard]] bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept;
-[[nodiscard]] std::pmr::string weaken_http_etag(
-    std::string_view etag, std::pmr::memory_resource* resource = nullptr);
+[[nodiscard]] std::string weaken_http_etag(std::string_view etag);
 }  // namespace ruvia

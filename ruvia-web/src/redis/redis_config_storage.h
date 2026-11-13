@@ -4,16 +4,14 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_types.h"
 
 #include "client/client_tls.h"
 #include "integration/named_capability.h"
-#include "util/config_validation.h"
-#include "util/tcp_socket_policies.h"
+#include "server/config_validation.h"
+#include "server/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -36,17 +34,17 @@ inline void validate_redis_config(const redis_config& config) {
 
 // PMR-owned runtime form of the ordinary public redis_config value.
 struct redis_config_storage final {
-    redis_config_storage(const redis_config& source_value, std::pmr::memory_resource* resource)
+    redis_config_storage(const redis_config& source_value)
         : redis_config_storage(
-              validated_config_tag_type{}, validate(source_value), pmr_resource_or_default(resource)) {}
+              validated_config_tag_type{}, validate(source_value)) {}
 
-    redis_config_storage(const redis_config_storage& source_value, std::pmr::memory_resource* resource)
-        : redis_config_storage(validated_config_tag_type{}, source_value, pmr_resource_or_default(resource)) {}
+    redis_config_storage(const redis_config_storage& source_value)
+        : redis_config_storage(validated_config_tag_type{}, source_value) {}
 
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_;
-    std::pmr::string username_;
-    std::pmr::string password_;
+    std::string username_;
+    std::string password_;
     client_tls_config_storage tls_;
     std::uint32_t database_;
     std::size_t pool_size_per_worker_;
@@ -78,11 +76,11 @@ private:
     // installs; allocator-rebound copies share them.
     template <typename source_type>
     [[nodiscard]] static client_tls_config_storage tls_storage(
-        const source_type& source_value, std::pmr::memory_resource* resource) {
+        const source_type& source_value) {
         if constexpr (std::same_as<source_type, redis_config>) {
-            return {source_value.tls_, client_tls_files::parse, resource};
+            return {source_value.tls_, client_tls_files::parse};
         } else {
-            return {source_value.tls_, resource};
+            return {source_value.tls_};
         }
     }
 
@@ -92,12 +90,12 @@ private:
         requires(std::same_as<source_type, redis_config> ||
                     std::same_as<source_type, redis_config_storage>)
     redis_config_storage(
-        validated_config_tag_type, const source_type& source_value, std::pmr::memory_resource* resource)
-        : host_(source_value.host_, resource),
+        validated_config_tag_type, const source_type& source_value)
+        : host_(source_value.host_),
           port_(resolved_port(source_value)),
-          username_(source_value.username_, resource),
-          password_(source_value.password_, resource),
-          tls_(tls_storage(source_value, resource)),
+          username_(source_value.username_),
+          password_(source_value.password_),
+          tls_(tls_storage(source_value)),
           database_(source_value.database_),
           pool_size_per_worker_(source_value.pool_size_per_worker_),
           blocking_pool_size_per_worker_(source_value.blocking_pool_size_per_worker_),

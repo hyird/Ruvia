@@ -1,7 +1,6 @@
 #pragma once
 
 #include <deque>
-#include <memory_resource>
 
 #include <asio/io_context.hpp>
 
@@ -25,8 +24,8 @@ namespace ruvia::test {
 // exit; deque never invalidates references to existing elements, so the returned
 // reference stays valid for the test's lifetime.
 inline asio::io_context& new_test_io_context() {
-    static std::pmr::deque<asio::io_context>& registry =
-        *new std::pmr::deque<asio::io_context>(std::pmr::new_delete_resource());
+    static std::deque<asio::io_context>& registry =
+        *new std::deque<asio::io_context>();
     return registry.emplace_back();
 }
 

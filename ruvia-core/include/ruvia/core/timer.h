@@ -7,7 +7,7 @@
 #include <variant>
 
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
@@ -43,20 +43,20 @@ class sleep_operation;
 // already finished is a no-op rather than a use-after-free.
 //
 // The worker is borrowed for the lifetime of the returned operation: the
-// caller must keep its address-stable handle alive until the operation
+// caller must keep its address-stable worker_ref alive until the operation
 // completes or is dropped cold. This is the same borrow-only boundary the
-// request hot path applies everywhere else; a temporary handle would dangle in
+// request hot path applies everywhere else; a temporary worker_ref would dangle in
 // the cold operation.
 [[nodiscard]] sleep_operation sleep_for(
-    const worker_handle& worker_value, timeout_duration duration, stop_token stop_token_value = {});
-sleep_operation sleep_for(worker_handle&&, timeout_duration, stop_token = {}) = delete;
-sleep_operation sleep_for(const worker_handle&&, timeout_duration, stop_token = {}) = delete;
-[[nodiscard]] sleep_operation sleep_until(const worker_handle& worker_value,
+    const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value = {});
+sleep_operation sleep_for(worker_ref&&, timeout_duration, stop_token = {}) = delete;
+sleep_operation sleep_for(const worker_ref&&, timeout_duration, stop_token = {}) = delete;
+[[nodiscard]] sleep_operation sleep_until(const worker_ref& worker_value,
     std::chrono::steady_clock::time_point deadline, stop_token stop_token_value = {});
 sleep_operation sleep_until(
-    worker_handle&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
+    worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
 sleep_operation sleep_until(
-    const worker_handle&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
+    const worker_ref&&, std::chrono::steady_clock::time_point, stop_token = {}) = delete;
 
 // One sleep on the caller's worker: single-use, movable only before it is
 // awaited, and started on the borrowed worker by co_await. An empty stop token
@@ -75,23 +75,23 @@ public:
     [[nodiscard]] timer_sleep_result await_resume() const noexcept;
 
 private:
-    friend sleep_operation sleep_for(const worker_handle&, timeout_duration, stop_token);
+    friend sleep_operation sleep_for(const worker_ref&, timeout_duration, stop_token);
     friend sleep_operation sleep_until(
-        const worker_handle&, std::chrono::steady_clock::time_point, stop_token);
+        const worker_ref&, std::chrono::steady_clock::time_point, stop_token);
 
-    sleep_operation(const worker_handle& worker_value, timeout_duration duration,
+    sleep_operation(const worker_ref& worker_value, timeout_duration duration,
         stop_token stop_token_value) noexcept
         : worker_(&worker_value),
           target_(duration),
           stop_token_(std::move(stop_token_value)) {}
 
-    sleep_operation(const worker_handle& worker_value, std::chrono::steady_clock::time_point deadline,
+    sleep_operation(const worker_ref& worker_value, std::chrono::steady_clock::time_point deadline,
         stop_token stop_token_value) noexcept
         : worker_(&worker_value),
           target_(deadline),
           stop_token_(std::move(stop_token_value)) {}
 
-    const worker_handle* worker_;
+    const worker_ref* worker_;
     std::variant<timeout_duration, std::chrono::steady_clock::time_point> target_;
     stop_token stop_token_;
     std::coroutine_handle<> continuation_{};

@@ -2,7 +2,6 @@
 
 #include <condition_variable>
 #include <exception>
-#include <memory_resource>
 #include <mutex>
 #include <vector>
 
@@ -25,7 +24,7 @@ class worker_runtime;
 // belong to one lifecycle thread.
 class worker_group final {
 public:
-    explicit worker_group(std::pmr::memory_resource* resource = nullptr);
+    worker_group();
     ~worker_group();
 
     worker_group(const worker_group&) = delete;
@@ -66,7 +65,7 @@ private:
     [[noreturn]] void rethrow_phase_failure(std::exception_ptr fallback);
 
     // Borrowed members in registration order.
-    std::pmr::vector<worker_runtime*> members_;
+    std::vector<worker_runtime*> members_;
     mutable std::mutex mutex_;
     std::condition_variable stop_changed_;
     bool stopping_{false};

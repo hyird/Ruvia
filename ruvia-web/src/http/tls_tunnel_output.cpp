@@ -29,15 +29,14 @@ const std::unique_ptr<BIO_METHOD, decltype(&BIO_meth_free)> tls_tunnel_output::b
 }();
 
 tls_tunnel_output::tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket,
-    const worker_handle& worker_value, std::pmr::memory_resource& resource, connection_lifecycle* lifecycle)
+    const worker_ref& worker_value, connection_lifecycle* lifecycle)
     : ssl_(ssl),
       socket_(socket),
       worker_(worker_value),
       lifecycle_(lifecycle),
-      bytes_(&resource),
       available_(worker_value),
       flushed_(worker_value),
-      tasks_(worker_value, {.resource_ = &resource}) {
+      tasks_(worker_value) {
     if (!worker_.is_current()) {
         std::terminate();
     }

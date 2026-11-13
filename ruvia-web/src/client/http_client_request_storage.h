@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -59,11 +58,10 @@ struct http_client_route final {
 };
 
 struct http_client_websocket_handshake final {
-    http_client_websocket_handshake(websocket_client_negotiation_config_view config,
-        std::pmr::memory_resource* resource);
+    http_client_websocket_handshake(websocket_client_negotiation_config_view config);
     websocket_client_negotiation negotiation_;
     std::array<char, 24> key_;
-    std::pmr::string selected_subprotocol_;
+    std::string selected_subprotocol_;
     websocket_compression compression_{};
 };
 
@@ -72,7 +70,7 @@ public:
     // Complete owning boundary: reserve field metadata once and normalize/copy
     // every field before asynchronous work can outlive caller storage.
     http_client_request_storage(std::string_view method, std::string_view target,
-        std::span<const http_header_view> fields, std::pmr::memory_resource* resource);
+        std::span<const http_header_view> fields);
 
     http_client_request_storage(const http_client_request_storage&) = delete;
     http_client_request_storage& operator=(const http_client_request_storage&) = delete;
@@ -134,9 +132,6 @@ public:
         return target_;
     }
     [[nodiscard]] std::string_view target() const&& = delete;
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return method_.get_allocator().resource();
-    }
 
     [[nodiscard]] std::string_view body() const& noexcept {
         return body_;
@@ -145,7 +140,7 @@ public:
     [[nodiscard]] bool has_body() const noexcept {
         return has_body_;
     }
-    [[nodiscard]] const std::pmr::vector<http_header>& headers() const noexcept {
+    [[nodiscard]] const std::vector<http_header>& headers() const noexcept {
         return headers_;
     }
     [[nodiscard]] bool udp_tunnel() const noexcept {
@@ -166,14 +161,14 @@ public:
 
 private:
     http_client_request_storage(
-        std::string_view method, std::string_view target, std::pmr::memory_resource* resource);
+        std::string_view method, std::string_view target);
 
-    std::pmr::string method_;
-    std::pmr::string target_;
-    std::pmr::vector<http_header> headers_;
-    std::pmr::string body_;
-    std::pmr::string tunnel_authority_;
-    std::pmr::string tunnel_protocol_;
+    std::string method_;
+    std::string target_;
+    std::vector<http_header> headers_;
+    std::string body_;
+    std::string tunnel_authority_;
+    std::string tunnel_protocol_;
     std::shared_ptr<http_client_websocket_handshake> websocket_;
     stop_token host_stop_;
     bool is_tunnel_{};
@@ -182,7 +177,7 @@ private:
     bool has_body_{false};
     http_client_upload_state* upload_{};
     // The normalized authority override that route() views.
-    std::pmr::string route_authority_;
+    std::string route_authority_;
     std::optional<http_client_route> route_;
 };
 

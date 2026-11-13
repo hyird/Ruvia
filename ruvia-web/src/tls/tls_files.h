@@ -1,12 +1,10 @@
 #pragma once
 
 #include <filesystem>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/tls_config.h"
 
@@ -16,18 +14,16 @@ namespace ruvia::detail {
 // A TLS file name in UTF-8, the encoding OpenSSL's file BIOs decode (on
 // Windows into a wide name for _wfopen). Converting through char8_t never
 // narrows a native wide path through the ANSI code page.
-using tls_file_name = std::pmr::u8string;
+using tls_file_name = std::u8string;
 
 // The one TLS path validator, shared by servers and clients: a path must not
 // be empty, and since OpenSSL and the database drivers consume C strings, it
 // must not contain NUL either. Throws std::invalid_argument.
-[[nodiscard]] inline tls_file_name make_tls_file_name(
-    const std::filesystem::path& file, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline tls_file_name make_tls_file_name(const std::filesystem::path& file) {
     if (file.empty()) {
         throw std::invalid_argument("TLS file paths must not be empty");
     }
-    auto name = file.string<char8_t, std::char_traits<char8_t>, std::pmr::polymorphic_allocator<char8_t>>(
-        std::pmr::polymorphic_allocator<char8_t>(pmr_resource_or_default(resource)));
+    auto name = file.u8string();
     if (name.find(u8'\0') != tls_file_name::npos) {
         throw std::invalid_argument("TLS file paths must not contain NUL bytes");
     }
@@ -47,22 +43,15 @@ struct tls_identity_files final {
     tls_file_name private_key_file_;
 };
 
-[[nodiscard]] inline tls_identity_files make_tls_identity_files(
-    const tls_identity_config& identity, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline tls_identity_files make_tls_identity_files(const tls_identity_config& identity) {
     return {
-        .certificate_chain_file_ = make_tls_file_name(identity.certificate_chain_file_, resource),
-        .private_key_file_ = make_tls_file_name(identity.private_key_file_, resource),
+        .certificate_chain_file_ = make_tls_file_name(identity.certificate_chain_file_),
+        .private_key_file_ = make_tls_file_name(identity.private_key_file_),
     };
 }
 
-// Rebinds validated names to another resource without re-validating them.
-[[nodiscard]] inline tls_identity_files copy_tls_identity_files(
-    const tls_identity_files& files, std::pmr::memory_resource* resource) {
-    auto* const target = pmr_resource_or_default(resource);
-    return {
-        .certificate_chain_file_ = tls_file_name(files.certificate_chain_file_, target),
-        .private_key_file_ = tls_file_name(files.private_key_file_, target),
-    };
+[[nodiscard]] inline tls_identity_files copy_tls_identity_files(const tls_identity_files& files) {
+    return files;
 }
 
 // Reads and parses the files once; throws on unreadable, invalid or mismatched files.

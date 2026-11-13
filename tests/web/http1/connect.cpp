@@ -5,7 +5,6 @@
 #include <chrono>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -17,7 +16,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/web/app.h"
@@ -32,7 +30,7 @@
 namespace {
 struct observation {
     std::mutex mutex_;
-    std::pmr::string bytes_{ruvia::process_resource()};
+    std::string bytes_{};
     std::atomic<bool> finish_first_{};
     std::atomic<bool> ended_{};
     std::atomic<bool> retained_stable_{true};
@@ -54,14 +52,14 @@ class http1_tunnel_routes final {
         if (observed_value.finish_first_) {
             co_await tunnel_value.finish();
         }
-        std::optional<std::pmr::string> retained;
+        std::optional<std::string> retained;
         while (auto bytes = co_await tunnel_value.read()) {
             {
                 std::lock_guard lock(observed_value.mutex_);
                 observed_value.bytes_.append(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             }
             if (!retained) {
-                retained.emplace(reinterpret_cast<const char*>(bytes->data()), bytes->size(), ruvia::process_resource());
+                retained.emplace(reinterpret_cast<const char*>(bytes->data()), bytes->size());
             }
             if (!observed_value.finish_first_) {
                 auto output = tunnel_value.write(*bytes);
@@ -87,8 +85,8 @@ void exercise_connect(bool finish_first) {
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    const std::pmr::string initial_value(5007, 't', ruvia::process_resource());
-    const std::pmr::string additional(100003, 't', ruvia::process_resource());
+    const std::string initial_value(5007, 't');
+    const std::string additional(100003, 't');
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
@@ -100,9 +98,9 @@ void exercise_connect(bool finish_first) {
                     throw std::system_error(result_value.error_code());
                 }
             };
-            const std::pmr::string request(std::pmr::string("CONNECT HTTP1-TARGET.TEST:0443 HTTP/1.1\r\nHost: HTTP1-TARGET.TEST:0443\r\n\r\n", ruvia::process_resource()) + initial_value, ruvia::process_resource());
+            const std::string request(std::string("CONNECT HTTP1-TARGET.TEST:0443 HTTP/1.1\r\nHost: HTTP1-TARGET.TEST:0443\r\n\r\n") + initial_value);
             co_await send(request);
-            std::pmr::string head{ruvia::process_resource()};
+            std::string head{};
             char byte{};
             while (!head.ends_with("\r\n\r\n")) {
                 const auto read = co_await ruvia::async_asio<std::size_t>([&](auto handler) { client.async_read_some(asio::buffer(&byte, 1), std::move(handler)); });
@@ -112,10 +110,10 @@ void exercise_connect(bool finish_first) {
                 head.push_back(byte);
             }
             EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
-            EXPECT_TRUE(head.find("Content-Length:") == std::pmr::string::npos);
-            EXPECT_TRUE(head.find("Transfer-Encoding:") == std::pmr::string::npos);
+            EXPECT_TRUE(head.find("Content-Length:") == std::string::npos);
+            EXPECT_TRUE(head.find("Transfer-Encoding:") == std::string::npos);
             std::array<char, 4096> input{};
-            std::pmr::string echoed{ruvia::process_resource()};
+            std::string echoed{};
             if (!finish_first) {
                 co_await send(additional);
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
@@ -130,7 +128,7 @@ void exercise_connect(bool finish_first) {
                 }
                 echoed.append(input.data(), read.result());
             }
-            EXPECT_TRUE(echoed == (finish_first ? std::pmr::string{ruvia::process_resource()} : std::pmr::string(initial_value, ruvia::process_resource()) + additional));
+            EXPECT_TRUE(echoed == (finish_first ? std::string{} : std::string(initial_value) + additional));
             if (finish_first) {
                 co_await send(additional);
                 client.shutdown(asio::ip::tcp::socket::shutdown_send);
@@ -153,7 +151,7 @@ void exercise_connect(bool finish_first) {
     EXPECT_TRUE(observed->ended_ && observed->retained_stable_);
     {
         std::lock_guard lock(observed->mutex_);
-        EXPECT_TRUE(observed->bytes_ == std::pmr::string(initial_value, ruvia::process_resource()) + additional);
+        EXPECT_TRUE(observed->bytes_ == std::string(initial_value) + additional);
     }
 }
 
@@ -164,7 +162,7 @@ class http1_interim_routes final {
     RUVIA_ROUTES_END
 
     ruvia::task<ruvia::http_response> hints(ruvia::context& context_value) {
-        std::pmr::string link_value("</asset>; rel=preload", ruvia::process_resource());
+        std::string link_value("</asset>; rel=preload");
         const std::array<ruvia::http_header_view, 1> links{{{"link", link_value}}};
         auto first = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::early_hints, links));
         auto second = context_value.inform(ruvia::http_interim_response_head(ruvia::http_status::processing));
@@ -212,13 +210,13 @@ class http1_interim_routes final {
 };
 
 // Sends one closing request and returns every byte the server wrote until EOF.
-std::pmr::string exchange_closing_request(std::string_view request) {
+std::string exchange_closing_request(std::string_view request) {
     auto& io = ruvia::test::new_test_io_context();
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::http_server_fixture server(io);
     asio::ip::tcp::socket client(io);
     client.connect(server.endpoint());
-    std::pmr::string received{ruvia::process_resource()};
+    std::string received{};
     std::exception_ptr failure;
     auto run = [&]() -> ruvia::task<void> {
         asio::steady_timer watchdog_value(io, std::chrono::seconds(5));
@@ -265,24 +263,24 @@ TEST(Ruvia, http1_connect_routes_transfer_buffered_bytes_and_keep_receive_direct
 TEST(Ruvia, http1_interim_responses_reach_http11_clients_but_never_http10_clients) {
     const auto http11 = exchange_closing_request("GET /http1-early-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_TRUE(http11.starts_with("HTTP/1.1 103 "));
-    EXPECT_TRUE(http11.find("link: </asset>; rel=preload\r\n") != std::pmr::string::npos);
-    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 102 ") != std::pmr::string::npos);
-    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::pmr::string::npos);
+    EXPECT_TRUE(http11.find("link: </asset>; rel=preload\r\n") != std::string::npos);
+    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 102 ") != std::string::npos);
+    EXPECT_TRUE(http11.find("\r\n\r\nHTTP/1.1 200 ") != std::string::npos);
     EXPECT_TRUE(http11.ends_with("final"));
 
     // RFC 9110 15.2: an HTTP/1.0 client would take the 1xx head as the final
     // response, so the server omits it and sends only the final response.
     const auto http10 = exchange_closing_request("GET /http1-early-hints HTTP/1.0\r\nHost: localhost\r\n\r\n");
-    EXPECT_TRUE(http10.find(" 103 ") == std::pmr::string::npos);
-    EXPECT_TRUE(http10.find(" 102 ") == std::pmr::string::npos);
-    EXPECT_TRUE(std::string_view(http10).substr(0, http10.find("\r\n")).find(" 200 ") != std::pmr::string::npos);
+    EXPECT_TRUE(http10.find(" 103 ") == std::string::npos);
+    EXPECT_TRUE(http10.find(" 102 ") == std::string::npos);
+    EXPECT_TRUE(std::string_view(http10).substr(0, http10.find("\r\n")).find(" 200 ") != std::string::npos);
     EXPECT_TRUE(http10.ends_with("final"));
 }
 
 TEST(Ruvia, http1_unstarted_interim_responses_do_not_block_the_final_response) {
     const auto response = exchange_closing_request("GET /http1-cold-hints HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(response.find(" 103 ") == std::pmr::string::npos);
-    EXPECT_TRUE(response.find(" 102 ") == std::pmr::string::npos);
-    EXPECT_TRUE(response.find("cold-final") != std::pmr::string::npos);
+    EXPECT_TRUE(response.find(" 103 ") == std::string::npos);
+    EXPECT_TRUE(response.find(" 102 ") == std::string::npos);
+    EXPECT_TRUE(response.find("cold-final") != std::string::npos);
 }

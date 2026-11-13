@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <vector>
@@ -66,7 +65,7 @@ struct http3_quic_crypto_callbacks final {
 };
 
 // Connection lifecycle notifications for the owner; each, when set, receives
-// http3_quic_connection_options::callback_user_data_. A nonzero return fails
+// http3_quic_connection_options::callback_context_. A nonzero return fails
 // the connection as ngtcp2 documents for the callback.
 struct http3_quic_owner_callbacks final {
     // Issues a connection ID and its stateless reset token (RFC 9000 §5.1.1).
@@ -116,8 +115,7 @@ struct http3_quic_connection_options final {
     std::size_t max_udp_payload_size_{1350};
     // Bounded unreliable output retained until ngtcp2 accepts each frame.
     std::size_t max_pending_datagram_bytes_{64 * 1024};
-    void* callback_user_data_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
+    void* callback_context_{nullptr};
     // The connection installs its own received_data_credit_sink_: a returned
     // http3_received_data_credit extends the stream and connection receive
     // windows (RFC 9000 §4.1), so DATA credit returns only as the application
@@ -133,8 +131,7 @@ struct http3_quic_path final {
 };
 
 struct http3_quic_datagram final {
-    explicit http3_quic_datagram(
-        std::pmr::memory_resource* resource = nullptr);
+    http3_quic_datagram() noexcept;
     http3_quic_datagram(const http3_quic_datagram&) = delete;
     http3_quic_datagram& operator=(const http3_quic_datagram&) = delete;
     http3_quic_datagram(http3_quic_datagram&&) = delete;
@@ -142,7 +139,7 @@ struct http3_quic_datagram final {
 
     ngtcp2_path_storage path_{};
     std::uint32_t ecn_{NGTCP2_ECN_NOT_ECT};
-    std::pmr::vector<std::byte> bytes_;
+    std::vector<std::byte> bytes_;
 };
 
 // One QUIC v1 + HTTP/3 connection. ngtcp2 owns packet, loss recovery and flow
@@ -169,7 +166,7 @@ public:
     // (ngtcp2_crypto_conn_ref::get_conn); every other capability has a member.
     [[nodiscard]] ngtcp2_conn* native_handle() noexcept;
     [[nodiscard]] const ngtcp2_conn* native_handle() const noexcept;
-    [[nodiscard]] void* callback_user_data() const noexcept;
+    [[nodiscard]] void* callback_context() const noexcept;
     void set_tls_native_handle(void* tls_native_handle) noexcept;
     [[nodiscard]] bool handshake_completed() const noexcept;
     [[nodiscard]] bool after_retry() const noexcept;
@@ -257,7 +254,7 @@ private:
     class impl;
     explicit http3_quic_connection(http3_role role,
         const http3_quic_connection_options& options);
-    std::unique_ptr<impl, detail::http_pmr_object_deleter<impl>> impl_;
+    std::unique_ptr<impl> impl_;
 };
 
 // Writes a QUIC Stateless Reset packet (RFC 9000 §10.3) into `output`, using

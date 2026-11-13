@@ -4,7 +4,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/context.h"
@@ -54,18 +53,14 @@ const csrf_protection_config& csrf_protection::validate(const csrf_protection_co
     return source_value;
 }
 
-csrf_protection::csrf_protection(
-    const csrf_protection_config& validated, std::pmr::memory_resource* resource)
-    : cookie_name_(validated.cookie_name_, resource),
-      header_name_(validated.header_name_, resource) {}
-
 csrf_protection::csrf_protection()
     : csrf_protection(csrf_protection_config{}) {}
 
 csrf_protection::csrf_protection(const csrf_protection_config& config)
-    : csrf_protection(validate(config), process_resource()) {}
+    : cookie_name_(validate(config).cookie_name_),
+      header_name_(config.header_name_) {}
 
-task<void> csrf_protection::handle(context& c, next& next_value) {
+task<void> csrf_protection::invoke(context& c, next& next_value) {
     const auto method = c.req().known_method();
     const bool safe = method == http_known_method::get || method == http_known_method::head ||
                       method == http_known_method::options;

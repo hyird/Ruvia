@@ -24,19 +24,18 @@ void validate_db_sql_text(std::string_view sql) {
 }
 
 prepared_db_statement prepare_db_statement(
-    std::string_view sql, std::span<const db_value> params, std::pmr::memory_resource* resource) {
+    std::string_view sql, std::span<const db_value> params) {
     validate_db_sql_text(sql);
-    auto* resolved = pmr_resource_or_default(resource);
-    return prepared_db_statement{std::pmr::string(sql, resolved), detail::clone_db_values(params, resolved)};
+    return prepared_db_statement{std::string(sql), detail::clone_db_values(params)};
 }
 
 prepared_db_statement prepare_db_notify(
-    std::string_view channel, std::string_view payload, std::pmr::memory_resource* resource) {
+    std::string_view channel, std::string_view payload) {
     if (channel.empty()) {
         throw std::invalid_argument("database notify channel must not be empty");
     }
     const std::array<db_value, 2> params{db_value(channel), db_value(payload)};
-    return prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params, resource);
+    return prepare_db_statement("SELECT \"pg_notify\"($1::text, $2::text)", params);
 }
 
 namespace detail {
@@ -51,13 +50,13 @@ namespace {
 db_query_plan db_query_plan::prepare(const db_query& query, const db_query* count, const db_query_backend& backend) {
     const auto driver = db_pool_driver(backend.pool_);
     const auto prepare_step = [&](const db_query& input) {
-        auto statement = input.compile(driver, backend.resource_);
+        auto statement = input.compile(driver);
         if (!statement.returns_rows()) {
             throw std::invalid_argument(count ? "query and count require statements that return rows"
                                               : "query requires a statement that returns rows");
         }
 #ifdef RUVIA_ENABLE_REDIS
-        std::optional<std::pmr::string> key;
+        std::optional<std::string> key;
         if (backend.cache_ != nullptr) {
             key = backend.cache_->key(input, statement, driver);
         }
@@ -74,14 +73,14 @@ db_query_plan db_query_plan::prepare(const db_query& query, const db_query* coun
     return plan;
 }
 
-task<db_rows> query_db_backend(const db_query_backend& backend, std::pmr::string sql,
-    std::pmr::vector<db_value> params, operation_options& options) {
+task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
+    std::vector<db_value> params, operation_options& options) {
     return visit_db_pool(backend.pool_, [&](auto& pool) {
         if (backend.slot_.has_value()) {
             return pool.query_on_transaction_slot(
-                *backend.slot_, std::move(sql), std::move(params), backend.resource_, options);
+                *backend.slot_, std::move(sql), std::move(params), options);
         }
-        return pool.query(std::move(sql), std::move(params), backend.resource_, std::move(options), backend.io_metrics_);
+        return pool.query(std::move(sql), std::move(params), std::move(options), backend.io_metrics_);
     });
 }
 

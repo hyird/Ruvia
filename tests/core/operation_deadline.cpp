@@ -224,7 +224,7 @@ TEST(Ruvia, wide_positive_timeouts_remain_active_and_can_be_tightened) {
     EXPECT_EQ(retained.timeout_, tightened.timeout_);
 }
 
-TEST(Ruvia, timer_conversion_helpers_do_not_narrow_before_saturation) {
+TEST(Ruvia, timer_conversions_do_not_narrow_before_saturation) {
     using clock_type = std::chrono::steady_clock;
     using wide_ticks = std::chrono::duration<std::uint64_t, clock_type::duration::period>;
     const wide_ticks ticks(std::numeric_limits<std::uint64_t>::max());

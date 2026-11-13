@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <initializer_list>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -404,7 +403,7 @@ private:
     std::optional<stop_source> source_;
     stop_token output_;
     std::array<stop_registration, 2> parents_;
-    std::pmr::vector<stop_registration> extra_parents_;
+    std::vector<stop_registration> extra_parents_;
 };
 
 }  // namespace ruvia

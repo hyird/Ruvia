@@ -4,14 +4,12 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 
 namespace ruvia {
@@ -58,8 +56,7 @@ private:
 static_assert(std::is_trivially_copyable_v<query_row_count>);
 static_assert(sizeof(query_row_count) == sizeof(std::uint64_t));
 
-// A move-only entity collection. Elements share this collection's resource;
-// the resource owner must outlive the collection and every element.
+// A move-only entity collection.
 template <typename entity_type>
 class entity_rows final {
 public:
@@ -73,35 +70,15 @@ public:
     using iterator = entity_type*;
     using const_iterator = const entity_type*;
 
-    explicit entity_rows(std::pmr::memory_resource* resource = nullptr)
-        : rows_(pmr_resource_or_default(resource)) {}
-    template <typename owner_type>
-        requires requires(owner_type& owner) {
-            { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;
-        }
-    explicit entity_rows(owner_type& owner)
-        : entity_rows(owner.resource()) {}
+    entity_rows() noexcept = default;
     entity_rows(const entity_rows&) = delete;
     entity_rows& operator=(const entity_rows&) = delete;
     entity_rows(entity_rows&&) noexcept = default;
-    entity_rows& operator=(entity_rows&& other) {
-        if (this == &other) {
-            return *this;
-        }
-        auto* const target = resource();
-        if (other.resource() == target) {
-            std::pmr::vector<entity_type> rebound(std::move(other.rows_));
+    entity_rows& operator=(entity_rows&& other) noexcept {
+        if (this != &other) {
+            rows_ = std::move(other.rows_);
             other.rows_.clear();
-            rows_.swap(rebound);
-            return *this;
         }
-        std::pmr::vector<entity_type> rebound(target);
-        rebound.reserve(other.rows_.size());
-        for (const auto& item : other.rows_) {
-            rebound.push_back(item.rebind_for_rows(target));
-        }
-        rows_.swap(rebound);
-        other.rows_.clear();
         return *this;
     }
     [[nodiscard]] std::size_t size() const noexcept {
@@ -156,17 +133,11 @@ public:
         rows_.reserve(count);
     }
     void push_back(entity_type&& entity) {
-        if (entity.resource() != rows_.get_allocator().resource()) {
-            throw std::invalid_argument("entity result elements must use the result's memory resource");
-        }
         rows_.push_back(std::move(entity));
-    }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return rows_.get_allocator().resource();
     }
 
 private:
-    std::pmr::vector<entity_type> rows_;
+    std::vector<entity_type> rows_;
 };
 
 }  // namespace ruvia

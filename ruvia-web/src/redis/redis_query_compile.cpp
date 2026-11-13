@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <system_error>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_hex.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/detail/redis/redis_orm.h"
@@ -81,8 +80,8 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
     throw std::invalid_argument("Redis index kind must be TAG, TEXT or NUMERIC");
 }
 
-[[nodiscard]] std::pmr::string redis_index_name(std::string_view prefix, std::pmr::memory_resource* resource) {
-    std::pmr::string result_value(resource);
+[[nodiscard]] std::string redis_index_name(std::string_view prefix) {
+    std::string result_value;
     result_value.reserve(prefix.size() + 4U);
     result_value.append(prefix);
     result_value.append(":idx");
@@ -93,9 +92,9 @@ void require_index_fits_column(redis_index_kind index_kind, redis_column_kind co
 // marker. Index columns are safe identifiers (normalize_redis_mapping), and
 // queries only name shadows of index columns; entity writes use the declared
 // column names as they are.
-[[nodiscard]] std::pmr::string shadow_field(
-    std::string_view shadow, std::string_view field, std::pmr::memory_resource* resource) {
-    std::pmr::string result_value(resource);
+[[nodiscard]] std::string shadow_field(
+    std::string_view shadow, std::string_view field) {
+    std::string result_value;
     result_value.reserve(shadow.size() + field.size());
     result_value.append(shadow);
     result_value.append(field);
@@ -240,7 +239,7 @@ struct redis_column_comparison final {
 
 // `@shadow_field:{value}`
 void append_shadow_tag_term(
-    std::pmr::string& output, std::string_view shadow, std::string_view field, std::string_view value) {
+    std::string& output, std::string_view shadow, std::string_view field, std::string_view value) {
     output.reserve(output.size() + 4U + shadow.size() + field.size() + value.size());
     output.push_back('@');
     output.append(shadow);
@@ -252,7 +251,7 @@ void append_shadow_tag_term(
 
 // `@field:{x<hex>}`
 void append_encoded_tag_term(
-    std::pmr::string& output, std::string_view field, std::string_view raw_value) {
+    std::string& output, std::string_view field, std::string_view raw_value) {
     output.reserve(output.size() + 5U + field.size() + raw_value.size() * 2U);
     output.push_back('@');
     output.append(field);
@@ -263,7 +262,7 @@ void append_encoded_tag_term(
 
 // `@field:[low high]`; a bound prefixed with '(' is exclusive.
 void append_numeric_range(
-    std::pmr::string& output, std::string_view field, std::string_view low, std::string_view high) {
+    std::string& output, std::string_view field, std::string_view low, std::string_view high) {
     output.reserve(output.size() + 5U + field.size() + low.size() + high.size());
     output.push_back('@');
     output.append(field);
@@ -274,14 +273,14 @@ void append_numeric_range(
     output.push_back(']');
 }
 
-void append_presence(std::pmr::string& output, std::string_view field) {
+void append_presence(std::string& output, std::string_view field) {
     // Presence markers are written as the raw value 1. They are indexed as a
     // TAG shadow field, but are not passed through the user TAG encoding.
     append_shadow_tag_term(output, present_shadow, field, present_value);
 }
 
 // `field IS NULL` / `field IS NOT NULL` through the presence shadow.
-void append_null_comparison(std::pmr::string& output, std::string_view field,
+void append_null_comparison(std::string& output, std::string_view field,
     redis_binary_operator operation, const char* unsupported) {
     if (operation == redis_binary_operator::equal) {
         output.push_back('-');
@@ -293,7 +292,7 @@ void append_null_comparison(std::pmr::string& output, std::string_view field,
     }
 }
 
-void append_tag_comparison(std::pmr::string& output, std::string_view field, const redis_literal& value,
+void append_tag_comparison(std::string& output, std::string_view field, const redis_literal& value,
     redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
         append_null_comparison(output, field, operation, "unsupported NULL TAG comparison");
@@ -318,7 +317,7 @@ void append_tag_comparison(std::pmr::string& output, std::string_view field, con
     }
 }
 
-void append_numeric_comparison(std::pmr::string& output, std::string_view field, const redis_literal& value,
+void append_numeric_comparison(std::string& output, std::string_view field, const redis_literal& value,
     redis_column_kind column_kind, redis_binary_operator operation) {
     if (value.kind() == redis_literal_kind::null) {
         append_null_comparison(output, field, operation, "unsupported NULL NUMERIC comparison");
@@ -369,11 +368,10 @@ void append_numeric_comparison(std::pmr::string& output, std::string_view field,
 // Compiles one predicate tree against one repository mapping.
 class redis_query_compiler final {
 public:
-    redis_query_compiler(const redis_mapping& mapping, std::pmr::memory_resource* resource) noexcept
-        : mapping_(mapping),
-          resource_(resource) {}
+    redis_query_compiler(const redis_mapping& mapping) noexcept
+        : mapping_(mapping) {}
 
-    void append_predicate(std::pmr::string& output, const redis_predicate_storage& predicate) const {
+    void append_predicate(std::string& output, const redis_predicate_storage& predicate) const {
         append_expression(output, predicate.nodes_, predicate.nodes_[predicate.root_], 0U);
     }
 
@@ -384,18 +382,18 @@ public:
         }
     }
 
-    [[nodiscard]] std::pmr::string sort_field(std::string_view field) const {
+    [[nodiscard]] std::string sort_field(std::string_view field) const {
         validate_sort_field(field);
         if (mapping_.index_kind(field) == redis_index_kind::tag) {
-            return shadow_field(sort_shadow, field, resource_);
+            return shadow_field(sort_shadow, field);
         }
-        return std::pmr::string(field, resource_);
+        return std::string(field);
     }
 
 private:
     using nodes_type = std::span<const redis_predicate_node>;
 
-    void append_expression(std::pmr::string& output, nodes_type nodes, const redis_predicate_node& node,
+    void append_expression(std::string& output, nodes_type nodes, const redis_predicate_node& node,
         std::size_t depth) const {
         constexpr std::size_t max_depth = 64U;
         if (depth > max_depth) {
@@ -436,7 +434,7 @@ private:
         }
     }
 
-    void append_comparison(std::pmr::string& output, nodes_type nodes, const redis_predicate_node& node) const {
+    void append_comparison(std::string& output, nodes_type nodes, const redis_predicate_node& node) const {
         const auto comparison = column_comparison(mapping_, nodes, node);
         const auto field = comparison.column_.name_;
         const auto& value = comparison.operand_.literal_;
@@ -463,7 +461,7 @@ private:
         throw std::invalid_argument("Redis TEXT predicates are not exposed by redis_predicate");
     }
 
-    void append_in_list(std::pmr::string& output, nodes_type nodes, const redis_predicate_node& node) const {
+    void append_in_list(std::string& output, nodes_type nodes, const redis_predicate_node& node) const {
         const auto comparison = column_comparison(mapping_, nodes, node);
         const auto field = comparison.column_.name_;
         const auto& items = comparison.operand_.operands_;
@@ -514,7 +512,7 @@ private:
         }
     }
 
-    void append_between(std::pmr::string& output, nodes_type nodes, const redis_predicate_node& node) const {
+    void append_between(std::string& output, nodes_type nodes, const redis_predicate_node& node) const {
         const auto comparison = column_comparison(mapping_, nodes, node);
         if (node.operands_.size() < 3U) {
             throw std::logic_error("invalid Redis predicate expression");
@@ -534,7 +532,6 @@ private:
     }
 
     const redis_mapping& mapping_;
-    std::pmr::memory_resource* resource_;
 };
 
 // Written values are our own encodings of numeric columns, so this only
@@ -566,7 +563,7 @@ void append_delete(redis_orm_arguments_type& args, field_type&& field) {
 }  // namespace
 
 redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix,
-    const redis_repository_config& config, std::pmr::memory_resource* resource) {
+    const redis_repository_config& config) {
     const std::string_view prefix = config.prefix_.empty() ? entity_prefix : std::string_view(config.prefix_);
     if (prefix.empty()) {
         throw std::invalid_argument("Redis entity prefix cannot be empty");
@@ -579,10 +576,9 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
             throw std::invalid_argument("Redis entity column uses reserved __ruvia_ namespace");
         }
     }
-    resource = pmr_resource_or_default(resource);
-    redis_mapping result_value{columns, std::pmr::string(entity_prefix, resource), std::pmr::string(prefix, resource),
-        redis_entity_storage_prefix(prefix, resource), std::pmr::vector<redis_index_definition>(resource),
-        std::pmr::vector<redis_index_kind>(columns.size(), redis_index_kind::none, resource)};
+    redis_mapping result_value{columns, std::string(entity_prefix), std::string(prefix),
+        redis_entity_storage_prefix(prefix), std::vector<redis_index_definition>{},
+        std::vector<redis_index_kind>(columns.size(), redis_index_kind::none)};
     result_value.indexes_.reserve(config.indexes_.size());
     for (const auto& index : config.indexes_) {
         const std::string_view field = index.column_;
@@ -599,14 +595,14 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
             throw std::invalid_argument("invalid Redis index column name");
         }
         require_index_fits_column(index.kind_, column->kind_);
-        result_value.indexes_.push_back({std::pmr::string(field, resource), index.kind_, index.sortable_});
+        result_value.indexes_.push_back({std::string(field), index.kind_, index.sortable_});
         column_index_kind = index.kind_;
     }
     return result_value;
 }
 
-std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resource* resource) {
-    std::pmr::string encoded(pmr_resource_or_default(resource));
+std::string encode_redis_tag(std::string_view value) {
+    std::string encoded;
     encoded.reserve(value.size() * 2U + 1U);
     encoded.push_back('x');
     http_append_lower_hex(encoded, value);
@@ -618,22 +614,19 @@ std::pmr::string encode_redis_tag(std::string_view value, std::pmr::memory_resou
 namespace ruvia {
 
 redis_search_mapping::redis_search_mapping(const redis_search_mapping& other)
-    : redis_search_mapping(other, other.resource()) {}
-
-redis_search_mapping::redis_search_mapping(const redis_search_mapping& other, std::pmr::memory_resource* resource)
-    : mapping_{other.mapping_.columns_, std::pmr::string(other.mapping_.entity_prefix_, resource),
-          std::pmr::string(other.mapping_.prefix_, resource), std::pmr::string(other.mapping_.storage_prefix_, resource),
-          std::pmr::vector<detail::redis_index_definition>(resource),
-          std::pmr::vector<redis_index_kind>(other.mapping_.column_index_kinds_, resource)} {
+    : mapping_{other.mapping_.columns_, std::string(other.mapping_.entity_prefix_),
+          std::string(other.mapping_.prefix_), std::string(other.mapping_.storage_prefix_),
+          std::vector<detail::redis_index_definition>{},
+          std::vector<redis_index_kind>(other.mapping_.column_index_kinds_)} {
     mapping_.indexes_.reserve(other.mapping_.indexes_.size());
     for (const auto& index : other.mapping_.indexes_) {
-        mapping_.indexes_.push_back({std::pmr::string(index.column_, resource), index.kind_, index.sortable_});
+        mapping_.indexes_.push_back({std::string(index.column_), index.kind_, index.sortable_});
     }
 }
 
 redis_search_mapping& redis_search_mapping::operator=(const redis_search_mapping& other) {
     if (this != &other) {
-        redis_search_mapping replacement(other, resource());
+        redis_search_mapping replacement(other);
         swap(replacement);
     }
     return *this;
@@ -641,11 +634,7 @@ redis_search_mapping& redis_search_mapping::operator=(const redis_search_mapping
 
 redis_search_mapping& redis_search_mapping::operator=(redis_search_mapping&& other) {
     if (this != &other) {
-        if (resource() == other.resource()) {
-            swap(other);
-        } else {
-            *this = other;
-        }
+        swap(other);
     }
     return *this;
 }
@@ -669,10 +658,12 @@ redis_compiled_command redis_search_mapping::compile_find(
     const redis_find_options& options, redis_search_mode mode) const {
     require_valid();
     const auto& mapping = mapping_;
-    auto* resource = this->resource();
-    const detail::redis_query_compiler compiler(mapping, resource);
+    const detail::redis_query_compiler compiler(mapping);
     const auto skip = options.skip_ ? options.skip_->value() : 0U;
     const auto requested_take = options.take_ ? options.take_->value() : redis_find_default_take;
+    if (!std::in_range<std::int64_t>(skip) || !std::in_range<std::int64_t>(requested_take)) {
+        throw std::invalid_argument("Redis search skip and take must fit in 64-bit signed range");
+    }
     std::uint64_t take = requested_take;
     bool count_only = false;
     switch (mode) {
@@ -687,7 +678,7 @@ redis_compiled_command redis_search_mapping::compile_find(
         default:
             throw std::invalid_argument("invalid Redis search mode");
     }
-    std::optional<std::pmr::string> sort_field_name;
+    std::optional<std::string> sort_field_name;
     if (options.order_.has_value()) {
         const auto& order = *options.order_;
         if (count_only) {
@@ -703,24 +694,24 @@ redis_compiled_command redis_search_mapping::compile_find(
                 throw std::invalid_argument("invalid Redis order direction");
         }
     }
-    std::pmr::string query(resource);
+    std::string query;
     if (const auto* predicate = detail::redis_predicate_access::storage(options.where_)) {
         query.reserve(predicate->nodes_.size() * 24U);
         compiler.append_predicate(query, *predicate);
     } else {
         query = "*";
     }
-    std::pmr::vector<std::pmr::string> args(resource);
+    std::vector<std::string> args;
     args.reserve(sort_field_name.has_value() ? 11U : 8U);
     args.emplace_back("FT.SEARCH");
-    args.push_back(detail::redis_index_name(mapping.prefix_, resource));
+    args.push_back(detail::redis_index_name(mapping.prefix_));
     args.emplace_back(std::move(query));
     args.emplace_back("LIMIT");
     if (count_only) {
         args.emplace_back("0");
         args.emplace_back("0");
     } else {
-        std::pmr::string encoded_skip(resource), encoded_take(resource);
+        std::string encoded_skip, encoded_take;
         http_append_unsigned(encoded_skip, skip);
         http_append_unsigned(encoded_take, take);
         args.emplace_back(std::move(encoded_skip));
@@ -739,7 +730,6 @@ redis_compiled_command redis_search_mapping::compile_find(
 redis_compiled_command redis_search_mapping::compile_create_index() const {
     require_valid();
     const auto& mapping = mapping_;
-    auto* resource = this->resource();
     // A mapping without indexes is valid for key-based access only.
     if (mapping.indexes_.empty()) {
         throw std::invalid_argument("Redis repository requires at least one index column");
@@ -752,10 +742,10 @@ redis_compiled_command redis_search_mapping::compile_create_index() const {
             arg_count += definition.sortable_ ? 8U : 7U;
         }
     }
-    std::pmr::vector<std::pmr::string> args(resource);
+    std::vector<std::string> args;
     args.reserve(arg_count);
     args.emplace_back("FT.CREATE");
-    args.push_back(detail::redis_index_name(mapping.prefix_, resource));
+    args.push_back(detail::redis_index_name(mapping.prefix_));
     args.emplace_back("ON");
     args.emplace_back("HASH");
     args.emplace_back("PREFIX");
@@ -765,7 +755,7 @@ redis_compiled_command redis_search_mapping::compile_create_index() const {
     for (const auto& definition : mapping.indexes_) {
         const std::string_view field = definition.column_;
         if (definition.kind_ == redis_index_kind::tag) {
-            args.push_back(detail::shadow_field(detail::tag_shadow, field, resource));
+            args.push_back(detail::shadow_field(detail::tag_shadow, field));
             args.emplace_back("AS");
             args.emplace_back(field);
             args.emplace_back("TAG");
@@ -777,7 +767,7 @@ redis_compiled_command redis_search_mapping::compile_create_index() const {
                 args.emplace_back("SORTABLE");
             }
         }
-        auto presence = detail::shadow_field(detail::present_shadow, field, resource);
+        auto presence = detail::shadow_field(detail::present_shadow, field);
         args.emplace_back(presence);
         args.emplace_back("AS");
         args.push_back(std::move(presence));
@@ -786,7 +776,7 @@ redis_compiled_command redis_search_mapping::compile_create_index() const {
         if (definition.kind_ == redis_index_kind::tag && definition.sortable_) {
             args.emplace_back(field);
             args.emplace_back("AS");
-            args.push_back(detail::shadow_field(detail::sort_shadow, field, resource));
+            args.push_back(detail::shadow_field(detail::sort_shadow, field));
             args.emplace_back("TAG");
             args.emplace_back("SORTABLE");
             args.emplace_back("NOINDEX");
@@ -797,11 +787,10 @@ redis_compiled_command redis_search_mapping::compile_create_index() const {
 
 redis_compiled_command redis_search_mapping::compile_drop_index() const {
     require_valid();
-    auto* resource = this->resource();
-    std::pmr::vector<std::pmr::string> args(resource);
+    std::vector<std::string> args;
     args.reserve(2U);
     args.emplace_back("FT.DROPINDEX");
-    args.push_back(detail::redis_index_name(mapping_.prefix_, resource));
+    args.push_back(detail::redis_index_name(mapping_.prefix_));
     return redis_compiled_command(std::move(args));
 }
 
@@ -836,13 +825,12 @@ std::optional<std::string_view> redis_primary_key(
 }
 
 void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view field,
-    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value,
-    std::pmr::memory_resource* resource) {
+    std::optional<std::string_view> value, bool numeric_index, bool tag_shadow_value) {
     if (!value) {
         append_delete(args, field);
-        append_delete(args, shadow_field(present_shadow, field, resource));
+        append_delete(args, shadow_field(present_shadow, field));
         if (tag_shadow_value) {
-            append_delete(args, shadow_field(tag_shadow, field, resource));
+            append_delete(args, shadow_field(tag_shadow, field));
         }
         return;
     }
@@ -850,9 +838,9 @@ void append_redis_entity_field(redis_orm_arguments_type& args, std::string_view 
         require_exact_numeric_text(*value);
     }
     append_set(args, field, *value);
-    append_set(args, shadow_field(present_shadow, field, resource), present_value);
+    append_set(args, shadow_field(present_shadow, field), present_value);
     if (tag_shadow_value) {
-        append_set(args, shadow_field(tag_shadow, field, resource), encode_redis_tag(*value, resource));
+        append_set(args, shadow_field(tag_shadow, field), encode_redis_tag(*value));
     }
 }
 

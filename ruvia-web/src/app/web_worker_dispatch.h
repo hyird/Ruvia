@@ -14,8 +14,8 @@ namespace ruvia::detail {
 class worker_capabilities;
 class worker_state_registry;
 
-// The endpoint behind every web_worker_handle. Core owns admission: posts go
-// through worker_handle::post_payload and accepted jobs start only while that
+// The endpoint behind every web_worker_ref. Core owns admission: posts go
+// through worker_ref::post_payload and accepted jobs start only while that
 // worker accepts and its stop token is clear. Started jobs run in the worker's
 // task_scope, which the server worker joins before retiring capabilities.
 //
@@ -33,7 +33,7 @@ public:
     web_worker_dispatch(const web_worker_dispatch&) = delete;
     web_worker_dispatch& operator=(const web_worker_dispatch&) = delete;
 
-    [[nodiscard]] static web_worker_handle handle(std::shared_ptr<web_worker_dispatch> dispatch) noexcept;
+    [[nodiscard]] static web_worker_ref make_ref(std::shared_ptr<web_worker_dispatch> dispatch) noexcept;
     [[nodiscard]] bool valid() const noexcept;
     [[nodiscard]] bool accepting() const noexcept;
     [[nodiscard]] bool is_current() const noexcept;
@@ -50,7 +50,7 @@ private:
     [[nodiscard]] ruvia::task<void> run(job_type job);
 
     // A stable copy: queries stay valid after the server's runtime is gone.
-    worker_handle worker_;
+    worker_ref worker_;
     ruvia::worker_runtime& runtime_;
     worker_client_registry_view client_registries_;
     const worker_state_registry& worker_states_;

@@ -30,14 +30,14 @@ flowchart TB
     end
     subgraph core ["ruvia-core (ruvia::core) — 独立运行时底座"]
         c_rt["协程 task / standalone Asio 事件循环 / 单一 steady_timer 最小堆 / stop_token"]
-        c_pool["有界通道 / pool_lease_scheduler / blocking_pool / mimalloc PMR 资源"]
+        c_pool["有界通道 / pool_lease_scheduler / blocking_pool / mimalloc 线程堆回收"]
     end
     subgraph http ["ruvia-http (ruvia::http) — 纯 Sans-I/O 协议引擎"]
         h_proto["HTTP/1.x / HTTP/2 / HTTP/3 / HPACK / QPACK / QUIC / 内容编码 / Multipart / Range / Cookie / WebSocket / Capsule"]
     end
 
     web -->|"消费纯值协议计划驱动异步读写与超时"| http
-    web -->|"复用事件循环、协程、租约调度与 PMR"| core
+    web -->|"复用事件循环、协程与租约调度"| core
 ```
 
 - **单向无环依赖**：`ruvia-http` 不依赖 `core`、Asio、socket、定时器、OpenSSL 或 mimalloc；`ruvia-core` 不含任何 HTTP/Web、TLS、压缩或数据后端语义。
@@ -73,20 +73,17 @@ flowchart TB
 
 ```mermaid
 flowchart BT
-    subgraph req ["请求级借用 (Context — 不设独立池层)"]
-        arena["c.arena() : request_memory<br/>monotonic_buffer_resource (初始块默认 4 KiB，支持 fork())"]
-        temporary["c.pool() : process_resource()<br/>中途释放 / 循环扩容 / DB & Redis 零拷贝 swap"]
+    subgraph req ["请求与连接级治理（零额外池层）"]
+        containers["标准拥有型容器与协程帧<br/>(std::string / std::vector / task frame)"]
+        budget["inbound_buffer_account & inbound_buffer_budget<br/>单连接级 + Worker 级两级实时入站字节上限"]
     end
-    process["process_resource()<br/>进程寿命、线程安全的 mimalloc 薄 PMR 适配（分配落在调用线程的线程堆）"]
-    allocator["mimalloc<br/>线程堆 / 尺寸类 / 页管理 / 空闲块复用 / purge"]
+    allocator["mimalloc-static (全局接管)<br/>线程堆 / 尺寸类 / 页管理 / 空闲块复用 / collect_thread_heap()"]
 
-    arena -->|"溢出分配 / 请求结束整批归还"| process
-    temporary -.->|"逐块分配 / deallocate 回收复用"| process
-    process --> allocator
+    containers -->|"直接分配与释放"| allocator
+    budget -.->|"实时配额守卫（超限抛 std::bad_alloc -> 503）"| containers
 ```
 
-- **原生分配器与零额外池层**：不另建 `mi_heap_t`、Worker 级资源、尺寸类、空闲块或协程帧缓存，不篡改全局默认 PMR，不设隐式 `thread_local` 业务池，Asio 小块与 awaitable 帧缓存统一关闭；分配器策略优先用 mimalloc 默认值与构建选项表达，完全空闲时仅调 `collect_thread_heap()`。
-- **PMR 资源传递与异常提升**：PMR 对象构造继承源资源、赋值保留目标资源（同资源 `swap`，跨资源递归重绑定后 `swap`）；异常抛出时将动态诊断负载提升至 `process_resource()`。
+- **原生分配器与零额外池层**：全仓直接使用标准容器与 `mimalloc` 原生分配，不设 `std::pmr` 包装层、请求单调 Arena、`mi_heap_t`、Worker 级资源、尺寸类、空闲块或协程帧缓存，不设隐式 `thread_local` 业务池，Asio 小块与 awaitable 帧缓存统一关闭；分配器策略用 mimalloc 默认值与构建选项表达，完全空闲时仅调 `collect_thread_heap()`。
 - **最短内存生命周期**：异步入口返回前完成输入拥有化，构造冷任务后、进入 I/O 挂起前立即释放临时源容器；空结果或零长消息不分配数据块、不占配额。
 - **栈上 SBO 与缓冲水位线**：高频短数据与小回调采用栈上 SBO；长连接缓冲按水位线保留小容量、超限归还大块并在空闲周期触发 `trim`；流式缓冲 `consume()` 仅推游标，待已消费前缀覆盖存活后缀时才 $O(1)$ 摊销前移压缩。
 - **两级实时内存预算**：入站缓冲强制执行 worker 级与单连接级两级实时内存上限，超限直接抛出 `std::bad_alloc`。
@@ -141,7 +138,7 @@ sequenceDiagram
     C->>IO: 原始字节流 (TCP TLS / QUIC)
     IO->>P: 输入视图
     P-->>IO: 解析结果与协议计划
-    IO->>M: Context (借用请求 Arena)
+    IO->>M: Context (请求与连接元数据视图)
     M->>H: 路由分发
     H-->>M: 填充响应元数据 (draft -> edit_response -> policy)
     M-->>IO: 响应提交与流式控制
@@ -169,7 +166,7 @@ sequenceDiagram
 - **响应提交与流式关连**：HSTS 仅限 `https`，`session` 在响应头 commit 时轮换 ID；一旦提交流式或升级输出，下游异常必须重抛并关闭连接。
 - **Model Schema 与 ORM**：`model_type` 编译期 schema 中必填、可选、可空、默认值与清空语义正交独立；ORM 与直接查询路线独立，映射结果递归拥有数据，分页关联加载经根主键子查询复用外层 `WITH`。
 - **数据库驱动与事务**：严禁持有数据库事务或锁等待远程网络 I/O；建连前异步预解析地址（PG 生成平行 `host / hostaddr`），预处理缓存“二次命中才 prepare”与代际 LRU 淘汰；PG `PQflush` 期间同步 `PQconsumeInput` 防死锁，MariaDB 禁 `LOCAL INFILE` 并释放 >64 KiB 宽列缓冲；事务内独占连接且禁读写共享查询缓存，流式结果在四个出口精确归还连接一次，迁移限单语句且只追加。
-- **Redis 与查询缓存（`RUVIAQC2`）**：常规池与阻塞池物理隔离，ORM Lua 写前先校验类型与必填字段；`RUVIAQC2` 查询缓存对八元组算 SHA-256 并按形状分键失效（取消或停机立即上抛）。
+- **Redis 与查询缓存（`RUVIAQC`）**：常规池与阻塞池物理隔离，ORM Lua 写前先校验类型与必填字段；`RUVIAQC` 查询缓存对八元组算 SHA-256 并按形状分键失效（取消或停机立即上抛）。
 
 ---
 

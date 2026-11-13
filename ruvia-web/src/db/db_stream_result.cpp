@@ -11,12 +11,9 @@
 // connection exactly once.
 
 namespace ruvia {
-db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot,
-    std::pmr::memory_resource* resource, operation_options options) noexcept
+db_stream_result::lease_type::lease_type(detail::db_pool_ref_type client, std::size_t slot, operation_options options) noexcept
     : client_(client),
       slot_(slot),
-      resource_(pmr_resource_or_default(resource)),
-      fields_(resource_),
       options_(std::move(options)) {}
 
 void db_stream_result::lease_type::abort() noexcept {
@@ -24,15 +21,14 @@ void db_stream_result::lease_type::abort() noexcept {
 }
 
 db_stream_result::state_type::state_type(
-    lease_type lease, std::pmr::vector<std::pmr::string> column_names) noexcept
+    lease_type lease, std::vector<std::string> column_names) noexcept
     : column_names_(std::move(column_names)),
       operation_(std::move(lease)) {}
 
 db_stream_result::db_stream_result(detail::db_pool_ref_type client, std::size_t slot,
-    std::pmr::vector<std::pmr::string> column_names, std::pmr::memory_resource* resource,
+    std::vector<std::string> column_names,
     operation_options options)
-    : state_(make_pmr_object<state_type>(
-          resource, lease_type{client, slot, resource, std::move(options)}, std::move(column_names))) {}
+    : state_(std::make_unique<state_type>(lease_type{client, slot, std::move(options)}, std::move(column_names))) {}
 
 db_stream_result::db_stream_result(db_stream_result&& other) noexcept
     : state_(std::move(other.state_)),
@@ -45,10 +41,10 @@ bool db_stream_result::active() const noexcept {
     return state_ != nullptr && state_->operation_.active();
 }
 
-std::span<const std::pmr::string> db_stream_result::column_names() const& {
+std::span<const std::string> db_stream_result::column_names() const& {
     registration_.require_active();
-    return state_ != nullptr ? std::span<const std::pmr::string>(state_->column_names_)
-                             : std::span<const std::pmr::string>{};
+    return state_ != nullptr ? std::span<const std::string>(state_->column_names_)
+                             : std::span<const std::string>{};
 }
 
 void db_stream_result::bind_operation_scope(
@@ -88,14 +84,14 @@ task<std::optional<db_row>> db_stream_result::read(operation_options operation) 
 
 task<std::optional<db_row>> db_stream_result::read_task(
     detail::request_io_metrics* io_metrics, operation_guard_type pending,
-    std::pmr::vector<std::pmr::string>& column_names, operation_options operation_value) {
+    std::vector<std::string>& column_names, operation_options operation_value) {
     detail::scoped_request_io_timer timer(io_metrics, detail::request_io_kind::db);
     operation_guard_type operation(std::move(pending));
     operation.start();
     auto effective = admit_stream_operation(operation, std::move(operation_value));
     auto& lease_value = operation.lease();
     auto row = co_await detail::visit_db_pool(lease_value.client_, [&](auto& client) {
-        return client.read_stream_row(lease_value.slot_, lease_value.fields_, column_names, lease_value.resource_, effective);
+        return client.read_stream_row(lease_value.slot_, lease_value.fields_, column_names, effective);
     });
     if (row) {
         operation.finish_active();

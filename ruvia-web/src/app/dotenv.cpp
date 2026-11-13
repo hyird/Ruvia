@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <fstream>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <system_error>
@@ -16,7 +15,6 @@
 #include <unistd.h>
 #endif
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "app/env_state.h"
@@ -34,13 +32,9 @@ template <typename variables_type>
 }  // namespace
 
 env::env()
-    : state_(construct_pmr_object<detail::env_state>(process_resource())) {}
+    : state_(std::make_unique<detail::env_state>()) {}
 
 env::~env() = default;
-
-void env::state_deleter_type::operator()(detail::env_state* state_value) const noexcept {
-    destroy_pmr_object(state_value, process_resource());
-}
 
 std::optional<std::string_view> env::get(std::string_view name) const& noexcept {
     const auto& variables = state_->variables_;
@@ -87,7 +81,7 @@ std::size_t env::size() const noexcept {
 
 std::filesystem::path detail::dotenv_executable_directory() {
 #ifdef _WIN32
-    std::pmr::wstring buffer(260, L'\0', process_resource());
+    std::wstring buffer(260, L'\0');
     for (;;) {
         const auto length =
             ::GetModuleFileNameW(nullptr, buffer.data(), static_cast<DWORD>(buffer.size()));
@@ -101,7 +95,7 @@ std::filesystem::path detail::dotenv_executable_directory() {
         buffer.resize(buffer.size() * 2);
     }
 #else
-    std::pmr::vector<char> buffer(1024, process_resource());
+    std::vector<char> buffer(1024);
     for (;;) {
         const auto length = ::readlink("/proc/self/exe", buffer.data(), buffer.size());
         if (length < 0) {
@@ -117,10 +111,9 @@ std::filesystem::path detail::dotenv_executable_directory() {
 #endif
 }
 
-std::pmr::string detail::dotenv_path_message(std::string_view prefix, const std::filesystem::path& path) {
-    const auto name = path.string<char8_t, std::char_traits<char8_t>, std::pmr::polymorphic_allocator<char8_t>>(
-        std::pmr::polymorphic_allocator<char8_t>(process_resource()));
-    std::pmr::string result_value(prefix, process_resource());
+std::string detail::dotenv_path_message(std::string_view prefix, const std::filesystem::path& path) {
+    const auto name = path.u8string();
+    std::string result_value(prefix);
     result_value.append(reinterpret_cast<const char*>(name.data()), name.size());
     return result_value;
 }

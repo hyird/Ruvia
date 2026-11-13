@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <utility>
 
@@ -42,13 +41,13 @@ private:
 
     http1_client_exchange_state(http_known_method method, http1_close_policy close_policy,
         detail::http1_client_initial_content_state content_state,
-        std::pmr::string offered_upgrade_protocols) noexcept
+        std::string offered_upgrade_protocols) noexcept
         : offered_upgrade_protocols_(std::move(offered_upgrade_protocols)),
           method_(method),
           close_policy_(close_policy),
           content_state_(content_state) {}
 
-    std::pmr::string offered_upgrade_protocols_;
+    std::string offered_upgrade_protocols_;
     http_known_method method_{http_known_method::unknown};
     http1_close_policy close_policy_{http1_close_policy::allow_reuse};
     detail::http1_client_initial_content_state content_state_{

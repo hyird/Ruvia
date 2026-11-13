@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,7 +12,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request_target.h"
@@ -62,10 +60,9 @@ inline constexpr std::int64_t max_cookie_age_seconds = 34560000;
 
 // Writes cookie_request_pair_size(name, value) bytes at out and returns the
 // end of the written pair. Only inputs overlapping the written bytes need a
-// snapshot: short snapshots use the stack, otherwise resource (default if null).
+// snapshot: short snapshots use the stack, otherwise heap storage.
 // Allocation failure leaves the output untouched.
-char* write_cookie_request_pair(
-    char* out, std::string_view name, std::string_view value, std::pmr::memory_resource* resource = nullptr);
+char* write_cookie_request_pair(char* out, std::string_view name, std::string_view value);
 
 // Cookie request pairs always include '=', including for an empty name.
 // Inputs may borrow header_value, including its terminating NUL.
@@ -104,12 +101,8 @@ void append_cookie_request_pair(string& header_value, std::string_view name, std
     }
     // The pair is written before the separator, which would otherwise
     // overwrite a borrowed terminator first.
-    std::pmr::memory_resource* resource = nullptr;
-    if constexpr (requires { header_value.get_allocator().resource(); }) {
-        resource = header_value.get_allocator().resource();
-    }
     try {
-        (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value, resource);
+        (void)write_cookie_request_pair(bytes + start + separator_bytes, name, value);
     } catch (...) {
         header_value.resize(start);
         throw;
@@ -243,7 +236,6 @@ private:
 struct http_cookie_jar_options final {
     std::size_t max_cookies_{256};
     std::size_t max_cookie_bytes_{std::size_t{32} * 1024};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // Sans-I/O RFC 6265 client cookie jar for a fixed origin. Validates Domain,
@@ -267,10 +259,9 @@ public:
         std::span<const http_header_view> headers,
         std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
-    [[nodiscard]] std::pmr::string cookie_header(std::string_view request_target,
+    [[nodiscard]] std::string cookie_header(std::string_view request_target,
         bool include_received = true,
-        std::chrono::system_clock::time_point now = std::chrono::system_clock::now(),
-        std::pmr::memory_resource* resource = nullptr);
+        std::chrono::system_clock::time_point now = std::chrono::system_clock::now());
 
     template <typename fn_type>
     void visit_matching_cookies(std::string_view request_target, bool include_received,
@@ -319,23 +310,22 @@ public:
 
 private:
     struct stored_cookie final {
+        stored_cookie(std::string_view name, std::string_view value)
+            : stored_cookie(name, value, "/", {}) {}
         stored_cookie(std::string_view name, std::string_view value,
-            std::pmr::memory_resource* resource)
-            : stored_cookie(name, value, "/", {}, resource) {}
-        stored_cookie(std::string_view name, std::string_view value,
-            std::string_view path, std::string_view domain,
-            std::pmr::memory_resource* resource)
-            : name_(name, resource),
-              value_(value, resource),
-              path_(path, resource),
-              domain_(domain, resource) {}
+            std::string_view path, std::string_view domain)
+            : name_(name),
+              value_(value),
+              path_(path),
+              domain_(domain) {}
 
-        std::pmr::string name_;
-        std::pmr::string value_;
-        std::pmr::string path_;
-        std::pmr::string domain_;
+        std::string name_;
+        std::string value_;
+        std::string path_;
+        std::string domain_;
         std::optional<std::chrono::system_clock::time_point> expires_;
         bool secure_{false};
+        bool partitioned_{false};
         bool configured_{true};
     };
 
@@ -346,6 +336,7 @@ private:
         std::string_view domain_;
         std::optional<std::chrono::system_clock::time_point> expires_;
         bool secure_{false};
+        bool partitioned_{false};
         bool expired_{false};
     };
 
@@ -361,12 +352,11 @@ private:
         std::size_t replaced_bytes, std::size_t replacement_bytes, bool adding) const noexcept;
     void recompute_next_expiry() noexcept;
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::string host_;
+    std::string host_;
     http_scheme scheme_{http_scheme::http};
     std::size_t max_cookies_{256};
     std::size_t max_cookie_bytes_{std::size_t{32} * 1024};
-    std::pmr::vector<stored_cookie> cookies_;
+    std::vector<stored_cookie> cookies_;
     std::optional<std::chrono::system_clock::time_point> next_expiry_{};
     std::size_t cookie_bytes_{0};
 };

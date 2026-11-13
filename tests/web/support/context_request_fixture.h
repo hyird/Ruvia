@@ -19,7 +19,7 @@ public:
     explicit context_callback(callback_type* callback) noexcept
         : callback_(callback) {}
 
-    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next&) {
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next&) {
         co_await (*callback_)(context_value);
     }
 

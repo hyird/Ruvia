@@ -13,7 +13,7 @@
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/web/server_config.h"
 
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia::detail {
 
@@ -57,20 +57,20 @@ public:
             for (auto& weak : ready) {
                 if (auto state = weak.lock()) {
                     state->closed_.store(true, std::memory_order_release);
-                    detail::worker_handle_access::defer_or_terminate(state->worker_, [state] { state->changed_.notify(); });
+                    detail::worker_ref_access::defer_or_terminate(state->worker_, [state] { state->changed_.notify(); });
                 }
             }
         }
     }
 
     // The caller retains the gauge; registrations never borrow its coroutine.
-    static task<void> wait(std::shared_ptr<connection_count> count, worker_handle caller, operation_options options, stop_token host_stop) {
+    static task<void> wait(std::shared_ptr<connection_count> count, worker_ref caller, operation_options options, stop_token host_stop) {
         if (!caller.is_current()) {
             throw std::logic_error("connection wait must run on its caller worker");
         }
         stop_group stops(options.stop_token_, host_stop);
         options.stop_token_ = stops.token();
-        auto state = std::allocate_shared<wait_state>(std::pmr::polymorphic_allocator<wait_state>(process_resource()), caller);
+        auto state = std::make_shared<wait_state>(caller);
         operation_interrupt_source source;
         operation_interrupt interrupt(source, caller, options, state.get(), [](void* target) noexcept { static_cast<wait_state*>(target)->changed_.notify(); }, "wait_connections_closed");
         {
@@ -103,10 +103,10 @@ public:
 private:
     std::atomic<std::size_t> active_{};
     struct wait_state final {
-        explicit wait_state(worker_handle worker)
+        explicit wait_state(worker_ref worker)
             : worker_(std::move(worker)),
               changed_(worker_) {}
-        worker_handle worker_;
+        worker_ref worker_;
         worker_signal changed_;
         std::atomic<bool> closed_{false};
     };

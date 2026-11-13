@@ -6,7 +6,6 @@
 #include <string_view>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_wait_result.h"
 #include "ruvia/web/http_client_types.h"
 
@@ -92,10 +91,10 @@ namespace ruvia::detail {
     switch (status) {
         case worker_wait_status::timed_out:
             throw http_client_error(std::make_error_code(std::errc::timed_out),
-                std::pmr::string(operation, process_resource()).append(" timed out"));
+                std::string(operation).append(" timed out"));
         case worker_wait_status::cancelled:
             throw http_client_error(std::make_error_code(std::errc::operation_canceled),
-                std::pmr::string(operation, process_resource()).append(" cancelled"));
+                std::string(operation).append(" cancelled"));
         case worker_wait_status::closed:
         case worker_wait_status::worker_stopping:
             throw http_client_error(make_error_code(http_client_errc::closing),

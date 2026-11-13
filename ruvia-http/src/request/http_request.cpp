@@ -5,7 +5,6 @@
 
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/url_encoding.h"
 
@@ -109,9 +108,4 @@ http_response_coding_selection http_response_coding_selection_for(const http_req
         });
     return http_response_coding_selection::select(qualities);
 }
-
-std::pmr::memory_resource* http_request::resource() const noexcept {
-    return detail::http_pmr_resource_or_default(resource_);
-}
-
 }  // namespace ruvia

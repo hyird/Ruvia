@@ -1,11 +1,9 @@
 #include <array>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 #include "ruvia/web/streaming.h"
 
@@ -51,7 +49,7 @@ namespace {
 struct scoped_controller_path final {
     static constexpr std::size_t inline_capacity = 256;
     std::array<char, inline_capacity> inline_{};
-    std::pmr::string heap_{process_resource()};
+    std::string heap_{};
     std::string_view view_{};
 
     scoped_controller_path(std::string_view prefix, std::string_view path) {
@@ -77,16 +75,16 @@ struct scoped_controller_path final {
     }
 };
 
-[[nodiscard]] std::pmr::string join_controller_paths(std::string_view prefix, std::string_view path) {
+[[nodiscard]] std::string join_controller_paths(std::string_view prefix, std::string_view path) {
     scoped_controller_path joined(prefix, path);
     if (!joined.heap_.empty()) {
         return std::move(joined.heap_);
     }
-    return std::pmr::string(joined.view_, process_resource());
+    return std::string(joined.view_);
 }
-[[nodiscard]] std::pmr::vector<controller_middleware_descriptor> merge_middleware_descriptors(
+[[nodiscard]] std::vector<controller_middleware_descriptor> merge_middleware_descriptors(
     std::span<const controller_middleware_descriptor> base, std::span<const controller_middleware_descriptor> extra) {
-    std::pmr::vector<controller_middleware_descriptor> middlewares(process_resource());
+    std::vector<controller_middleware_descriptor> middlewares;
     middlewares.reserve(base.size() + extra.size());
     middlewares.insert(middlewares.end(), base.begin(), base.end());
     middlewares.insert(middlewares.end(), extra.begin(), extra.end());
@@ -108,12 +106,12 @@ struct scoped_controller_path final {
 }  // namespace
 
 detail::controller_route_builder::controller_route_builder(router& router_value, std::string_view prefix,
-    std::pmr::vector<controller_middleware_descriptor> middlewares)
+    std::vector<controller_middleware_descriptor> middlewares)
     : controller_route_builder(
           router_value, join_controller_paths({}, prefix), std::move(middlewares), owned_prefix_tag_type{}) {}
 
-detail::controller_route_builder::controller_route_builder(router& router_value, std::pmr::string prefix,
-    std::pmr::vector<controller_middleware_descriptor> middlewares, owned_prefix_tag_type)
+detail::controller_route_builder::controller_route_builder(router& router_value, std::string prefix,
+    std::vector<controller_middleware_descriptor> middlewares, owned_prefix_tag_type)
     : router_(router_value),
       prefix_(std::move(prefix)),
       middlewares_(std::move(middlewares)) {}
@@ -148,7 +146,7 @@ void detail::controller_route_builder::register_tunnel_route(std::string_view pr
     }
     const auto path = protocol.empty() ? target : joined->view_;
     router_.register_endpoint(http_known_method::connect, {}, path,
-        route_endpoint::tunnel(process_resource(), callback_access::invoke(handler), protocol, config),
+        route_endpoint::tunnel(callback_access::invoke(handler), protocol, config),
         callback_access::target(handler), middlewares_, middlewares);
 }
 
@@ -158,7 +156,7 @@ void detail::controller_route_builder::register_websocket_route(http_known_metho
     websocket_route_config websocket_config) const {
     const scoped_controller_path joined(prefix_, path);
     router_.register_endpoint(method, {}, joined.view_,
-        route_endpoint::websocket(process_resource(), callback_access::invoke(handler), std::move(websocket_config)),
+        route_endpoint::websocket(callback_access::invoke(handler), std::move(websocket_config)),
         callback_access::target(handler), middlewares_, middlewares);
 }
 detail::controller_route_builder detail::controller_route_builder::create_scope(
@@ -173,7 +171,7 @@ namespace {
 
 struct controller_registry_state final {
     std::mutex mutex_;
-    std::pmr::vector<controller_registrar> registrars_{process_resource()};
+    std::vector<controller_registrar> registrars_{};
     bool sealed_{false};
 };
 
@@ -228,8 +226,8 @@ bool add_controller_registrar(controller_registrar registrar_value) {
     return true;
 }
 
-std::pmr::vector<controller_registrar> seal_controller_registrars() {
-    std::pmr::vector<controller_registrar> registrars{process_resource()};
+std::vector<controller_registrar> seal_controller_registrars() {
+    std::vector<controller_registrar> registrars{};
     auto& state_value = controller_registry();
     std::lock_guard lock(state_value.mutex_);
     state_value.sealed_ = true;

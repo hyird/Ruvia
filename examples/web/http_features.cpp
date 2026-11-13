@@ -103,7 +103,7 @@ private:
             bytes_value += chunk->size();
         }
         // Request trailers are available only after the request body reaches EOF.
-        std::pmr::string result_value(c.arena());
+        std::string result_value;
         result_value.append("uploaded=").append(std::to_string(bytes_value));
         result_value.append(" trailers=").append(std::to_string(c.req().trailers().size()));
         result_value.push_back('\n');

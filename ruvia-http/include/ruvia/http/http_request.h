@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -53,7 +51,6 @@ public:
     http_request_header_block(http_request_header_block&& other) noexcept
         : fields_(std::exchange(other.fields_, nullptr)),
           kinds_(std::exchange(other.kinds_, nullptr)),
-          resource_(std::exchange(other.resource_, nullptr)),
           size_(std::exchange(other.size_, std::uint16_t{0})),
           capacity_(std::exchange(other.capacity_, std::uint16_t{0})),
           repeated_known_bits_(std::exchange(other.repeated_known_bits_, std::uint32_t{0})) {}
@@ -62,7 +59,6 @@ public:
             release();
             fields_ = std::exchange(other.fields_, nullptr);
             kinds_ = std::exchange(other.kinds_, nullptr);
-            resource_ = std::exchange(other.resource_, nullptr);
             size_ = std::exchange(other.size_, std::uint16_t{0});
             capacity_ = std::exchange(other.capacity_, std::uint16_t{0});
             repeated_known_bits_ = std::exchange(other.repeated_known_bits_, std::uint32_t{0});
@@ -99,15 +95,15 @@ public:
         return slot < 32U && (repeated_known_bits_ & (std::uint32_t{1} << slot)) != 0;
     }
 
-    void reserve(std::size_t count, std::pmr::memory_resource* resource) {
+    void reserve(std::size_t count) {
         if (count > (std::numeric_limits<std::uint16_t>::max)()) {
             throw std::logic_error("request header block exceeds field limit");
         }
         if (count <= capacity_) {
             return;
         }
-        auto* owner_value = http_pmr_resource_or_default(resource);
-        auto* memory = static_cast<std::byte*>(owner_value->allocate(bytes_for(count), alignof(http_header_view)));
+        auto* memory = static_cast<std::byte*>(
+            ::operator new(bytes_for(count), std::align_val_t{alignof(http_header_view)}));
         auto* replacement = reinterpret_cast<http_header_view*>(memory);
         auto* replacement_kinds = reinterpret_cast<http_field_kind*>(replacement + count);
         for (std::size_t i = 0; i < size_; ++i) {
@@ -119,7 +115,6 @@ public:
         release();
         fields_ = replacement;
         kinds_ = replacement_kinds;
-        resource_ = owner_value;
         size_ = size;
         capacity_ = static_cast<std::uint16_t>(count);
         repeated_known_bits_ = repeated_known_bits;
@@ -131,8 +126,7 @@ public:
         }
         if (size_ == capacity_) {
             reserve((std::min)(static_cast<std::size_t>((std::numeric_limits<std::uint16_t>::max)()),
-                        (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)),
-                resource_);
+                (std::max)(std::size_t{1}, std::size_t(capacity_) * 2)));
         }
         std::construct_at(fields_ + size_, field);
         kinds_[size_] = kind;
@@ -147,11 +141,10 @@ private:
     void release() noexcept {
         if (fields_ != nullptr) {
             std::destroy_n(fields_, size_);
-            resource_->deallocate(fields_, bytes_for(capacity_), alignof(http_header_view));
+            ::operator delete(fields_, bytes_for(capacity_), std::align_val_t{alignof(http_header_view)});
         }
         fields_ = nullptr;
         kinds_ = nullptr;
-        resource_ = nullptr;
         size_ = 0;
         capacity_ = 0;
         repeated_known_bits_ = 0;
@@ -159,7 +152,6 @@ private:
 
     http_header_view* fields_{nullptr};
     http_field_kind* kinds_{nullptr};
-    std::pmr::memory_resource* resource_{nullptr};
     std::uint16_t size_{0};
     std::uint16_t capacity_{0};
     std::uint32_t repeated_known_bits_{0};
@@ -170,7 +162,7 @@ private:
 class http_request final {
 public:
     // Owns the compact descriptor block; field text still borrows protocol input.
-    // The block's PMR resource must outlive the request. Moving transfers it.
+    // Moving transfers it.
     http_request(const http_request&) = delete;
     http_request& operator=(const http_request&) = delete;
     http_request(http_request&&) noexcept = default;
@@ -185,9 +177,7 @@ public:
     }
 
     // Returns the request to its default-constructed state: releases owned header
-    // descriptors, clears all borrowed message views and forgets the PMR resource.
-    // Useful when a runtime reuses a request object before its input storage or
-    // PMR resource is retired.
+    // descriptors and clears all borrowed message views.
     void reset() noexcept {
         *this = http_request();
     }
@@ -272,8 +262,6 @@ private:
 
     http_request() noexcept = default;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept;
-
     std::string_view method_;
     http_known_method known_method_{http_known_method::unknown};
     std::string_view target_;
@@ -288,27 +276,23 @@ private:
     // One-based indices; zero means absent. No duplicated string views.
     std::array<std::uint16_t, cached_header_slots> cached_headers_{};
     std::span<const std::byte> body_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
-// Header descriptors live in the caller-selected PMR resource rather than the
-// request's coroutine frame. The protocol field-count limit is independent of
-// this object's layout.
+// Header descriptors live on the heap rather than the request's coroutine frame.
+// The protocol field-count limit is independent of this object's layout.
 
 // Constructs a semantic request directly, without parsing a wire-format head.
 // Header names/values and body bytes are borrowed from the caller; the exact
-// header span count is used to allocate descriptors from `resource`. The caller
-// must keep all supplied text/body storage and the resource alive while the
-// returned request is in use. Invalid method, target, or header fields throw
-// http_protocol_error. Header fields pass the same recipient field rules as
-// the HTTP/1 and HTTP/2 parsers, so a repeated singleton field such as Range or
-// If-Range throws instead of resolving to one of its lines. A header section
-// outside the http_field_section_budget rule (max_http_header_bytes,
-// max_http_header_fields) throws the 431 header_too_large error. Body framing
-// fields are intentionally not interpreted because this API represents an
-// already-parsed request.
+// header span count is used to allocate descriptors. The caller must keep all
+// supplied text/body storage alive while the returned request is in use.
+// Invalid method, target, or header fields throw http_protocol_error. Header
+// fields pass the same recipient field rules as the HTTP/1 and HTTP/2 parsers,
+// so a repeated singleton field such as Range or If-Range throws instead of
+// resolving to one of its lines. A header section outside the
+// http_field_section_budget rule (max_http_header_bytes, max_http_header_fields)
+// throws the 431 header_too_large error. Body framing fields are intentionally
+// not interpreted because this API represents an already-parsed request.
 [[nodiscard]] http_request make_parsed_http_request(
     borrowed_text method, borrowed_text target, std::span<const http_header_view> headers,
-    borrowed_span<std::byte> body, std::pmr::memory_resource* resource);
-
+    borrowed_span<std::byte> body = {});
 }  // namespace ruvia

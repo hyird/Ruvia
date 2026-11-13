@@ -67,7 +67,7 @@ public:
           allocator_(std::move(allocator_value)) {}
 
     void start() {
-        task_.handle_.promise().control_.set_completion(this, &task_completion_state::complete);
+        task_.coroutine_.promise().control_.set_completion(this, &task_completion_state::complete);
         task_.start();
     }
 
@@ -103,11 +103,11 @@ private:
         auto result_value = [&owner_value]() -> task_completion_result<t_type> {
             try {
                 if constexpr (std::is_void_v<t_type>) {
-                    owner_value->task_.handle_.promise().result();
+                    owner_value->task_.coroutine_.promise().result();
                     return {};
                 } else {
                     return task_completion_result<t_type>(
-                        std::in_place_index<0>, owner_value->task_.handle_.promise().result());
+                        std::in_place_index<0>, owner_value->task_.coroutine_.promise().result());
                 }
             } catch (...) {
                 if constexpr (std::is_void_v<t_type>) {
@@ -275,21 +275,21 @@ public:
     // suspend_race_state records the completion instead; the return value of
     // await_suspend then reports the actual race order, so a synchronous
     // completion is consumed by await_resume without resuming at all.
-    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
         if constexpr (std::is_void_v<result_type>) {
-            initiate_([this, handle](std::error_code ec, auto&&...) mutable {
+            initiate_([this, continuation](std::error_code ec, auto&&...) mutable {
                 if (state_.complete(asio_completion<void>::completed(ec))) {
-                    handle.resume();
+                    continuation.resume();
                 }
             });
         } else {
-            initiate_([this, handle](std::error_code ec, result_type result_value) mutable {
+            initiate_([this, continuation](std::error_code ec, result_type result_value) mutable {
                 if (state_.complete(asio_completion<result_type>::completed(ec, std::move(result_value)))) {
-                    handle.resume();
+                    continuation.resume();
                 }
             });
         }
-        return state_.suspend(handle);
+        return state_.suspend(continuation);
     }
 
     [[nodiscard]] asio_completion<result_type> await_resume() {

@@ -6,7 +6,6 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 
 #include "server/http_server_options.h"
@@ -14,15 +13,12 @@
 namespace ruvia::detail {
 namespace {
 
-using snapshot_owner = std::unique_ptr<static_root, pmr_object_deleter<static_root>>;
+using snapshot_owner = std::unique_ptr<static_root>;
 
 // Snapshots are released by whichever thread drops the last reference, so the
 // control block and the root both come from the process resource.
 [[nodiscard]] document_root_snapshot share_snapshot(snapshot_owner owner) {
-    const auto deleter = owner.get_deleter();
-    // The constructor invokes the deleter itself if its allocation fails.
-    return document_root_snapshot(
-        owner.release(), deleter, std::pmr::polymorphic_allocator<std::byte>(process_resource()));
+    return document_root_snapshot(std::move(owner));
 }
 
 }  // namespace
@@ -35,8 +31,8 @@ document_root_publisher::document_root_publisher(const std::filesystem::path& ro
       interval_(interval),
       precompression_(precompression),
       resident_(resident),
-      mailboxes_(worker_count, process_resource()) {
-    auto initial = static_root_access::make(process_resource(), root, config);
+      mailboxes_(worker_count) {
+    auto initial = static_root_access::make(root, config);
     static_root_access::install_resident_bodies(*initial, nullptr, resident_);
     static_root_access::install_precompressed_variants(*initial, nullptr, precompression_);
     current_ = share_snapshot(std::move(initial));
@@ -46,7 +42,7 @@ document_root_publisher::~document_root_publisher() = default;
 
 document_root_publisher::mailbox::~mailbox() {
     // The graph has joined every worker before destroying the mailbox host.
-    destroy_pmr_object(pending_.exchange(nullptr, std::memory_order_acq_rel), process_resource());
+    delete pending_.exchange(nullptr);
 }
 
 document_root_publisher::mailbox& document_root_publisher::register_worker() noexcept {
@@ -62,40 +58,39 @@ void document_root_publisher::record_failure(std::exception_ptr failure) noexcep
 }
 
 void document_root_publisher::publish(document_root_snapshot snapshot) {
-    std::pmr::vector<publication_owner> publication(process_resource());
+    std::vector<publication_owner> publication;
     publication.reserve(mailboxes_.size());
     for (std::size_t i = 0; i < mailboxes_.size(); ++i) {
-        publication.push_back(make_pmr_object<document_root_snapshot>(process_resource(), snapshot));
+        publication.push_back(std::make_unique<document_root_snapshot>(snapshot));
     }
     // Every allocation has succeeded before any worker can see this snapshot.
     commit_publication(std::move(snapshot), publication);
 }
 
 void document_root_publisher::commit_publication(document_root_snapshot snapshot,
-    std::pmr::vector<publication_owner>& publication) noexcept {
+    std::vector<publication_owner>& publication) noexcept {
     current_.swap(snapshot);
     for (std::size_t i = 0; i < mailboxes_.size(); ++i) {
         publication_owner superseded(
-            mailboxes_[i].pending_.exchange(publication[i].release(), std::memory_order_acq_rel),
-            pmr_object_deleter<document_root_snapshot>{process_resource()});
+            mailboxes_[i].pending_.exchange(publication[i].release(), std::memory_order_acq_rel));
     }
     // Unread nodes are reclaimed by the next publish; adopted snapshots live
     // only as long as a worker's current generation or request leases need them.
 }
 
 task<void> document_root_publisher::refresh(
-    const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop) {
+    const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop) {
     // Shared ownership lets the blocking jobs read the previous snapshot while
     // workers keep serving it, and lets resident bytes and precompression
     // reuse its unchanged file versions.
     const auto previous = current_;
-    snapshot_owner candidate(nullptr, pmr_object_deleter<static_root>{process_resource()});
+    snapshot_owner candidate(nullptr);
     try {
         // The unchanged-snapshot comparison walks every entry, so it runs on
         // the pool with the rebuild; an unchanged root yields no candidate.
         auto rebuilt = co_await ruvia::run_blocking(worker, {.stop_token_ = stop}, [previous, root = root_] {
-            auto built = static_root_access::make(process_resource(), root,
-                static_root_access::copy_config(*previous, process_resource()));
+            auto built = static_root_access::make(root,
+                static_root_access::copy_config(*previous));
             if (static_root_access::fingerprint(*built) == static_root_access::fingerprint(*previous) &&
                 static_root_access::same_snapshot(*built, *previous)) {
                 built.reset();
@@ -157,21 +152,21 @@ task<void> document_root_publisher::refresh(
     }
 }
 
-static_root_runtime::static_root_runtime(http_server_options& options, const worker_handle& worker_value,
+static_root_runtime::static_root_runtime(http_server_options& options, const worker_ref& worker_value,
     const http_server_worker_state& state_value)
     : options_(options),
       publisher_(options.document_root_.publisher()),
       mailbox_(publisher_ == nullptr ? nullptr : &publisher_->register_worker()),
       worker_(worker_value),
       state_(state_value),
-      pending_(nullptr, pmr_object_deleter<document_root_snapshot>{process_resource()}),
-      current_(nullptr, pmr_object_deleter<document_root_generation>{process_resource()}),
-      retired_(process_resource()),
+      pending_(nullptr),
+      current_(nullptr),
+      retired_(),
       refreshes_(publisher_ != nullptr && mailbox_ == publisher_->mailboxes_.data()) {
     if (publisher_ != nullptr) {
         // Worker construction is serialized before startup; no publisher can
         // replace this shared_ptr while its initial reference is copied.
-        current_ = make_pmr_object<document_root_generation>(process_resource(), publisher_->current_);
+        current_ = std::make_unique<document_root_generation>(publisher_->current_);
         options_.document_root_.publish(*current_);
     }
 }
@@ -188,7 +183,7 @@ void static_root_runtime::adopt_published() {
     }
     // The exchanged node is exclusively ours, so copying its shared_ptr cannot
     // race the publisher reclaiming or replacing the source object.
-    auto next = make_pmr_object<document_root_generation>(process_resource(), *pending_);
+    auto next = std::make_unique<document_root_generation>(*pending_);
     if (current_->leased()) {
         // If vector growth fails both current_ and pending_ remain owned here;
         // adoption retries next interval, or skips to a newer mailbox node.

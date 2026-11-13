@@ -6,10 +6,8 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
-#include <memory_resource>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 
@@ -19,7 +17,7 @@
 #include "server/http_server_worker_state.h"
 
 namespace ruvia {
-class worker_handle;
+class worker_ref;
 }  // namespace ruvia
 
 namespace ruvia::detail {
@@ -58,13 +56,13 @@ public:
     // One rebuild pass on the refresher. A changed tree is published; a
     // failed pass is counted and the last complete snapshot stays published.
     [[nodiscard]] task<void> refresh(
-        const worker_handle& worker, const http_server_worker_state& state, const stop_token& stop = {});
+        const worker_ref& worker, const http_server_worker_state& state, const stop_token& stop = {});
 
 private:
     friend class static_root_runtime;
 
     using publication_owner =
-        std::unique_ptr<document_root_snapshot, pmr_object_deleter<document_root_snapshot>>;
+        std::unique_ptr<document_root_snapshot>;
 
     struct mailbox final {
         ~mailbox();
@@ -83,7 +81,7 @@ private:
 
     void publish(document_root_snapshot snapshot);
     void commit_publication(document_root_snapshot snapshot,
-        std::pmr::vector<publication_owner>& publication) noexcept;
+        std::vector<publication_owner>& publication) noexcept;
 
     // The configured path, not the snapshot's canonical one: a refresh must
     // re-resolve symlinks so a retargeted root (atomic deploy) is followed.
@@ -93,7 +91,7 @@ private:
     static_root_resident_options resident_;
     // Only the first registered worker reads or replaces current_ after startup.
     document_root_snapshot current_;
-    std::pmr::vector<mailbox> mailboxes_;
+    std::vector<mailbox> mailboxes_;
     std::size_t registered_workers_{0};
     std::atomic<std::size_t> failures_{0};
 };
@@ -104,7 +102,7 @@ private:
 // worker joins refresh() before teardown.
 class static_root_runtime final {
 public:
-    static_root_runtime(http_server_options& options, const worker_handle& worker_value,
+    static_root_runtime(http_server_options& options, const worker_ref& worker_value,
         const http_server_worker_state& state_value);
     ~static_root_runtime();
     static_root_runtime(const static_root_runtime&) = delete;
@@ -121,20 +119,20 @@ public:
 
 private:
     using generation_owner =
-        std::unique_ptr<document_root_generation, pmr_object_deleter<document_root_generation>>;
+        std::unique_ptr<document_root_generation>;
 
     void adopt_published();
 
     http_server_options& options_;
     document_root_publisher* publisher_;
     document_root_publisher::mailbox* mailbox_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     const http_server_worker_state& state_;
     // Retained locally if preparing a worker generation fails; a later
     // publication supersedes it instead of accumulating missed snapshots.
     document_root_publisher::publication_owner pending_;
     generation_owner current_;
-    std::pmr::vector<generation_owner> retired_;
+    std::vector<generation_owner> retired_;
     const bool refreshes_;
 };
 

@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -31,7 +30,7 @@ enum class field_line_folding_policy { mime,
 // MIME removes only CRLF. HTTP replaces the complete obs-fold, including its
 // adjacent OWS/RWS, with SP before field values are interpreted (RFC 9112 5.2).
 inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_fold,
-    field_line_folding_policy policy, std::pmr::string& storage) {
+    field_line_folding_policy policy, std::string& storage) {
     storage.clear();
     storage.reserve(input.size());
     std::size_t segment_begin = 0;

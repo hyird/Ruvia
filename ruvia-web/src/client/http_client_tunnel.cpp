@@ -8,7 +8,6 @@
 #include "client/http_client_pool.h"
 #include "client/http_client_response_memory.h"
 #include "client/http_client_response_state.h"
-#include "util/pmr_owned_storage.h"
 namespace ruvia {
 namespace {
 void require_output(detail::http_client_response_state* state_value, bool finishing) {
@@ -127,16 +126,16 @@ task<void> http_client_tunnel::write(std::string_view bytes_value, operation_opt
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
-        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::pmr::string(bytes_value, state_value.resource_), std::move(operation)}));
+        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::string(bytes_value), std::move(operation)}));
 }
-task<void> http_client_tunnel::write_owned(std::pmr::string&& bytes_value, operation_options operation) {
+task<void> http_client_tunnel::write_owned(std::string&& bytes_value, operation_options operation) {
     require_output(response_.state_, false);
     auto& state_value = *response_.state_;
     if (bytes_value.size() > state_value.tunnel_->config_.max_chunk_bytes_) {
         throw std::length_error("HTTP client tunnel chunk exceeds configured bound");
     }
     return ::ruvia::make_scoped_operation(state_value.tunnel_->output_.output_scope_,
-        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), detail::rebind_owned_storage(bytes_value, state_value.resource_), std::move(operation)}));
+        detail::write_client_output<tunnel_output_policy>(&state_value, detail::http_client_output_write_input{http_client_response(&state_value), std::move(bytes_value), std::move(operation)}));
 }
 task<void> http_client_tunnel::finish(operation_options operation) & {
     require_output(response_.state_, true);

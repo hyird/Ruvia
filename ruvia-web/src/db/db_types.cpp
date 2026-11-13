@@ -6,8 +6,6 @@
 #include "ruvia/web/db/db_rows.h"
 #include "ruvia/web/db/db_schema.h"
 
-#include "util/pmr_owned_storage.h"
-
 namespace ruvia {
 db_value::db_value(std::nullptr_t)
     : storage_(std::monostate{}) {}
@@ -19,14 +17,14 @@ db_value::db_value(const char* value)
 db_value::db_value(std::string_view value)
     : storage_(std::in_place_type<borrowed_text>, value) {}
 
-db_value::db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value)
-    : storage_(std::in_place_type<std::pmr::string>, std::move(value)) {}
+db_value::db_value(std::in_place_type_t<std::string>, std::string value)
+    : storage_(std::in_place_type<std::string>, std::move(value)) {}
 
 db_value::db_value(const db_value& other)
     : storage_(std::visit(
           [](const auto& value) -> storage_type {
               using value_type = std::remove_cvref_t<decltype(value)>;
-              if constexpr (std::is_same_v<value_type, std::pmr::string>) {
+              if constexpr (std::is_same_v<value_type, std::string>) {
                   return storage_type(std::in_place_type<value_type>, value, value.get_allocator());
               } else {
                   return storage_type(std::in_place_type<value_type>, value);
@@ -44,7 +42,7 @@ db_value_type db_value::type() const noexcept {
             if constexpr (std::is_same_v<value_type, std::monostate>) {
                 return db_value_type::null;
             } else if constexpr (std::is_same_v<value_type, borrowed_text> ||
-                                 std::is_same_v<value_type, std::pmr::string>) {
+                                 std::is_same_v<value_type, std::string>) {
                 return db_value_type::string;
             } else if constexpr (std::is_same_v<value_type, std::int64_t>) {
                 return db_value_type::signed_value;
@@ -63,7 +61,7 @@ std::string_view db_value::text() const& {
     if (const auto* borrowed = std::get_if<borrowed_text>(&storage_)) {
         return borrowed->view();
     }
-    return std::get<std::pmr::string>(storage_);
+    return std::get<std::string>(storage_);
 }
 
 std::int64_t db_value::signed_value() const {
@@ -82,54 +80,30 @@ bool db_value::bool_value() const {
     return std::get<bool>(storage_);
 }
 
-db_field::db_field(std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      storage_(std::monostate{}) {}
+db_field::db_field() noexcept = default;
 
-db_field::db_field(std::nullptr_t, std::pmr::memory_resource* resource)
-    : db_field(resource) {}
+db_field::db_field(std::nullptr_t) noexcept {}
 
-db_field::db_field(std::string_view value, std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      storage_(std::in_place_type<std::pmr::string>, value, resource_) {}
+db_field::db_field(std::string_view value)
+    : storage_(std::in_place_type<std::string>, value) {}
 
-db_field::db_field(borrowed_tag_type, std::string_view value, std::pmr::memory_resource* resource)
-    : resource_(pmr_resource_or_default(resource)),
-      storage_(std::in_place_type<borrowed_text>, value) {}
+db_field::db_field(borrowed_tag_type, std::string_view value) noexcept
+    : storage_(std::in_place_type<borrowed_text>, value) {}
 
-db_field db_field::borrowed(std::string_view value, std::pmr::memory_resource* resource) {
-    return db_field(borrowed_tag_type{}, value, resource);
+db_field db_field::borrowed(std::string_view value) noexcept {
+    return db_field(borrowed_tag_type{}, value);
 }
 
 db_field::db_field(db_field&& other) noexcept
-    : resource_(other.resource_),
-      storage_(std::move(other.storage_)) {
+    : storage_(std::move(other.storage_)) {
     other.storage_.emplace<std::monostate>();
 }
 
 // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-db_field& db_field::operator=(db_field&& other) {
-    if (this == &other) {
-        return *this;
-    }
-    if (auto* owned = std::get_if<std::pmr::string>(&other.storage_)) {
-        auto replacement = detail::rebind_owned_storage(*owned, resource_);
-        if (auto* destination = std::get_if<std::pmr::string>(&storage_)) {
-            destination->swap(replacement);
-        } else {
-            storage_.emplace<std::pmr::string>(std::move(replacement));
-        }
-    } else if (const auto* borrowed = std::get_if<borrowed_text>(&other.storage_)) {
-        storage_.emplace<borrowed_text>(*borrowed);
-    } else {
-        storage_.emplace<std::monostate>();
-    }
-    other.storage_.emplace<std::monostate>();
-    return *this;
-}
+db_field& db_field::operator=(db_field&& other) noexcept = default;
 
 std::optional<std::string_view> db_field::value() const& noexcept {
-    if (const auto* owned = std::get_if<std::pmr::string>(&storage_)) {
+    if (const auto* owned = std::get_if<std::string>(&storage_)) {
         return *owned;
     }
     if (const auto* borrowed = std::get_if<borrowed_text>(&storage_)) {
@@ -138,7 +112,7 @@ std::optional<std::string_view> db_field::value() const& noexcept {
     return std::nullopt;
 }
 
-db_row::db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
+db_row::db_row(const db_field* fields_value, std::size_t size, const std::string* column_names,
     std::size_t column_count) noexcept
     : fields_(fields_value, size),
       column_names_(column_names, column_count) {}
@@ -196,17 +170,11 @@ const db_field* db_row::end() const& noexcept {
     return fields_.empty() ? first : first + fields_.size();
 }
 
-std::span<const std::pmr::string> db_row::column_names() const& noexcept {
+std::span<const std::string> db_row::column_names() const& noexcept {
     return column_names_;
 }
 
-db_rows::db_rows(std::pmr::memory_resource* resource)
-    : db_rows(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
-
-db_rows::db_rows(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-    : rows_(resource),
-      fields_(resource),
-      column_names_(resource) {}
+db_rows::db_rows() noexcept = default;
 
 db_rows::db_rows(db_rows&& other) noexcept
     : rows_(std::move(other.rows_)),
@@ -226,52 +194,14 @@ db_rows& db_rows::operator=(db_rows&& other) {
     if (this == &other) {
         return *this;
     }
-    auto* const target = rows_.get_allocator().resource();
-    if (other.rows_.get_allocator().resource() == target &&
-        other.fields_.get_allocator().resource() == target &&
-        other.column_names_.get_allocator().resource() == target) {
-        if (const auto* owned = std::get_if<owned_raw_result_type>(&raw_result_)) {
-            owned->release_(owned->value_);
-        }
-        rows_ = std::move(other.rows_);
-        fields_ = std::move(other.fields_);
-        column_names_ = std::move(other.column_names_);
-        raw_result_ = other.raw_result_;
-        other.raw_result_.template emplace<no_raw_result_type>();
-        return *this;
-    }
-    std::pmr::vector<std::pmr::string> new_column_names(other.column_names_, target);
-    std::pmr::vector<db_field> new_fields(target);
-    new_fields.reserve(other.fields_.size());
-    for (const auto& field : other.fields_) {
-        if (const auto text = field.value()) {
-            new_fields.push_back(db_field(*text, target));
-        } else {
-            new_fields.push_back(db_field(nullptr, target));
-        }
-    }
-    std::pmr::vector<db_row> new_rows(target);
-    new_rows.reserve(other.rows_.size());
-    std::size_t field_offset = 0;
-    for (const auto& row : other.rows_) {
-        new_rows.push_back(db_row(
-            new_fields.data() + field_offset, row.size(), new_column_names.data(), new_column_names.size()));
-        field_offset += row.size();
-    }
     if (const auto* owned = std::get_if<owned_raw_result_type>(&raw_result_)) {
         owned->release_(owned->value_);
     }
-    raw_result_.template emplace<no_raw_result_type>();
-    rows_.swap(new_rows);
-    fields_.swap(new_fields);
-    column_names_.swap(new_column_names);
-    if (const auto* owned = std::get_if<owned_raw_result_type>(&other.raw_result_)) {
-        owned->release_(owned->value_);
-    }
+    rows_ = std::move(other.rows_);
+    fields_ = std::move(other.fields_);
+    column_names_ = std::move(other.column_names_);
+    raw_result_ = other.raw_result_;
     other.raw_result_.template emplace<no_raw_result_type>();
-    other.rows_.clear();
-    other.fields_.clear();
-    other.column_names_.clear();
     return *this;
 }
 
@@ -304,35 +234,18 @@ const db_row& db_rows::back() const& noexcept {
     return rows_.back();
 }
 
-std::span<const std::pmr::string> db_rows::column_names() const& noexcept {
+std::span<const std::string> db_rows::column_names() const& noexcept {
     return column_names_;
 }
 
-db_migration_report::db_migration_report(std::pmr::memory_resource* resource)
-    : db_migration_report(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource)) {}
+db_migration_report::db_migration_report() noexcept = default;
 
-db_migration_report::db_migration_report(
-    resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-    : applied_(resource),
-      skipped_(resource) {}
-
-db_migration_report& db_migration_report::operator=(db_migration_report&& other) {
-    if (this != &other) {
-        auto* const target = applied_.get_allocator().resource();
-        auto new_applied = detail::rebind_owned_storage(other.applied_, target, other.skipped_);
-        auto new_skipped = detail::rebind_owned_storage(other.skipped_, target, other.applied_);
-        applied_.swap(new_applied);
-        skipped_.swap(new_skipped);
-        other.applied_.clear();
-        other.skipped_.clear();
-    }
-    return *this;
-}
-std::span<const std::pmr::string> db_migration_report::applied() const& noexcept {
+db_migration_report& db_migration_report::operator=(db_migration_report&& other) = default;
+std::span<const std::string> db_migration_report::applied() const& noexcept {
     return applied_;
 }
 
-std::span<const std::pmr::string> db_migration_report::skipped() const& noexcept {
+std::span<const std::string> db_migration_report::skipped() const& noexcept {
     return skipped_;
 }
 

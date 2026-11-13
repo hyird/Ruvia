@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -266,10 +265,10 @@ private:
     friend class http2_connection;
     friend class detail::http2_connection;
     friend class http3_connection;
-    websocket_extended_connect_negotiation(std::pmr::string subprotocol, websocket_compression compression) noexcept
+    websocket_extended_connect_negotiation(std::string subprotocol, websocket_compression compression) noexcept
         : subprotocol_(std::move(subprotocol)),
           compression_(compression) {}
-    std::pmr::string subprotocol_;
+    std::string subprotocol_;
     websocket_compression compression_;
 };
 
@@ -327,14 +326,14 @@ public:
 
 private:
     friend websocket_server_handshake make_websocket_server_handshake(
-        const http_request&, websocket_server_handshake_options, std::pmr::memory_resource*);
+        const http_request&, websocket_server_handshake_options);
 
     inline static constexpr std::string_view subprotocol_header_prefix = "Sec-WebSocket-Protocol: ";
     inline static constexpr std::string_view extensions_header_prefix = "Sec-WebSocket-Extensions: ";
     inline static constexpr std::string_view crlf = "\r\n";
 
-    websocket_server_handshake(std::array<char, 28> accept, std::pmr::string subprotocol,
-        websocket_compression compression, std::pmr::vector<http_header> response_headers_value) noexcept
+    websocket_server_handshake(std::array<char, 28> accept, std::string subprotocol,
+        websocket_compression compression, std::vector<http_header> response_headers_value) noexcept
         : accept_(accept),
           subprotocol_(std::move(subprotocol)),
           compression_(compression),
@@ -342,17 +341,16 @@ private:
           response_headers_(std::move(response_headers_value)) {}
 
     std::array<char, 28> accept_;
-    std::pmr::string subprotocol_;
+    std::string subprotocol_;
     websocket_compression compression_;
     detail::websocket_compression_extension compression_extension_;
-    std::pmr::vector<http_header> response_headers_;
+    std::vector<http_header> response_headers_;
 };
 
 // Call after validate_websocket_handshake() succeeds. The selected subprotocol
-// and response fields are copied into `resource`; the response plan borrows no
+// and response fields are copied; the response plan borrows no
 // request or server-preference storage.
-[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(const http_request& request,
-    websocket_server_handshake_options options = {},
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+[[nodiscard]] websocket_server_handshake make_websocket_server_handshake(
+    const http_request& request, websocket_server_handshake_options options = {});
 
 }  // namespace ruvia

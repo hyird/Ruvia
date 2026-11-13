@@ -4,18 +4,15 @@
 #include <cstdint>
 #include <initializer_list>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/model.h"
 #include "ruvia/web/validation.h"
 
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -24,11 +21,11 @@ std::size_t default_evaluations = 0;
 std::size_t predicate_evaluations = 0;
 std::size_t nested_default_evaluations = 0;
 
-std::pmr::string nested_default() {
+std::string nested_default() {
     if (++nested_default_evaluations == 2) {
         throw std::runtime_error("array default failed");
     }
-    return std::pmr::string(256, 'd', ruvia::process_resource());
+    return std::string(256, 'd');
 }
 
 int codec_default() {
@@ -90,44 +87,6 @@ RUVIA_MODEL(forward_branch,
     RUVIA_REQUIRED_FIELD(name, ruvia::string),
     RUVIA_OPTIONAL_FIELD(roots, ruvia::boxed_array<forward_root>));
 
-class failing_resource final : public std::pmr::memory_resource {
-public:
-    explicit failing_resource(std::size_t remaining)
-        : remaining_(remaining) {}
-
-    [[nodiscard]] std::size_t allocation_count() const noexcept {
-        return allocations_.allocation_count();
-    }
-
-    [[nodiscard]] std::size_t live_allocations() const noexcept {
-        return allocations_.live_allocations();
-    }
-
-    [[nodiscard]] std::size_t deallocation_count() const noexcept {
-        return allocations_.deallocation_count();
-    }
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (remaining_ == 0) {
-            throw std::bad_alloc();
-        }
-        --remaining_;
-        return allocations_.allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        allocations_.deallocate(pointer, bytes_value, alignment);
-    }
-
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-
-    std::size_t remaining_;
-    ruvia::test::counting_memory_resource allocations_;
-};
-
 }  // namespace
 
 TEST(Ruvia, model_json_codec_supports_public_scalar_and_array_roots) {
@@ -148,44 +107,40 @@ TEST(Ruvia, model_json_codec_supports_public_scalar_and_array_roots) {
 }
 
 TEST(Ruvia, model_json_scalar_roots_keep_short_output_in_inline_storage) {
-    ruvia::test::counting_memory_resource resource;
     {
-        const auto number = ruvia::to_json(ruvia::float_value(1.5f), {.resource_ = &resource});
-        const auto wide_number = ruvia::to_json(ruvia::double_value(2.25), {.resource_ = &resource});
-        const auto nonfinite = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::infinity()), {.resource_ = &resource});
-        const auto integer = ruvia::to_json(ruvia::int64(7), {.resource_ = &resource});
+        const auto number = ruvia::to_json(ruvia::float_value(1.5f));
+        const auto wide_number = ruvia::to_json(ruvia::double_value(2.25));
+        const auto nonfinite = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::infinity()));
+        const auto integer = ruvia::to_json(ruvia::int64(7));
         EXPECT_EQ(number, "1.5");
         EXPECT_EQ(wide_number, "2.25");
         EXPECT_EQ(nonfinite, "null");
         EXPECT_EQ(integer, "7");
-        EXPECT_EQ(resource.allocation_count(), std::size_t{0});
     }
     {
-        const auto encoded = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::max()), {.resource_ = &resource});
-        EXPECT_EQ(encoded.get_allocator().resource(), &resource);
+        const auto encoded = ruvia::to_json(ruvia::double_value(std::numeric_limits<double>::max()));
         EXPECT_EQ(ruvia::from_json<ruvia::double_value>(encoded).value_, std::numeric_limits<double>::max());
     }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, model_json_writer_replaces_ill_formed_utf8_with_replacement_characters) {
     // Each literal piece ends at a hex escape so the next letter is not read as a
     // further hex digit.
-    std::pmr::string input("a\xD3\xC9", ruvia::process_resource());  // GBK lead/trail bytes: two maximal subparts
-    input += "b\xE4\xBD";                                            // truncated 3-byte sequence: one subpart
-    input += "c\xC0\xAF";                                            // overlong lead and stray continuation
-    input += "d\xED\xA0\x80";                                        // UTF-16 surrogate code point
-    input += "e\xF4\x90\x80\x80";                                    // above U+10FFFF
-    input += "f\xE4\xB8\xAD\xF0\x9F\x98\x80";                        // well-formed U+4E2D and U+1F600
-    input += "\"\n\xF0\x9F\x98";                                     // escapes, then a sequence cut at the end
-    const std::pmr::string replacement("\xEF\xBF\xBD", ruvia::process_resource());
-    std::pmr::string expected(std::pmr::string("\"a", ruvia::process_resource()) + replacement + replacement, ruvia::process_resource());
-    expected += std::pmr::string("b", ruvia::process_resource()) + replacement;
-    expected += std::pmr::string("c", ruvia::process_resource()) + replacement + replacement;
-    expected += std::pmr::string("d", ruvia::process_resource()) + replacement + replacement + replacement;
-    expected += std::pmr::string("e", ruvia::process_resource()) + replacement + replacement + replacement + replacement;
+    std::string input("a\xD3\xC9");            // GBK lead/trail bytes: two maximal subparts
+    input += "b\xE4\xBD";                      // truncated 3-byte sequence: one subpart
+    input += "c\xC0\xAF";                      // overlong lead and stray continuation
+    input += "d\xED\xA0\x80";                  // UTF-16 surrogate code point
+    input += "e\xF4\x90\x80\x80";              // above U+10FFFF
+    input += "f\xE4\xB8\xAD\xF0\x9F\x98\x80";  // well-formed U+4E2D and U+1F600
+    input += "\"\n\xF0\x9F\x98";               // escapes, then a sequence cut at the end
+    const std::string replacement("\xEF\xBF\xBD");
+    std::string expected(std::string("\"a") + replacement + replacement);
+    expected += std::string("b") + replacement;
+    expected += std::string("c") + replacement + replacement;
+    expected += std::string("d") + replacement + replacement + replacement;
+    expected += std::string("e") + replacement + replacement + replacement + replacement;
     expected += "f\xE4\xB8\xAD\xF0\x9F\x98\x80";
-    expected += std::pmr::string("\\\"\\n", ruvia::process_resource()) + replacement + "\"";
+    expected += std::string("\\\"\\n") + replacement + "\"";
 
     const auto output = ruvia::to_json(ruvia::string(input));
     EXPECT_EQ(std::string_view(output), std::string_view(expected));
@@ -196,7 +151,7 @@ TEST(Ruvia, model_json_writer_replaces_ill_formed_utf8_with_replacement_characte
 
     ruvia::array<ruvia::string> nested;
     nested.emplace_back(std::string_view("\xFF"));
-    EXPECT_EQ(std::string_view(ruvia::to_json(nested)), std::string_view(std::pmr::string("[\"", ruvia::process_resource()) + replacement + "\"]"));
+    EXPECT_EQ(std::string_view(ruvia::to_json(nested)), std::string_view(std::string("[\"") + replacement + "\"]"));
 }
 
 TEST(Ruvia, model_json_member_keys_escape_controls_and_keep_utf8) {
@@ -224,33 +179,6 @@ TEST(Ruvia, model_json_codec_rejects_nested_wrong_null_and_duplicate_fields) {
     }));
 }
 
-TEST(Ruvia, model_json_codec_root_array_failure_cleans_partial_elements) {
-    const std::pmr::string input("[\"" + std::pmr::string(80, 'a', ruvia::process_resource()) + "\",\"" + std::pmr::string(80, 'b', ruvia::process_resource()) +
-                                     "\",\"" + std::pmr::string(80, 'c', ruvia::process_resource()) + "\"] ",
-        ruvia::process_resource());
-    failing_resource successful_resource((std::numeric_limits<std::size_t>::max)());
-    auto successful = ruvia::from_json<ruvia::array<ruvia::string>>(input,
-        {.resource_ = &successful_resource});
-    EXPECT_EQ(successful.size(), std::size_t{3});
-    const auto allocations = successful_resource.allocation_count();
-    EXPECT_TRUE(allocations > 1);
-    if (ruvia::test::stl_allocation_failure_injection_enabled()) {
-        for (std::size_t failure = 1; failure <= allocations; ++failure) {
-            failing_resource resource(failure - 1);
-            bool threw = false;
-            try {
-                (void)ruvia::from_json<ruvia::array<ruvia::string>>(input, {.resource_ = &resource});
-            } catch (const std::bad_alloc&) {
-                threw = true;
-            }
-            EXPECT_TRUE(threw);
-            EXPECT_EQ(resource.allocation_count(), failure - 1);
-            EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-            EXPECT_EQ(resource.allocation_count(), resource.deallocation_count());
-        }
-    }
-}
-
 TEST(Ruvia, model_json_codec_root_model_arrays_validate_and_roundtrip_recursively) {
     constexpr auto input = R"([{"name":"root","children":[{"name":"child"}]}])";
     auto dense = ruvia::from_json<ruvia::array<codec_node>>(input);
@@ -265,45 +193,37 @@ TEST(Ruvia, model_json_codec_root_model_arrays_validate_and_roundtrip_recursivel
 }
 
 TEST(Ruvia, model_json_codec_forward_declared_graph_owns_nested_destination_values) {
-    ruvia::test::counting_memory_resource destination;
-    forward_root retained({.resource_ = &destination});
+    forward_root retained;
     constexpr std::string_view input =
         R"({"name":"root","branches":[{"name":"branch","roots":[{"name":"leaf"}]}]})";
     {
-        std::pmr::monotonic_buffer_resource source;
-        auto parsed_value = ruvia::from_json<forward_root>(input, {.resource_ = &source});
+        auto parsed_value = ruvia::from_json<forward_root>(input);
         retained = std::move(parsed_value);
     }
     EXPECT_EQ(std::string_view(ruvia::to_json(retained)), input);
 }
 
 TEST(Ruvia, model_json_codec_array_default_exception_releases_previous_elements) {
-    const std::pmr::string input("[{\"name\":\"" + std::pmr::string(256, 'a', ruvia::process_resource()) +
-                                     "\"},{\"name\":\"" + std::pmr::string(256, 'b', ruvia::process_resource()) + "\"}]",
-        ruvia::process_resource());
+    const std::string input("[{\"name\":\"" + std::string(256, 'a') +
+                            "\"},{\"name\":\"" + std::string(256, 'b') + "\"}]");
     const auto check = [&]<typename array_t_type>() {
         nested_default_evaluations = 0;
-        ruvia::test::counting_memory_resource memory;
         bool threw = false;
         try {
-            (void)ruvia::from_json<array_t_type>(input, {.resource_ = &memory});
+            (void)ruvia::from_json<array_t_type>(input);
         } catch (const std::runtime_error& error) {
             threw = std::string_view(error.what()) == "array default failed";
         }
         EXPECT_TRUE(threw);
         EXPECT_EQ(nested_default_evaluations, std::size_t{2});
-        EXPECT_TRUE(memory.allocation_count() >= 3);
-        EXPECT_EQ(memory.live_allocations(), std::size_t{0});
-        EXPECT_EQ(memory.allocation_count(), memory.deallocation_count());
     };
     check.template operator()<ruvia::array<codec_array_default>>();
     check.template operator()<ruvia::boxed_array<codec_array_default>>();
 }
 
 TEST(Ruvia, model_json_codec_owned_root_string_survives_input_destruction) {
-    ruvia::test::counting_memory_resource resource;
-    std::pmr::string input(R"("retained")", ruvia::process_resource());
-    auto parsed_value = ruvia::from_json<ruvia::string>(input, {.resource_ = &resource});
+    std::string input(R"("retained")");
+    auto parsed_value = ruvia::from_json<ruvia::string>(input);
     input.assign(input.size(), 'x');
     EXPECT_EQ(parsed_value.view(), "retained");
 }
@@ -340,7 +260,7 @@ TEST(Ruvia, model_json_codec_handles_presence_defaults_and_serialization_options
     EXPECT_EQ(default_evaluations, std::size_t{1});
 
     const auto serialized = ruvia::to_json(missing);
-    const std::pmr::string roundtrip_input(serialized, ruvia::process_resource());
+    const std::string roundtrip_input(serialized);
     auto roundtrip = ruvia::from_json<codec_presence>(roundtrip_input);
     EXPECT_TRUE(roundtrip.is_present<"defaulted">());
     EXPECT_EQ(std::string_view(ruvia::to_json(roundtrip)),
@@ -390,8 +310,8 @@ TEST(Ruvia, model_json_codec_preserves_default_null_dynamic_array_elements) {
         value.set<"dense">(std::move(dense));
         value.set<"boxed">(std::move(boxed));
         const auto output = ruvia::to_json(value);
-        const auto expected = "{\"dense\":" + std::pmr::string(expected_array, ruvia::process_resource()) +
-                              ",\"boxed\":" + std::pmr::string(expected_array, ruvia::process_resource()) + "}";
+        const auto expected = "{\"dense\":" + std::string(expected_array) +
+                              ",\"boxed\":" + std::string(expected_array) + "}";
         EXPECT_EQ(std::string_view(output), std::string_view(expected));
         const auto reparsed = ruvia::from_json<codec_dynamic_sequences>(output);
         EXPECT_EQ(reparsed.get<"dense">().size(), tokens.size());
@@ -425,120 +345,39 @@ TEST(Ruvia, model_json_codec_roundtrips_default_dynamic_objects) {
 }
 
 TEST(Ruvia, model_json_codec_owns_dynamic_tokens_and_preserves_retained_results) {
-    ruvia::test::counting_memory_resource model_resource;
-    ruvia::test::counting_memory_resource output_resource;
-    const auto model_baseline = model_resource.live_allocations();
-    const auto output_baseline = output_resource.live_allocations();
     {
-        codec_dynamic retained({.resource_ = &model_resource});
-        std::pmr::string retained_json(&output_resource);
-        std::pmr::string input(R"({"value":{"keep":")", ruvia::process_resource());
+        codec_dynamic retained;
+        std::string retained_json;
+        std::string input(R"({"value":{"keep":")");
         input.append(256, 'q');
         input += R"("},"object":{"n":1}})";
-        auto parsed_value = ruvia::from_json<codec_dynamic>(input, {.resource_ = &model_resource});
+        auto parsed_value = ruvia::from_json<codec_dynamic>(input);
         retained = std::move(parsed_value);
         input.assign(input.size(), 'x');
-        std::pmr::string expected_token(R"({"keep":")", ruvia::process_resource());
+        std::string expected_token(R"({"keep":")");
         expected_token.append(256, 'q');
         expected_token += R"("})";
         EXPECT_EQ(retained.get<"value">().view(), expected_token);
-        retained_json = ruvia::to_json(retained, {.resource_ = &output_resource});
-        const auto saved = std::pmr::string(retained_json, ruvia::process_resource());
-        const auto retained_model_live = model_resource.live_allocations();
-        const auto retained_output_live = output_resource.live_allocations();
-        const std::pmr::string temporary_input("{\"value\":\"" + std::pmr::string(160, 't', ruvia::process_resource()) +
-                                                   "\",\"object\":{\"later\":true}}",
-            ruvia::process_resource());
+        retained_json = ruvia::to_json(retained);
+        const auto saved = std::string(retained_json);
+        const std::string temporary_input("{\"value\":\"" + std::string(160, 't') +
+                                          "\",\"object\":{\"later\":true}}");
         for (std::size_t i = 0; i < 32; ++i) {
             {
-                auto temporary = ruvia::from_json<codec_dynamic>(temporary_input, {.resource_ = &model_resource});
-                EXPECT_TRUE(model_resource.live_allocations() > retained_model_live);
-                const auto output = ruvia::to_json(temporary, {.resource_ = &output_resource});
-                EXPECT_TRUE(output_resource.live_allocations() > retained_output_live);
+                auto temporary = ruvia::from_json<codec_dynamic>(temporary_input);
+                const auto output = ruvia::to_json(temporary);
                 EXPECT_EQ(std::string_view(output), temporary_input);
             }
             EXPECT_EQ(retained.get<"value">().view(), expected_token);
             EXPECT_EQ(std::string_view(retained_json), saved);
-            EXPECT_EQ(model_resource.live_allocations(), retained_model_live);
-            EXPECT_EQ(output_resource.live_allocations(), retained_output_live);
         }
-        const std::pmr::string invalid_input("{\"value\":\"" + std::pmr::string(160, 'i', ruvia::process_resource()) + "\",\"object\":[]}", ruvia::process_resource());
+        const std::string invalid_input("{\"value\":\"" + std::string(160, 'i') + "\",\"object\":[]}");
         for (std::size_t i = 0; i < 32; ++i) {
-            const auto allocated = model_resource.allocation_count();
             EXPECT_TRUE(ruvia::test::throws_on([&] {
-                (void)ruvia::from_json<codec_dynamic>(invalid_input, {.resource_ = &model_resource});
+                (void)ruvia::from_json<codec_dynamic>(invalid_input);
             }));
-            EXPECT_TRUE(model_resource.allocation_count() > allocated);
-            EXPECT_EQ(model_resource.live_allocations(), retained_model_live);
-            EXPECT_EQ(output_resource.live_allocations(), retained_output_live);
         }
     }
-    EXPECT_EQ(model_resource.live_allocations(), model_baseline);
-    EXPECT_EQ(output_resource.live_allocations(), output_baseline);
-    EXPECT_EQ(model_resource.allocation_count(), model_resource.deallocation_count());
-    EXPECT_EQ(output_resource.allocation_count(), output_resource.deallocation_count());
-}
-
-TEST(Ruvia, model_json_codec_releases_allocations_when_parse_or_serialize_fails) {
-    std::pmr::string input(R"({"single":{"wire\"id":9,"text":")", ruvia::process_resource());
-    input.append(192, 'x');
-    input += R"("},"array":[{"wire\"id":1,"text":")";
-    input.append(80, 'y');
-    input += R"("}],"boxed":[{"wire\"id":2}],"tree":{"name":"root","children":[{"name":"leaf","children":[{"name":"end"}]}]}})";
-    failing_resource successful_resource((std::numeric_limits<std::size_t>::max)());
-    auto successful = ruvia::from_json<codec_envelope>(input, {.resource_ = &successful_resource});
-    EXPECT_EQ(successful.get<"array">().size(), std::size_t{1});
-    const auto successful_allocations = successful_resource.allocation_count();
-    EXPECT_TRUE(successful_allocations > 1);
-    const bool inject = ruvia::test::stl_allocation_failure_injection_enabled();
-    if (inject) {
-        bool saw_partial_construction_failure = false;
-        for (std::size_t failure = 1; failure <= successful_allocations; ++failure) {
-            failing_resource resource(failure - 1);
-            bool failed = false;
-            try {
-                (void)ruvia::from_json<codec_envelope>(input, {.resource_ = &resource});
-            } catch (const std::bad_alloc&) {
-                failed = true;
-            }
-            EXPECT_TRUE(failed);
-            EXPECT_EQ(resource.allocation_count(), failure - 1);
-            saw_partial_construction_failure =
-                saw_partial_construction_failure || resource.allocation_count() > 0;
-            EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-            EXPECT_EQ(resource.allocation_count(), resource.deallocation_count());
-        }
-        EXPECT_TRUE(saw_partial_construction_failure);
-    }
-
-    const std::pmr::string kept(80, 'k', ruvia::process_resource());
-    auto model = ruvia::from_json<codec_dynamic>(
-        std::pmr::string("{\"value\":{\"kept\":\"", ruvia::process_resource()) + kept + "\"},\"object\":{}}");
-    const auto before = std::pmr::string(ruvia::to_json(model), ruvia::process_resource());
-    failing_resource successful_output((std::numeric_limits<std::size_t>::max)());
-    {
-        const auto output = ruvia::to_json(model, {.resource_ = &successful_output});
-        EXPECT_EQ(std::string_view(output), before);
-    }
-    EXPECT_EQ(successful_output.live_allocations(), std::size_t{0});
-    const auto output_allocations = successful_output.allocation_count();
-    EXPECT_TRUE(output_allocations > 0);
-    if (inject) {
-        for (std::size_t failure = 0; failure < output_allocations; ++failure) {
-            failing_resource output_resource(failure);
-            bool serialize_failed = false;
-            try {
-                (void)ruvia::to_json(model, {.resource_ = &output_resource});
-            } catch (const std::bad_alloc&) {
-                serialize_failed = true;
-            }
-            EXPECT_TRUE(serialize_failed);
-            EXPECT_EQ(output_resource.allocation_count(), failure);
-            EXPECT_EQ(output_resource.live_allocations(), std::size_t{0});
-            EXPECT_EQ(output_resource.allocation_count(), output_resource.deallocation_count());
-        }
-    }
-    EXPECT_EQ(std::string_view(ruvia::to_json(model)), before);
 }
 
 TEST(Ruvia, model_json_codec_roundtrips_empty_schema_and_rejects_non_object_root) {
@@ -612,7 +451,7 @@ TEST(Ruvia, json_representation_budget_bounds_scalar_and_owned_string_results) {
         (void)ruvia::from_json<ruvia::int32>("1", {.max_representation_bytes_ = 0});
     }));
 
-    const std::pmr::string text("\"" + std::pmr::string(4096, 'x', ruvia::process_resource()) + "\"", ruvia::process_resource());
+    const std::string text("\"" + std::string(4096, 'x') + "\"");
     EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = 1024});
     }));
@@ -626,53 +465,46 @@ TEST(Ruvia, json_representation_budget_bounds_scalar_and_owned_string_results) {
     EXPECT_TRUE(!ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(text, {.max_representation_bytes_ = single_copy_budget});
     }));
-    const std::pmr::string escaped("\"\\n" + std::pmr::string(4094, 'x', ruvia::process_resource()) + "\"", ruvia::process_resource());
+    const std::string escaped("\"\\n" + std::string(4094, 'x') + "\"");
     EXPECT_TRUE(ruvia::test::throws_on([&] {
         (void)ruvia::from_json<ruvia::string>(escaped, {.max_representation_bytes_ = single_copy_budget});
     }));
 }
 
 TEST(Ruvia, json_representation_budget_includes_decoded_field_names) {
-    const std::pmr::string key(R"(\u0075)" + std::pmr::string(2048, 'x', ruvia::process_resource()), ruvia::process_resource());
-    const std::pmr::string member(std::pmr::string("\"", ruvia::process_resource()) + key + "\":0", ruvia::process_resource());
-    const std::pmr::string single(std::pmr::string("{", ruvia::process_resource()) + member + "}", ruvia::process_resource());
-    const std::pmr::string repeated(std::pmr::string("{", ruvia::process_resource()) + member + "," + member + "}", ruvia::process_resource());
+    const std::string key(R"(\u0075)" + std::string(2048, 'x'));
+    const std::string member(std::string("\"") + key + "\":0");
+    const std::string single(std::string("{") + member + "}");
+    const std::string repeated(std::string("{") + member + "," + member + "}");
     const auto one_key_budget = sizeof(codec_empty) + key.size() + 128;
-    ruvia::test::counting_memory_resource memory;
     {
         auto parsed_value = ruvia::from_json<codec_empty>(single,
-            {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
+            {.max_representation_bytes_ = one_key_budget});
         EXPECT_EQ(std::string_view(ruvia::to_json(parsed_value)), "{}");
         EXPECT_TRUE(ruvia::test::throws_on([&] {
             (void)ruvia::from_json<codec_empty>(single,
-                {.resource_ = &memory, .max_representation_bytes_ = sizeof(codec_empty) + 1024});
+                {.max_representation_bytes_ = sizeof(codec_empty) + 1024});
         }));
         EXPECT_TRUE(ruvia::test::throws_on([&] {
             (void)ruvia::from_json<codec_empty>(repeated,
-                {.resource_ = &memory, .max_representation_bytes_ = one_key_budget});
+                {.max_representation_bytes_ = one_key_budget});
         }));
     }
-    EXPECT_EQ(memory.live_allocations(), std::size_t{0});
-    EXPECT_EQ(memory.allocation_count(), memory.deallocation_count());
 }
 
 TEST(Ruvia, json_budget_failure_releases_partial_results_and_preserves_retained_values) {
-    ruvia::test::counting_memory_resource memory;
     {
         auto retained = ruvia::from_json<ruvia::array<ruvia::string>>(
-            R"(["retained value with owned storage"])", {.resource_ = &memory});
-        const auto retained_allocations = memory.live_allocations();
+            R"(["retained value with owned storage"])");
         for (std::size_t index = 0; index < 8; ++index) {
             EXPECT_TRUE(ruvia::test::throws_on([&] {
                 (void)ruvia::from_json<ruvia::boxed_array<ruvia::string>>(
                     R"(["first element with owned storage","second element with owned storage"])",
-                    {.resource_ = &memory, .max_array_elements_ = 1});
+                    {.max_array_elements_ = 1});
             }));
-            EXPECT_EQ(memory.live_allocations(), retained_allocations);
             EXPECT_EQ(retained[0].view(), std::string_view("retained value with owned storage"));
         }
     }
-    EXPECT_EQ(memory.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, model_json_codec_validates_field_rules_on_root_and_nested_model_arrays) {

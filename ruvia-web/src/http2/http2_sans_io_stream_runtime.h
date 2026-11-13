@@ -5,12 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
@@ -30,17 +28,16 @@ enum class http2_request_body_store_status : std::uint8_t {
     stored,
     too_large,
     backlog_overflow,
+    buffer_limit,
 };
 
 class http2_sans_io_stream_runtime final {
 public:
     // The owning table resolves metadata and body resources before construction.
-    http2_sans_io_stream_runtime(std::uint32_t stream_id, std::pmr::memory_resource* resource,
-        std::pmr::memory_resource* body_resource)
+    explicit http2_sans_io_stream_runtime(std::uint32_t stream_id, inbound_buffer_account* inbound = nullptr) noexcept
         : stream_id_(stream_id),
-          trailers_(resource),
-          buffered_body_(body_resource),
-          body_queue_(body_resource) {}
+          buffered_reservation_(inbound),
+          body_queue_(inbound) {}
 
     void bind_push_parent(std::uint32_t id) noexcept {
         push_parent_ = id;
@@ -121,16 +118,21 @@ public:
             return http2_request_body_store_status::too_large;
         }
         if (body_mode_ == request_body_mode::stream) {
-            if (!body_queue_.enqueue_bounded(data, chunk.take_credit(), backlog_limit)) {
-                return http2_request_body_store_status::backlog_overflow;
+            switch (body_queue_.enqueue_bounded(data, chunk.take_credit(), backlog_limit)) {
+                case http2_body_queue_store_status::stored:
+                    break;
+                case http2_body_queue_store_status::backlog_overflow:
+                    return http2_request_body_store_status::backlog_overflow;
+                case http2_body_queue_store_status::buffer_limit:
+                    return http2_request_body_store_status::buffer_limit;
             }
         } else {
             try {
                 if (!data.empty()) {
-                    buffered_body_.append(data.data(), data.size());
+                    inbound_append(buffered_body_, buffered_reservation_, data);
                 }
             } catch (const inbound_buffer_limit_error&) {
-                return http2_request_body_store_status::backlog_overflow;
+                return http2_request_body_store_status::buffer_limit;
             }
         }
         received_bytes_ += data.size();
@@ -153,7 +155,7 @@ public:
     const http2_sans_io_body_queue& body_queue() const&& = delete;
 
     void discard_body() noexcept {
-        std::pmr::string(buffered_body_.get_allocator()).swap(buffered_body_);
+        inbound_discard(buffered_body_, buffered_reservation_);
         body_queue_.discard();
     }
 
@@ -189,7 +191,7 @@ private:
     friend class http2_sans_io_stream_runtime_table;
 
     [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        const worker_handle& worker_value, multiplexed_session_termination& termination) {
+        const worker_ref& worker_value, multiplexed_session_termination& termination) {
         if (!route_selected_ || signal_) {
             return nullptr;
         }
@@ -220,7 +222,8 @@ private:
     std::optional<http2_request_head_event> request_head_;
     route_resolution resolution_{};
     request_body_mode body_mode_{request_body_mode::buffered};
-    std::pmr::string buffered_body_;
+    std::string buffered_body_;
+    inbound_buffer_reservation buffered_reservation_;
     http2_sans_io_body_queue body_queue_;
     std::size_t received_bytes_{0};
     std::optional<multiplexed_stream_signal> signal_;
@@ -238,12 +241,9 @@ private:
 class http2_sans_io_stream_runtime_table final {
 public:
     explicit http2_sans_io_stream_runtime_table(
-        std::pmr::memory_resource* resource, multiplexed_session_termination& termination,
-        std::pmr::memory_resource* body_resource = nullptr)
-        : resource_(pmr_resource_or_default(resource)),
-          body_resource_(body_resource != nullptr ? body_resource : resource_),
-          termination_(termination),
-          overflow_(resource_) {}
+        multiplexed_session_termination& termination, inbound_buffer_account* body_account = nullptr) noexcept
+        : termination_(termination),
+          body_account_(body_account) {}
 
     [[nodiscard]] http2_sans_io_stream_runtime* find(std::uint32_t stream_id) noexcept {
         for (auto& slot : inline_) {
@@ -289,12 +289,12 @@ public:
         }
         for (auto& slot : inline_) {
             if (!slot) {
-                slot.emplace(stream_id, resource_, body_resource_);
+                slot.emplace(stream_id, body_account_);
                 ++size_;
                 return *slot;
             }
         }
-        auto runtime = make_pmr_object<http2_sans_io_stream_runtime>(resource_, stream_id, resource_, body_resource_);
+        auto runtime = std::make_unique<http2_sans_io_stream_runtime>(stream_id, body_account_);
         auto* result_value = runtime.get();
         overflow_.push_back(std::move(runtime));
         ++size_;
@@ -302,14 +302,14 @@ public:
     }
 
     [[nodiscard]] multiplexed_stream_signal* begin_dispatch(
-        std::uint32_t stream_id, const worker_handle& worker_value) {
+        std::uint32_t stream_id, const worker_ref& worker_value) {
         auto* runtime = find(stream_id);
         if (runtime == nullptr) {
             return nullptr;
         }
         return runtime->begin_dispatch(worker_value, termination_);
     }
-    multiplexed_stream_signal* begin_dispatch(std::uint32_t, worker_handle&&) = delete;
+    multiplexed_stream_signal* begin_dispatch(std::uint32_t, worker_ref&&) = delete;
 
     [[nodiscard]] bool mark_tunnel(std::uint32_t stream_id) noexcept {
         auto* runtime = find(stream_id);
@@ -386,7 +386,7 @@ private:
     // resident footprint stays small in every connection.
     static constexpr std::size_t inline_capacity = 2;
     using overflow_runtime_type =
-        std::unique_ptr<http2_sans_io_stream_runtime, pmr_object_deleter<http2_sans_io_stream_runtime>>;
+        std::unique_ptr<http2_sans_io_stream_runtime>;
 
     void account_removal(const http2_sans_io_stream_runtime& runtime) noexcept {
         if (runtime.tunnel()) {
@@ -394,11 +394,10 @@ private:
         }
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::memory_resource* body_resource_;
     multiplexed_session_termination& termination_;
+    inbound_buffer_account* body_account_{nullptr};
     std::array<std::optional<http2_sans_io_stream_runtime>, inline_capacity> inline_{};
-    std::pmr::vector<overflow_runtime_type> overflow_;
+    std::vector<overflow_runtime_type> overflow_;
     std::size_t size_{0};
     std::size_t tunnel_count_{0};
 };

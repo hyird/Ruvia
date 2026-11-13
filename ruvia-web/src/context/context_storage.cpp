@@ -1,3 +1,5 @@
+#include <memory>
+
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_values.h"
 #include "ruvia/http/http_request.h"
@@ -10,32 +12,29 @@
 #include "router/route_resolution.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #endif
 namespace ruvia {
 
-context::context(
-    request_memory& memory, const http_request& request, const detail::context_services& services)
-    : context(memory, request, {}, nullptr, nullptr, 0, 0, services) {}
+context::context(const http_request& request, const detail::context_services& services)
+    : context(request, {}, nullptr, nullptr, 0, 0, services) {}
 
-context::context(request_memory& memory, const http_request& request,
+context::context(const http_request& request,
     std::string_view route_path, const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count, std::uintptr_t route_rate_limit_scope,
     const detail::context_services& services)
-    : memory_(memory),
-      request_(request),
+    : request_(request),
       capabilities_(services.worker(), services.get_stop_token(), services.worker_states()),
       route_path_(route_path),
       param_names_(param_names),
       param_values_(param_values),
       param_count_(param_count < detail::max_route_params ? param_count : detail::max_route_params),
       route_rate_limit_scope_(route_rate_limit_scope),
-      request_storage_(make_pmr_object<detail::context_request_storage>(memory.resource(),
-          services, memory.resource())) {
+      request_storage_(std::make_unique<detail::context_request_storage>(services)) {
     operation_scope_.bind_worker(services.worker());
 }
 context::~context() = default;
@@ -73,10 +72,10 @@ const ruvia::env& context::env() const noexcept {
     return services().env() != nullptr ? *services().env() : empty;
 }
 
-std::pmr::string& context::decoded_body() const {
+std::string& context::decoded_body() const {
     auto& storage = request_storage();
     if (!storage.decoded_body_) {
-        storage.decoded_body_.emplace(services().inbound_buffer_pool() != nullptr ? services().inbound_buffer_pool() : ruvia::process_resource());
+        storage.decoded_body_.emplace();
     }
     return *storage.decoded_body_;
 }
@@ -135,13 +134,13 @@ void context::respond(http_response&& response) {
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_handle context::db() const {
+db_session context::db() const {
     const auto& services_value = services();
     return services_value.client_registries().db(
         operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
-db_handle context::db(std::string_view alias) const {
+db_session context::db(std::string_view alias) const {
     const auto& services_value = services();
     return services_value.client_registries().db(
         alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
@@ -149,13 +148,13 @@ db_handle context::db(std::string_view alias) const {
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_handle context::redis() const {
+redis_session context::redis() const {
     const auto& services_value = services();
     return services_value.client_registries().redis(
         operation_scope_, services_value.io_metrics(), capabilities_.stop_token());
 }
 
-redis_handle context::redis(std::string_view alias) const {
+redis_session context::redis(std::string_view alias) const {
     const auto& services_value = services();
     return services_value.client_registries().redis(
         alias, operation_scope_, services_value.io_metrics(), capabilities_.stop_token());

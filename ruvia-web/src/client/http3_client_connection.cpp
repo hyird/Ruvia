@@ -11,7 +11,6 @@
 #include <coroutine>
 #include <cstring>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <system_error>
@@ -23,7 +22,6 @@
 #include <openssl/ssl.h>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http3_quic_connection.h"
@@ -105,15 +103,15 @@ struct free_ticket final {
 
 struct http3_client_tls::ticket final {
     explicit ticket(const http3_client_route& route)
-        : host_(route.host_, process_resource()),
+        : host_(route.host_),
           port_(route.port_),
-          server_name_(route.server_name_, process_resource()) {}
+          server_name_(route.server_name_) {}
     [[nodiscard]] bool names(const http3_client_route& route) const noexcept {
         return port_ == route.port_ && host_ == route.host_ && server_name_ == route.server_name_;
     }
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_;
-    std::pmr::string server_name_;
+    std::string server_name_;
     std::array<std::uint8_t, 4096> params_{};
     std::size_t params_size_{};
     http3_peer_settings settings_{};
@@ -127,7 +125,7 @@ struct http3_client_tls::ticket final {
 
 http3_client_tls::http3_client_tls(http_client_pool& pool)
     : context_(asio::ssl::context::tls_client),
-      tickets_(process_resource()),
+      tickets_(),
       capacity_((std::max)(pool.config().connection_limits_.max_idle_multiplexed_, std::size_t{1})) {
     initialize_quic_crypto();
     configure_client_tls_context(*context_.native_handle(), pool.config().tls_);
@@ -233,15 +231,15 @@ public:
           shared_tls_(shared_tls),
           route_(route),
           index_(index),
-          connect_slots_(1, pool.worker(), process_resource()),
+          connect_slots_(1, pool.worker()),
           changed_(pool.worker()),
           writer_(pool.worker()),
-          streams_(process_resource()),
-          endpoint_host_(process_resource()),
-          receive_buffers_{std::pmr::vector<std::byte>(process_resource()), std::pmr::vector<std::byte>(process_resource())},
-          socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
-          old_socket_(nullptr, pmr_object_deleter<asio::ip::udp::socket>{process_resource()}),
-          packet_(process_resource()) {
+          streams_(),
+          endpoint_host_(),
+          receive_buffers_{std::vector<std::byte>(), std::vector<std::byte>()},
+          socket_{},
+          old_socket_{},
+          packet_() {
         SSL_CTX_sess_set_new_cb(shared_tls_.context_.native_handle(), save_ticket);
         streams_.reserve(pool.config().http3_.max_concurrent_streams_);
     }
@@ -626,7 +624,7 @@ public:
             response.trailers_.clear();
             response.trailers_.reserve(trailers.size());
             for (const auto& field : trailers) {
-                response.trailers_.emplace_back(field.name(), field.value(), response.resource_);
+                response.trailers_.emplace_back(field.name(), field.value());
             }
         }
         if (item.retry_425_) {
@@ -866,13 +864,13 @@ public:
         } catch (...) {
         }
     }
-    task<void> receive(asio::ip::udp::socket& socket, asio::ip::udp::endpoint local, std::pmr::vector<std::byte>& bytes) {
+    task<void> receive(asio::ip::udp::socket& socket, asio::ip::udp::endpoint local, std::vector<std::byte>& bytes) {
         try {
             while (open_ && socket.is_open()) {
                 asio::ip::udp::endpoint remote;
                 const auto result = co_await async_asio<std::size_t>([&](auto handler) {
                     socket.async_receive_from(asio::buffer(bytes), remote,
-                        asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
+                        std::move(handler));
                 });
                 if (!open_ || !socket.is_open()) {
                     break;
@@ -945,7 +943,7 @@ public:
                     sending_socket_ = output;
                     const auto sent = co_await async_asio<std::size_t>([&](auto handler) {
                         output->async_send_to(asio::buffer(packet_.bytes_), *remote,
-                            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
+                            std::move(handler));
                     });
                     sending_socket_ = nullptr;
                     packet_pending_ = false;
@@ -1087,7 +1085,7 @@ public:
             throw http_client_error(make_error_code(http_client_errc::resolve_failed), "HTTP/3 dial address rejected");
         }
         remote_ = *connect_endpoint_;
-        socket_ = make_pmr_object<asio::ip::udp::socket>(process_resource(), pool_.io_context());
+        socket_ = std::make_unique<asio::ip::udp::socket>(pool_.io_context());
         socket_->open(remote_.protocol());
         socket_->connect(remote_);
         peer_ip_ = resolved_peer_ip;
@@ -1161,10 +1159,8 @@ public:
             .initial_max_data_ = receive_window,
             .initial_max_stream_data_ = 64 * 1024,
             .max_udp_payload_size_ = config.http3_.max_datagram_bytes_,
-            .callback_user_data_ = this,
-            .resource_ = process_resource(),
+            .callback_context_ = this,
             .http3_ = {
-                .resource_ = process_resource(),
                 .max_concurrent_streams_ = config.http3_.max_concurrent_streams_,
                 .max_stream_output_bytes_ = config.http3_.max_stream_output_bytes_,
                 .enable_h3_datagram_ = true}};
@@ -1308,16 +1304,16 @@ public:
     pool_lease_scheduler connect_slots_;
     worker_signal changed_;
     worker_signal writer_;
-    std::pmr::vector<stream*> streams_;
-    std::pmr::string endpoint_host_;
-    std::array<std::pmr::vector<std::byte>, 2> receive_buffers_;
+    std::vector<stream*> streams_;
+    std::string endpoint_host_;
+    std::array<std::vector<std::byte>, 2> receive_buffers_;
     std::size_t active_receive_buffer_{0};
     std::unique_ptr<SSL, free_tls> tls_;
     std::unique_ptr<ngtcp2_crypto_ossl_ctx, free_crypto> crypto_;
     ngtcp2_crypto_conn_ref reference_{};
     std::optional<http3_quic_connection> quic_;
-    std::unique_ptr<asio::ip::udp::socket, pmr_object_deleter<asio::ip::udp::socket>> socket_;
-    std::unique_ptr<asio::ip::udp::socket, pmr_object_deleter<asio::ip::udp::socket>> old_socket_;
+    std::unique_ptr<asio::ip::udp::socket> socket_;
+    std::unique_ptr<asio::ip::udp::socket> old_socket_;
     asio::ip::udp::socket* sending_socket_{};
     asio::ip::udp::endpoint local_, old_local_, remote_;
     std::optional<asio::ip::udp::endpoint> connect_endpoint_;
@@ -1344,7 +1340,7 @@ public:
 class http3_client_connection::address_race final {
 public:
     struct candidate final {
-        std::unique_ptr<session, pmr_object_deleter<session>> connection_{nullptr, pmr_object_deleter<session>{nullptr}};
+        std::unique_ptr<session> connection_{};
         bool running_{false};
     };
     address_race(http_client_pool& pool, http3_client_tls& shared_tls, const http3_client_route& route, std::size_t index)
@@ -1353,7 +1349,7 @@ public:
           route_(route),
           index_(index),
           resolver_(pool.worker()),
-          selection_(1, pool.worker(), process_resource()),
+          selection_(1, pool.worker()),
           changed_(pool.worker()) {}
 
     void cancel(error_code reason) noexcept {
@@ -1498,8 +1494,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
                 }
             });
     }
-    std::unique_ptr<session, pmr_object_deleter<session>> retained{
-        nullptr, pmr_object_deleter<session>{process_resource()}};
+    std::unique_ptr<session> retained;
     std::exception_ptr failure;
     try {
         if (session_) {
@@ -1564,8 +1559,7 @@ task<void> http3_client_connection::select_endpoint(bool allow_early,
                         race.retained_ = nullptr;
                         entry.connection_ = std::move(retained);
                     } else {
-                        entry.connection_ = make_pmr_object<session>(
-                            process_resource(), race.pool_, race.shared_tls_, race.route_, race.index_);
+                        entry.connection_ = std::make_unique<session>(race.pool_, race.shared_tls_, race.route_, race.index_);
                     }
                     entry.connection_->connect_endpoint_ = *next;
                     entry.connection_->race_signal_ = &race.changed_;
@@ -1701,10 +1695,10 @@ bool http3_client_connection::active() const noexcept {
 http3_client_connection::http3_client_connection(http_client_pool& pool, http3_client_tls& tls, std::size_t index,
     std::uint64_t serial, std::string_view host, std::uint16_t port, std::string_view server_name)
     : tls_(tls),
-      route_{.host_ = std::pmr::string(host, process_resource()), .port_ = port, .server_name_ = std::pmr::string(server_name, process_resource())},
+      route_{.host_ = std::string(host), .port_ = port, .server_name_ = std::string(server_name)},
       serial_(serial),
-      session_(make_pmr_object<session>(process_resource(), pool, tls_, route_, index)),
-      race_(make_pmr_object<address_race>(process_resource(), pool, tls_, route_, index)) {}
+      session_(std::make_unique<session>(pool, tls_, route_, index)),
+      race_(std::make_unique<address_race>(pool, tls_, route_, index)) {}
 http3_client_connection::~http3_client_connection() = default;
 bool http3_client_connection::serves(std::string_view host, std::uint16_t port, std::string_view server_name) const noexcept {
     return !fresh_ && !race_->retired_ && route_.port_ == port && http_ascii_equals_ignore_case(route_.host_, host) &&
@@ -1908,7 +1902,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
     response.connection_generation_ = self.generation_;
     self.capture_connection_info(response, self.requests_ != 0);
     if (request.udp_tunnel()) {
-        response.http3_datagrams_.emplace(response.resource_);
+        response.http3_datagrams_.emplace();
     }
     for (unsigned attempt = 0; attempt != 2; ++attempt) {
         while (!self.quic_->handshake_completed() && (!may_send_early || attempt != 0 || self.early_rejected_)) {
@@ -1972,7 +1966,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
             const bool reused = self.requests_++ != 0;
             self.capture_connection_info(response, reused);
             item.early_ = !self.quic_->handshake_completed();
-            client_prepared_request_scratch scratch(process_resource());
+            client_prepared_request_scratch scratch;
             const auto prepared = self.pool_.policy().prepare_request(request, scratch);
             try {
                 self.submit_request_head(item, request, prepared.headers_);
@@ -2000,7 +1994,7 @@ task<bool> http3_client_connection::execute(const http_client_request_storage& r
                             co_return co_await self.send_body(item, chunk);
                         },
                         [&]() -> task<bool> {
-                            std::pmr::vector<http_header_view> trailers(process_resource());
+                            std::vector<http_header_view> trailers;
                             if (const auto* upload = request.upload()) {
                                 trailers.reserve(upload->trailers_.size());
                                 for (const auto& field : upload->trailers_) {
@@ -2120,7 +2114,7 @@ task<void> http3_client_connection::migrate(std::string_view local_address, std:
         }
     };
     check();
-    auto replacement = make_pmr_object<asio::ip::udp::socket>(process_resource(), self.pool_.io_context());
+    auto replacement = std::make_unique<asio::ip::udp::socket>(self.pool_.io_context());
     asio::ip::udp::endpoint local;
     try {
         const asio::ip::udp::endpoint requested(asio::ip::make_address(local_address), port);

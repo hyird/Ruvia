@@ -4,17 +4,16 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/http/http_pmr_string.h"
+#include "ruvia/http/http_io_buffer.h"
 
 #include "field/http_lower_header_name.h"
+#include "memory/geometric_reserve.h"
 #include "response/http_response_header_bits.h"
-#include "util/geometric_reserve.h"
 namespace ruvia::detail {
 
 // The field section handed to one nghttp2 HEADERS/PUSH_PROMISE submission.
@@ -24,10 +23,7 @@ namespace ruvia::detail {
 // session deflater is the only HPACK encoder.
 class http2_field_list final {
 public:
-    explicit http2_field_list(std::pmr::memory_resource* resource)
-        : owned_(resource),
-          entries_(resource),
-          nv_(resource) {}
+    http2_field_list() noexcept = default;
 
     void clear() noexcept {
         owned_.clear();
@@ -38,14 +34,14 @@ public:
     // Keep common sections warm; return oversized storage so one large field
     // section cannot pin descriptor buffers to an idle connection.
     void release() noexcept {
-        http_clear_pmr_string_retaining_small(owned_);
-        if (entries_.capacity() > http_retained_pmr_string_bytes / sizeof(entry_type)) {
-            entries_ = std::pmr::vector<entry_type>(entries_.get_allocator());
+        http_clear_string_retaining_small(owned_);
+        if (entries_.capacity() > http_retained_string_bytes / sizeof(entry_type)) {
+            entries_ = std::vector<entry_type>();
         } else {
             entries_.clear();
         }
-        if (nv_.capacity() > http_retained_pmr_string_bytes / sizeof(nghttp2_nv)) {
-            nv_ = std::pmr::vector<nghttp2_nv>(nv_.get_allocator());
+        if (nv_.capacity() > http_retained_string_bytes / sizeof(nghttp2_nv)) {
+            nv_ = std::vector<nghttp2_nv>();
         } else {
             nv_.clear();
         }
@@ -143,9 +139,9 @@ private:
                                      : std::string_view(owned_).substr(text.offset_, text.size_);
     }
 
-    std::pmr::string owned_;
-    std::pmr::vector<entry_type> entries_;
-    std::pmr::vector<nghttp2_nv> nv_;
+    std::string owned_;
+    std::vector<entry_type> entries_;
+    std::vector<nghttp2_nv> nv_;
 };
 
 }  // namespace ruvia::detail

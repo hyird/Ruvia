@@ -36,7 +36,7 @@ class hold_root_request final {
 public:
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
 
-    ruvia::task<void> handle(ruvia::context& context_value, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& context_value, ruvia::next& next_value) {
         if (context_value.req().header("X-Hold-Root").has_value()) {
             held_request_started.store(true, std::memory_order_release);
             if (co_await ruvia::sleep_for(context_value.worker(), 1h, context_value.stop_token()) ==

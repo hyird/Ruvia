@@ -4,7 +4,6 @@
 #include <atomic>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -12,9 +11,8 @@
 #include <vector>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "event_loop_state.h"
 
@@ -35,8 +33,7 @@ struct event_loop_pool::impl_type final {
         }
         loops_.reserve(count);
         for (std::size_t i = 0; i < count; ++i) {
-            loops_.push_back(std::allocate_shared<detail::event_loop_state>(
-                std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()),
+            loops_.push_back(std::make_shared<detail::event_loop_state>(
                 options.queue_capacity_, options.blocking_pool_));
             loops_.back()->install_shutdown_registration();
         }
@@ -105,7 +102,7 @@ struct event_loop_pool::impl_type final {
     [[nodiscard]] std::exception_ptr join() noexcept {
         auto failure = group_.join();
         for (const auto& loop : loops_) {
-            detail::worker_handle_access::wait_for_reservations(loop->runtime_.handle());
+            detail::worker_ref_access::wait_for_reservations(loop->runtime_.worker());
         }
         const std::lock_guard lock(failure_mutex_);
         if (joined_) {
@@ -115,22 +112,21 @@ struct event_loop_pool::impl_type final {
         return failure;
     }
 
-    std::pmr::vector<std::shared_ptr<detail::event_loop_state>> loops_{process_resource()};
-    worker_group group_{process_resource()};
+    std::vector<std::shared_ptr<detail::event_loop_state>> loops_;
+    worker_group group_;
     std::mutex failure_mutex_;
     bool joined_{false};
     std::atomic<std::size_t> next_index_{0};
 };
 
 event_loop_pool::event_loop_pool(event_loop_pool_options options)
-    : impl_(std::allocate_shared<impl_type>(
-          std::pmr::polymorphic_allocator<impl_type>(process_resource()), options)) {
+    : impl_(std::make_shared<impl_type>(options)) {
     impl_->bind_callbacks(impl_);
 }
 
 event_loop_pool::~event_loop_pool() {
     if (std::ranges::any_of(
-            impl_->loops_, [](const auto& loop) { return loop->runtime_.handle().is_current(); })) {
+            impl_->loops_, [](const auto& loop) { return loop->runtime_.worker().is_current(); })) {
         std::terminate();
     }
     impl_->stop();
@@ -152,7 +148,7 @@ void event_loop_pool::stop() noexcept {
 
 void event_loop_pool::join() {
     if (std::ranges::any_of(
-            impl_->loops_, [](const auto& loop) { return loop->runtime_.handle().is_current(); })) {
+            impl_->loops_, [](const auto& loop) { return loop->runtime_.worker().is_current(); })) {
         throw std::logic_error("cannot join an event loop pool from one of its workers");
     }
     impl_->stop();

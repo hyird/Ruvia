@@ -6,7 +6,7 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "server/connection_scanner.h"
 #include "server/server_tls_stream.h"
@@ -42,12 +42,12 @@ inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcep
 // once the worker is stopping; scanner close_all, a fixed deadline and the
 // worker scanner bound it. The task borrows its arguments until completion.
 [[nodiscard]] task<void> linger_http_connection(
-    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_handle& worker_value);
+    asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value);
 
 // Sends TLS close_notify for a non-aborted session without waiting for the
 // peer's alert, then lingers like linger_http_connection() when `mode` is
 // http_connection_close::linger. Same bounds and caller duties as above.
 [[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream,
-    http_connection_close mode, connection_scanner& scanner, const worker_handle& worker_value);
+    http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value);
 
 }  // namespace ruvia::detail

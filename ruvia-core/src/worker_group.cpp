@@ -6,12 +6,10 @@
 #include <string>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 
 namespace ruvia {
-worker_group::worker_group(std::pmr::memory_resource* resource)
-    : members_(pmr_resource_or_default(resource)) {}
+worker_group::worker_group() = default;
 
 worker_group::~worker_group() {
     for (auto* member : members_) {

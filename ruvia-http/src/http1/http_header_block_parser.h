@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 
@@ -79,8 +78,7 @@ static_assert(max_http_header_fields <=
               static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
 
 struct parsed_request_header_block {
-    explicit parsed_request_header_block(std::pmr::memory_resource* resource = nullptr) noexcept
-        : headers_(resource) {}
+    parsed_request_header_block() noexcept = default;
 
     http_header_slice method_;
     http_header_slice target_;

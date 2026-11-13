@@ -6,7 +6,6 @@
 #include <concepts>
 #include <functional>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <semaphore>
 #include <stdexcept>
@@ -20,7 +19,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 
-#include "failing_memory_resource.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::one_shot_tests {
@@ -63,7 +61,7 @@ struct payload final {
     payload_state* state_{};
 };
 
-task<void> exercise_payload_retirement(worker_handle worker, bool& success) {
+task<void> exercise_payload_retirement(worker_ref worker, bool& success) {
     for (const auto consume : {false, true}) {
         payload_state state;
         auto [completion, receiver] = make_one_shot<payload>(worker);
@@ -144,7 +142,7 @@ bool test_completion_move_can_close_receiver(bool stop_worker) {
     asio::io_context io;
     auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
     payload_state state;
-    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().handle());
+    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().worker());
     std::binary_semaphore requested{0};
     std::binary_semaphore closed{0};
     bool observe = true;
@@ -194,7 +192,7 @@ bool test_concurrent_completion_reservation(bool throw_first) {
     auto attachment = attach_event_loop(io, {.queue_capacity_ = 8});
     payload_state first_state;
     payload_state retry_state;
-    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().handle());
+    auto [completion, receiver] = make_one_shot<payload>(attachment.loop().worker());
     std::binary_semaphore entered{0};
     std::binary_semaphore proceed{0};
     std::binary_semaphore second_finished{0};
@@ -242,7 +240,7 @@ task<void> wait_for_cancellation(one_shot_receiver<payload>& receiver, stop_toke
     cancelled = result.status() == worker_wait_status::cancelled;
 }
 
-task<void> exercise_cancellation_during_completion(worker_handle worker, bool& success) {
+task<void> exercise_cancellation_during_completion(worker_ref worker, bool& success) {
     payload_state state;
     auto [completion, receiver] = make_one_shot<payload>(worker);
     std::binary_semaphore entered{0};
@@ -346,7 +344,7 @@ ruvia::task<void> wait_until_closed(ruvia::one_shot_receiver<int>& receiver, boo
 }
 
 ruvia::one_shot_receiver<int>::wait_operation make_cold_wait_after_receiver_close(
-    ruvia::worker_handle worker_value, bool timed, bool completed = false) {
+    ruvia::worker_ref worker_value, bool timed, bool completed = false) {
     auto [completion, receiver] = ruvia::make_one_shot<int>(std::move(worker_value));
     if (completed) {
         static_cast<void>(completion.complete(7));
@@ -371,7 +369,7 @@ ruvia::task<void> verify_cold_wait_operations(ruvia::one_shot_receiver<int>::wai
               completed_timed_cold_closed.status() == ruvia::worker_wait_status::closed;
 }
 
-ruvia::task<void> exercise(ruvia::worker_handle worker_value, bool& success) {
+ruvia::task<void> exercise(ruvia::worker_ref worker_value, bool& success) {
     {
         auto [completion, receiver] = ruvia::make_one_shot<throwing_move>(worker_value);
         bool move_failed = false;
@@ -548,7 +546,7 @@ TEST(Ruvia, OneShotLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto cold_wait = make_cold_wait_after_receiver_close(worker_value, false);
         auto timed_cold_wait = make_cold_wait_after_receiver_close(worker_value, true);
         auto completed_cold_wait = make_cold_wait_after_receiver_close(worker_value, false, true);
@@ -565,7 +563,7 @@ TEST(Ruvia, OneShotLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         ruvia::test::run_worker_tasks(attachment, wait_for_worker_stopping(attachment, receiver, worker_stopping));
     }
@@ -574,7 +572,7 @@ TEST(Ruvia, OneShotLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto [delivered_completion, delivered_receiver] = ruvia::make_one_shot<int>(worker_value);
         auto [closed_completion, closed_receiver] = ruvia::make_one_shot<int>(worker_value);
         ruvia::test::run_worker_tasks(attachment,
@@ -587,7 +585,7 @@ TEST(Ruvia, OneShotLifecycle) {
     {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         auto [completion, receiver] = ruvia::make_one_shot<int>(worker_value);
         std::binary_semaphore receiver_scheduled{0};
         asio::post(io_context, [&receiver_scheduled] { receiver_scheduled.release(); });
@@ -614,13 +612,10 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
         SCOPED_TRACE(fail_move);
         asio::io_context io;
         auto attachment = ruvia::attach_event_loop(io, {.queue_capacity_ = 8});
-        ruvia::test::failing_memory_resource resource;
         payload_state state;
-        auto [completion, receiver] = ruvia::make_one_shot<payload>(
-            attachment.loop().handle(), {.resource_ = &resource});
+        auto [completion, receiver] = ruvia::make_one_shot<payload>(attachment.loop().worker());
         std::optional<ruvia::one_shot_receiver<payload>> owner(std::move(receiver));
         owner->close();
-        const auto live_allocations = resource.live_allocations();
         bool first_move = true;
         bool state_pinned = false;
         state.query_on_move_ = true;
@@ -629,7 +624,7 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
             if (std::exchange(first_move, false)) {
                 owner.reset();
                 completion = {};
-                state_pinned = resource.live_allocations() == live_allocations;
+                state_pinned = !completion.valid();
             }
         };
 
@@ -645,7 +640,6 @@ TEST(Ruvia, OneShotCompletionPinsStateDuringReentrantRebinding) {
         EXPECT_TRUE(state_pinned);
         EXPECT_FALSE(completion.valid());
         EXPECT_EQ(state.destroyed_, 1);
-        EXPECT_EQ(resource.live_allocations(), std::size_t{0});
     }
 }
 

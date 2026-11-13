@@ -3,13 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "db/db_pipeline.h"
@@ -71,7 +69,7 @@ struct mariadb_flight final {
     std::string_view sql_{};
     std::string_view statement_sql_{};
     std::span<const db_value> params_{};
-    std::pmr::string* interpolated_{nullptr};
+    std::string* interpolated_{nullptr};
     // The bytes it put on the wire, once sent.
     std::size_t size_{0};
     bool sent_{false};
@@ -115,9 +113,9 @@ struct mariadb_pipeline_io final {
     using member_type = db_pipeline_member<mariadb_pipeline_io>;
     using flight_type = mariadb_flight;
 
-    struct group_data final {
-        group_data()
-            : send_buffer_(process_resource()) {}
+    struct group_state final {
+        group_state()
+            : send_buffer_() {}
 
         // Frees a stored result nobody took; called whenever the group's
         // flights clear, which every group does before its slot goes away.
@@ -139,7 +137,7 @@ struct mariadb_pipeline_io final {
         // The command being sent, copied (or, deferred, interpolated) so that
         // a statement abandoned while its send is suspended leaves libmariadb
         // nothing dangling. Above the send budget it is given back once sent.
-        std::pmr::string send_buffer_;
+        std::string send_buffer_;
         // What has been read of the head's responses.
         std::exception_ptr head_failure_{};
         std::exception_ptr head_output_failure_{};
@@ -157,7 +155,7 @@ struct mariadb_pipeline_io final {
     struct statement_type final {
         std::string_view sql_;
         std::span<const db_value> params_;
-        std::pmr::string interpolated_;
+        std::string interpolated_;
         mariadb_statement_classification classification_{};
         bool deferred_{false};
         bool ambiguous_backslash_{false};

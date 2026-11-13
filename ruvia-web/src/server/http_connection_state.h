@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -13,7 +12,6 @@
 
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_io_buffer.h"
@@ -50,7 +48,7 @@ inline constexpr std::size_t idle_resident_read_bytes = 256;
 // compact only when the consumed prefix covers the remaining bytes.
 class connection_read_buffer final {
 public:
-    explicit connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator);
+    connection_read_buffer() noexcept;
 
     // Unconsumed bytes, starting with the current request.
     [[nodiscard]] std::string_view pending() const& noexcept RUVIA_LIFETIMEBOUND {
@@ -94,7 +92,7 @@ private:
 // logged fields are copied; nothing is kept without an access log.
 class http1_deferred_access_log final {
 public:
-    explicit http1_deferred_access_log(std::pmr::polymorphic_allocator<char> allocator);
+    http1_deferred_access_log() noexcept;
 
     // Keeps the record of a response whose head completes at output offset
     // `head_end`. Duration is measured when the record is reported.
@@ -121,34 +119,24 @@ private:
         http_status_code status_;
     };
 
-    std::pmr::vector<entry_type> entries_;
-    std::pmr::string text_;
+    std::vector<entry_type> entries_;
+    std::string text_;
 };
 
 // Heavy request storage exists only while the connection is serving requests.
 // A pipelined burst reuses it; idle connections retain only their session frame.
 // The work set and its configured initial arena block share one allocation.
 struct connection_work_set final {
-    explicit connection_work_set(std::span<std::byte> arena_block);
+    connection_work_set() noexcept;
 
     connection_read_buffer read_buffer_;
-    // Serialized response output not yet written: the current response's head
-    // (and coalesced small body), preceded by any pipelined responses held
-    // back for one write. Empty between writes.
     http_response_head_buffer response_head_;
     http1_deferred_access_log deferred_access_;
     http1_server_request_parse_state parsed_;
     route_resolution route_resolution_;
-    // Initial block of the per-request arena (see above).
-    std::span<std::byte> arena_block_;
 };
 
-struct connection_work_set_deleter final {
-    void operator()(connection_work_set* work_set) const noexcept;
-};
-
-[[nodiscard]] std::unique_ptr<connection_work_set, connection_work_set_deleter>
-make_connection_work_set(std::size_t arena_bytes);
+[[nodiscard]] std::unique_ptr<connection_work_set> make_connection_work_set();
 
 // Owns one admitted socket and its connection_slot as one linear value. The
 // slot is acquired only after socket configuration succeeds, then moves into

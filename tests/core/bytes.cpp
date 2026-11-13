@@ -3,7 +3,6 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -27,13 +26,10 @@ TEST(Ruvia, empty_byte_views_round_trip) {
 
 TEST(Ruvia, byte_views_accept_named_owners_and_preserve_storage_addresses) {
     const std::string owned_text("abc", 3);
-    const std::pmr::string pmr_text("def", 3);
     const std::vector<std::byte> owned_bytes{std::byte{'x'}, std::byte{0}, std::byte{'z'}};
     const auto text_bytes = ruvia::as_bytes(owned_text);
-    const auto pmr_bytes = ruvia::as_bytes(pmr_text);
     const auto chars_value = ruvia::as_chars(owned_bytes);
     EXPECT_TRUE(reinterpret_cast<const char*>(text_bytes.data()) == owned_text.data());
-    EXPECT_TRUE(reinterpret_cast<const char*>(pmr_bytes.data()) == pmr_text.data());
     EXPECT_TRUE(chars_value.data() == reinterpret_cast<const char*>(owned_bytes.data()));
     EXPECT_EQ(chars_value, std::string_view("x\0z", 3));
 }

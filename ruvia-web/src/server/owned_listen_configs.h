@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <utility>
@@ -27,13 +26,13 @@ public:
     owned_listen_configs& operator=(owned_listen_configs&&) = delete;
     ~owned_listen_configs();
 
-    [[nodiscard]] std::pmr::vector<http_server_listener_definition> load();
+    [[nodiscard]] std::vector<http_server_listener_definition> load();
     [[nodiscard]] bool needs_tls_preparation() const noexcept;
-    std::pmr::vector<listen_config> configs_{process_resource()};
+    std::vector<listen_config> configs_{};
 
 private:
     void own_addresses();
-    std::pmr::vector<std::pmr::string> addresses_{process_resource()};
+    std::vector<std::string> addresses_{};
     bool inherited_owned_{true};
 };
 

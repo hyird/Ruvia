@@ -16,7 +16,7 @@
 //
 // The callable runs on a foreign thread and outlives nothing: it must own
 // everything it touches (capture by value or move), and it must not touch the
-// context, the request arena, or any other worker-owned state. Nothing in C++
+// context or any other worker-owned state. Nothing in C++
 // enforces that -- the pool cannot see through a lambda's captures -- and a
 // worker that stops while a task is still running does not wait for it, so a
 // captured reference into a request is a use-after-free waiting to happen.
@@ -38,13 +38,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/one_shot.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait_result.h"
 
 namespace ruvia {
@@ -392,7 +391,7 @@ template <typename t_type>
 // to turn a rejection into an exception and to rethrow the callable's own
 // exception.
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_handle worker_value, operation_options options, fn_type fn)
+[[nodiscard]] auto run_blocking(worker_ref worker_value, operation_options options, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     using result_type = std::invoke_result_t<fn_type&>;
     using payload = detail::blocking_payload<result_type>;
@@ -422,17 +421,13 @@ template <typename fn_type>
         co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
 
-    // The one-shot outlives the request that started it: a worker that stops
-    // resumes the waiter immediately while the pool thread is still running, so
-    // this state cannot live in the request arena.
-    //
     // A worker that is already stopping refuses the registration. That is the
     // shutdown race, not a failure of this call, so it becomes the status a
     // shutdown always produces -- an offload must never turn into an exception
     // the caller did not ask for.
     std::optional<std::pair<one_shot_completion<payload>, one_shot_receiver<payload>>> channel;
     try {
-        channel.emplace(make_one_shot<payload>(std::move(worker_value), {.resource_ = process_resource()}));
+        channel.emplace(make_one_shot<payload>(std::move(worker_value)));
     } catch (const std::runtime_error&) {
         co_return outcome_type::with_status(blocking_status::worker_stopping);
     }
@@ -485,7 +480,7 @@ template <typename fn_type>
 }
 
 template <typename fn_type>
-[[nodiscard]] auto run_blocking(worker_handle worker_value, fn_type fn)
+[[nodiscard]] auto run_blocking(worker_ref worker_value, fn_type fn)
     -> task<blocking_result<std::invoke_result_t<fn_type&>>> {
     return run_blocking(std::move(worker_value), operation_options{}, std::move(fn));
 }

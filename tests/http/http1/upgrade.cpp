@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -41,7 +40,7 @@ using ruvia::test::parse_http1_request_message;
     try {
         const auto plan = ruvia::prepare_http1_upgrade_response_head(response, parsed.state_.request());
         EXPECT_TRUE(plan.close_delimited_stream() != nullptr);
-        ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>(response.memory_resource())};
+        ruvia::http_response_head_buffer head;
         ruvia::append_http1_response_head(response, head, plan);
         return std::string(head.view());
     } catch (const ruvia::http1_response_head_error&) {
@@ -76,9 +75,8 @@ TEST(Ruvia, http1_upgrade_offer_needs_http11_the_upgrade_option_and_a_protocol) 
 // protocol; the head carries no framing and the connection option is added
 // once, beside the application's own options.
 TEST(Ruvia, http1_upgrade_head_switches_to_an_offered_protocol_without_framing) {
-    std::pmr::unsynchronized_pool_resource resource;
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header("x-tunnel", "echo");
         const auto head = upgrade_head(response, offering_request);
         EXPECT_EQ(response.status().value(), 101);
@@ -91,7 +89,7 @@ TEST(Ruvia, http1_upgrade_head_switches_to_an_offered_protocol_without_framing) 
         EXPECT_TRUE(head.ends_with("\r\n\r\n")) << head;
     }
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header("Upgrade", "OTHER");
         response.header("Connection", "upgrade");
         const auto head = upgrade_head(response, offering_request);
@@ -101,7 +99,7 @@ TEST(Ruvia, http1_upgrade_head_switches_to_an_offered_protocol_without_framing) 
         EXPECT_EQ(field_count(response, "Connection"), 1U);
     }
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header("Connection", "x-hop");
         response.header("x-hop", "1");
         const auto head = upgrade_head(response, offering_request);
@@ -114,34 +112,33 @@ TEST(Ruvia, http1_upgrade_head_switches_to_an_offered_protocol_without_framing) 
 // A request without an offer, a protocol the client did not offer, content
 // and framing fields are refused before the response changes.
 TEST(Ruvia, http1_upgrade_head_rejects_unoffered_switches_content_and_framing_unchanged) {
-    std::pmr::unsynchronized_pool_resource resource;
     const auto refused_unchanged = [&](ruvia::http_response& response, std::string_view request_wire) {
         const auto fields = response.headers().size();
         const auto refused = upgrade_head(response, request_wire).empty();
         return refused && response.status().value() == 200 && response.headers().size() == fields;
     };
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         EXPECT_TRUE(refused_unchanged(response, "GET / HTTP/1.1\r\nHost: x\r\nUpgrade: echo\r\n\r\n"));
     }
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header("Upgrade", "echo/2");
         EXPECT_TRUE(refused_unchanged(response, offering_request));
     }
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header("Upgrade", "other, unoffered");
         EXPECT_TRUE(refused_unchanged(response, offering_request));
     }
     {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.body("payload");
         EXPECT_TRUE(refused_unchanged(response, offering_request));
     }
     for (const auto& [name, value] : {std::pair<std::string_view, std::string_view>{"Content-Length", "0"},
              std::pair<std::string_view, std::string_view>{"Transfer-Encoding", "chunked"}}) {
-        ruvia::http_response response(&resource);
+        ruvia::http_response response;
         response.header(name, value);
         EXPECT_TRUE(refused_unchanged(response, offering_request)) << name;
     }

@@ -8,7 +8,6 @@
 #include <cstring>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -18,7 +17,6 @@
 #include <vector>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http2_types.h"
 #include "ruvia/http/http_expectations.h"
 #include "ruvia/http/http_header.h"
@@ -29,8 +27,8 @@
 
 #include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
+#include "memory/geometric_reserve.h"
 #include "response/http_local_content_state.h"
-#include "util/geometric_reserve.h"
 
 namespace ruvia::detail {
 
@@ -42,8 +40,7 @@ struct http2_stored_header_view final {
 
 class http2_header_list final {
 public:
-    explicit http2_header_list(std::pmr::memory_resource* resource = nullptr)
-        : http2_header_list(http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {}
+    http2_header_list() noexcept = default;
 
     http2_header_list(const http2_header_list&) = delete;
     http2_header_list& operator=(const http2_header_list&) = delete;
@@ -105,10 +102,6 @@ public:
     }
 
 private:
-    http2_header_list(http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : overflow_storage_("", resource),
-          overflow_fields_(0, resource) {}
-
     static constexpr std::size_t inline_header_fields = 16;
     static constexpr std::size_t inline_header_storage_bytes = 512;
     static constexpr std::size_t max_stored_header_view_size =
@@ -153,9 +146,9 @@ private:
     }
 
     std::array<char, inline_header_storage_bytes> inline_storage_;
-    std::pmr::string overflow_storage_;
+    std::string overflow_storage_;
     std::array<header_field_type, inline_header_fields> inline_fields_;
-    std::pmr::vector<header_field_type> overflow_fields_;
+    std::vector<header_field_type> overflow_fields_;
     std::size_t storage_size_{0};
     std::uint16_t count_{0};
     bool using_overflow_storage_{false};
@@ -848,34 +841,22 @@ class http2_stream_state final {
     http2_tunnel_state tunnel_state_;
     // Received DATA bytes delivered to the owner and not yet acknowledged.
     std::uint32_t window_debt_{0};
-    std::pmr::string method_;
+    std::string method_;
     http_known_method known_method_{http_known_method::unknown};
-    std::pmr::string scheme_;
-    std::pmr::string authority_;
-    std::pmr::string path_;
-    std::pmr::string protocol_;
-    std::pmr::string cookie_;
+    std::string scheme_;
+    std::string authority_;
+    std::string path_;
+    std::string protocol_;
+    std::string cookie_;
     http2_header_list headers_;
-    std::pmr::vector<http_header> trailers_;
+    std::vector<http_header> trailers_;
     http2_local_request_content_gate local_request_content_gate_{http2_local_request_content_gate::open};
     bool pinned_{false};
     std::size_t pending_events_{0};
 
-    http2_stream_state(std::uint32_t stream_id, http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : id_(stream_id),
-          method_("", resource),
-          scheme_("", resource),
-          authority_("", resource),
-          path_("", resource),
-          protocol_("", resource),
-          cookie_("", resource),
-          headers_(resource),
-          trailers_(0, http_header({}, {}, resource), resource) {}
-
 public:
-    explicit http2_stream_state(std::uint32_t stream_id, std::pmr::memory_resource* resource)
-        : http2_stream_state(stream_id, http_resolved_pmr_resource_tag{}, http_pmr_resource_or_default(resource)) {}
-
+    explicit http2_stream_state(std::uint32_t stream_id) noexcept
+        : id_(stream_id) {}
     http2_stream_state(const http2_stream_state&) = delete;
     http2_stream_state& operator=(const http2_stream_state&) = delete;
     http2_stream_state(http2_stream_state&&) = delete;
@@ -1206,9 +1187,6 @@ public:
     }
 
     void take_request_target_from(http2_stream_state& other) noexcept {
-        if (method_.get_allocator().resource() != other.method_.get_allocator().resource()) {
-            std::terminate();
-        }
         method_.swap(other.method_);
         using std::swap;
         swap(known_method_, other.known_method_);
@@ -1246,10 +1224,10 @@ public:
         return headers_.append(name, value, kind);
     }
     [[nodiscard]] bool append_remote_trailer(std::string_view name, std::string_view value) {
-        trailers_.emplace_back(name, value, method_.get_allocator().resource());
+        trailers_.emplace_back(name, value);
         return true;
     }
-    [[nodiscard]] std::pmr::vector<http_header> take_remote_trailers() & noexcept {
+    [[nodiscard]] std::vector<http_header> take_remote_trailers() & noexcept {
         return std::move(trailers_);
     }
 

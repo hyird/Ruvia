@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -61,8 +60,7 @@ struct default_exception_response final {
     // The failure maps to no HTTP error: a fault for the caller to report.
     bool unexpected_;
 };
-[[nodiscard]] default_exception_response make_default_exception_response(
-    std::pmr::memory_resource* resource, const std::exception_ptr& exception);
+[[nodiscard]] default_exception_response make_default_exception_response(const std::exception_ptr& exception);
 
 // One worker's binding of the process route plan: the worker's controller
 // instance behind every route and the worker's middleware instance behind
@@ -93,8 +91,7 @@ public:
     // "."/".." value, or a pattern starting with an empty segment (a "//"
     // network-path reference) is a programming error and throws
     // std::invalid_argument. A root "*" value's leading slash becomes "%2F".
-    [[nodiscard]] std::pmr::string url_for(std::string_view pattern,
-        std::span<const std::string_view> values, std::pmr::memory_resource* resource) const;
+    [[nodiscard]] std::string url_for(std::string_view pattern, std::span<const std::string_view> values) const;
     [[nodiscard]] route_resolution resolve(const http_request& request) const noexcept;
     [[nodiscard]] route_resolution resolve(route_request_view request) const noexcept;
 
@@ -113,7 +110,7 @@ public:
     // The caller owns response and keeps it alive until dispatch completes;
     // successful completion assigns the selected final response directly.
     task<void> dispatch_buffered_response(const http_request& request,
-        const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
+        const route_resolution& resolution, document_root_binding document_root,
         const context_services& services, static_file_selection_mode static_file_mode,
         http_response& response) const;
     // The one matched-route invocation every transport awaits: builds the
@@ -125,22 +122,22 @@ public:
     // without surfacing it gets that failure instead. Returns whether the
     // response accounts for that failure. The context dies before this
     // returns, so body completion and the request arena outlive it.
-    [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request, request_memory& memory,
+    [[nodiscard]] task<bool> dispatch_resolved_route(const http_request& request,
         const resolved_route& resolved, const context_services& services,
         const std::optional<http_request_body_failure>* body_failure, http_response& response) const;
-    task<http_response> handle_error(const http_request& request, request_memory& memory,
+    task<http_response> handle_error(const http_request& request,
         http_error_info error, const context_services& services) const;
-    task<http_response> handle_exception(const http_request& request, request_memory& memory,
+    task<http_response> handle_exception(const http_request& request,
         std::exception_ptr exception, const context_services& services) const;
     // Absence means the bound output handled the request; a value is the one
     // buffered response produced before a response-stream commit.
     task<std::optional<http_response>> dispatch_response_stream(const http_request& request,
-        const resolved_route& route, request_memory& memory, response_stream_writer& response_stream,
+        const resolved_route& route, response_stream_writer& response_stream,
         const context_services& services) const;
     // A CONNECT tunnel or WebSocket upgrade: `handler` is the terminal that
     // commits the upgrade. Absence means the terminal took the request.
     task<std::optional<http_response>> dispatch_upgrade(const http_request& request,
-        const resolved_route& route, request_memory& memory, const route_stream_handler& handler,
+        const resolved_route& route, const route_stream_handler& handler,
         const context_services& services) const;
     // The not-found handler that applies to `path`: the tightest prefix scope
     // covering it, else the plan-wide one; null when neither is configured.
@@ -202,7 +199,7 @@ private:
     // The handler is copied into the coroutine frame: callers may pass one
     // bound from the resolved route as a temporary.
     [[nodiscard]] task<std::optional<http_response>> dispatch_stream_route(const http_request& request,
-        const resolved_route& route, request_memory& memory, route_stream_handler handler,
+        const resolved_route& route, route_stream_handler handler,
         const context_services& services, response_stream_writer* response_stream = nullptr) const;
 
     // A route's own frames and, only when some are conditional, their scopes.
@@ -219,12 +216,12 @@ private:
     [[nodiscard]] static task<void> contain_failure(
         const route_table& table, context& context, std::exception_ptr exception);
     [[nodiscard]] task<http_response> handle_not_found(
-        const http_request& request, request_memory& memory, const context_services& services) const;
+        const http_request& request, const context_services& services) const;
     [[nodiscard]] task<http_response> handle_exception(
         context& context, std::exception_ptr exception) const;
     [[nodiscard]] task<http_response> handle_exception(context& context, std::exception_ptr exception,
         http_error_handler_ref error_handler) const;
-    [[nodiscard]] task<http_response> handle_exception(const http_request& request, request_memory& memory,
+    [[nodiscard]] task<http_response> handle_exception(const http_request& request,
         std::exception_ptr exception, const context_services& services,
         http_error_handler_ref error_handler) const;
 
@@ -236,20 +233,20 @@ private:
     // Worker-bound, indexed like the plan: the controller instance behind each
     // route, the middleware instances this table owns, and each frame bound to
     // its instance.
-    std::pmr::vector<void*> handler_targets_;
-    std::pmr::vector<void*> middleware_instances_;
-    std::pmr::vector<route_middleware> middleware_frames_;
+    std::vector<void*> handler_targets_;
+    std::vector<void*> middleware_instances_;
+    std::vector<route_middleware> middleware_frames_;
 };
 
 }  // namespace ruvia::detail
 
 namespace ruvia {
 
-[[nodiscard]] inline context make_route_context(request_memory& memory, const http_request& request,
+[[nodiscard]] inline context make_route_context(const http_request& request,
     const detail::resolved_route& resolved, const detail::context_services& services) {
     const auto& route = resolved.route();
     const auto values = resolved.match().values();
-    return detail::context_access::make(memory, request, route.path(), route.param_names().data(),
+    return detail::context_access::make(request, route.path(), route.param_names().data(),
         values.data(), values.size(), reinterpret_cast<std::uintptr_t>(&route), services);
 }
 

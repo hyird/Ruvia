@@ -1,5 +1,4 @@
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string_view>
@@ -17,7 +16,7 @@
 #include "http/unsupported_request_content_coding.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "router/route_table.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/inbound_transport_error.h"
 
 // Turning a failed request into a response: the error a thrown exception really
@@ -39,47 +38,42 @@ struct classified_error final {
 };
 
 [[nodiscard]] classified_error classify_exception(
-    std::pmr::memory_resource* resource, const std::exception_ptr& exception) {
+    const std::exception_ptr& exception) {
     try {
         if (exception != nullptr) {
             std::rethrow_exception(exception);
         }
         return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error,
-                                         .message_ = "unhandled exception"},
-                    resource)};
+                    .message_ = "unhandled exception"})};
     } catch (const detail::inbound_transport_error&) {
         throw;
     } catch (const detail::unsupported_request_content_coding& error) {
         return {.error_ = http_error({.status_ = http_unsupported_content_coding::status(),
-                                         .code_ = "unsupported_content_coding",
-                                         .message_ = error.what()},
-                    resource),
+                    .code_ = "unsupported_content_coding",
+                    .message_ = error.what()}),
             .accepted_codings_ = error.accepted_codings()};
     } catch (const detail::rate_limit_rejected& rejected) {
         const auto error = detail::rate_limit_rejection_error();
         return {.error_ = http_error(
-                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}, resource),
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.message()}),
             .rate_limit_rejection_ = rejected.rejection()};
     } catch (const http_error& error) {
-        return {.error_ = http_error(error, resource)};
+        return {.error_ = http_error(error)};
     } catch (const http_protocol_error& error) {
         return {.error_ = http_error(
-                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.what()},
-                    resource)};
+                    {.status_ = error.status(), .code_ = error.code(), .message_ = error.what()})};
     } catch (const detail::inbound_buffer_limit_error&) {
         return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
-                                         .code_ = "inbound_buffer_limit",
-                                         .message_ = "inbound buffer capacity exhausted"},
-                    resource)};
+                    .code_ = "inbound_buffer_limit",
+                    .message_ = "inbound buffer capacity exhausted"})};
     } catch (const blocking_operation_rejected& error) {
         // The blocking pool refused the work or the worker is going away. That
         // is capacity, not a bug in the request: answer it like any other
         // overload instead of a 500. The message is the framework's own and
         // names no application internals.
         return {.error_ = http_error({.status_ = ruvia::http_status::service_unavailable,
-                                         .code_ = "blocking_pool_unavailable",
-                                         .message_ = error.what()},
-                    resource)};
+                    .code_ = "blocking_pool_unavailable",
+                    .message_ = error.what()})};
     } catch (...) {
         // An unexpected exception (e.g. a database/library error) may carry
         // internal detail -- table names, query fragments, file paths. Do NOT echo
@@ -87,7 +81,7 @@ struct classified_error final {
         // "Internal Server Error" body. The exception_ptr is still set on the context, so an on_error
         // handler can log or inspect the full detail server-side; without one it
         // is reported to stderr (report_unexpected_failure).
-        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error}, resource),
+        return {.error_ = http_error({.status_ = ruvia::http_status::internal_server_error}),
             .unexpected_ = true};
     }
 }
@@ -112,30 +106,29 @@ void apply_exception_response_metadata(http_response& response, const classified
 }  // namespace
 
 detail::default_exception_response detail::make_default_exception_response(
-    std::pmr::memory_resource* resource, const std::exception_ptr& exception) {
-    const auto error_info = classify_exception(resource, exception);
-    auto response = make_default_error_response(resource, error_info.error_.info());
+    const std::exception_ptr& exception) {
+    const auto error_info = classify_exception(exception);
+    auto response = make_default_error_response(error_info.error_.info());
     apply_exception_response_metadata(response, error_info);
     return {.response_ = std::move(response), .unexpected_ = error_info.unexpected_};
 }
 
-task<http_response> detail::route_table::handle_error(const http_request& request,
-    request_memory& memory, http_error_info error, const context_services& services) const {
+task<http_response> detail::route_table::handle_error(const http_request& request, http_error_info error, const context_services& services) const {
     // A request stream request reaches neither the error handler nor the
     // unmatched middleware: its listener serves no application route.
     const bool request_stream = static_cast<bool>(services.request_stream());
     const auto error_handler = request_stream ? nullptr : error_handler_for(request.path());
     // Nothing to wrap and no handler: the original allocation-free path.
     if (error_handler == nullptr && (request_stream || plan_->unmatched_middleware_count_ == 0)) {
-        auto response = make_default_error_response(memory.resource(), error);
+        auto response = make_default_error_response(error);
         co_return response;
     }
 
-    auto context_value = detail::context_access::make(memory, request, services);
+    auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
     auto terminal = [error, error_handler](context& terminal_context) -> task<http_response> {
         if (error_handler == nullptr) {
-            co_return make_default_error_response(terminal_context.arena(), error);
+            co_return make_default_error_response(error);
         }
         co_return co_await invoke_error_handler(terminal_context, error, error_handler);
     };
@@ -154,24 +147,22 @@ task<http_response> detail::route_table::handle_error(const http_request& reques
     co_return co_await finalize_failure(context_value, exception);
 }
 
-task<http_response> detail::route_table::handle_exception(const http_request& request,
-    request_memory& memory, std::exception_ptr exception, const context_services& services) const {
-    return handle_exception(request, memory, std::move(exception), services,
+task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services) const {
+    return handle_exception(request, std::move(exception), services,
         services.request_stream() ? nullptr : error_handler_for(request.path()));
 }
 
-task<http_response> detail::route_table::handle_exception(const http_request& request,
-    request_memory& memory, std::exception_ptr exception, const context_services& services,
+task<http_response> detail::route_table::handle_exception(const http_request& request, std::exception_ptr exception, const context_services& services,
     http_error_handler_ref error_handler) const {
     if (error_handler == nullptr) {
-        auto answer = make_default_exception_response(memory.resource(), exception);
+        auto answer = make_default_exception_response(exception);
         if (answer.unexpected_) {
             ruvia::report_unhandled_failure("request handler", exception);
         }
         co_return std::move(answer.response_);
     }
 
-    auto context_value = detail::context_access::make(memory, request, services);
+    auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
     auto response = co_await handle_exception(context_value, exception, error_handler);
     detail::context_access::apply_response_policy(context_value, response);
@@ -179,19 +170,19 @@ task<http_response> detail::route_table::handle_exception(const http_request& re
 }
 
 task<http_response> detail::route_table::handle_not_found(
-    const http_request& request, request_memory& memory, const context_services& services) const {
+    const http_request& request, const context_services& services) const {
     const auto not_found_handler = not_found_handler_for(request.path());
     if (not_found_handler == nullptr && plan_->unmatched_middleware_count_ == 0) {
-        co_return make_route_not_found_response(memory.resource());
+        co_return make_route_not_found_response();
     }
 
-    auto context_value = detail::context_access::make(memory, request, services);
+    auto context_value = detail::context_access::make(request, services);
     detail::context_access::services(context_value).bind_routes(*this);
     // The handler's own failure keeps going through handle_exception, exactly as
     // before; wrapping it in the chain must not change which layer answers it.
     auto terminal = [this, not_found_handler](context& terminal_context) -> task<http_response> {
         if (not_found_handler == nullptr) {
-            co_return make_route_not_found_response(terminal_context.arena());
+            co_return make_route_not_found_response();
         }
         std::exception_ptr exception;
         try {
@@ -219,7 +210,7 @@ task<http_response> detail::route_table::handle_exception(
 
 task<http_response> detail::route_table::handle_exception(context& context_value,
     std::exception_ptr exception, http_error_handler_ref error_handler) const {
-    const auto error_info = classify_exception(context_value.arena(), exception);
+    const auto error_info = classify_exception(exception);
     detail::context_access::set_error(context_value, exception);
     detail::context_access::discard_draft(context_value);
     report_unexpected_failure(error_info, exception, error_handler);
@@ -239,7 +230,7 @@ namespace {
 // scopes "/api" and "/api/x" but never "/apix".
 template <typename stored_type>
 [[nodiscard]] auto select_prefix_handler(
-    const std::pmr::vector<stored_type>& stored, std::string_view path) noexcept {
+    const std::vector<stored_type>& stored, std::string_view path) noexcept {
     for (const auto& candidate : stored) {
         const std::string_view prefix(candidate.prefix_);
         if (detail::path_is_under_prefix(path, prefix)) {

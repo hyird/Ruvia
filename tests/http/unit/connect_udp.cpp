@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <memory_resource>
 #include <new>
 #include <string>
 #include <string_view>
@@ -14,8 +13,6 @@
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_response_server.h"
-
-#include "memory_resource_fixture.h"
 
 TEST(Ruvia, http_connect_udp_default_template_roundtrip_and_target_rejection) {
     for (const auto host : {"example.test", "192.0.2.6", "2001:db8::42"}) {
@@ -62,24 +59,22 @@ TEST(Ruvia, http_connect_udp_upgrade_handshake_requires_capsule_negotiation) {
         ruvia::validate_http_connect_udp_response(ruvia::http_protocol_version::http11, 101, bad_resp);
     EXPECT_TRUE(resp_err == ruvia::http_connect_udp_error::invalid_response);
     const auto abs_req = ruvia::make_parsed_http_request("GET",
-        "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {},
-        std::pmr::get_default_resource());
+        "https://example.test/.well-known/masque/udp/192.0.2.1/443/", fields, {});
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(abs_req).has_value());
     const auto abs_query_req = ruvia::make_parsed_http_request("GET",
-        "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {},
-        std::pmr::get_default_resource());
+        "https://example.test/.well-known/masque/udp/192.0.2.1/443/?target=1", fields, {});
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(abs_query_req).has_value());
 }
 TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     ruvia::http_datagram_session session;
-    const std::pmr::string payload = "udp";
+    const std::string payload = "udp";
     const auto plan = session.prepare_udp_datagram(payload);
     EXPECT_TRUE(plan.index() == 0);
-    std::pmr::string wire(std::get<0>(plan).prefix());
+    std::string wire(std::get<0>(plan).prefix());
     wire.append(payload);
-    std::pmr::string capsule;
+    std::string capsule;
     struct capsule_capture final {
-        std::pmr::string& bytes_;
+        std::string& bytes_;
         bool datagram_{true};
     } captured{capsule};
     ruvia::http_capsule_decoder decoder;
@@ -101,7 +96,7 @@ TEST(Ruvia, http_udp_capsule_session_checks_context_size_and_half_close) {
     capsule[0] = 2;
     const auto dropped = session.receive_udp_datagram(value);
     EXPECT_TRUE(dropped.index() == 0 && !std::get<0>(dropped));
-    const std::pmr::string too_large(65528, 'x');
+    const std::string too_large(65528, 'x');
     EXPECT_TRUE(session.prepare_udp_datagram(too_large).index() != 0);
     session.close_send();
     session.close_receive();
@@ -121,7 +116,7 @@ TEST(Ruvia, http_connect_udp_response_preparation_owns_required_fields_and_http1
         EXPECT_TRUE(std::get<0>(prepared).header("x-proxy") == "test");
         EXPECT_TRUE(std::get<0>(prepared).status() == ruvia::http_status::switching_protocols);
         const auto plan = ruvia::prepare_http1_connect_udp_response_head(std::get<0>(prepared));
-        ruvia::http_response_head_buffer head{std::pmr::polymorphic_allocator<char>{}};
+        ruvia::http_response_head_buffer head;
         ruvia::append_http1_response_head(std::get<0>(prepared), head, plan);
         EXPECT_TRUE(head.view().starts_with("HTTP/1.1 101 "));
         EXPECT_TRUE(head.view().find("Connection: Upgrade\r\n") != std::string_view::npos);
@@ -384,7 +379,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         ruvia::http_header_view{"Capsule-Protocol", "?1"},
     };
     const auto parsed_req = ruvia::make_parsed_http_request(
-        "GET", "/.well-known/masque/udp/192.0.2.1/443/", list_fields, {}, std::pmr::get_default_resource());
+        "GET", "/.well-known/masque/udp/192.0.2.1/443/", list_fields, {});
     EXPECT_TRUE(ruvia::is_http_connect_udp_upgrade_request(parsed_req));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request(parsed_req).has_value());
 
@@ -437,7 +432,7 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
         "GET /.well-known/masque/udp/192.0.2.1/443/ HTTP/1.0\r\n"
         "Host: example.test\r\n"
         "Upgrade: connect-udp\r\n\r\n";
-    h10_parser.parse_head(raw_h10, 0, std::pmr::get_default_resource());
+    h10_parser.parse_head(raw_h10, 0);
     EXPECT_TRUE(h10_parser.head_ready() != nullptr);
     EXPECT_TRUE(!ruvia::is_http_connect_udp_upgrade_request(h10_parser.request()));
 
@@ -473,11 +468,11 @@ TEST(Ruvia, http_connect_udp_sender_and_recipient_field_validation) {
 
 TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     std::string host("example.test");
-    std::pmr::string method("CONNECT");
+    std::string method("CONNECT");
     std::string protocol("connect-udp");
-    std::pmr::string scheme("https");
+    std::string scheme("https");
     std::string authority("example.test");
-    std::pmr::string path("/.well-known/masque/udp/192.0.2.1/443/");
+    std::string path("/.well-known/masque/udp/192.0.2.1/443/");
     const ruvia::http_connect_udp_target_view target_view{.host_ = host, .port_ = 443};
     const ruvia::http_client_udp_tunnel_request_view tunnel_view{.target_ = path};
     const std::array fields{ruvia::http_header_view{"Capsule-Protocol", "?1"}};
@@ -498,86 +493,6 @@ TEST(Ruvia, http_connect_udp_views_accept_named_owners_and_preserve_addresses) {
     EXPECT_TRUE(request_view.authority_.data() == authority.data());
     EXPECT_TRUE(request_view.path_.data() == path.data());
     const auto encoded = ruvia::encode_http_connect_udp_path(target_view);
-    EXPECT_TRUE(std::holds_alternative<std::pmr::string>(encoded));
+    EXPECT_TRUE(std::holds_alternative<std::string>(encoded));
     EXPECT_TRUE(!ruvia::validate_http_connect_udp_request_to_send(request_view).has_value());
-}
-
-TEST(Ruvia, http_connect_udp_target_construction_inherits_resource) {
-    ruvia::test::counting_memory_resource memory;
-    {
-        auto parsed = ruvia::parse_http_connect_udp_path(
-            "/.well-known/masque/udp/copy-resource-source.example.test/443/", &memory);
-        auto& source = std::get<ruvia::http_connect_udp_target>(parsed);
-        const auto expected_host = std::pmr::string(source.host_);
-        ruvia::http_connect_udp_target copied(source);
-        EXPECT_EQ(copied.host_.get_allocator().resource(), &memory);
-        source.host_.assign("changed.test");
-        source.port_ = 80;
-        EXPECT_EQ(std::string_view(copied.host_), std::string_view(expected_host));
-        EXPECT_EQ(copied.port_, 443);
-
-        memory.reject_allocations(true);
-        ruvia::http_connect_udp_target moved(std::move(copied));
-        EXPECT_EQ(moved.host_.get_allocator().resource(), &memory);
-        EXPECT_EQ(std::string_view(moved.host_), std::string_view(expected_host));
-        EXPECT_EQ(moved.port_, 443);
-    }
-    EXPECT_EQ(memory.live_bytes(), 0U);
-}
-
-TEST(Ruvia, http_connect_udp_target_assignment_retains_resource_and_rolls_back_failure) {
-    for (const bool move_assignment : {false, true}) {
-        SCOPED_TRACE(move_assignment);
-        ruvia::test::counting_memory_resource source_memory;
-        ruvia::test::counting_memory_resource destination_memory;
-        {
-            ruvia::http_connect_udp_target source{
-                std::pmr::string("long-source-subdomain.example.test", &source_memory), 443};
-            ruvia::http_connect_udp_target destination{
-                std::pmr::string("old.test", &destination_memory), 80};
-            source_memory.reject_allocations(true);
-            destination_memory.reject_allocations(true);
-            if (move_assignment) {
-                EXPECT_THROW(destination = std::move(source), std::bad_alloc);
-            } else {
-                EXPECT_THROW(destination = source, std::bad_alloc);
-            }
-            EXPECT_EQ(source.host_, "long-source-subdomain.example.test");
-            EXPECT_EQ(source.port_, 443);
-            EXPECT_EQ(destination.host_, "old.test");
-            EXPECT_EQ(destination.port_, 80);
-            EXPECT_EQ(source.host_.get_allocator().resource(), &source_memory);
-            EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
-
-            destination_memory.reject_allocations(false);
-            if (move_assignment) {
-                destination = std::move(source);
-            } else {
-                destination = source;
-            }
-            EXPECT_EQ(destination.host_, "long-source-subdomain.example.test");
-            EXPECT_EQ(destination.port_, 443);
-            EXPECT_EQ(destination.host_.get_allocator().resource(), &destination_memory);
-        }
-        EXPECT_EQ(source_memory.live_bytes(), 0U);
-        EXPECT_EQ(destination_memory.live_bytes(), 0U);
-    }
-}
-
-TEST(Ruvia, http_connect_udp_target_same_resource_move_requires_no_allocation) {
-    ruvia::test::counting_memory_resource memory;
-    {
-        ruvia::http_connect_udp_target source{
-            std::pmr::string("long-source-subdomain.example.test", &memory), 443};
-        ruvia::http_connect_udp_target destination{
-            std::pmr::string("long-retired-subdomain.example.test", &memory), 80};
-        memory.reject_allocations(true);
-
-        destination = std::move(source);
-
-        EXPECT_EQ(destination.host_, "long-source-subdomain.example.test");
-        EXPECT_EQ(destination.port_, 443);
-        EXPECT_EQ(destination.host_.get_allocator().resource(), &memory);
-    }
-    EXPECT_EQ(memory.live_bytes(), 0U);
 }

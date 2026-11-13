@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -12,18 +11,17 @@
 #include <asio/ssl/context.hpp>
 #include <openssl/types.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/tls_config.h"
 
+#include "server/config_validation.h"
 #include "tls/dns_host.h"
 #include "tls/tls_credential.h"
 #include "tls/tls_files.h"
 #include "tls/tls_protocol_policy.h"
-#include "util/config_validation.h"
 namespace ruvia::detail {
 
 [[nodiscard]] inline bool is_client_ip_address(std::string_view host) noexcept {
@@ -88,10 +86,12 @@ struct client_tls_config_storage final {
     // also reads the trust store and the client identity (when configured);
     // throws when either cannot be loaded.
     client_tls_config_storage(
-        const client_tls_config& source_value, client_tls_files files, std::pmr::memory_resource* resource);
+        const client_tls_config& source_value, client_tls_files files);
 
     // Copies share the parsed trust store and identity; no file is re-read.
-    client_tls_config_storage(const client_tls_config_storage& source_value, std::pmr::memory_resource* resource);
+    client_tls_config_storage(const client_tls_config_storage& source_value);
+    client_tls_config_storage(client_tls_config_storage&&) noexcept = default;
+    client_tls_config_storage& operator=(client_tls_config_storage&&) noexcept = default;
     // Reads the client identity, and the trust store unless one was supplied.
     void parse_files(std::string_view private_key_password);
 
@@ -106,7 +106,7 @@ struct client_tls_config_storage final {
     // nullopt selects the system or driver trust store.
     std::optional<tls_file_name> ca_file_;
     std::optional<tls_identity_files> identity_;
-    std::optional<std::pmr::string> server_name_;
+    std::optional<std::string> server_name_;
     // Parsed by client_tls_files::parse: the trust store and the configured
     // client identity.
     std::optional<tls_trust_store> trust_store_;
@@ -117,7 +117,7 @@ struct client_tls_config_storage final {
 // only TLS material, never a client's worker-affine configuration or callbacks.
 // A started parser is joined even after cancellation; callers reject publication.
 [[nodiscard]] task<client_tls_config_storage> prepare_client_tls_config(
-    worker_handle worker, client_tls_config_storage config,
+    worker_ref worker, client_tls_config_storage config,
     std::string_view private_key_password, stop_token stop);
 
 enum class client_tls_setup_error : std::uint8_t {

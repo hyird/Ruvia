@@ -7,7 +7,6 @@
 #include "ruvia/http/http_response.h"
 
 #include "http1_request_message_fixture.h"
-#include "memory_resource_fixture.h"
 
 TEST(Ruvia, response_custom_coding_distinguishes_missing_and_empty_preferences) {
     const auto missing = ruvia::test::parse_http1_request_message("GET / HTTP/1.1\r\nHost: x\r\n\r\n");
@@ -51,15 +50,12 @@ TEST(Ruvia, response_coding_stack_checks_every_known_and_custom_member_without_c
         "GET / HTTP/1.1\r\nHost: x\r\nAccept-Encoding: gzip, custom, other, br;q=0\r\n\r\n");
     ASSERT_TRUE(parsed.complete());
     const auto selection = ruvia::http_response_coding_selection_for(parsed.state_.request());
-    ruvia::test::counting_memory_resource memory;
-    ruvia::http_response response(&memory);
+    ruvia::http_response response;
     EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
         ruvia::http_response_content_coding_status::absent);
     response.header("Content-Encoding", "gzip, CUSTOM, other, custom");
-    memory.reject_allocations();
     EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
         ruvia::http_response_content_coding_status::accepted);
-    memory.reject_allocations(false);
     response.header("Content-Encoding", "br", {.mode_ = ruvia::http_response_header_mode::append});
     EXPECT_EQ(ruvia::evaluate_http_response_content_coding(selection, response, &parsed.state_.request()),
         ruvia::http_response_content_coding_status::not_acceptable);

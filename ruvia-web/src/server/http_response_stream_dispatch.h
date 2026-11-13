@@ -2,22 +2,20 @@
 
 #include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/web/streaming.h"
 
+#include "context/context_access.h"
 #include "context/context_services.h"
-#include "http/streaming_access.h"
 #include "router/route_table.h"
 #include "server/http_server_options.h"
 #include "server/inbound_transport_error.h"
@@ -83,9 +81,8 @@ bool response_stream_committed_thunk(void* target) noexcept {
 }
 
 template <typename sink>
-[[nodiscard]] response_stream_writer make_response_stream_writer(
-    sink& sink_value, std::pmr::memory_resource& resource) noexcept {
-    return streaming_access::make_response_stream_writer(resource, &sink_value, sink_value.output_interrupts(), &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>,
+[[nodiscard]] response_stream_writer make_response_stream_writer(sink& sink_value) noexcept {
+    return streaming_access::make_response_stream_writer(&sink_value, sink_value.output_interrupts(), &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>,
         &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>,
         &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>,
         &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>);
@@ -286,14 +283,14 @@ struct response_stream_no_peer_abort final {
 // persistence remains a transport concern when a buffered response is returned.
 template <typename sink, typename peer_aborted_type = response_stream_no_peer_abort>
 task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value,
-    const http_request& request, const resolved_route& route, request_memory& request_memory_value,
+    const http_request& request, const resolved_route& route,
     const context_services& services, peer_aborted_type peer_aborted = {}) {
-    auto response_stream = make_response_stream_writer(sink_value, *process_resource());
+    auto response_stream = make_response_stream_writer(sink_value);
 
     std::exception_ptr exception;
     try {
         auto result_value = co_await routes_value.dispatch_response_stream(
-            request, route, request_memory_value, response_stream, services);
+            request, route, response_stream, services);
         if (services.connection_aborted() || services.request_reset() || peer_aborted()) {
             if (!sink_value.committed()) {
                 co_return response_stream_dispatch_result::make_aborted_before_commit();
@@ -344,7 +341,7 @@ task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_v
         co_return response_stream_dispatch_result::make_failed_after_commit(
             committed_response_stream_status(sink_value), std::move(exception));
     }
-    auto response = co_await routes_value.handle_exception(request, request_memory_value, exception, services);
+    auto response = co_await routes_value.handle_exception(request, exception, services);
     co_return response_stream_dispatch_result::make_recovered_failure(std::move(response));
 }
 

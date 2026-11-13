@@ -4,17 +4,15 @@
 #include <cstdint>
 #include <filesystem>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/ip_address.h"
 
 namespace ruvia {
@@ -33,9 +31,9 @@ namespace ruvia {
 struct tls_identity_config final {
     std::filesystem::path certificate_chain_file_{};
     std::filesystem::path private_key_file_{};
-    std::pmr::string certificate_chain_pem_{process_resource()};
-    std::pmr::string private_key_pem_{process_resource()};
-    std::pmr::string private_key_password_{process_resource()};
+    std::string certificate_chain_pem_{};
+    std::string private_key_pem_{};
+    std::string private_key_password_{};
 };
 
 using tls_certificate_id = std::uint64_t;
@@ -93,14 +91,14 @@ public:
     // submission/after preparation, or blocking_operation_rejected while
     // waiting for the pool. Started tasks must be awaited/joined.
     // ID zero throws std::invalid_argument. Before returning a cold task, the
-    // library copies secrets into process_resource storage and cleanses its
+    // library copies secrets into heap storage and cleanses its
     // incoming copy, including on failure. Discarding a cold task cleanses its
     // retained copy; any detached preparation owns and cleanses its own input
     // and never publishes. These operations have no per-call timeout/token.
     [[nodiscard]] task<void> insert_or_assign(
-        worker_handle caller, tls_certificate_id id, tls_identity_config identity);
+        worker_ref caller, tls_certificate_id id, tls_identity_config identity);
     // Returns false for an absent ID without submitting blocking work.
-    [[nodiscard]] task<bool> erase(worker_handle caller, tls_certificate_id id);
+    [[nodiscard]] task<bool> erase(worker_ref caller, tls_certificate_id id);
     [[nodiscard]] bool contains(tls_certificate_id id) const noexcept;
     [[nodiscard]] std::size_t size() const noexcept;
 
@@ -145,7 +143,7 @@ struct client_tls_config final {
     std::optional<tls_identity_config> identity_{};
     // SNI and verified peer name, an IP literal or ASCII DNS name; nullopt
     // uses the configured host. An IP literal matches IP subjectAltNames.
-    std::optional<std::pmr::string> server_name_{};
+    std::optional<std::string> server_name_{};
     // 每条 TLS 连接发出的记录总上限（含握手和 KeyUpdate），范围 1..2^23。
     // 达到上限后终止连接；更新密钥不重置计数。保守的连接级上限保证不会达到
     // RFC 9846 §5.5 的单密钥 AES-GCM 用量上限，也适用于数据库连接。
@@ -170,10 +168,10 @@ struct tls_client_certificate_config final {
 // "a.example.com", but neither "example.com" nor "a.b.example.com". An exact
 // host_ wins over a wildcard covering the same name.
 struct tls_sni_config final {
-    std::pmr::string host_{process_resource()};
+    std::string host_{};
     tls_identity_config identity_{};
     // This identity's stapled OCSP response; see tls_config::ocsp_response_.
-    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
+    std::vector<std::byte> ocsp_response_{};
 };
 
 // An additional identity served on connections that arrived at address_, a
@@ -185,10 +183,10 @@ struct tls_sni_config final {
 // wildcard listeners; QUIC retains packet destination/interface information
 // when handing datagrams between workers and selecting the reply source.
 struct tls_local_address_config final {
-    std::pmr::string address_{process_resource()};
+    std::string address_{};
     tls_identity_config identity_{};
     // This identity's stapled OCSP response; see tls_config::ocsp_response_.
-    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
+    std::vector<std::byte> ocsp_response_{};
 };
 
 // One HTTPS listener's identities. The listener negotiates TLS 1.1, 1.2 or 1.3;
@@ -225,10 +223,10 @@ struct tls_config final {
     // association, signature and freshness checks. No fetching or refresh:
     // replace_tls_identities() installs a renewed response with its identity.
     // Not available with certificate_store_.
-    std::pmr::vector<std::byte> ocsp_response_{process_resource()};
+    std::vector<std::byte> ocsp_response_{};
     tls_client_certificate_config client_certificates_{};
-    std::pmr::vector<tls_sni_config> sni_{process_resource()};
-    std::pmr::vector<tls_local_address_config> local_addresses_{process_resource()};
+    std::vector<tls_sni_config> sni_{};
+    std::vector<tls_local_address_config> local_addresses_{};
     // 发出的 TLS 记录总上限，范围 1..2^23；含握手及控制记录，KeyUpdate 不
     // 重置计数。达到上限后终止连接，以满足 RFC 9846 §5.5 的密钥用量约束。
     std::uint64_t max_outgoing_records_{std::uint64_t{1} << 23};
@@ -238,7 +236,7 @@ struct tls_config final {
     // fails the handshake with no_application_protocol (RFC 7301 §3.2); one
     // offering no ALPN completes it without a protocol. A routes listener
     // negotiates its own HTTP versions and rejects a non-empty list.
-    std::pmr::vector<std::pmr::string> alpn_{process_resource()};
+    std::vector<std::string> alpn_{};
     // Optional live library, shared by every worker and both TLS transports.
     // With a library, fixed identity_/sni_/local_addresses_ must be empty.
     // Without a selector, default_certificate_ selects an ID. A selector must

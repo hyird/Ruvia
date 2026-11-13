@@ -2,7 +2,7 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory_resource>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -13,7 +13,6 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_ascii.h"
 
 #include "client/client_tls.h"
@@ -28,7 +27,7 @@ void guard_native_handshake(const SSL*, int, int) noexcept;
 
 struct tls_context_policy final {
     tls_context_policy(SSL_CTX& context, std::string_view host, std::uint64_t limit)
-        : host_(host, process_resource()),
+        : host_(host),
           record_limit_(limit),
           original_security_(SSL_CTX_get_security_callback(&context)),
           original_security_data_(SSL_CTX_get0_security_ex_data(&context)),
@@ -45,7 +44,7 @@ struct tls_context_policy final {
             host_.pop_back();
         }
     }
-    std::pmr::string host_;
+    std::string host_;
     std::uint64_t record_limit_;
     security_callback original_security_;
     void* original_security_data_;
@@ -116,17 +115,17 @@ struct tls_record_state final {
 };
 
 void free_context_policy(void*, void* value, CRYPTO_EX_DATA*, int, long, void*) noexcept {
-    destroy_pmr_object(static_cast<tls_context_policy*>(value), process_resource());
+    delete static_cast<tls_context_policy*>(value);
 }
 
 void free_record_state(void*, void* value, CRYPTO_EX_DATA*, int, long, void*) noexcept {
-    destroy_pmr_object(static_cast<tls_record_state*>(value), process_resource());
+    delete static_cast<tls_record_state*>(value);
 }
 
 int copy_record_state(CRYPTO_EX_DATA*, const CRYPTO_EX_DATA*, void** value, int, long, void*) noexcept {
     try {
         if (*value) {
-            *value = construct_pmr_object<tls_record_state>(process_resource(), *static_cast<tls_record_state*>(*value));
+            *value = new tls_record_state(*static_cast<tls_record_state*>(*value));
         }
         return 1;
     } catch (...) {
@@ -201,7 +200,7 @@ void count_tls_records(int writing, int, int content_type, const void*, std::siz
                 BIO_set_callback_ex(bio, deny_output);
                 return;
             }
-            auto owner = make_pmr_object<tls_record_state>(process_resource(), tls_record_state{policy->record_limit_});
+            auto owner = std::make_unique<tls_record_state>(tls_record_state{policy->record_limit_});
             if (SSL_set_ex_data(ssl, record_index, owner.get()) != 1) {
                 throw std::bad_alloc();
             }
@@ -317,7 +316,7 @@ void native_tls_context_scope::new_context(void* parent, void*, CRYPTO_EX_DATA* 
     }
     auto* context = static_cast<SSL_CTX*>(parent);
     try {
-        auto owner = make_pmr_object<tls_context_policy>(process_resource(), *context, current_->host_, current_->record_limit_);
+        auto owner = std::make_unique<tls_context_policy>(*context, current_->host_, current_->record_limit_);
         if (CRYPTO_set_ex_data(storage, index, owner.get()) != 1) {
             throw std::bad_alloc();
         }
@@ -339,13 +338,13 @@ void validate_tls_record_limit(std::uint64_t limit) {
 void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit) {
     validate_tls_record_limit(record_limit);
     register_tls_policy_indexes();
-    auto owner = make_pmr_object<tls_context_policy>(process_resource(), context, std::string_view{}, record_limit);
+    auto owner = std::make_unique<tls_context_policy>(context, std::string_view{}, record_limit);
     auto* previous = static_cast<tls_context_policy*>(SSL_CTX_get_ex_data(&context, context_index));
     if (SSL_CTX_set_ex_data(&context, context_index, owner.get()) != 1) {
         throw std::bad_alloc();
     }
     auto* policy = owner.release();
-    destroy_pmr_object(previous, process_resource());
+    delete previous;
     install_context_callbacks(context, policy);
     if (SSL_CTX_set_min_proto_version(&context, TLS1_1_VERSION) != 1 || SSL_CTX_set_max_proto_version(&context, 0) != 1) {
         throw std::runtime_error("failed to configure TLS versions");

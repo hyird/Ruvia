@@ -4,13 +4,12 @@
 #include <stdexcept>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 
 worker_codecs::worker_codecs() noexcept
-    : content_codecs_(process_resource()),
-      websocket_deflate_(process_resource()) {}
+    : content_codecs_(),
+      websocket_deflate_() {}
 
 worker_codecs::~worker_codecs() = default;
 

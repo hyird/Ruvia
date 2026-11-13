@@ -3,7 +3,6 @@
 #include <array>
 #include <chrono>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,14 +21,12 @@ struct client_prepared_request_scratch final {
     static constexpr std::size_t inline_header_capacity = 16;
     static constexpr std::size_t inline_cookie_capacity = 256;
 
-    explicit client_prepared_request_scratch(std::pmr::memory_resource* resource)
-        : overflow_headers_(resource),
-          overflow_cookie_header_(resource) {}
+    client_prepared_request_scratch() = default;
 
     std::array<http_header_view, inline_header_capacity> inline_headers_;
-    std::pmr::vector<http_header_view> overflow_headers_;
+    std::vector<http_header_view> overflow_headers_;
     std::array<char, inline_cookie_capacity> inline_cookie_header_;
-    std::pmr::string overflow_cookie_header_;
+    std::string overflow_cookie_header_;
 };
 
 // Origin policy owns cookies and automatic headers independently of connection

@@ -3,14 +3,13 @@
 // Stable, non-detail entry points for HTTP response serialization plans. The
 // plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
 #include <initializer_list>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
 #include "ruvia/http/http1_response_head_error.h"
 #include "ruvia/http/http1_response_head_plan.h"
 #include "ruvia/http/http_field_section.h"
@@ -65,7 +64,7 @@ void append_http1_response_head(
 // Append only field lines; chunk delimiters belong to the caller. Inputs may
 // alias output. Allocation failure leaves the existing output bytes unchanged.
 void append_http1_response_trailers(
-    std::pmr::string& output, const http_response_trailer_section& trailers);
+    std::string& output, const http_response_trailer_section& trailers);
 
 // Validate a complete response trailer section and return a borrowed proof for
 // synchronous protocol submission. The input storage must outlive its use.

@@ -4,7 +4,6 @@
 #include <string>
 #include <variant>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_status.h"
 
@@ -106,9 +105,8 @@ http1_client_response_parser::initial_request_content_phase(
 }
 
 http1_client_response_parser::http1_client_response_parser(
-    http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource) noexcept
+    http1_client_exchange_state exchange_state) noexcept
     : exchange_state_(std::move(exchange_state)),
-      resource_(resource),
       request_content_phase_(initial_request_content_phase(exchange_state_)) {}
 
 http1_client_response_parse_result http1_client_response_parser::parse(std::string_view buffer) {
@@ -167,18 +165,18 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // Exclude only the final empty line: every field keeps its CRLF, matching
     // the request scanner even when the head contains no fields.
     auto field_section = buffer.substr(fields_begin, header_bytes - 2 - fields_begin);
-    std::optional<std::pmr::string> unfolded_fields;
+    std::optional<std::string> unfolded_fields;
     // The status line is not a field: its following whitespace cannot be
     // folded into the reason phrase. Only normalize within the field block.
     if (const auto first_fold = detail::find_field_line_fold(field_section);
         first_fold != std::string_view::npos) {
-        unfolded_fields.emplace("", detail::http_pmr_resource_or_default(resource_));
+        unfolded_fields.emplace();
         detail::copy_unfolded_field_lines(
             field_section, first_fold, detail::field_line_folding_policy::http, *unfolded_fields);
         field_section = *unfolded_fields;
     }
     auto parsed_head = detail::parse_http1_client_response_head_fields(
-        status_line, field_section, exchange_state_, resource_);
+        status_line, field_section, exchange_state_);
     if ((parsed_head.index() != 0)) {
         return fail(std::get<1>(parsed_head));
     }
@@ -195,14 +193,14 @@ http1_client_response_parse_result http1_client_response_parser::parse(std::stri
     // plan have validated. Field views borrow the input or unfolded_head until
     // they are copied below; neither failure nor allocation commits the exchange.
     auto head = detail::http_client_response_head_access::make(
-        parsed_value.received_status_, parsed_value.protocol_version_, resource_);
+        parsed_value.received_status_, parsed_value.protocol_version_);
     detail::http_client_response_head_access::content_length(head, parsed_value.content_length_.value());
     const auto parsed_headers = parsed_value.headers_.view();
     if (!parsed_headers.empty()) {
         auto& headers = detail::http_client_response_head_access::headers(head);
         headers.reserve(parsed_headers.size());
         for (const auto& header_value : parsed_headers) {
-            headers.emplace_back(header_value.name(), header_value.value(), resource_);
+            headers.emplace_back(header_value.name(), header_value.value());
         }
     }
 

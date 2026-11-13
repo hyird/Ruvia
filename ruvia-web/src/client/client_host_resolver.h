@@ -11,7 +11,7 @@
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia::detail {
 
@@ -29,14 +29,14 @@ using client_resolve_operation = std::variant<client_resolve_result, task<client
 
 // A DNS host is looked up on the blocking pool of the client's event loop;
 // without one the client cannot connect, so it is rejected at construction.
-void require_client_host_lookup(std::string_view host, const worker_handle& worker);
+void require_client_host_lookup(std::string_view host, const worker_ref& worker);
 
 // HTTP、WebSocket、Redis 和数据库共用的系统名称查询。系统 getaddrinfo 不可
 // 抢占；查询卸载到客户端事件循环借用的有界阻塞池，只携带自有输入，取消或停机先
 // 释放等待者，再丢弃迟到结果。IP 字面量不查询，也不需要池。
 class client_host_resolver final {
 public:
-    explicit client_host_resolver(const worker_handle& worker) noexcept
+    explicit client_host_resolver(const worker_ref& worker) noexcept
         : worker_(&worker) {}
     client_host_resolver(const client_host_resolver&) = delete;
     client_host_resolver& operator=(const client_host_resolver&) = delete;
@@ -50,7 +50,7 @@ public:
 private:
     struct query;
     [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_deadline timeout, stop_token stop);
-    const worker_handle* worker_;
+    const worker_ref* worker_;
     std::optional<stop_source> stop_;
 };
 

@@ -16,7 +16,7 @@ namespace {
 [[nodiscard]] http_buffered_compression_step prepare_representation(const http_request& request,
     const http_response_coding_policy& policy, std::string_view alternative_service,
     const http_cors_policy* cors, http_response& response, const http_server_options& options,
-    const worker_handle& worker) {
+    const worker_ref& worker) {
     if (cors != nullptr) {
         (void)cors->apply_response_headers(request, response);
     }
@@ -33,7 +33,7 @@ namespace {
 }  // namespace
 
 http_response_preparation http_response_tail::prepare(
-    http_response& response, const http_server_options& options, const worker_handle& worker) const {
+    http_response& response, const http_server_options& options, const worker_ref& worker) const {
     const auto& request = *request_;
     const auto first_pass = prepare_representation(
         request, coding_policy_, alternative_service_, cors(options), response, options, worker);
@@ -51,7 +51,7 @@ http_response_preparation http_response_tail::prepare(
 }
 
 task<prepared_application_response> http_response_tail::finish_prepare(const http_response_preparation& preparation,
-    http_response& response, const http_server_options& options, const route_table& routes, request_memory& memory,
+    http_response& response, const http_server_options& options, const route_table& routes,
     const context_services& services) const {
     const auto& request = *request_;
     const auto& deferred = std::get<http_response_preparation::deferred_type>(preparation.state_);
@@ -77,7 +77,7 @@ task<prepared_application_response> http_response_tail::finish_prepare(const htt
                 plan_buffered_http_response_write(request.known_method(), response), recovery.recovered()};
         }
         if (step.action_ == buffered_response_recovery_action::handle_error) {
-            response = co_await routes.handle_error(request, memory, *step.error_, services);
+            response = co_await routes.handle_error(request, *step.error_, services);
         }
         pass = prepare_representation(
             request, policy, alternative_service_, cors(options), response, options, services.worker());

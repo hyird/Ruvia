@@ -25,7 +25,7 @@
 
 class request_id_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Example", "basic-http");
     }
@@ -33,7 +33,7 @@ public:
 
 class admin_auth_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         if (c.req().header("X-Admin-Token").value_or("") != "secret") {
             c.respond(c.error({.status_ = ruvia::http_status::unauthorized,
                 .code_ = "unauthorized",
@@ -95,7 +95,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> user(ruvia::context& c) {
-        user_response response({.resource_ = c.arena()});
+        user_response response;
         response.set<"id">(c.req().param("id").value_or("unknown"))
             .set<"name">("example-user")
             .set<"active">(ruvia::bool_value{true});
@@ -103,7 +103,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> wildcard(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("wildcard=");
         body.append(c.req().param("*").value_or(""));
         body.push_back('\n');
@@ -111,7 +111,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> inputs(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("remote=");
         body.append(c.conn().remote().address().to_string());
         body.append("\nuser-agent=");
@@ -128,7 +128,7 @@ private:
 
     ruvia::task<ruvia::http_response> echo(ruvia::context& c) {
         const auto body = co_await c.req().text();
-        std::pmr::string owned(c.allocator<char>());
+        std::string owned;
         owned.assign(body.data(), body.size());
         c.draft().status(ruvia::http_status::created);
         c.draft().header("X-Echo", "true");
@@ -144,7 +144,7 @@ private:
     // unregistered pattern throws at build time instead of emitting a dead
     // link. Works in handlers, middleware and fallback handlers alike.
     ruvia::task<ruvia::http_response> links(ruvia::context& c) {
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("user=");
         body.append(c.url_for("/api/users/:id", {c.req().param("id").value_or("0")}));
         body.append("\nfile=");
@@ -187,7 +187,6 @@ int main() {
                 .write_timeout_ = std::chrono::seconds(60),
                 .max_connections_per_worker_ = 10000,
                 .max_requests_per_connection_ = 1000,
-                .request_arena_initial_bytes_ = 4096,
             })
             .on_error(&example_error_handler)
             .on_error({.prefix_ = "/api", .handler_ = &api_error})

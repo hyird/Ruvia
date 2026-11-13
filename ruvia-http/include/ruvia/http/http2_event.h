@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <utility>
@@ -123,9 +122,9 @@ public:
     http2_server_request_view request_view() const&& = delete;
     // Head fields borrow this lease; body borrows its caller-owned storage.
     [[nodiscard]] http_request build_request(
-        std::pmr::memory_resource* resource = nullptr, borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
+        borrowed_text body = {}) const& RUVIA_LIFETIMEBOUND;
     http_request build_request(
-        std::pmr::memory_resource* resource = nullptr, borrowed_text body = {}) const&& = delete;
+        borrowed_text body = {}) const&& = delete;
     [[nodiscard]] http_server_expectation_plan expectation_plan(
         http_unsupported_expectation_policy policy) const noexcept {
         return expectations_.server_plan(content_, policy);
@@ -226,7 +225,7 @@ public:
         return trailers_;
     }
     std::span<const http_header> trailers() const&& = delete;
-    [[nodiscard]] std::pmr::vector<http_header> take_trailers() && noexcept {
+    [[nodiscard]] std::vector<http_header> take_trailers() && noexcept {
         return std::move(trailers_);
     }
     [[nodiscard]] http2_message_content_semantics content_semantics() const noexcept {
@@ -236,13 +235,13 @@ public:
 private:
     friend class http2_event;
     http2_message_end_event(std::uint32_t stream_id,
-        std::pmr::vector<http_header> trailers,
+        std::vector<http_header> trailers,
         http2_message_content_semantics content_semantics) noexcept
         : stream_id_(stream_id),
           trailers_(std::move(trailers)),
           content_semantics_(content_semantics) {}
     std::uint32_t stream_id_{0};
-    std::pmr::vector<http_header> trailers_;
+    std::vector<http_header> trailers_;
     http2_message_content_semantics content_semantics_{http2_message_content_semantics::content};
 };
 
@@ -480,7 +479,7 @@ private:
         return http2_event(http2_message_body_chunk_event(endpoint, id, bytes_value, credit));
     }
     [[nodiscard]] static http2_event message_end(std::uint32_t id,
-        std::pmr::vector<http_header> trailers,
+        std::vector<http_header> trailers,
         http2_message_content_semantics content_semantics) noexcept {
         return http2_event(
             http2_message_end_event(id, std::move(trailers), content_semantics));

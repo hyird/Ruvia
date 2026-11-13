@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -12,14 +11,13 @@
 #include <variant>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "ratelimit/rate_limiter.h"
+#include "server/config_validation.h"
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
 #include "server/inbound_transport_error.h"
 #include "tls/tls_random.h"
-#include "util/config_validation.h"
 
 namespace ruvia::detail {
 
@@ -74,7 +72,7 @@ void http_server_options::set_server(const server_config& config) {
     }
     std::optional<http_cors_policy> cors;
     if (config.cors_) {
-        cors.emplace(*config.cors_, process_resource());
+        cors.emplace(*config.cors_);
     }
     server_ = config;
     compression_ = config.compression_;
@@ -88,17 +86,16 @@ void http_server_options::set_rate_limit(const rate_limit_config& config) {
 }
 
 void http_server_options::set_trusted_proxies(const trusted_proxy_config& config) {
-    http_client_ip_config ip_config(process_resource());
+    http_client_ip_config ip_config;
     ip_config.enabled_ = !config.cidrs_.empty();
     ip_config.trusted_proxies_ = config.cidrs_;
     ip_config.forwarding_headers_ = config.forwarding_headers_;
     ip_config.trust_x_forwarded_proto_ = config.trust_x_forwarded_proto_;
-    trusted_proxies_ = http_client_ip_extractor(ip_config, process_resource());
+    trusted_proxies_ = http_client_ip_extractor(ip_config);
 }
 
 http_server_listener_definition validate_run_listener(const http_server_listener_definition& listener,
-    const http_server_options& options, std::chrono::steady_clock::time_point key_origin,
-    std::pmr::memory_resource* resource) {
+    const http_server_options& options, std::chrono::steady_clock::time_point key_origin) {
     const auto worker_count = options.server_.worker_count_;
     if (const auto* redirect = std::get_if<http_server_listener_definition::redirect_http_to_https>(&listener.transport_)) {
         detail::ensure_non_zero_port(redirect->https_port_, "HTTP-to-HTTPS redirect requires a fixed HTTPS listen port");
@@ -138,19 +135,17 @@ http_server_listener_definition validate_run_listener(const http_server_listener
         throw std::invalid_argument("inherited listener sockets must number one per worker");
     }
 #endif
-    auto validated = listener.clone(resource);
+    auto validated = listener.clone();
     // One ticket key ring per TLS listener for this run, so TLS resumption
     // does not depend on which worker accepts the connection. Credentials
     // were loaded once by listen(); every worker installs them.
     if (auto* tls = std::get_if<http_server_listener_definition::tls>(&validated.transport_)) {
-        tls->session_ticket_keys_ = std::allocate_shared<tls_session_ticket_key_ring>(
-            std::pmr::polymorphic_allocator<tls_session_ticket_key_ring>(resource), key_origin);
+        tls->session_ticket_keys_ = std::make_shared<tls_session_ticket_key_ring>(key_origin);
     }
     // One QUIC secret per HTTP/3 service, shared by every worker so any
     // worker can tell which one owns a connection ID.
     if (validated.http3_.has_value()) {
-        auto secret = std::allocate_shared<std::array<std::uint8_t, 32>>(
-            std::pmr::polymorphic_allocator<std::array<std::uint8_t, 32>>(resource));
+        auto secret = std::make_shared<std::array<std::uint8_t, 32>>();
         if (!fill_random_bytes(std::span<unsigned char>(secret->data(), secret->size()))) {
             throw std::runtime_error("failed to generate the HTTP/3 connection ID secret");
         }
@@ -161,7 +156,7 @@ http_server_listener_definition validate_run_listener(const http_server_listener
 
 validated_http_server_configuration::validated_http_server_configuration(
     std::span<const http_server_listener_definition> listeners, http_server_options&& options)
-    : listeners_(process_resource()),
+    : listeners_(),
       options_(std::move(options)),
       // Every listener's key epochs start together, so all workers rotate them
       // at the same instants.
@@ -169,7 +164,7 @@ validated_http_server_configuration::validated_http_server_configuration(
     listeners_.reserve(listeners.size());
     for (const auto& listener : listeners) {
         listeners_.push_back(
-            validate_run_listener(listener, options_, tls_key_origin_, listeners_.get_allocator().resource()));
+            validate_run_listener(listener, options_, tls_key_origin_));
     }
 }
 
@@ -196,7 +191,6 @@ void validate_server_limits(const server_config& config) {
     detail::ensure_positive_duration(
         config.connection_scan_interval_, "connection scan interval must be greater than 0");
     validate_worker_queue_capacity(config.worker_queue_capacity_);
-    detail::ensure_positive_size(config.request_arena_initial_bytes_, "request arena initial buffer size must be greater than zero");
     detail::ensure_positive_size(config.max_buffered_body_bytes_, "buffered body limit must be greater than 0");
     detail::ensure_positive_optional_size(
         config.max_stream_body_bytes_, "configured stream body limit must be greater than zero");

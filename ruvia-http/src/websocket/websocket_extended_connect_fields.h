@@ -15,7 +15,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline http_header_descriptor_storage<http_header_view> stage_websocket_extended_connect_fields(
     const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers) {
     const auto negotiation_fields = negotiation.request_fields();
-    http_header_descriptor_storage<http_header_view> staged(negotiation.resource());
+    http_header_descriptor_storage<http_header_view> staged;
     staged.reserve(negotiation_fields.size() + headers.size());
     for (const auto& field : negotiation_fields) {
         staged.append(http_header_view{field.name(), field.value()});

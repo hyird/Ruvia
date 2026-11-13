@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -83,7 +82,7 @@ inline char* http_encode_lower_hex(char* output, std::string_view bytes) noexcep
 // output.data()[output.size()]; an aliased input is rebased by offset after
 // the resize, which may reallocate. Throws std::length_error when the result
 // cannot fit the string.
-inline void http_append_lower_hex(std::pmr::string& output, std::span<const unsigned char> bytes) {
+inline void http_append_lower_hex(std::string& output, std::span<const unsigned char> bytes) {
     const auto start = output.size();
     if (bytes.size() > (output.max_size() - start) / 2) {
         throw std::length_error("hex output length is not representable");
@@ -100,7 +99,7 @@ inline void http_append_lower_hex(std::pmr::string& output, std::span<const unsi
     http_encode_lower_hex(output.data() + start, source);
 }
 
-inline void http_append_lower_hex(std::pmr::string& output, std::string_view bytes) {
+inline void http_append_lower_hex(std::string& output, std::string_view bytes) {
     http_append_lower_hex(output, std::span(reinterpret_cast<const unsigned char*>(bytes.data()), bytes.size()));
 }
 

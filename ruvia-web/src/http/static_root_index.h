@@ -5,14 +5,12 @@
 #include <ctime>
 #include <filesystem>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response_file.h"
@@ -66,48 +64,36 @@ struct static_root_resident_options final {
 // instead of copying them: the buffer is immutable and shared by every
 // snapshot that indexes the same file version.
 struct static_root_memory_variant final {
-    explicit static_root_memory_variant(std::pmr::memory_resource* resource)
-        : etag_(resource),
-          last_modified_(resource) {}
-
     http_content_coding content_coding_{http_content_coding::identity};
-    std::shared_ptr<const std::pmr::string> bytes_;
+    std::shared_ptr<const std::string> bytes_;
     std::uint64_t modified_token_{0};
     std::time_t modified_seconds_{0};
-    std::pmr::string etag_;
-    std::pmr::string last_modified_;
+    std::string etag_;
+    std::string last_modified_;
 };
 
 struct static_root_entry final {
-    explicit static_root_entry(std::pmr::memory_resource* resource)
-        : relative_path_(resource),
-          file_path_(resource),
-          content_type_(resource),
-          etag_(resource),
-          last_modified_(resource),
-          memory_variants_(resource) {}
-
-    std::pmr::string relative_path_;
+    std::string relative_path_;
     http_native_path_string_type file_path_;
-    std::pmr::string content_type_;
+    std::string content_type_;
     std::uint64_t size_{0};
     http_response_file_identity identity_{http_response_file_identity::unchecked()};
     std::uint64_t modified_token_{0};
     std::time_t modified_seconds_{0};
-    std::pmr::string etag_;
-    std::pmr::string last_modified_;
+    std::string etag_;
+    std::string last_modified_;
     bool directly_servable_{true};
-    std::pmr::vector<static_root_memory_variant> memory_variants_;
+    std::vector<static_root_memory_variant> memory_variants_;
     // The file's bytes as indexed, when the snapshot keeps it resident. Shared
     // with later snapshots that index the same file version.
-    std::shared_ptr<const std::pmr::string> resident_bytes_;
+    std::shared_ptr<const std::string> resident_bytes_;
 };
 
 struct static_root_state final {
     http_native_path_string_type root_;
     static_root_config_storage config_;
-    std::pmr::vector<static_root_entry> entries_;
-    std::pmr::vector<std::pmr::string> directories_;
+    std::vector<static_root_entry> entries_;
+    std::vector<std::string> directories_;
     std::uint64_t fingerprint_{0};
     bool has_sidecars_{false};
 #if defined(__unix__)
@@ -115,17 +101,14 @@ struct static_root_state final {
     // open entries beneath it. Shared with every static_root_entry_open, so
     // an open still running on the blocking pool after its request gave up
     // never uses a descriptor this snapshot already closed.
-    std::shared_ptr<const native_file_handle> root_directory_;
+    std::shared_ptr<const native_file_descriptor> root_directory_;
     // The directory instance root_directory_ names; the index was built from
     // the same one.
     native_directory_identity root_identity_{};
 #endif
 
-    static_root_state(std::pmr::memory_resource* resource, static_root_config_storage configured_policy)
-        : root_(resource),
-          config_(std::move(configured_policy)),
-          entries_(resource),
-          directories_(resource) {}
+    explicit static_root_state(static_root_config_storage configured_policy) noexcept
+        : config_(std::move(configured_policy)) {}
 
     static_root_state(const static_root_state&) = delete;
     static_root_state& operator=(const static_root_state&) = delete;
@@ -250,7 +233,7 @@ public:
     }
 
     // The file's indexed bytes when the snapshot keeps them in memory.
-    [[nodiscard]] const std::pmr::string* resident_bytes() const noexcept {
+    [[nodiscard]] const std::string* resident_bytes() const noexcept {
         return resident_bytes_;
     }
 
@@ -262,8 +245,8 @@ private:
         std::uint64_t size, http_response_file_identity identity, std::uint64_t modified_token,
         std::time_t modified_seconds, static_range_request_policy range_requests,
         static_response_validator_policy response_validators, bool directly_servable,
-        const std::pmr::vector<static_root_memory_variant>* memory_variants,
-        const std::pmr::string* resident_bytes) noexcept
+        const std::vector<static_root_memory_variant>* memory_variants,
+        const std::string* resident_bytes) noexcept
         : file_path_(file_path),
           content_type_(content_type_value),
           cache_control_(cache_control_value),
@@ -291,8 +274,8 @@ private:
     static_range_request_policy range_requests_;
     static_response_validator_policy response_validators_;
     bool directly_servable_;
-    const std::pmr::vector<static_root_memory_variant>* memory_variants_;
-    const std::pmr::string* resident_bytes_;
+    const std::vector<static_root_memory_variant>* memory_variants_;
+    const std::string* resident_bytes_;
 };
 
 // One indexed file's open for a response, owning everything it reads: it runs
@@ -304,13 +287,13 @@ class static_root_entry_open final {
 public:
     // The opened handle; empty when the open failed or, for a checked open,
     // when the handle no longer holds the indexed identity and size.
-    [[nodiscard]] http_response_file_handle operator()() const noexcept;
+    [[nodiscard]] http_response_file_descriptor operator()() const noexcept;
 
 private:
     friend class static_root_access;
 
 #if defined(__unix__)
-    static_root_entry_open(std::shared_ptr<const native_file_handle> root_directory,
+    static_root_entry_open(std::shared_ptr<const native_file_descriptor> root_directory,
         http_native_path_string_type open_path, http_response_file_identity identity, std::uint64_t size,
         bool checked) noexcept
         : root_directory_(std::move(root_directory)),
@@ -328,7 +311,7 @@ private:
 #endif
 
 #if defined(__unix__)
-    std::shared_ptr<const native_file_handle> root_directory_;
+    std::shared_ptr<const native_file_descriptor> root_directory_;
 #endif
     // Beneath the root on POSIX, the canonical path on Windows; in the
     // synchronized process resource, since the pool thread may free it.
@@ -340,14 +323,11 @@ private:
 
 class static_root_access final {
 public:
-    [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> make(
-        std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-        const static_root_config_storage& config);
-    [[nodiscard]] static std::unique_ptr<static_root, pmr_object_deleter<static_root>> make(
-        std::pmr::memory_resource* object_resource, const std::filesystem::path& root,
-        static_root_config_storage&& config);
-    [[nodiscard]] static static_root_config_storage copy_config(
-        const static_root& root, std::pmr::memory_resource* resource);
+    [[nodiscard]] static std::unique_ptr<static_root> make(
+        const std::filesystem::path& root, const static_root_config_storage& config);
+    [[nodiscard]] static std::unique_ptr<static_root> make(
+        const std::filesystem::path& root, static_root_config_storage&& config);
+    [[nodiscard]] static static_root_config_storage copy_config(const static_root& root);
     [[nodiscard]] static std::string_view index_file(const static_root& root) noexcept;
     [[nodiscard]] static bool has_directory_index(const static_root& root) noexcept;
     [[nodiscard]] static bool has_sidecars(const static_root& root) noexcept;
@@ -362,9 +342,9 @@ public:
     // the final relative path in `relative` (backed by `storage` when
     // rewritten). Throws the forbidden http_error for a path outside the root.
     [[nodiscard]] static std::optional<static_root_entry_view> resolve(
-        const static_root& root, std::string_view& relative, std::pmr::string& storage);
+        const static_root& root, std::string_view& relative, std::string& storage);
     [[nodiscard]] static std::optional<static_root_entry_view> try_resolve(
-        const static_root& root, std::string_view& relative, std::pmr::string& storage);
+        const static_root& root, std::string_view& relative, std::string& storage);
     [[nodiscard]] static std::uint64_t fingerprint(const static_root& root) noexcept;
     [[nodiscard]] static bool same_snapshot(
         const static_root& left, const static_root& right) noexcept;

@@ -9,7 +9,7 @@
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/move_only_function.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
@@ -126,9 +126,9 @@ public:
         [[nodiscard]] std::uintptr_t await_resume();
 
     private:
-        thread_join_operation(worker_runtime& owner, worker_handle caller) noexcept;
+        thread_join_operation(worker_runtime& owner, worker_ref caller) noexcept;
         worker_runtime* owner_;
-        worker_handle caller_;
+        worker_ref caller_;
         thread_join_operation* next_{};
         std::coroutine_handle<> continuation_{};
         bool started_{};
@@ -142,8 +142,8 @@ public:
     // Wait asynchronously for that HANDLE, close it, and call join() to reap
     // the exited thread. Zero means already joined. Runtime must outlive the
     // operation; concurrent join() is not permitted.
-    [[nodiscard]] thread_join_operation prepare_thread_join(worker_handle caller) &;
-    thread_join_operation prepare_thread_join(worker_handle) && = delete;
+    [[nodiscard]] thread_join_operation prepare_thread_join(worker_ref caller) &;
+    thread_join_operation prepare_thread_join(worker_ref) && = delete;
 #endif
     // Takes reporting ownership of the first failure, if any: destruction no
     // longer reports a failure taken here. Later calls return the same failure.
@@ -151,8 +151,8 @@ public:
     [[nodiscard]] worker_runtime_state state() const noexcept;
     [[nodiscard]] asio::io_context& io_context() & noexcept;
     asio::io_context& io_context() && = delete;
-    [[nodiscard]] const worker_handle& handle() const& noexcept;
-    const worker_handle& handle() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept;
+    const worker_ref& worker() const&& = delete;
     // The event loop over this runtime's worker, created on first use, for
     // try_start()/start(), on_stop(), defer_cleanup() and report_failure()
     // (which fails this runtime). Once a loop exists, the runtime's stop
@@ -174,10 +174,7 @@ private:
     // admission the gate deferred.
     void finish_loop_stop_admission() noexcept;
 
-    struct impl_deleter_type final {
-        void operator()(impl_type* value) const noexcept;
-    };
-    std::unique_ptr<impl_type, impl_deleter_type> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 
 }  // namespace ruvia

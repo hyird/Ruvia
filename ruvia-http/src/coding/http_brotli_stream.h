@@ -4,13 +4,13 @@
 #include <brotli/encode.h>
 
 #include <cstddef>
-#include <memory_resource>
+#include <limits>
 #include <string>
 #include <string_view>
 
-#include "util/http_c_library_memory.h"
+#include "memory/http_c_library_memory.h"
 
-// Brotli (RFC 7932) state whose working memory comes from one PMR resource.
+// Brotli (RFC 7932) state with tracked working memory.
 // Brotli retains the allocator context as its opaque pointer, so these types are
 // pinned: owners embed them in storage whose address never changes.
 //
@@ -27,7 +27,9 @@ namespace ruvia::detail {
 // failure.
 class brotli_decoder_stream final {
 public:
-    brotli_decoder_stream(std::pmr::memory_resource* resource, std::size_t max_decoded_bytes);
+    explicit brotli_decoder_stream(
+        std::size_t max_decoded_bytes,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~brotli_decoder_stream();
     brotli_decoder_stream(const brotli_decoder_stream&) = delete;
     brotli_decoder_stream& operator=(const brotli_decoder_stream&) = delete;
@@ -59,7 +61,9 @@ inline constexpr int brotli_stream_window_bits = 19;
 // Encoder at quality 5, shared by whole-buffer and streaming HTTP content coding.
 class brotli_encoder_stream final {
 public:
-    brotli_encoder_stream(std::pmr::memory_resource* resource, int window_bits);
+    explicit brotli_encoder_stream(
+        int window_bits,
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~brotli_encoder_stream();
     brotli_encoder_stream(const brotli_encoder_stream&) = delete;
     brotli_encoder_stream& operator=(const brotli_encoder_stream&) = delete;
@@ -70,7 +74,7 @@ public:
     // Consumes the input and drains the requested operation into output. False
     // means the total output budget was exceeded before appending a block.
     // After false or an exception, the owner must discard/rebuild this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::pmr::string& output,
+    [[nodiscard]] bool encode(std::string_view input, std::string& output,
         BrotliEncoderOperation operation, std::size_t max_encoded_bytes);
 
 private:

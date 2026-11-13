@@ -1,7 +1,6 @@
 #pragma once
 
 #include <memory>
-#include <memory_resource>
 #include <optional>
 
 #include <openssl/types.h>
@@ -22,12 +21,12 @@ namespace ruvia::detail {
 // borrowed while their identity is parsed and are never copied; an empty
 // password uses the noninteractive default and terminal prompting is disabled.
 [[nodiscard]] http_server_listener_definition::tls load_http_server_tls(
-    const tls_config& config, std::pmr::memory_resource* resource);
+    const tls_config& config);
 
 // The identities of `config` alone, validated then parsed as by
 // load_http_server_tls(); for application::replace_tls_identities().
 [[nodiscard]] std::shared_ptr<const http_server_tls_identities> load_http_server_tls_identities(
-    const tls_config& config, std::pmr::memory_resource* resource);
+    const tls_config& config);
 
 // Throws std::invalid_argument unless `config` keeps the client certificate
 // policy (the same CA path and requirement) and the outgoing record limit

@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -16,7 +15,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_signal.h"
@@ -87,7 +85,7 @@ struct listener_socket_duplicates final {
 // session configuration destroyed -- once every task it owns has ended.
 class worker_connections final {
 public:
-    worker_connections(asio::io_context& io, const worker_handle& worker_value,
+    worker_connections(asio::io_context& io, const worker_ref& worker_value,
         const route_table& routes_value, worker_capabilities& capabilities,
         http_server_options& options, const stop_token& stop_token_value,
         http_server_worker_state& state_value, task_scope& tasks,
@@ -168,13 +166,13 @@ public:
 
 private:
     struct listener final {
-        listener(asio::io_context& io, const worker_handle& worker_value,
-            const http_server_listener_definition& definition, std::pmr::memory_resource* resource,
+        listener(asio::io_context& io, const worker_ref& worker_value,
+            const http_server_listener_definition& definition,
             prepared_http_server_session session = {})
             : session_owner_(std::move(session)),
-              session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition, resource)),
+              session_(session_owner_ ? *session_owner_ : inline_session_.emplace(definition)),
               endpoint_(definition.endpoint_),
-              tasks_(worker_value, {.resource_ = resource}),
+              tasks_(worker_value),
               retired_(worker_value),
               activated_(worker_value)
 #if !defined(_WIN32)
@@ -240,15 +238,15 @@ private:
     task<void> rotate_tls_ticket_keys();
     void accept_socket(std::size_t index, tcp_socket_type socket, adopt_options options = {});
     task<void> prepare_connection(std::size_t index, tcp_socket_type socket,
-        std::pmr::vector<std::byte> prefix, std::optional<ip_endpoint> remote);
+        std::vector<std::byte> prefix, std::optional<ip_endpoint> remote);
     void admit_socket(std::size_t index, tcp_socket_type socket, std::optional<ip_endpoint> remote,
-        std::pmr::vector<std::byte> prefix, std::size_t bytes_read = 0);
+        std::vector<std::byte> prefix, std::size_t bytes_read = 0);
     // `remote` is the peer accept_socket() read before the socket moved into
     // the lease; absent when the socket no longer knew its peer.
     task<void> run_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::pmr::vector<std::byte> prefix);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
     task<void> run_tls_session(http_server_session_config& listener, accepted_connection_lease connection,
-        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::pmr::vector<std::byte> prefix);
+        std::optional<asio::ip::tcp::endpoint> remote, std::uint64_t connection_id, std::vector<std::byte> prefix);
     void report_session_failure(
         tcp_socket_type& socket, std::string_view remote_address, std::exception_ptr failure) noexcept;
     template <typename stream_type>
@@ -266,7 +264,7 @@ private:
     task<std::variant<http1_serve_handoff, http_connection_close>> serve_requests(
         http1_connection_session<stream_type>& session, connection_work_set& work_set);
     asio::io_context& io_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     const route_table& routes_;
     worker_capabilities& capabilities_;
     http_server_options& options_;
@@ -279,7 +277,7 @@ private:
     std::size_t worker_index_;
     // Indexed by listener slot; empty once a listener retired or failed to
     // prepare.
-    std::pmr::vector<std::unique_ptr<listener, pmr_object_deleter<listener>>> listeners_;
+    std::vector<std::unique_ptr<listener>> listeners_;
     connection_scanner scanner_;
     // Caller-thread statistics and the Windows acceptor's balancing read it.
     connection_count connection_count_;
@@ -294,7 +292,7 @@ private:
     };
     void prepare_listener_gauge(std::size_t index, const asio::ip::tcp::endpoint& endpoint);
     mutable std::mutex gauges_mutex_;
-    std::pmr::vector<std::shared_ptr<listener_gauge>> gauges_{process_resource()};
+    std::vector<std::shared_ptr<listener_gauge>> gauges_{};
     connection_id_sequence connection_ids_;
     connection_registry registry_;
     std::atomic<std::size_t> refused_{};
@@ -307,7 +305,7 @@ private:
     bool http3_attached_{false};
     // Indexed by HTTP/3 slot, like listeners_. Declared last: destroyed
     // before every service its connections borrow.
-    std::pmr::vector<std::unique_ptr<http3_endpoint, pmr_object_deleter<http3_endpoint>>> http3_endpoints_;
+    std::vector<std::unique_ptr<http3_endpoint>> http3_endpoints_;
 #endif
 };
 

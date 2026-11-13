@@ -13,7 +13,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/http_native_path.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_file.h"
@@ -50,7 +50,7 @@ inline constexpr std::size_t response_file_read_ahead_bytes = 64 * 1024;
 // Where a file body's blocking reads run -- the worker's blocking pool -- and
 // what bounds or abandons them.
 struct response_file_io final {
-    worker_handle worker_;
+    worker_ref worker_;
     stop_token stop_;
     // Bounds each read the response waits on. Servers pass write_timeout_: the
     // next write waits for the read. An abandoned read keeps running on the
@@ -193,7 +193,7 @@ private:
         http_response_file_identity identity_{http_response_file_identity::unchecked()};
         // A duplicate of the response's handle, or empty until the pool opens
         // path_ for a body framed without one.
-        native_file_handle input_;
+        native_file_descriptor input_;
         read_buffer buffer_;
         std::uint64_t position_{};
         std::size_t filled_{};

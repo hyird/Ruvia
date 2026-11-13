@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 
 #include "ruvia/http/cookies.h"
@@ -11,7 +10,7 @@
 TEST(Ruvia, cookie_plan_serialization_emits_fields_without_attributes) {
     const ruvia::cookie_options options{.path_ = ""};
     const ruvia::set_cookie_plan plan("sid", "value", options);
-    std::pmr::string wire(plan.size(), '\0');
+    std::string wire(plan.size(), '\0');
     plan.write(wire.data());
     EXPECT_EQ(wire, "sid=value");
     const auto parsed_value = ruvia::parse_set_cookie(wire);
@@ -30,9 +29,9 @@ TEST(Ruvia, cookie_plan_serialization_formats_exact_max_age_widths_and_prefixed_
         const ruvia::cookie_options options{
             .path_ = "/", .max_age_ = std::chrono::seconds{age}, .prefix_ = ruvia::cookie_prefix::host, .secure_ = ruvia::cookie_attribute_policy::emit};
         const ruvia::set_cookie_plan plan("sid", "value", options);
-        std::pmr::string wire(plan.size(), '\0');
+        std::string wire(plan.size(), '\0');
         plan.write(wire.data());
-        EXPECT_EQ(wire, std::pmr::string("__Host-sid=value; Path=/; Max-Age=") + std::to_string(age).c_str() + "; Secure");
+        EXPECT_EQ(wire, std::string("__Host-sid=value; Path=/; Max-Age=") + std::to_string(age).c_str() + "; Secure");
         const auto parsed_value = ruvia::parse_set_cookie(wire);
         EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
@@ -51,7 +50,7 @@ TEST(Ruvia, cookie_plan_serialization_writes_zero_max_age_as_deletion_expires) {
         .expires_ = std::chrono::system_clock::time_point{std::chrono::hours{24 * 365 * 40}},
         .max_age_ = std::chrono::seconds{0}};
     const ruvia::set_cookie_plan plan("sid", "", options);
-    std::pmr::string wire(plan.size(), '\0');
+    std::string wire(plan.size(), '\0');
     plan.write(wire.data());
     EXPECT_EQ(wire, "sid=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 GMT");
 }

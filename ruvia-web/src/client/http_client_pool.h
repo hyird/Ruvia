@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <vector>
@@ -12,12 +11,11 @@
 #include <asio/io_context.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "ruvia/http/http2_connection.h"
@@ -61,9 +59,9 @@ using http_client_cancellation_target = worker_cancellation_target<http_client_p
 class http_client_pool final {
 public:
     // Process-lifetime storage backs the pool and its retained responses.
-    http_client_pool(asio::io_context& io_context, const worker_handle& worker_value,
+    http_client_pool(asio::io_context& io_context, const worker_ref& worker_value,
         http_client_config_storage config, const http_client_worker_services& services);
-    http_client_pool(asio::io_context&, worker_handle&&, http_client_config_storage,
+    http_client_pool(asio::io_context&, worker_ref&&, http_client_config_storage,
         const http_client_worker_services&) = delete;
     ~http_client_pool();
     http_client_pool(const http_client_pool&) = delete;
@@ -77,7 +75,7 @@ public:
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
     [[nodiscard]] http_client_stats stats() const noexcept;
-    [[nodiscard]] std::pmr::vector<http_client_endpoint_address> dns_snapshot() const;
+    [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
     void update_dns(std::span<const http_client_endpoint_address> addresses);
     [[nodiscard]] task<void> refresh_dns(operation_options options);
     [[nodiscard]] bool close_connection(std::uint64_t id) noexcept;
@@ -107,7 +105,7 @@ public:
     // TLS-authenticated responses of `route` update its entries in this pool's
     // bounded Alt-Svc cache.
     void observe_alt_svc(const http_client_route& route, std::span<const http_header> fields);
-    [[nodiscard]] task<void> migrate_http3(std::pmr::string local_address, std::uint16_t port,
+    [[nodiscard]] task<void> migrate_http3(std::string local_address, std::uint16_t port,
         operation_options options, stop_token host_stop);
 #ifdef RUVIA_ENABLE_HTTP3
     // `operation` follows the client's per-operation contract: an interrupted
@@ -127,7 +125,7 @@ public:
     [[nodiscard]] asio::io_context& io_context() noexcept {
         return io_context_;
     }
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
     [[nodiscard]] const http_client_config_storage& config() const noexcept {
@@ -208,10 +206,10 @@ private:
 #ifdef RUVIA_ENABLE_HTTP2
     struct http2_push_driver;
 #endif
-    using connection_owner_type = std::unique_ptr<http_client_connection, pmr_object_deleter<http_client_connection>>;
+    using connection_owner_type = std::unique_ptr<http_client_connection>;
 
 #ifdef RUVIA_ENABLE_HTTP2
-    [[nodiscard]] task<void> run_http2_push(std::unique_ptr<http2_push_driver, pmr_object_deleter<http2_push_driver>> driver);
+    [[nodiscard]] task<void> run_http2_push(std::unique_ptr<http2_push_driver> driver);
 #endif
     [[nodiscard]] task<void> execute_into(
         http_client_request_storage request, operation_options options, http_client_response_state* state);
@@ -262,10 +260,10 @@ private:
     // An h3 alternative (RFC 7838) advertised by the responses of one route:
     // its dial host, dial port and TLS server name.
     struct alternative_service final {
-        std::pmr::string route_host_;
+        std::string route_host_;
         std::uint16_t route_port_;
-        std::pmr::string server_name_;
-        std::pmr::string host_;
+        std::string server_name_;
+        std::string host_;
         std::uint16_t port_;
         std::chrono::steady_clock::time_point expires_;
         // A failed alternative is not tried again before then.
@@ -281,13 +279,13 @@ private:
     void release_http3_connection(http3_client_connection& connection) noexcept;
 #endif
     asio::io_context& io_context_;
-    worker_handle worker_;
+    worker_ref worker_;
     http_client_config_storage config_;
     // Borrows config_.uri_host_; the pool is address-stable and never moved.
     std::optional<http_origin_view> origin_;
     client_request_policy policy_;
     http_client_advertisement_queue advertisements_;
-    std::pmr::list<http_client_push> pushes_;
+    std::list<http_client_push> pushes_;
 #ifdef RUVIA_ENABLE_HTTP2
     std::size_t active_pushes_{};
 #endif
@@ -301,15 +299,15 @@ private:
     std::shared_ptr<http_client_cancellation_target> cancellation_target_;
     task_scope background_tasks_;
     // Owners stay at one address; a null entry is a free position.
-    std::pmr::vector<connection_owner_type> connections_;
+    std::vector<connection_owner_type> connections_;
 #ifdef RUVIA_ENABLE_HTTP3
     // Bounded by http3_.max_alt_svc_entries_ across routes, least recently
     // used first out.
-    std::pmr::vector<alternative_service> alternative_services_{process_resource()};
+    std::vector<alternative_service> alternative_services_{};
     std::uint64_t alternative_clock_{};
     // Created with the first HTTP/3 connection.
-    std::unique_ptr<http3_client_tls, pmr_object_deleter<http3_client_tls>> http3_tls_{nullptr, pmr_object_deleter<http3_client_tls>{process_resource()}};
-    std::pmr::vector<std::unique_ptr<http3_client_connection, pmr_object_deleter<http3_client_connection>>> http3_connections_{process_resource()};
+    std::unique_ptr<http3_client_tls> http3_tls_{};
+    std::vector<std::unique_ptr<http3_client_connection>> http3_connections_{};
 #endif
     worker_signal admission_signal_;
     worker_signal reclaim_signal_;

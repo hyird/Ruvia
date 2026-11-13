@@ -5,7 +5,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_datagram.h"
 #include "ruvia/http/http_hex.h"
@@ -21,13 +20,9 @@
 
 namespace ruvia {
 
-http_connect_udp_target::http_connect_udp_target(std::pmr::string host, port_number port) noexcept
+http_connect_udp_target::http_connect_udp_target(std::string host, port_number port) noexcept
     : host_(std::move(host)),
       port_(port.value()) {}
-
-http_connect_udp_target::http_connect_udp_target(const http_connect_udp_target& other)
-    : host_(other.host_, other.host_.get_allocator()),
-      port_(other.port_) {}
 
 namespace {
 constexpr std::string_view prefix{"/.well-known/masque/udp/"};
@@ -49,9 +44,13 @@ enum class handshake_message_role : std::uint8_t {
     response_recipient,
     response_sender,
 };
+enum class capsule_protocol_state : std::uint8_t {
+    absent,
+    valid_true,
+    invalid,
+};
 struct handshake_fields {
-    // capsule_ is true only for exactly one Capsule-Protocol field holding ?1.
-    bool capsule_{false}, capsule_field_{false}, capsule_invalid_{false};
+    capsule_protocol_state capsule_protocol_{capsule_protocol_state::absent};
     bool upgrade_{false}, upgrade_field_{false}, connection_{false}, connection_field_{false};
     bool host_{false}, forbidden_{false}, http2_forbidden_{false};
     std::string_view host_value_{};
@@ -89,11 +88,16 @@ std::variant<handshake_fields, http_connect_udp_error> fields(std::span<const he
         }
         if (http_ascii_equals_ignore_case(field.name(), "capsule-protocol")) {
             // RFC 9297 section 3.4: recipients handle a non-Boolean value as if the
-            // field were absent; ?0 has the same meaning as absence.
-            const auto value = parse_http_capsule_protocol(field.value());
-            found.capsule_invalid_ = found.capsule_invalid_ || found.capsule_field_ || !value.has_value() || !*value;
-            found.capsule_field_ = true;
-            found.capsule_ = !found.capsule_invalid_;
+            // field were absent; ?0 has the same meaning as absence. Only senders
+            // require a single ?1 Capsule-Protocol field.
+            if (list_role == detail::http_field_list_role::sender) {
+                const auto value = parse_http_capsule_protocol(field.value());
+                found.capsule_protocol_ =
+                    (found.capsule_protocol_ == capsule_protocol_state::absent &&
+                        value == std::optional<bool>(true))
+                        ? capsule_protocol_state::valid_true
+                        : capsule_protocol_state::invalid;
+            }
         } else if (http_ascii_equals_ignore_case(field.name(), "upgrade")) {
             found.upgrade_field_ = true;
             if (upgrade_protocols.parse_field(field.value(), list_role,
@@ -169,7 +173,7 @@ std::optional<http_connect_udp_error> validate_connect_udp_response(
     return std::nullopt;
 }
 }  // namespace
-std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target, std::pmr::memory_resource* resource) {
+std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(http_connect_udp_target_view target) {
     if (!valid_host(target.host_) || target.port_ == 0) {
         return http_connect_udp_error::invalid_target;
     }
@@ -179,7 +183,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer{};
     const auto port_digits = http_format_unsigned(port_buffer, target.port_.value());
-    std::pmr::string result_value(detail::http_pmr_resource_or_default(resource));
+    std::string result_value;
     result_value.reserve(prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
     result_value.append(prefix);
     for (const unsigned char c : target.host_.view()) {
@@ -194,7 +198,7 @@ std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_p
     result_value.push_back('/');
     return result_value;
 }
-std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path, std::pmr::memory_resource* resource) {
+std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(std::string_view path) {
     if (!path.starts_with(prefix) || path.size() <= prefix.size() || !path.ends_with('/')) {
         return http_connect_udp_error::invalid_path;
     }
@@ -213,7 +217,7 @@ std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect
     if ((port.index() != 0) || !std::get<0>(port)) {
         return http_connect_udp_error::invalid_target;
     }
-    std::pmr::string host(detail::http_pmr_resource_or_default(resource));
+    std::string host;
     const auto decoded_host = decode_url_component(raw_host, host);
     if (!decoded_host || !valid_host(*decoded_host)) {
         return http_connect_udp_error::invalid_target;
@@ -236,7 +240,7 @@ std::optional<http_connect_udp_error> validate_request(http_connect_udp_request_
         return std::get<1>(parsed_value);
     }
     const auto& found = std::get<0>(parsed_value);
-    if (sending && !found.capsule_) {
+    if (sending && found.capsule_protocol_ != capsule_protocol_state::valid_true) {
         return http_connect_udp_error::invalid_capsule_protocol;
     }
     if (found.forbidden_ || request.authority_.empty() || request.path_.empty()) {
@@ -328,10 +332,10 @@ std::variant<http_response, http_connect_udp_error> prepare_http_connect_udp_res
         return http_connect_udp_error::invalid_response;
     }
     // As the sender, the planner only lets a single ?1 through.
-    if (found.capsule_invalid_) {
+    if (found.capsule_protocol_ == capsule_protocol_state::invalid) {
         return http_connect_udp_error::invalid_capsule_protocol;
     }
-    if (!found.capsule_) {
+    if (found.capsule_protocol_ == capsule_protocol_state::absent) {
         response.header_stable_view("Capsule-Protocol", "?1");
     }
     if (version == http_protocol_version::http11) {

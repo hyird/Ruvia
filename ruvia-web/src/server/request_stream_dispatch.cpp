@@ -14,19 +14,18 @@
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #endif
 
 #include "context/context_access.h"
 #include "context/context_services.h"
-#include "http/streaming_access.h"
+#include "integration/operation_lane_lease.h"
 #include "router/compiled_route_plan.h"
 #include "router/route_table.h"
 #include "server/http_server_options.h"
-#include "util/operation_lane_lease.h"
 
 namespace ruvia::detail {
 
@@ -86,7 +85,7 @@ void complete_request_stream(context& context_value, std::exception_ptr failure)
         }
         failure = std::make_exception_ptr(std::logic_error("request stream callback completed without a response"));
     }
-    auto answer = make_default_exception_response(context_value.arena(), failure);
+    auto answer = make_default_exception_response(failure);
     if (answer.unexpected_) {
         context_access::services(context_value)
             .connection_failure()
@@ -105,20 +104,18 @@ task<void> serve_request_stream(void*, context& context_value) {
 [[nodiscard]] const route_entry& request_stream_response_route() noexcept {
     // Process-invariant and allocation-free: no route path, method token or
     // protocol to own.
-    static const route_entry route(process_resource(),
-        {.method_ = http_known_method::unknown,
-            .path_ = {},
-            .endpoint_ = route_endpoint::response_stream(&serve_request_stream, request_body_mode::stream)});
+    static const route_entry route({.method_ = http_known_method::unknown,
+        .path_ = {},
+        .endpoint_ = route_endpoint::response_stream(&serve_request_stream, request_body_mode::stream)});
     return route;
 }
 
 [[nodiscard]] const route_entry& request_stream_tunnel_route() noexcept {
     // The tunnel upgrade runs serve_request_stream_tunnel() for this route
     // instead of its handler.
-    static const route_entry route(process_resource(),
-        {.method_ = http_known_method::unknown,
-            .path_ = {},
-            .endpoint_ = route_endpoint::tunnel(process_resource(), &serve_request_stream, {}, {})});
+    static const route_entry route({.method_ = http_known_method::unknown,
+        .path_ = {},
+        .endpoint_ = route_endpoint::tunnel(&serve_request_stream, {}, {})});
     return route;
 }
 
@@ -211,30 +208,30 @@ void request_stream::advertise_alternative_service(std::string_view value) {
     context_.advertise_alternative_service(value);
 }
 
-http_client_handle request_stream::client() const {
+http_client_ref request_stream::client() const {
     return context_.client();
 }
 
-http_client_handle request_stream::client(std::string_view alias) const {
+http_client_ref request_stream::client(std::string_view alias) const {
     return context_.client(alias);
 }
 
 #ifdef RUVIA_ENABLE_DATABASE
-db_handle request_stream::db() const {
+db_session request_stream::db() const {
     return context_.db();
 }
 
-db_handle request_stream::db(std::string_view alias) const {
+db_session request_stream::db(std::string_view alias) const {
     return context_.db(alias);
 }
 #endif
 
 #ifdef RUVIA_ENABLE_REDIS
-redis_handle request_stream::redis() const {
+redis_session request_stream::redis() const {
     return context_.redis();
 }
 
-redis_handle request_stream::redis(std::string_view alias) const {
+redis_session request_stream::redis(std::string_view alias) const {
     return context_.redis(alias);
 }
 #endif
@@ -301,7 +298,7 @@ task<websocket_accept_result> request_stream::accept_websocket(websocket_route_c
 
 task<websocket_accept_result> request_stream::accept_websocket_impl(websocket_route_config config) {
     // Validated before any state check so an invalid configuration selects nothing.
-    const auto endpoint = detail::route_endpoint::websocket(process_resource(), nullptr, std::move(config));
+    const auto endpoint = detail::route_endpoint::websocket(nullptr, std::move(config));
     co_return co_await accept_websocket_endpoint(*endpoint.websocket());
 }
 

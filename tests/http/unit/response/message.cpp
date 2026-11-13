@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -15,19 +14,13 @@
 #include "ruvia/http/http_interim_response.h"
 #include "ruvia/http/http_response.h"
 
-#include "failing_memory_resource.h"
-#include "memory_resource_fixture.h"
-#include "stl_allocation_fixture.h"
-
-using ruvia::test::failing_memory_resource;
-
 namespace {
 
 using ruvia::http_response;
 using ruvia::http_response_header_options;
 
 http_response make_response() {
-    return http_response(std::pmr::new_delete_resource());
+    return http_response{};
 }
 
 template <typename fn_type>
@@ -46,7 +39,7 @@ TEST(Ruvia, response_header_append_preserves_multiplicity_across_table_spill) {
     http_response response;
     response.header("X-Repeated", "first");
     for (int i = 0; i < 7; ++i) {
-        response.header(std::pmr::string("X-Filler-") + std::to_string(i).c_str(), "value");
+        response.header(std::string("X-Filler-") + std::to_string(i).c_str(), "value");
     }
     response.header("x-repeated", "second", {.mode_ = ruvia::http_response_header_mode::append});
     EXPECT_EQ(response.headers().size(), std::size_t{9});
@@ -60,76 +53,6 @@ TEST(Ruvia, response_header_append_preserves_multiplicity_across_table_spill) {
     response.header("X-Repeated", "replacement");
     EXPECT_EQ(response.headers().size(), std::size_t{8});
     EXPECT_EQ(response.header("X-Repeated"), std::string_view("replacement"));
-}
-
-TEST(Ruvia, response_header_reserve_publishes_storage_before_retirement) {
-    ruvia::test::reentrant_memory_resource resource;
-    {
-        http_response response(&resource);
-        for (int index = 0; index != 9; ++index) {
-            response.header(std::pmr::string("X-Field-") + std::to_string(index).c_str(), "value");
-        }
-        auto headers = response.headers().clone();
-        std::array<std::string_view, 9> values;
-        for (std::size_t index = 0; index != values.size(); ++index) {
-            values[index] = headers.begin()[index].value();
-        }
-        struct observation final {
-            ruvia::http_response_headers* headers_;
-            const ruvia::http_response_header* previous_;
-            ruvia::test::reentrant_memory_resource* resource_;
-            bool committed_{false};
-        } observed{&headers, headers.begin(), &resource};
-        resource.deallocation_context_ = &observed;
-        resource.before_deallocate_ = [](void* context) noexcept {
-            auto& observed = *static_cast<observation*>(context);
-            observed.committed_ = observed.headers_->begin() != observed.previous_;
-            if (observed.committed_) {
-                observed.resource_->reject_allocations(true);
-                observed.headers_->content_type(ruvia::http_content_type::application_json);
-            }
-        };
-        headers.reserve(64);
-        resource.before_deallocate_ = nullptr;
-        EXPECT_TRUE(observed.committed_);
-        EXPECT_EQ(headers.header("Content-Type"), std::string_view("application/json"));
-        ASSERT_EQ(headers.size(), std::size_t{10});
-        for (std::size_t index = 0; index != values.size(); ++index) {
-            EXPECT_EQ(headers.begin()[index].value(), values[index]);
-            EXPECT_EQ(headers.begin()[index].value().data(), values[index].data());
-        }
-        headers.reserve(64);
-        resource.reject_allocations(false);
-    }
-    EXPECT_EQ(resource.live_bytes(), std::size_t{0});
-}
-
-TEST(Ruvia, response_header_reserve_failure_preserves_fields_for_retry) {
-    failing_memory_resource resource;
-    {
-        http_response response(&resource);
-        for (int index = 0; index != 9; ++index) {
-            response.header(std::pmr::string("X-Field-") + std::to_string(index).c_str(), "value");
-        }
-        auto headers = response.headers().clone();
-        const auto* const previous = headers.begin();
-        const auto live = resource.live_allocations();
-        if (ruvia::test::stl_allocation_failure_injection_enabled()) {
-            resource.fail_after(0);
-            EXPECT_THROW(headers.reserve(64), std::bad_alloc);
-            EXPECT_EQ(headers.begin(), previous);
-            EXPECT_EQ(headers.size(), std::size_t{9});
-            EXPECT_EQ(resource.live_allocations(), live);
-        }
-        resource.allow_allocations();
-        headers.reserve(64);
-        EXPECT_EQ(headers.size(), std::size_t{9});
-        EXPECT_EQ(resource.live_allocations(), live);
-        for (int index = 0; index != 9; ++index) {
-            EXPECT_EQ(headers.header(std::pmr::string("X-Field-") + std::to_string(index).c_str()), std::string_view("value"));
-        }
-    }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 TEST(Ruvia, response_status_is_version_neutral_code_only) {
@@ -151,78 +74,6 @@ TEST(Ruvia, response_header_distinguishes_missing_from_present_empty) {
     const auto present_empty = response.header("x-empty");
     EXPECT_TRUE(present_empty.has_value());
     EXPECT_TRUE(present_empty.value_or("missing").empty());
-}
-
-TEST(Ruvia, response_move_assignment_transfers_body) {
-    std::pmr::monotonic_buffer_resource source_resource;
-    std::pmr::monotonic_buffer_resource target_resource;
-    http_response source_value(&source_resource);
-    http_response target(&target_resource);
-
-    source_value.body(std::pmr::string(4096, 's'));
-    target.body(std::pmr::string(64, 't'));
-
-    target = std::move(source_value);
-
-    EXPECT_EQ(target.body_bytes(), std::pmr::string(4096, 's'));
-}
-
-TEST(Ruvia, response_body_replacement_commits_before_resource_retirement) {
-    enum class body_kind { copied,
-        owned,
-        static_view,
-        file_bytes,
-        head_metadata };
-    struct observation final {
-        http_response* response_;
-        body_kind expected_;
-        bool committed_{false};
-    };
-    for (const auto kind : {body_kind::copied, body_kind::owned, body_kind::static_view,
-             body_kind::file_bytes, body_kind::head_metadata}) {
-        SCOPED_TRACE(static_cast<int>(kind));
-        ruvia::test::reentrant_memory_resource resource;
-        {
-            http_response response(&resource);
-            response.body(std::pmr::string(256, 'x'));
-            observation observed{&response, kind};
-            resource.deallocation_context_ = &observed;
-            resource.before_deallocate_ = [](void* context) noexcept {
-                auto& observed = *static_cast<observation*>(context);
-                auto& response = *observed.response_;
-                observed.committed_ = observed.expected_ == body_kind::head_metadata
-                                          ? response.has_head_metadata_body()
-                                          : response.body_bytes() == "replacement" &&
-                                                response.has_file_representation() == (observed.expected_ == body_kind::file_bytes);
-                if (observed.committed_) {
-                    response.static_body("reentrant");
-                }
-            };
-            switch (kind) {
-                case body_kind::copied:
-                    response.body("replacement");
-                    break;
-                case body_kind::owned:
-                    response.owned_body(std::pmr::string("replacement", &resource));
-                    break;
-                case body_kind::static_view:
-                    response.static_body("replacement");
-                    break;
-                case body_kind::file_bytes:
-                    response.file_bytes_body(std::pmr::string("replacement", &resource));
-                    break;
-                case body_kind::head_metadata:
-                    response.head_metadata_body();
-                    break;
-            }
-            resource.before_deallocate_ = nullptr;
-            EXPECT_TRUE(observed.committed_);
-            EXPECT_EQ(response.body_bytes(), "reentrant");
-            EXPECT_FALSE(response.has_file_representation());
-            EXPECT_FALSE(response.has_head_metadata_body());
-        }
-        EXPECT_EQ(resource.live_bytes(), std::size_t{0});
-    }
 }
 
 TEST(Ruvia, response_status_code_range_validated) {
@@ -392,75 +243,6 @@ TEST(Ruvia, response_plain_set_collapses_prior_appended_fields) {
     EXPECT_EQ(cookie_count, std::size_t{1});
 }
 
-TEST(Ruvia, response_header_append_failure_preserves_existing_header_for_retry) {
-    failing_memory_resource resource;
-    http_response response(&resource);
-    response.header("Link", "</a>; rel=preload");
-
-    resource.fail_after(0);
-    bool failed = false;
-    try {
-        response.header("Link", "</b>; rel=preload",
-            http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-    } catch (const std::bad_alloc&) {
-        failed = true;
-    }
-
-    EXPECT_TRUE(failed);
-    EXPECT_EQ(response.headers().size(), std::size_t{1});
-    response.header("Link", "</b>; rel=preload",
-        http_response_header_options{.mode_ = ruvia::http_response_header_mode::append});
-    EXPECT_EQ(response.headers().size(), std::size_t{2});
-}
-
-TEST(Ruvia, response_header_removal_commits_before_retiring_match_key) {
-    for (const bool known : {false, true}) {
-        for (const int filler_count : {0, 8}) {
-            SCOPED_TRACE(known);
-            SCOPED_TRACE(filler_count);
-            ruvia::test::reentrant_memory_resource resource;
-            {
-                http_response response(&resource);
-                const std::string_view key = known ? "Content-Type" : "X-Delete";
-                const std::string_view restored = known ? "application/json" : "retained";
-                response.header(key, known ? "text/plain; charset=us-ascii" : "before");
-                response.header("X-Stay", "untouched");
-                for (int index = 0; index != filler_count; ++index) {
-                    response.header(std::pmr::string("X-Filler-") + std::to_string(index).c_str(), "value");
-                }
-                struct observation final {
-                    http_response* response_;
-                    std::string_view key_;
-                    std::string_view restored_;
-                    std::size_t size_;
-                    bool committed_{false};
-                } observed{&response, key, restored, response.headers().size() - 1};
-                resource.deallocation_context_ = &observed;
-                resource.before_deallocate_ = [](void* context) noexcept {
-                    auto& observed = *static_cast<observation*>(context);
-                    auto& response = *observed.response_;
-                    observed.committed_ = response.headers().size() == observed.size_ &&
-                                          !response.header(observed.key_) &&
-                                          response.header("X-Stay") == "untouched";
-                    if (observed.committed_) {
-                        response.header(observed.key_, observed.restored_);
-                    }
-                };
-                response.remove_header(response.headers().begin()->name());
-                resource.before_deallocate_ = nullptr;
-                EXPECT_TRUE(observed.committed_);
-                EXPECT_EQ(response.header(key), restored);
-                EXPECT_EQ(response.header("X-Stay"), std::string_view("untouched"));
-                EXPECT_EQ(response.headers().size(), observed.size_ + 1);
-                for (int index = 0; index != filler_count; ++index) {
-                    EXPECT_EQ(response.header(std::pmr::string("X-Filler-") + std::to_string(index).c_str()), std::string_view("value"));
-                }
-            }
-            EXPECT_EQ(resource.live_bytes(), std::size_t{0});
-        }
-    }
-}
-
 TEST(Ruvia, response_header_removal_preserves_unrelated_fields) {
     for (const int filler_count : {0, 8}) {
         http_response response;
@@ -468,9 +250,9 @@ TEST(Ruvia, response_header_removal_preserves_unrelated_fields) {
         response.header("Vary", "Accept-Encoding");
         response.header("Vary", "Origin", {.mode_ = ruvia::http_response_header_mode::append});
         for (int i = 0; i < filler_count; ++i) {
-            response.header(std::pmr::string("X-Filler-") + std::to_string(i).c_str(), "value");
+            response.header(std::string("X-Filler-") + std::to_string(i).c_str(), "value");
         }
-        std::pmr::vector<std::pair<std::string_view, std::string_view>> fields;
+        std::vector<std::pair<std::string_view, std::string_view>> fields;
         for (const auto& header : response.headers()) {
             fields.emplace_back(header.name(), header.value());
         }

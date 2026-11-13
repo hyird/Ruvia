@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <charconv>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -10,7 +9,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_version.h"
@@ -22,19 +20,19 @@
 #include "ruvia/web/request_stream.h"
 #include "ruvia/web/router.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #endif
 
 #include "body/http_request_body_facade.h"
 #include "context/context_access.h"
 #include "integration/borrowed_clients.h"
+#include "integration/operation_interrupt.h"
 #include "ratelimit/rate_limit_decision.h"
 #include "ratelimit/rate_limiter.h"
 #include "router/router_impl.h"
-#include "util/operation_interrupt.h"
 
 namespace ruvia::detail {
 namespace {
@@ -44,10 +42,10 @@ namespace {
 // advertised length. Storage counts against the same inbound budget.
 class routed_body final {
 public:
-    routed_body(body_reader* source, std::optional<std::size_t> limit, std::pmr::memory_resource* resource)
+    routed_body(body_reader* source, std::optional<std::size_t> limit, inbound_buffer_account* inbound)
         : source_(source),
           limit_(limit),
-          bytes_(resource) {}
+          reservation_(inbound) {}
 
     task<std::optional<std::span<const std::byte>>> read(operation_options operation = {}) {
         if (failure_) {
@@ -84,7 +82,7 @@ public:
     task<std::string_view> read_all(operation_options operation) {
         const operation_steps steps(std::move(operation));
         while (auto chunk = co_await read(steps.next("request body read"))) {
-            bytes_.append(reinterpret_cast<const char*>(chunk->data()), chunk->size());
+            inbound_append(bytes_, reservation_, std::string_view(reinterpret_cast<const char*>(chunk->data()), chunk->size()));
         }
         co_return std::string_view(bytes_);
     }
@@ -99,7 +97,8 @@ private:
     body_reader* source_;
     std::optional<std::size_t> limit_;
     std::size_t consumed_{0};
-    std::pmr::string bytes_;
+    std::string bytes_;
+    inbound_buffer_reservation reservation_;
     std::exception_ptr failure_;
 };
 
@@ -125,7 +124,7 @@ private:
 
 class router_state final {
 public:
-    explicit router_state(worker_handle worker)
+    explicit router_state(worker_ref worker)
         : worker_(std::move(worker)) {
         if (!worker_.valid()) {
             throw std::invalid_argument("router requires a valid worker");
@@ -157,27 +156,27 @@ public:
     }
 
     struct tunnel_upgrade final {
-        std::pmr::string protocol_;
+        std::string protocol_;
         http_tunnel_route_config config_;
     };
 
     struct registration final {
-        std::pmr::string method_;
-        std::pmr::string path_;
+        std::string method_;
+        std::string path_;
         std::variant<router_handler, router_stream_handler> handler_;
         // A WebSocket or tunnel route keeps the configuration its endpoint is
         // validated and built from at freeze.
         std::variant<std::monostate, websocket_route_config, tunnel_upgrade> upgrade_;
-        std::pmr::vector<controller_middleware_descriptor> modifiers_;
+        std::vector<controller_middleware_descriptor> modifiers_;
 
         template <typename handler_type, typename upgrade_type = std::monostate>
         registration(std::string_view method, std::string_view path, handler_type handler,
             std::span<const controller_middleware_descriptor> modifiers, upgrade_type upgrade = {})
-            : method_(method, process_resource()),
-              path_(path, process_resource()),
+            : method_(method),
+              path_(path),
               handler_(std::move(handler)),
               upgrade_(std::move(upgrade)),
-              modifiers_(modifiers.begin(), modifiers.end(), process_resource()) {
+              modifiers_(modifiers.begin(), modifiers.end()) {
             if (!is_valid_http_method_token(method)) {
                 throw std::invalid_argument("route method must be a valid HTTP token");
             }
@@ -190,10 +189,10 @@ public:
     [[nodiscard]] static route_endpoint make_endpoint(const registration& route, route_stream_handler::invoke_type invoke,
         request_body_mode body_mode) {
         if (const auto* websocket = std::get_if<websocket_route_config>(&route.upgrade_)) {
-            return route_endpoint::websocket(process_resource(), invoke, *websocket);
+            return route_endpoint::websocket(invoke, *websocket);
         }
         if (const auto* tunnel = std::get_if<tunnel_upgrade>(&route.upgrade_)) {
-            return route_endpoint::tunnel(process_resource(), invoke, tunnel->protocol_, tunnel->config_);
+            return route_endpoint::tunnel(invoke, tunnel->protocol_, tunnel->config_);
         }
         return route_endpoint::response_stream(invoke, body_mode);
     }
@@ -203,7 +202,7 @@ public:
         phase_ = phase::freezing;
         try {
             detail::router builder;
-            std::pmr::vector<void*> targets(process_resource());
+            std::vector<void*> targets;
             targets.reserve(registrations_.size());
             for (const auto& route : registrations_) {
                 const auto method = classify_http_method(route.method_);
@@ -227,14 +226,13 @@ public:
             }
             configuration_.apply(builder);
             auto plan = builder.compile();
-            auto table = make_pmr_object<route_table>(process_resource(), *plan, std::span<void* const>(targets));
+            auto table = std::make_unique<route_table>(*plan, std::span<void* const>(targets));
             const auto route_limits = table->has_route_rate_limit() ? route_rate_limit_presence::present
                                                                     : route_rate_limit_presence::absent;
             auto limiter = rate_limit_ || route_limits == route_rate_limit_presence::present
-                               ? make_pmr_object<rate_limiter>(process_resource(),
-                                     rate_limit_ ? std::optional<rate_limit_rule>(rate_limit_->rule_) : std::nullopt, route_limits,
+                               ? std::make_unique<rate_limiter>(rate_limit_ ? std::optional<rate_limit_rule>(rate_limit_->rule_) : std::nullopt, route_limits,
                                      rate_limit_ ? rate_limit_->capacity_per_worker_ : default_rate_limit_capacity_per_worker)
-                               : std::unique_ptr<rate_limiter, pmr_object_deleter<rate_limiter>>{};
+                               : std::unique_ptr<rate_limiter>{};
             if (!worker_state_definitions_.empty()) {
                 worker_states_.emplace(worker_state_definitions_);
                 try {
@@ -267,7 +265,6 @@ public:
         stream.routed_ = true;
         const auto& table = *self->table_;
         const auto& request = stream.request();
-        auto& memory = context_access::memory(context_value);
         const auto resolution = resolve_dispatched_request(table, request);
         const auto* resolved = resolution.resolved();
         context_access::route_binding binding(context_value,
@@ -288,7 +285,7 @@ public:
         // covers a request stream.
         if (const auto rejection = decide_request_rate_limit(
                 self->limiter_.get(), context_value.conn().client().address(), services.pinned_arrival())) {
-            auto response = co_await table.handle_error(request, memory, rate_limit_rejection_error(), services);
+            auto response = co_await table.handle_error(request, rate_limit_rejection_error(), services);
             apply_rate_limit_rejection_headers(response, *rejection);
             context_access::set_response(context_value, std::move(response));
             co_return;
@@ -296,8 +293,8 @@ public:
         if (resolved == nullptr) {
             auto buffered_services = services;
             buffered_services.response_output() = {};
-            http_response response(context_value.arena());
-            co_await table.dispatch_buffered_response(request, resolution, memory, document_root_binding::none(),
+            http_response response;
+            co_await table.dispatch_buffered_response(request, resolution, document_root_binding::none(),
                 buffered_services, static_file_selection_mode::identity_only, response);
             stream.respond(std::move(response));
             co_return;
@@ -305,7 +302,7 @@ public:
 
         const auto& route = resolved->route();
         if (route.endpoint().websocket() != nullptr || route.endpoint().tunnel() != nullptr) {
-            co_await dispatch_upgrade(table, stream, *resolved, memory, services);
+            co_await dispatch_upgrade(table, stream, *resolved, services);
             co_return;
         }
         services.bind_route_body_limit(route.max_request_body_bytes());
@@ -330,8 +327,7 @@ public:
                     }
                 }
             }
-            routed_body body(body_source, limit,
-                services.inbound_buffer_pool() != nullptr ? services.inbound_buffer_pool() : process_resource());
+            routed_body body(body_source, limit, services.inbound_buffers());
             auto reader = make_body_reader_facade(body);
             auto loader = make_request_body_loader_facade(body);
             if (mode == request_body_mode::stream) {
@@ -361,16 +357,16 @@ public:
         // Body adapters above have retired. The request-only error path must
         // not retain their borrowed views while constructing its fallback.
         services = request_services;
-        auto response = co_await table.handle_exception(request, memory, failure, services);
+        auto response = co_await table.handle_exception(request, failure, services);
         context_access::set_response(context_value, std::move(response));
     }
 
-    worker_handle worker_;
+    worker_ref worker_;
     app_configuration configuration_;
-    std::pmr::vector<registration> registrations_{process_resource()};
+    std::vector<registration> registrations_{};
     std::optional<rate_limit_config> rate_limit_;
     borrowed_clients clients_;
-    std::pmr::vector<worker_state_definition> worker_state_definitions_{process_resource()};
+    std::vector<worker_state_definition> worker_state_definitions_{};
 
 private:
     enum class phase { editable,
@@ -401,15 +397,14 @@ private:
         co_await resolved.stream_handler()(context_value);
     }
 
-    static task<void> dispatch_upgrade(const route_table& table, request_stream& stream, const resolved_route& resolved,
-        request_memory& memory, const context_services& services) {
+    static task<void> dispatch_upgrade(const route_table& table, request_stream& stream, const resolved_route& resolved, const context_services& services) {
         auto& context_value = stream.context_;
         const auto& request = stream.request();
         const bool websocket_route = resolved.route().endpoint().websocket() != nullptr;
         // The route exists only for the upgrade its endpoint names: a plain
         // GET, or an upgrade request carrying content, cannot reach it.
         if (websocket_route ? stream.accept_websocket_ == nullptr : !stream.tunnel_requested()) {
-            auto response = co_await table.handle_error(request, memory,
+            auto response = co_await table.handle_error(request,
                 websocket_route ? http_error_info({.status_ = http_status::bad_request,
                                       .code_ = "invalid_websocket_handshake",
                                       .message_ = "invalid WebSocket handshake"})
@@ -438,14 +433,14 @@ private:
         if (stream.response_.committed() || context_access::output_committed(context_value)) {
             std::rethrow_exception(failure);
         }
-        auto response = co_await table.handle_exception(request, memory, failure, services);
+        auto response = co_await table.handle_exception(request, failure, services);
         context_access::set_response(context_value, std::move(response));
     }
 
     phase phase_{phase::editable};
     compiled_route_plan_ptr_type plan_;
-    std::unique_ptr<route_table, pmr_object_deleter<route_table>> table_;
-    std::unique_ptr<rate_limiter, pmr_object_deleter<rate_limiter>> limiter_;
+    std::unique_ptr<route_table> table_;
+    std::unique_ptr<rate_limiter> limiter_;
     std::optional<worker_state_registry> worker_states_;
 };
 
@@ -453,8 +448,8 @@ private:
 
 namespace ruvia {
 
-router::router(worker_handle worker)
-    : state_(std::allocate_shared<detail::router_state>(std::pmr::polymorphic_allocator<detail::router_state>(process_resource()), std::move(worker))) {}
+router::router(worker_ref worker)
+    : state_(std::make_shared<detail::router_state>(std::move(worker))) {}
 router::~router() = default;
 
 router& router::add_buffered(std::string_view method, std::string_view path, router_handler handler,
@@ -482,7 +477,7 @@ router& router::add_tunnel(std::string_view protocol, std::string_view target, r
     http_tunnel_route_config config, std::span<const detail::controller_middleware_descriptor> modifiers) {
     state_->require_editable();
     state_->registrations_.emplace_back("CONNECT", target, std::move(handler), modifiers,
-        detail::router_state::tunnel_upgrade{std::pmr::string(protocol, process_resource()), config});
+        detail::router_state::tunnel_upgrade{std::string(protocol), config});
     return *this;
 }
 

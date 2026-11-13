@@ -4,19 +4,16 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_byte_range.h"
 
 namespace ruvia {
 
 // Owns copied framing metadata and ordered file-slice descriptors. Observed
-// views borrow the plan; its PMR resource must outlive it. Construction and
-// clone propagate allocation failures.
+// views borrow the plan. Construction and clone propagate allocation failures.
 class http_multipart_byte_range_plan final {
 public:
     enum class segment_kind : std::uint8_t {
@@ -56,34 +53,28 @@ public:
     [[nodiscard]] std::uint64_t content_length() const noexcept {
         return state_ == nullptr ? 0 : state_->content_length_;
     }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return state_.get_deleter().resource_;
-    }
-    [[nodiscard]] http_multipart_byte_range_plan clone(
-        std::pmr::memory_resource* resource) const;
+    [[nodiscard]] http_multipart_byte_range_plan clone() const;
 
 private:
     friend http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
-        const http_byte_range_set&, http_content_length, std::string_view, std::string_view, std::pmr::memory_resource*);
+        const http_byte_range_set&, http_content_length, std::string_view, std::string_view);
 
     struct storage final {
         static constexpr std::size_t max_segments = http_byte_range_set::capacity * 2 + 1;
 
-        explicit storage(std::pmr::memory_resource* resource)
-            : content_type_(std::string_view{}, resource),
-              metadata_(std::string_view{}, resource) {}
+        storage() = default;
 
-        std::pmr::string content_type_;
-        std::pmr::string metadata_;
+        std::string content_type_;
+        std::string metadata_;
         std::array<segment, max_segments> segments_{};
         std::size_t segment_count_{};
         std::uint64_t content_length_{};
     };
 
-    explicit http_multipart_byte_range_plan(std::pmr::memory_resource* resource)
-        : state_(detail::make_http_pmr_object<storage>(resource, resource)) {}
+    http_multipart_byte_range_plan()
+        : state_(std::make_unique<storage>()) {}
 
-    std::unique_ptr<storage, detail::http_pmr_object_deleter<storage>> state_;
+    std::unique_ptr<storage> state_;
 };
 
 // Each body part carries the selected representation's Content-Type and its
@@ -93,6 +84,6 @@ private:
 // representation with the full representation instead.
 [[nodiscard]] http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, http_content_length representation_length,
-    std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource);
+    std::string_view media_type, std::string_view boundary);
 
 }  // namespace ruvia

@@ -9,7 +9,6 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -20,8 +19,7 @@
 #include <asio/post.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 // The dispatcher's state, declared here because two translation units own parts
@@ -142,7 +140,7 @@ public:
     void close() noexcept;
     // Called after worker activity is serialized with teardown (by a joined
     // pool thread, an attached context's terminal handler, or its context
-    // service). Handles remain safe terminal endpoints. It never runs inside
+    // service). Worker refs remain safe terminal endpoints. It never runs inside
     // run_context(): the owned runtime detaches after run_context() returns,
     // and attached contexts are driven without worker identity. The lock-free
     // on-worker paths rely on this.
@@ -247,10 +245,10 @@ private:
         std::size_t slot, std::uint64_t generation) noexcept;
 
     asio::io_context& io_context_;
-    std::unique_ptr<asio::steady_timer, pmr_object_deleter<asio::steady_timer>> timer_;
+    std::unique_ptr<asio::steady_timer> timer_;
     std::size_t capacity_;
     ruvia::blocking_pool* const blocking_pool_;
-    std::pmr::vector<node_type> nodes_;
+    std::vector<node_type> nodes_;
     mutable std::mutex mutex_;
     std::condition_variable pending_changed_;
     std::size_t free_head_{no_node};
@@ -273,8 +271,8 @@ private:
     std::mutex hooks_mutex_;
     worker_shutdown_registration* hooks_head_{nullptr};
     worker_shutdown_registration* hooks_tail_{nullptr};
-    std::pmr::vector<timer_entry> timers_;
-    std::pmr::deque<timer_slot> timer_slots_;
+    std::vector<timer_entry> timers_;
+    std::deque<timer_slot> timer_slots_;
     std::size_t free_timer_slot_{no_timer_slot};
     std::uint64_t next_timer_sequence_{0};
     std::uint64_t timer_generation_{0};

@@ -7,9 +7,8 @@
 #include <asio/ssl/context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 
 #include "client/client_lifecycle.h"
 #include "client/client_tls.h"
@@ -27,7 +26,7 @@ namespace {
 }
 
 void validate_redis_registry(
-    const worker_handle& worker_value, std::span<const redis_definition_type> redis) {
+    const worker_ref& worker_value, std::span<const redis_definition_type> redis) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("redis registry requires a valid worker");
     }
@@ -37,15 +36,15 @@ void validate_redis_registry(
 }  // namespace
 
 redis_registry::redis_registry(asio::io_context& io_context,
-    std::span<const redis_definition_type> redis, worker_handle worker_value)
-    : runtimes_(process_resource()),
-      alias_index_(process_resource()) {
+    std::span<const redis_definition_type> redis, worker_ref worker_value)
+    : runtimes_(),
+      alias_index_() {
     validate_redis_registry(worker_value, redis);
     alias_index_.build(redis);
     runtimes_.reserve(redis.size());
     for (const auto& definition : redis) {
-        runtimes_.push_back(make_pmr_object<redis_client_runtime>(process_resource(), io_context, worker_value,
-            redis_config_storage(definition.config_, process_resource())));
+        runtimes_.push_back(std::make_unique<redis_client_runtime>(io_context, worker_value,
+            redis_config_storage(definition.config_)));
     }
 }
 
@@ -68,24 +67,24 @@ bool redis_registry::empty() const noexcept {
     return runtimes_.empty();
 }
 
-redis_handle redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
+redis_session redis_registry::get(::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto default_pool_index = alias_index_.default_index();
     if (!default_pool_index.has_value()) {
         throw redis_error(redis_error::code_type::not_configured, "default redis is not configured");
     }
-    return runtimes_[*default_pool_index]->handle(operation_scope, io_metrics);
+    return runtimes_[*default_pool_index]->session(operation_scope, io_metrics);
 }
 
-redis_handle redis_registry::get(
+redis_session redis_registry::get(
     std::string_view alias, ::ruvia::operation_scope& operation_scope, request_io_metrics* io_metrics) const {
     const auto match = alias_index_.find(alias);
     if (match.has_value()) {
-        return runtimes_[*match]->handle(operation_scope, io_metrics);
+        return runtimes_[*match]->session(operation_scope, io_metrics);
     }
     throw redis_error(redis_error::code_type::not_configured, "redis is not configured");
 }
 
-redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_handle& worker_value,
+redis_client_runtime::redis_client_runtime(asio::io_context& io_context, const worker_ref& worker_value,
     redis_config_storage config)
     : config_(std::move(config)),
       worker_(worker_value),
@@ -112,12 +111,12 @@ void redis_client_runtime::close_now() noexcept {
     subscriptions_.close_now();
 }
 
-redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
-    return redis_handle(*this, process_resource(), scope, io_metrics);
+redis_session redis_client_runtime::session(::ruvia::operation_scope& scope, request_io_metrics* io_metrics) {
+    return redis_session(*this, scope, io_metrics);
 }
 
-redis_handle redis_client_runtime::handle(::ruvia::operation_scope& scope, operation_options options) {
-    return redis_handle(*this, process_resource(), scope, std::move(options));
+redis_session redis_client_runtime::session(::ruvia::operation_scope& scope, operation_options options) {
+    return redis_session(*this, scope, std::move(options));
 }
 
 class redis_client_state final : public std::enable_shared_from_this<redis_client_state> {
@@ -139,9 +138,9 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] redis_handle redis();
+    [[nodiscard]] redis_session redis();
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -154,28 +153,28 @@ private:
     }
 
     event_loop loop_;
-    worker_handle worker_;
+    worker_ref worker_;
     redis_client_runtime runtime_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<redis_client_state> lifecycle_;
 };
 redis_client_state::redis_client_state(event_loop loop, const redis_config& config)
     : loop_(client_lifecycle<redis_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.handle()),
-      runtime_(loop_.io_context(), worker_, redis_config_storage(config, process_resource())),
+      worker_(loop_.worker()),
+      runtime_(loop_.io_context(), worker_, redis_config_storage(config)),
       lifecycle_(*this, loop_, worker_) {}
 
 void redis_client_state::throw_not_ready() {
     throw std::logic_error("redis client is not connected");
 }
 
-redis_handle redis_client_state::redis() {
+redis_session redis_client_state::redis() {
     lifecycle_.require_ready();
     // Unbounded blocking commands/subscriptions require an explicit lifetime.
     // Use the client's lifetime as the default, not as an extra user source.
     // A with_options() token replaces it; runtime_.close_now() independently
     // cancels all command pools and subscriptions during client shutdown.
-    return runtime_.handle(lifecycle_.operation_scope(), {.stop_token_ = lifecycle_.token()});
+    return runtime_.session(lifecycle_.operation_scope(), {.stop_token_ = lifecycle_.token()});
 }
 
 }  // namespace ruvia::detail
@@ -183,9 +182,7 @@ redis_handle redis_client_state::redis() {
 namespace ruvia {
 
 redis_client::redis_client(event_loop loop, const redis_config& config)
-    : state_(std::allocate_shared<detail::redis_client_state>(
-          std::pmr::polymorphic_allocator<detail::redis_client_state>(process_resource()),
-          std::move(loop), config)) {
+    : state_(std::make_shared<detail::redis_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 
@@ -197,7 +194,7 @@ task<void> redis_client::connect() & {
     return state_->connect();
 }
 
-redis_handle redis_client::redis() const& {
+redis_session redis_client::redis() const& {
     return state_->redis();
 }
 
@@ -209,7 +206,7 @@ task<void> redis_client::shutdown() & {
     return state_->shutdown();
 }
 
-const worker_handle& redis_client::worker() const& noexcept {
+const worker_ref& redis_client::worker() const& noexcept {
     return state_->worker();
 }
 

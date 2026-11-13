@@ -13,9 +13,8 @@
 #include <openssl/crypto.h>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_pmr_string.h"
 
 #include "redis/redis_protocol.h"
 
@@ -81,10 +80,10 @@ void redis_reader_deleter::operator()(redisReader* reader_value) const noexcept 
 }
 
 redis_connection::redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context,
-    const worker_handle& worker_value, const redis_config_storage& config, client_wire_counters& counters)
+    const worker_ref& worker_value, const redis_config_storage& config, client_wire_counters& counters)
     : config_(config),
       transport_(io_context, tls_context, worker_value, redis_endpoint(config), counters),
-      write_buffer_(process_resource()) {}
+      write_buffer_() {}
 
 redis_connection::~redis_connection() = default;
 
@@ -113,7 +112,7 @@ void redis_connection::throw_if_aborted() const {
 void redis_connection::ensure_reader() {
     if (reply_builder_ == nullptr) {
         reply_builder_ =
-            make_pmr_object<redis_reply_builder>(process_resource(), config_.max_reply_bytes_, config_.max_array_depth_);
+            std::make_unique<redis_reply_builder>(config_.max_reply_bytes_, config_.max_array_depth_);
     }
     if (reader_ == nullptr) {
         reader_.reset(reply_builder_->create_reader());
@@ -123,14 +122,14 @@ void redis_connection::ensure_reader() {
 
 task<void> redis_connection::write_request(const operation_deadline& timeout, redis_request_content content) {
     struct request_buffer_release final {
-        std::pmr::string& buffer_;
+        std::string& buffer_;
         redis_request_content content_;
 
         ~request_buffer_release() noexcept {
             if (content_ == redis_request_content::credential) {
                 OPENSSL_cleanse(buffer_.data(), buffer_.size());
             }
-            http_clear_pmr_string_retaining_small(buffer_, redis_retained_write_buffer_bytes);
+            http_clear_string_retaining_small(buffer_, redis_retained_write_buffer_bytes);
         }
     } release{write_buffer_, content};
     // Closing the socket does not end an in-flight write's borrow. Retire the
@@ -142,13 +141,13 @@ task<void> redis_connection::write_request(const operation_deadline& timeout, re
     }
 }
 
-task<redis_value> redis_connection::read_reply(const operation_deadline& timeout, std::pmr::memory_resource* resource,
+task<redis_value> redis_connection::read_reply(const operation_deadline& timeout,
     std::chrono::steady_clock::time_point* input_time) {
     if (!connected_) {
         throw redis_error(redis_error::code_type::io_error, "redis connection is closed");
     }
     ensure_reader();
-    reply_builder_->begin(pmr_resource_or_default(resource));
+    reply_builder_->begin();
     for (;;) {
         const auto unread_before = reader_->len - reader_->pos;
         void* raw_reply = nullptr;
@@ -283,7 +282,7 @@ task<redis_value> redis_connection::exchange_control_command(
     write_buffer_.clear();
     append_resp_command(write_buffer_, args);
     co_await write_request(deadline, content);
-    co_return co_await read_reply(deadline, process_resource());
+    co_return co_await read_reply(deadline);
 }
 
 }  // namespace ruvia::detail

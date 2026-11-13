@@ -4,7 +4,6 @@
 
 #include <array>
 #include <chrono>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,14 +14,12 @@
 #include <vector>
 
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/web/db/db_schema.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
 #include "db_migration_fixture.h"
-#include "failing_memory_resource.h"
 
 #if defined(RUVIA_ENABLE_POSTGRESQL) || defined(RUVIA_ENABLE_MARIADB)
 namespace {
@@ -34,10 +31,9 @@ void check_unverifiable_history(
     config.driver_ = driver;
     config.username_ = "test";
     config.query_timeout_ = std::chrono::seconds(2);
-    ruvia::test::failing_memory_resource resource;
     bool rejected = false;
     try {
-        (void)ruvia::test::run_db_migration(config, migrations, {.resource_ = &resource});
+        (void)ruvia::test::run_db_migration(config, migrations);
     } catch (const ruvia::db_error&) {
         // A scripted wire error is not evidence of history validation.
         throw;
@@ -45,7 +41,6 @@ void check_unverifiable_history(
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }
 
 [[nodiscard]] ruvia::db_config scripted_config(ruvia::test::backend_startup_peer& peer, ruvia::db_driver driver) {
@@ -92,7 +87,7 @@ TEST(Ruvia, db_migrator_rejects_sql_with_embedded_nul) {
     bool nul_sql_rejected = false;
     try {
         const std::array<ruvia::db_migration, 1> bad_migrations{{
-            ruvia::db_migration{{.id_ = "001", .sql_ = std::pmr::string("SELECT 1\0", 9, ruvia::process_resource())}},
+            ruvia::db_migration{{.id_ = "001", .sql_ = std::string("SELECT 1\0", 9)}},
         }};
         (void)ruvia::test::run_db_migration(
             ruvia::db_config{.driver_ = ruvia::db_driver::postgresql}, bad_migrations);
@@ -108,15 +103,14 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_postgresql_history) {
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
         peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-            std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("SET", ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("pg_advisory_lock", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("RESET", ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("CREATE TABLE", ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("?column?", ruvia::process_resource()), .type_ = 23, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("checksum", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("", ruvia::process_resource())}, ruvia::process_resource()), .null_rows_ = std::pmr::vector<bool>(1, null, ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("UPDATE 1", ruvia::process_resource())},
-                                                                                    {.column_ = std::pmr::string("pg_advisory_unlock", ruvia::process_resource()), .type_ = 16, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("t", ruvia::process_resource())}, ruvia::process_resource())}},
-                ruvia::process_resource()));
+            std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")},
+                {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})},
+                {.column_ = std::string(""), .command_ = std::string("RESET")},
+                {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")},
+                {.column_ = std::string("?column?"), .type_ = 23, .rows_ = std::vector<std::string>({std::string("1")})},
+                {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)},
+                {.column_ = std::string(""), .command_ = std::string("UPDATE 1")},
+                {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
         check_unverifiable_history(peer, ruvia::db_driver::postgresql, migrations);
     }
 }
@@ -124,14 +118,13 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_postgresql_history) {
 TEST(Ruvia, db_migrator_rejects_postgresql_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("SET", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("pg_advisory_lock", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("RESET", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("CREATE TABLE", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("?column?", ruvia::process_resource()), .type_ = 23},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("ALTER TABLE", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("pg_advisory_unlock", ruvia::process_resource()), .type_ = 16, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("t", ruvia::process_resource())}, ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("SET")},
+            {.column_ = std::string("pg_advisory_lock"), .rows_ = std::vector<std::string>({std::string("")})},
+            {.column_ = std::string(""), .command_ = std::string("RESET")},
+            {.column_ = std::string(""), .command_ = std::string("CREATE TABLE")},
+            {.column_ = std::string("?column?"), .type_ = 23},
+            {.column_ = std::string(""), .command_ = std::string("ALTER TABLE")},
+            {.column_ = std::string("pg_advisory_unlock"), .type_ = 16, .rows_ = std::vector<std::string>({std::string("t")})}}));
     check_unverifiable_history(peer, ruvia::db_driver::postgresql, {});
 }
 
@@ -143,19 +136,16 @@ TEST(Ruvia, db_migrator_fails_once_its_locked_session_is_lost) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration(
         {.id_ = "001", .sql_ = "BEGIN", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
-    peer_type peer(std::pmr::vector<std::pmr::vector<peer_type::postgres_reply>>({std::pmr::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-                                                                                                                                  {.column_ = "pg_advisory_lock", .rows_ = {""}},
-                                                                                                                                  {.column_ = "", .command_ = "RESET"},
-                                                                                                                                  {.column_ = "", .command_ = "CREATE TABLE"},
-                                                                                                                                  {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
-                                                                                                                                  {.column_ = "checksum"},
-                                                                                                                                  {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}},
-                                                                                      ruvia::process_resource()),
-                                                                                     std::pmr::vector<peer_type::postgres_reply>(  // A replacement session, which never took the lock.
-                                                                                         {{.column_ = "", .command_ = "INSERT 0 1"},
-                                                                                             {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}},
-                                                                                         ruvia::process_resource())},
-        ruvia::process_resource()));
+    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
+                                                                            {.column_ = "pg_advisory_lock", .rows_ = {""}},
+                                                                            {.column_ = "", .command_ = "RESET"},
+                                                                            {.column_ = "", .command_ = "CREATE TABLE"},
+                                                                            {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
+                                                                            {.column_ = "checksum"},
+                                                                            {.column_ = "", .command_ = "BEGIN", .status_ = 'T'}}),
+        std::vector<peer_type::postgres_reply>(  // A replacement session, which never took the lock.
+            {{.column_ = "", .command_ = "INSERT 0 1"},
+                {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
     auto config = peer.config();
     config.username_ = "test";
     config.query_timeout_ = std::chrono::seconds(2);
@@ -189,17 +179,15 @@ TEST(Ruvia, db_migrator_applies_and_records_postgresql_migrations_on_the_callers
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration(
         {.id_ = "001", .sql_ = "CREATE TABLE t(id INT)", .atomicity_ = ruvia::db_migration_atomicity::unwrapped})};
-    peer_type peer(std::pmr::vector<std::pmr::vector<peer_type::postgres_reply>>({std::pmr::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-                                                                                                                                  {.column_ = "pg_advisory_lock", .rows_ = {""}},
-                                                                                                                                  {.column_ = "", .command_ = "RESET"},
-                                                                                                                                  {.column_ = "", .command_ = "CREATE TABLE"},
-                                                                                                                                  {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
-                                                                                                                                  {.column_ = "checksum"},
-                                                                                                                                  {.column_ = "", .command_ = "CREATE TABLE"},
-                                                                                                                                  {.column_ = "", .command_ = "INSERT 0 1"},
-                                                                                                                                  {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}},
-                                                                                     ruvia::process_resource())},
-        ruvia::process_resource()));
+    peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
+        {.column_ = "pg_advisory_lock", .rows_ = {""}},
+        {.column_ = "", .command_ = "RESET"},
+        {.column_ = "", .command_ = "CREATE TABLE"},
+        {.column_ = "?column?", .type_ = 23, .rows_ = {"1"}},
+        {.column_ = "checksum"},
+        {.column_ = "", .command_ = "CREATE TABLE"},
+        {.column_ = "", .command_ = "INSERT 0 1"},
+        {.column_ = "pg_advisory_unlock", .type_ = 16, .rows_ = {"t"}}})}));
     const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::postgresql), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
     EXPECT_EQ(report.applied()[0], "001");
@@ -214,14 +202,12 @@ TEST(Ruvia, db_migrator_postgresql_run_ends_on_cancellation_and_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const bool cancel : {true, false}) {
         SCOPED_TRACE(cancel ? "cancelled" : "timed out");
-        peer_type peer(std::pmr::vector<std::pmr::vector<peer_type::postgres_reply>>({std::pmr::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
-                                                                                                                                      {.column_ = "pg_advisory_lock", .rows_ = {""}, .hold_ = 1}},
-                                                                                         ruvia::process_resource())},
-            ruvia::process_resource()));
+        peer_type peer(std::vector<std::vector<peer_type::postgres_reply>>({std::vector<peer_type::postgres_reply>({{.column_ = "", .command_ = "SET"},
+            {.column_ = "pg_advisory_lock", .rows_ = {""}, .hold_ = 1}})}));
         ruvia::stop_source stop;
         const auto lock_requested = [&] {
             for (const auto& parse : peer.postgres_parses()) {
-                if (parse.sql_.find("pg_advisory_lock") != std::pmr::string::npos) {
+                if (parse.sql_.find("pg_advisory_lock") != std::string::npos) {
                     return true;
                 }
             }
@@ -280,13 +266,12 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_mariadb_history) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE t(id INT)"})};
     for (const bool null : {false, true}) {
-        peer_type peer(std::pmr::vector<peer_type::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                    {.column_ = std::pmr::string("", ruvia::process_resource())},
-                                                                    {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                    {.column_ = std::pmr::string("checksum", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("", ruvia::process_resource())}, ruvia::process_resource()), .null_rows_ = std::pmr::vector<bool>(1, null, ruvia::process_resource())},
-                                                                    {.column_ = std::pmr::string("", ruvia::process_resource()), .affected_rows_ = 1},
-                                                                    {.column_ = std::pmr::string("", ruvia::process_resource())}},
-                           ruvia::process_resource()),
+        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
+                           {.column_ = std::string("")},
+                           {.rows_ = std::vector<std::string>({std::string("1")})},
+                           {.column_ = std::string("checksum"), .rows_ = std::vector<std::string>({std::string("")}), .null_rows_ = std::vector<bool>(1, null)},
+                           {.column_ = std::string(""), .affected_rows_ = 1},
+                           {.column_ = std::string("")}}),
             peer_type::after_startup::idle);
         check_unverifiable_history(peer, ruvia::db_driver::mariadb, migrations);
     }
@@ -294,12 +279,11 @@ TEST(Ruvia, db_migrator_rejects_unverifiable_mariadb_history) {
 
 TEST(Ruvia, db_migrator_rejects_mariadb_history_without_a_digest_column) {
     using peer_type = ruvia::test::backend_startup_peer;
-    peer_type peer(std::pmr::vector<peer_type::maria_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                {.column_ = std::pmr::string("", ruvia::process_resource())},
-                                                                {},
-                                                                {.column_ = std::pmr::string("", ruvia::process_resource())},
-                                                                {.column_ = std::pmr::string("", ruvia::process_resource())}},
-                       ruvia::process_resource()),
+    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = std::vector<std::string>({std::string("1")})},
+                       {.column_ = std::string("")},
+                       {},
+                       {.column_ = std::string("")},
+                       {.column_ = std::string("")}}),
         peer_type::after_startup::idle);
     check_unverifiable_history(peer, ruvia::db_driver::mariadb, {});
 }
@@ -307,14 +291,13 @@ TEST(Ruvia, db_migrator_rejects_mariadb_history_without_a_digest_column) {
 TEST(Ruvia, db_migrator_applies_and_records_mariadb_migrations_on_the_callers_loop) {
     using peer_type = ruvia::test::backend_startup_peer;
     const std::array migrations{ruvia::db_migration({.id_ = "001", .sql_ = "CREATE TABLE IF NOT EXISTS t(id INT)"})};
-    peer_type peer(std::pmr::vector<peer_type::maria_reply>({{.rows_ = {"1"}},
-                                                                {.column_ = ""},
-                                                                {.rows_ = {"1"}},
-                                                                {.column_ = "checksum"},
-                                                                {.column_ = ""},
-                                                                {.column_ = "", .affected_rows_ = 1},
-                                                                {.column_ = ""}},
-                       ruvia::process_resource()),
+    peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}},
+                       {.column_ = ""},
+                       {.rows_ = {"1"}},
+                       {.column_ = "checksum"},
+                       {.column_ = ""},
+                       {.column_ = "", .affected_rows_ = 1},
+                       {.column_ = ""}}),
         peer_type::after_startup::idle);
     const auto report = ruvia::test::run_db_migration(scripted_config(peer, ruvia::db_driver::mariadb), migrations);
     ASSERT_EQ(report.applied().size(), std::size_t{1});
@@ -326,12 +309,12 @@ TEST(Ruvia, db_migrator_mariadb_run_ends_on_cancellation_and_timeout) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const bool cancel : {true, false}) {
         SCOPED_TRACE(cancel ? "cancelled" : "timed out");
-        peer_type peer(std::pmr::vector<peer_type::maria_reply>({{.rows_ = {"1"}, .hold_ = 1}}, ruvia::process_resource()),
+        peer_type peer(std::vector<peer_type::maria_reply>({{.rows_ = {"1"}, .hold_ = 1}}),
             peer_type::after_startup::idle);
         ruvia::stop_source stop;
         const auto lock_requested = [&] {
             for (const auto& command : peer.maria_commands()) {
-                if (command.find("GET_LOCK") != std::pmr::string::npos) {
+                if (command.find("GET_LOCK") != std::string::npos) {
                     return true;
                 }
             }

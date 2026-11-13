@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <stdexcept>
@@ -17,10 +16,9 @@
 #include <vector>
 
 #include "ruvia/core/detail/suspend_race_state.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait.h"
 #include "ruvia/core/worker_wait_result.h"
 
@@ -47,7 +45,6 @@ struct channel_options final {
     // already assigned to a receiver while the buffer fills again.
     // A send may report full while every slot is temporarily in use.
     std::size_t capacity_{0};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 template <typename t_type>
@@ -77,10 +74,9 @@ struct channel_state final {
         return capacity + 1;
     }
 
-    channel_state(
-        worker_handle target, std::size_t requested_capacity, std::pmr::memory_resource* resource)
+    channel_state(worker_ref target, std::size_t requested_capacity)
         : worker_(std::move(target)),
-          slots_(slot_count(requested_capacity), resource),
+          slots_(slot_count(requested_capacity)),
           capacity_(requested_capacity) {
         if (!worker_.valid()) {
             throw std::invalid_argument("channel requires a valid worker");
@@ -95,7 +91,7 @@ struct channel_state final {
         return std::unique_lock(mutex_);
     }
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -217,9 +213,9 @@ struct channel_state final {
 
     // First member: unlinks from the worker registry after every other member is gone.
     worker_shutdown_registration shutdown_registration_;
-    worker_handle worker_;
+    worker_ref worker_;
     std::mutex mutex_;
-    std::pmr::vector<node> slots_;
+    std::vector<node> slots_;
     const std::size_t capacity_;
     node* free_{nullptr};
     node* head_{nullptr};
@@ -325,7 +321,7 @@ public:
             complete_ready({channel_send_status::closed, nullptr});
             return true;
         }
-        auto worker_value = detail::worker_handle_access::current();
+        auto worker_value = detail::worker_ref_access::current();
         if (!worker_value.valid()) {
             throw std::logic_error("channel send_wait must be awaited on a worker");
         }
@@ -357,7 +353,7 @@ public:
         return false;
     }
 
-    [[nodiscard]] bool await_suspend(std::coroutine_handle<> handle) {
+    [[nodiscard]] bool await_suspend(std::coroutine_handle<> continuation) {
         auto& state = *state_;
         bool suspended = false;
         {
@@ -379,7 +375,7 @@ public:
                     (void)completion_.complete({channel_send_status::worker_stopping, nullptr});
                 }
             }
-            suspended = completion_.suspend(handle);
+            suspended = completion_.suspend(continuation);
         }
         // Registered only once the wait really suspends; a stop already
         // requested runs the callback inline and completes the wait.
@@ -485,7 +481,7 @@ private:
     std::optional<t_type> value_;
     std::optional<operation_timeout> timeout_;
     stop_token stop_token_;
-    worker_handle worker_;
+    worker_ref worker_;
     std::optional<std::chrono::steady_clock::time_point> deadline_;
     // Queue links, guarded by the state lock.
     channel_send_operation* previous_{nullptr};
@@ -642,7 +638,7 @@ private:
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
     template <typename u_type>
-    friend auto make_channel(worker_handle, channel_options);
+    friend auto make_channel(worker_ref, channel_options);
 };
 
 template <typename t_type>
@@ -695,8 +691,8 @@ public:
             return wait_.complete_or_publish("channel supports one pending receiver");
         }
 
-        bool await_suspend(std::coroutine_handle<> handle) {
-            return wait_.suspend(handle);
+        bool await_suspend(std::coroutine_handle<> continuation) {
+            return wait_.suspend(continuation);
         }
 
         [[nodiscard]] worker_wait_result<t_type> await_resume() {
@@ -734,13 +730,13 @@ public:
     // The worker every receive must run on. Makes the receive-side affinity
     // contract queryable instead of only failing at await time. A moved-from
     // receiver has no bound worker and cannot answer this query.
-    [[nodiscard]] const worker_handle& worker() const& noexcept {
+    [[nodiscard]] const worker_ref& worker() const& noexcept {
         if (!state_) {
             std::terminate();
         }
         return state_->worker_;
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     // Retire the receive side: buffered values are destroyed on the calling
     // thread and later receives report closed. Worker shutdown keeps its
@@ -761,17 +757,16 @@ private:
 
     std::shared_ptr<detail::channel_state<t_type>> state_;
     template <typename u_type>
-    friend auto make_channel(worker_handle, channel_options);
+    friend auto make_channel(worker_ref, channel_options);
 };
 
 template <typename t_type>
-// The value parameter accepts both lvalue handles and rvalue handles before
+// The value parameter accepts both lvalue and rvalue worker refs before
 // transferring the stable dispatcher endpoint into the channel state.
 // NOLINTNEXTLINE(performance-unnecessary-value-param)
-[[nodiscard]] auto make_channel(worker_handle worker_value, channel_options options) {
-    auto* resolved = pmr_resource_or_default(options.resource_);
+[[nodiscard]] auto make_channel(worker_ref worker_value, channel_options options) {
     auto state_value = make_worker_wait_state<detail::channel_state<t_type>>(
-        resolved, std::move(worker_value), options.capacity_, resolved);
+        std::move(worker_value), options.capacity_);
     channel_sender<t_type> sender(state_value);
     return std::pair(std::move(sender), channel_receiver<t_type>(std::move(state_value)));
 }

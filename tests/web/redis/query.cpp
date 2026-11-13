@@ -2,17 +2,14 @@
 
 #include <cstdint>
 #include <iterator>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/redis/redis_repository.h"
 
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 
 namespace {
@@ -23,15 +20,8 @@ RUVIA_REDIS_ENTITY(redis_query_user, "query-user",
 }
 
 TEST(Ruvia, redis_predicate_composition_moves_source_and_preserves_range) {
-    ruvia::test::counting_memory_resource resource;
-    struct default_resource_guard {
-        std::pmr::memory_resource* previous_;
-        ~default_resource_guard() {
-            std::pmr::set_default_resource(previous_);
-        }
-    } guard_value{std::pmr::set_default_resource(&resource)};
     {
-        std::pmr::string text(200, 'x', ruvia::process_resource());
+        std::string text(200, 'x');
         auto filter = redis_query_user::column<"email">() == text;
         text.assign(200, 'y');
         auto range = redis_query_user::column<"age">().between(18, 65);
@@ -40,17 +30,9 @@ TEST(Ruvia, redis_predicate_composition_moves_source_and_preserves_range) {
         EXPECT_TRUE(!options.where_.empty());
         EXPECT_TRUE(!range.empty());
     }
-    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 TEST(Ruvia, redis_predicate_supports_copy_and_where_or_where_combination) {
-    ruvia::test::counting_memory_resource resource;
-    struct default_resource_guard {
-        std::pmr::memory_resource* previous_;
-        ~default_resource_guard() {
-            std::pmr::set_default_resource(previous_);
-        }
-    } guard_value{std::pmr::set_default_resource(&resource)};
     {
         auto base = redis_query_user::column<"email">() == "alice@example.com";
         auto copied = base;
@@ -62,7 +44,6 @@ TEST(Ruvia, redis_predicate_supports_copy_and_where_or_where_combination) {
         combined.or_where(redis_query_user::column<"age">() >= 21);
         EXPECT_TRUE(!combined.empty());
     }
-    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
 }
 
 namespace {
@@ -118,7 +99,6 @@ static_assert(!borrows_temporary_command<ruvia::redis_compiled_command>);
 }  // namespace
 
 TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
-    ruvia::test::counting_memory_resource resource;
     auto command = [&] {
         std::string prefix = "offline:users";
         std::string column = "email";
@@ -126,7 +106,7 @@ TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
             .prefix_ = prefix,
             .indexes_ = {{.column_ = column, .kind_ = ruvia::redis_index_kind::tag, .sortable_ = true}},
         };
-        const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(config, &resource);
+        const auto mapping = ruvia::redis_search_mapping::create<redis_query_user>(config);
         prefix.assign("changed");
         column.assign("age");
         std::string text("a|{ }\0", 6);
@@ -148,9 +128,6 @@ TEST(Ruvia, redis_search_compilation_owns_configuration_and_binary_predicates) {
     EXPECT_EQ(args[5], "3");
     EXPECT_EQ(args[7], "__ruvia_sort_email");
     EXPECT_EQ(args[8], "DESC");
-    for (const auto& argument : args) {
-        EXPECT_EQ(argument.get_allocator().resource(), &resource);
-    }
 }
 
 TEST(Ruvia, redis_search_mapping_rejects_invalid_schema_and_query_fields_offline) {
@@ -186,54 +163,24 @@ TEST(Ruvia, redis_search_compilation_preserves_empty_tag_and_zero_first_page) {
     EXPECT_EQ(count.arguments()[5], "0");
 }
 
-TEST(Ruvia, redis_search_mapping_and_commands_rebind_equivalent_resource_owners) {
-    ruvia::test::counting_memory_resource upstream;
-    ruvia::test::equivalent_tracking_resource source_resource(upstream);
-    ruvia::test::equivalent_tracking_resource destination_resource(upstream);
-    {
-        auto destination = ruvia::redis_search_mapping::create<redis_query_user>({}, &destination_resource);
-        auto command = destination.compile_drop_index();
-        {
-            auto source = ruvia::redis_search_mapping::create<redis_query_user>(search_config, &source_resource);
-            const auto copy = source;
-            EXPECT_EQ(copy.resource(), &source_resource);
-            const auto copied_command = copy.compile_create_index();
-            const auto command_copy = copied_command;
-            EXPECT_EQ(command_copy.resource(), &source_resource);
-            destination = source;
-            destination = std::move(source);
-            command = copied_command;
-            auto moved_command = copy.compile_create_index();
-            command = std::move(moved_command);
-        }
-        source_resource.retire();
-        EXPECT_EQ(destination.resource(), &destination_resource);
-        EXPECT_EQ(command.resource(), &destination_resource);
-        const auto recreated = destination.compile_create_index();
-        ASSERT_EQ(command.arguments().size(), recreated.arguments().size());
-        for (std::size_t i = 0; i != command.arguments().size(); ++i) {
-            EXPECT_EQ(command.arguments()[i], recreated.arguments()[i]);
-            EXPECT_EQ(command.arguments()[i].get_allocator().resource(), &destination_resource);
-        }
-    }
-    EXPECT_EQ(source_resource.callbacks_after_retirement(), std::size_t{0});
-    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-}
-
-TEST(Ruvia, redis_search_assignment_failure_preserves_destination_schema_and_command) {
-    ruvia::test::counting_memory_resource resource;
-    auto destination = ruvia::redis_search_mapping::create<redis_query_user>(
-        {.prefix_ = "destination"}, &resource);
+TEST(Ruvia, redis_search_mapping_and_commands_support_copy_and_move_assignment) {
+    auto destination = ruvia::redis_search_mapping::create<redis_query_user>({});
     auto command = destination.compile_drop_index();
-    const auto source = ruvia::redis_search_mapping::create<redis_query_user>(search_config);
-    const auto source_command = source.compile_create_index();
-    resource.reject_allocations();
-    EXPECT_THROW(destination = source, std::bad_alloc);
-    EXPECT_THROW(command = source_command, std::bad_alloc);
-    resource.reject_allocations(false);
-    const auto retained = destination.compile_drop_index();
-    EXPECT_EQ(retained.arguments()[1], "destination:idx");
-    EXPECT_EQ(command.arguments()[1], "destination:idx");
+    {
+        auto source = ruvia::redis_search_mapping::create<redis_query_user>(search_config);
+        const auto copy = source;
+        const auto copied_command = copy.compile_create_index();
+        destination = source;
+        destination = std::move(source);
+        command = copied_command;
+        auto moved_command = copy.compile_create_index();
+        command = std::move(moved_command);
+    }
+    const auto recreated = destination.compile_create_index();
+    ASSERT_EQ(command.arguments().size(), recreated.arguments().size());
+    for (std::size_t i = 0; i != command.arguments().size(); ++i) {
+        EXPECT_EQ(command.arguments()[i], recreated.arguments()[i]);
+    }
 }
 
 TEST(Ruvia, redis_search_index_compilation_keeps_tag_shadows_and_documents) {

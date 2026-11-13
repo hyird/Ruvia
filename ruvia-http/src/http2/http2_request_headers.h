@@ -7,15 +7,30 @@
 #include "ruvia/http/http_known_method.h"
 
 #include "coding/http_content_length.h"
+#include "field/binary_field_section_size.h"
+#include "field/http_connection_fields.h"
 #include "field/http_field_kind.h"
 #include "field/http_request_field_validation.h"
 #include "field/http_te_fields.h"
-#include "http2/http2_header_rules.h"
 #include "http2/http2_stream_state.h"
 #include "parser/http_request_target.h"
 #include "request/http_binary_request_fields.h"
 
 namespace ruvia::detail {
+
+// SETTINGS_MAX_HEADER_LIST_SIZE limits the decoded field section, not the
+// serialized HPACK block. Huffman coding can spend up to 30 bits per decoded
+// octet, so four encoded bytes per decoded-budget byte bound a valid block while
+// keeping a hard memory limit for incomplete CONTINUATION sequences.
+inline constexpr std::size_t max_http2_encoded_header_block_bytes = 4 * max_http_header_bytes;
+
+// Request TE values are validated with the other request-field semantics
+// (validate_request_field: only "trailers", RFC 9113 Section 8.2.2).
+[[nodiscard]] inline bool http2_is_valid_regular_header(
+    std::string_view name, std::string_view value) noexcept {
+    return is_valid_binary_field_name(name) && is_valid_http_header_value(value) &&
+           !is_forbidden_http_binary_connection_field(name);
+}
 
 struct http2_header_decode_context final {
     explicit http2_header_decode_context(http2_stream_state& stream_value) noexcept
@@ -134,7 +149,7 @@ struct http2_header_decode_context final {
             return true;
         }
         if (name == ":path") {
-            if (stream.has_path() || (!value.empty() && !is_valid_origin_or_asterisk_form_target(http_known_method::options, value))) {
+            if (stream.has_path() || value.empty()) {
                 return false;
             }
             stream.assign_request_path(value);

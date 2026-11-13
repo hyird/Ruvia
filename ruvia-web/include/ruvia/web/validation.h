@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <functional>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/web/error.h"
@@ -51,30 +49,19 @@ struct validation_failure_options final {
     borrowed_text message_{"request validation failed"};
 };
 
-// Diagnostics belong to the configured PMR resource. Copy and move construction
-// retain the source resource, whose owner must outlive every resulting validator.
-// Assignment retains the destination resource, including nested diagnostic text;
-// rebinding may allocate, and allocation failure leaves both validators unchanged.
-// Moves within the same resource do not allocate. Successful moves leave an
-// empty source that can be reused with its original resource.
+// Allocation failure during copy assignment leaves both validators unchanged.
+// Successful moves leave an empty source that can be reused.
 class validator final {
 public:
-    using issue_list_type = std::pmr::vector<validation_issue>;
+    using issue_list_type = std::vector<validation_issue>;
 
-    using options_type = model_options;
+    validator() noexcept = default;
 
-    validator()
-        : validator(options_type{}) {}
-
-    explicit validator(options_type options)
-        : issues_(std::initializer_list<validation_issue>{}, pmr_resource_or_default(options.resource_)) {}
-
-    validator(const validator& other)
-        : issues_(detail::clone_validation_issues(other.issues_, other.resource())) {}
+    validator(const validator&) = default;
 
     validator& operator=(const validator& other) {
         if (this != &other) {
-            auto copied = detail::clone_validation_issues(other.issues_, resource());
+            auto copied = other.issues_;
             issues_.swap(copied);
         }
         return *this;
@@ -85,14 +72,9 @@ public:
         other.issues_.clear();
     }
 
-    validator& operator=(validator&& other) {
+    validator& operator=(validator&& other) noexcept {
         if (this != &other) {
-            if (resource() == other.resource()) {
-                issues_.swap(other.issues_);
-            } else {
-                auto copied = detail::clone_validation_issues(other.issues_, resource());
-                issues_.swap(copied);
-            }
+            issues_ = std::move(other.issues_);
             other.issues_.clear();
         }
         return *this;
@@ -101,8 +83,7 @@ public:
     ~validator() = default;
 
     validator& add(std::string_view field, std::string_view code, std::string_view message) & RUVIA_LIFETIMEBOUND {
-        issues_.push_back(validation_issue(
-            {.field_ = field, .code_ = code, .message_ = message, .resource_ = resource()}));
+        issues_.push_back(validation_issue({.field_ = field, .code_ = code, .message_ = message}));
         return *this;
     }
     validator& add(std::string_view, std::string_view, std::string_view) && = delete;
@@ -193,12 +174,6 @@ public:
     }
     [[nodiscard]] const issue_list_type& issues() const&& = delete;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return issues_.get_allocator().resource();
-    }
-
-    // Throws an http_error owning copies of the issues in the process resource,
-    // so the exception outlives this validator and its resource.
     void throw_if_invalid(validation_failure_options options = {}) const& {
         if (!ok()) {
             throw http_error({.status_ = options.status_,
@@ -210,16 +185,10 @@ public:
 
     void throw_if_invalid(validation_failure_options options = {}) && {
         if (!ok()) {
-            if (*resource() == *process_resource()) {
-                auto moved_issues = std::move(issues_);
-                issues_.clear();
-                throw http_error(options.status_, options.code_.view(), options.message_.view(),
-                    {}, std::move(moved_issues), process_resource());
-            }
-            throw http_error({.status_ = options.status_,
-                .code_ = options.code_,
-                .message_ = options.message_,
-                .validation_issues_ = issues_});
+            auto moved_issues = std::move(issues_);
+            issues_.clear();
+            throw http_error(
+                options.status_, options.code_.view(), options.message_.view(), {}, std::move(moved_issues));
         }
     }
 
@@ -235,9 +204,8 @@ void validate_model(const model_type& model, validator& out) {
 
 template <typename t_type>
     requires detail::is_model<t_type>
-[[nodiscard]] t_type from_form(std::string_view body, model_parse_options options = {}) {
-    auto* const resource = pmr_resource_or_default(options.resource_);
-    auto parsed_value = detail::model_parse_access::parse_form_owned<t_type>(body, resource);
+[[nodiscard]] t_type from_form(std::string_view body) {
+    auto parsed_value = detail::model_parse_access::parse_form_owned<t_type>(body);
     if (!parsed_value) {
         throw std::invalid_argument("invalid form value");
     }
@@ -247,15 +215,13 @@ template <typename t_type>
     return std::move(*parsed_value);
 }
 
-// Owns parsed data in options.resource. Supports models, Ruvia scalar values,
-// strings, bytes and arrays of these types. Model types also evaluate their
-// declared field validation rules.
+// Supports models, Ruvia scalar values, strings, bytes and arrays of these
+// types. Model types also evaluate their declared field validation rules.
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 [[nodiscard]] t_type from_json(std::string_view body, model_parse_options options = {}) {
-    auto* const resource = pmr_resource_or_default(options.resource_);
     auto parsed_value = detail::parse_json_document<t_type>(
-        body, resource, detail::model_string_storage::owned, options);
+        body, detail::model_string_storage::owned, options);
     if (!parsed_value) {
         throw std::invalid_argument("invalid JSON value");
     }
@@ -270,7 +236,7 @@ template <typename t_type>
 template <typename t_type>
     requires detail::is_model_field<t_type>
 [[nodiscard]] inline std::optional<t_type> json_value::get() const& {
-    auto parsed_value = detail::parse_json_document<t_type>(view(), resource_, detail::model_string_storage::borrowed);
+    auto parsed_value = detail::parse_json_document<t_type>(view(), detail::model_string_storage::borrowed);
     if (!parsed_value) {
         return std::nullopt;
     }
@@ -291,8 +257,8 @@ template <typename t_type>
     requires detail::is_model_field<t_type>
 [[nodiscard]] inline json_field_lookup<t_type> json_object::get(std::string_view field) const& {
     std::optional<std::string_view> match;
-    const auto visited = detail::visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
-        resource_, [&match, field](std::string_view key, std::string_view value_view) {
+    const auto visited = detail::visit_json_object_fields(view(),
+        [&match, field](std::string_view key, std::string_view value_view) {
             if (key != field) {
                 return true;
             }
@@ -315,7 +281,7 @@ template <typename t_type>
         return json_field_lookup<t_type>(unique_lookup_status::absent);
     }
     detail::skip_json_whitespace(*match);
-    const json_value value(resolved_pmr_resource_tag{}, *match, resource_);
+    const json_value value(detail::borrowed_model_token_tag{}, *match);
     return json_field_lookup<t_type>(value.get<t_type>());
 }
 
@@ -326,7 +292,7 @@ template <typename t_type>
         return json_field_lookup<t_type>(unique_lookup_status::absent);
     }
     // Borrows this token's bytes, so results stay valid as long as *this.
-    const json_object object(resolved_pmr_resource_tag{}, view(), resource_);
+    const json_object object(detail::borrowed_model_token_tag{}, view());
     return object.get<t_type>(field);
 }
 }  // namespace ruvia
@@ -390,11 +356,10 @@ template <validation_target target, typename model_type>
 [[nodiscard]] model_type parse_and_validate_request_model(
     std::conditional_t<target == validation_target::json || target == validation_target::form,
         std::string_view, std::reference_wrapper<const request_name_value_list>>
-        input,
-    std::pmr::memory_resource* arena) {
+        input) {
     auto model = [&] {
         if constexpr (target == validation_target::json) {
-            auto parsed_value = parse_complete_json_value<model_type>(input, arena, model_string_storage::borrowed);
+            auto parsed_value = parse_complete_json_value<model_type>(input, model_string_storage::borrowed);
             if (!parsed_value) {
                 // Selecting JSON makes malformed input an error, not an optional
                 // format mismatch that json_if<T>() may silently skip.
@@ -402,9 +367,9 @@ template <validation_target target, typename model_type>
             }
             return std::move(*parsed_value);
         } else if constexpr (target == validation_target::form) {
-            return model_parse_access::parse_form<model_type>(form_body_input{.body_ = input}, arena);
+            return model_parse_access::parse_form<model_type>(form_body_input{.body_ = input});
         } else {
-            return model_parse_access::parse_form<model_type>(input, arena);
+            return model_parse_access::parse_form<model_type>(input);
         }
     }();
     validator validator_value;
@@ -424,7 +389,7 @@ public:
         "header_model field names must be unique ignoring ASCII case");
     using ruvia_validation_body_type = body_type;
 
-    [[nodiscard]] task<void> handle(context& c, next& next_value);
+    [[nodiscard]] task<void> invoke(context& c, next& next_value);
 };
 
 }  // namespace detail

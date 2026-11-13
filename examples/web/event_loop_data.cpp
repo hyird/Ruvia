@@ -10,18 +10,17 @@
 #include <exception>
 #include <iostream>
 #include <memory>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/error.h"
-#include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis_session.h"
 
 #include "backend_config.h"
 
@@ -30,7 +29,7 @@ using namespace ruvia;
 
 RUVIA_DB_ENTITY(device, "orm_demo_device",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string))
+    RUVIA_DB_COLUMN(name, std::string))
 
 RUVIA_REDIS_ENTITY(cached_device, "devices",
     RUVIA_REDIS_COLUMN(id, string, redis_column_options{.primary_key_ = true}),
@@ -110,13 +109,13 @@ int main(int argc, char** argv) {
         // Declared first, it outlives the loops.
         blocking_pool host_lookups({.thread_count_ = 1});
         event_loop_pool pool({.loop_count_ = 2, .blocking_pool_ = &host_lookups});
-        std::pmr::vector<std::unique_ptr<worker_data>> workers;
+        std::vector<std::unique_ptr<worker_data>> workers;
         for (std::size_t index = 0; index < pool.loop_count(); ++index) {
             workers.push_back(std::make_unique<worker_data>(pool.loop(index), sql, cache));
         }
         pool.start();
         std::exception_ptr failure;
-        std::pmr::vector<root_task<void>> tasks;
+        std::vector<root_task<void>> tasks;
         auto observe = [&] {
             for (auto& task : tasks) {
                 try {

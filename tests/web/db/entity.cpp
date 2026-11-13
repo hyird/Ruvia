@@ -2,7 +2,6 @@
 
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <stdexcept>
@@ -12,13 +11,11 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/db/db_entity.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 #include "test_io_context.h"
 
@@ -26,26 +23,26 @@ namespace {
 
 RUVIA_DB_ENTITY(entity, "users",
     ruvia::db_column<ruvia::fixed_string{"id"}, int>,
-    ruvia::db_column<ruvia::fixed_string{"name"}, std::pmr::string,
+    ruvia::db_column<ruvia::fixed_string{"name"}, std::string,
         ruvia::db_column_options{.nullable_ = true}>)
 
 RUVIA_DB_ENTITY(owned_type, "owned", ruvia::db_column<"text", ruvia::string>,
-    ruvia::db_column<"values", std::pmr::vector<std::optional<std::pmr::string>>>)
+    ruvia::db_column<"values", std::vector<std::optional<std::string>>>)
 
 RUVIA_DB_ENTITY(string_array_entity, "string_arrays",
-    ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>)
+    ruvia::db_column<"values", std::vector<std::string>>)
 
 RUVIA_DB_ENTITY(owned_container_entity, "owned_containers",
-    ruvia::db_column<"text", std::pmr::string>,
-    ruvia::db_column<"values", std::pmr::vector<std::pmr::string>>)
+    ruvia::db_column<"text", std::string>,
+    ruvia::db_column<"values", std::vector<std::string>>)
 
 RUVIA_DB_ENTITY(numeric_input_entity, "numeric_input",
     ruvia::db_column<"signed_value", std::int32_t, ruvia::db_column_options{.nullable_ = true}>,
     ruvia::db_column<"unsigned_value", std::uint32_t, ruvia::db_column_options{.nullable_ = true}>,
     ruvia::db_column<"real_value", float, ruvia::db_column_options{.nullable_ = true}>,
-    ruvia::db_column<"values", std::pmr::vector<std::int32_t>>,
-    ruvia::db_column<"optional_values", std::pmr::vector<std::optional<std::int32_t>>>,
-    ruvia::db_column<"real_values", std::pmr::vector<float>>)
+    ruvia::db_column<"values", std::vector<std::int32_t>>,
+    ruvia::db_column<"optional_values", std::vector<std::optional<std::int32_t>>>,
+    ruvia::db_column<"real_values", std::vector<float>>)
 
 TEST(Ruvia, db_entity_tracks_unset_null_and_value_states) {
     entity entity;
@@ -108,9 +105,9 @@ TEST(Ruvia, db_entity_numeric_overflow_preserves_value_null_and_unset) {
 
 TEST(Ruvia, db_entity_numeric_arrays_reject_late_overflow_without_partial_replacement) {
     numeric_input_entity value;
-    value.set<"values">(std::pmr::vector<std::int32_t>({11, 12}, ruvia::process_resource()));
-    value.set<"optional_values">(std::pmr::vector<std::optional<std::int32_t>>({11, std::nullopt, 12}, ruvia::process_resource()));
-    value.set<"real_values">(std::pmr::vector<float>({1.5F, 2.5F}, ruvia::process_resource()));
+    value.set<"values">(std::vector<std::int32_t>({11, 12}));
+    value.set<"optional_values">(std::vector<std::optional<std::int32_t>>({11, std::nullopt, 12}));
+    value.set<"real_values">(std::vector<float>({1.5F, 2.5F}));
     const auto above_signed = static_cast<std::int64_t>((std::numeric_limits<std::int32_t>::max)()) + 1;
     const auto check_rejected = [&](auto assign) {
         bool rejected = false;
@@ -121,11 +118,11 @@ TEST(Ruvia, db_entity_numeric_arrays_reject_late_overflow_without_partial_replac
         }
         EXPECT_TRUE(rejected);
     };
-    check_rejected([&] { value.set<"values">(std::pmr::vector<std::int64_t>({42, above_signed}, ruvia::process_resource())); });
+    check_rejected([&] { value.set<"values">(std::vector<std::int64_t>({42, above_signed})); });
     check_rejected([&] {
-        value.set<"optional_values">(std::pmr::vector<std::optional<std::int64_t>>({42, std::nullopt, above_signed}, ruvia::process_resource()));
+        value.set<"optional_values">(std::vector<std::optional<std::int64_t>>({42, std::nullopt, above_signed}));
     });
-    check_rejected([&] { value.set<"real_values">(std::pmr::vector<double>({0.5, (std::numeric_limits<double>::max)()}, ruvia::process_resource())); });
+    check_rejected([&] { value.set<"real_values">(std::vector<double>({0.5, (std::numeric_limits<double>::max)()})); });
     EXPECT_EQ(value.get<"values">().size(), std::size_t{2});
     EXPECT_EQ(value.get<"values">()[0], 11);
     EXPECT_EQ(value.get<"values">()[1], 12);
@@ -148,235 +145,59 @@ TEST(Ruvia, db_entity_numeric_set_accepts_representable_boundaries_and_scalar_wr
     EXPECT_EQ(value.get<"signed_value">(), (std::numeric_limits<std::int32_t>::max)());
     value.set<"unsigned_value">(static_cast<std::uint64_t>((std::numeric_limits<std::uint32_t>::max)()));
     EXPECT_EQ(value.get<"unsigned_value">(), (std::numeric_limits<std::uint32_t>::max)());
-    value.set<"values">(std::pmr::vector<std::int64_t>({minimum, static_cast<std::int64_t>(maximum)}, ruvia::process_resource()));
+    value.set<"values">(std::vector<std::int64_t>({minimum, static_cast<std::int64_t>(maximum)}));
     EXPECT_EQ(value.get<"values">()[0], minimum);
     EXPECT_EQ(value.get<"values">()[1], (std::numeric_limits<std::int32_t>::max)());
     value.set<"real_value">(ruvia::double_value{static_cast<double>((std::numeric_limits<float>::max)())});
     EXPECT_EQ(value.get<"real_value">(), (std::numeric_limits<float>::max)());
     value.set<"real_value">(std::numeric_limits<double>::infinity());
     EXPECT_EQ(value.get<"real_value">(), std::numeric_limits<float>::infinity());
-    value.set<"real_values">(std::pmr::vector<std::int64_t>({-7, 9}, ruvia::process_resource()));
+    value.set<"real_values">(std::vector<std::int64_t>({-7, 9}));
     EXPECT_EQ(value.get<"real_values">()[0], -7.0F);
     EXPECT_EQ(value.get<"real_values">()[1], 9.0F);
 }
 
-TEST(Ruvia, db_entity_set_normalizes_nested_owned_values_to_entity_resource) {
-    ruvia::test::counting_memory_resource source, target;
+TEST(Ruvia, db_entity_set_owns_nested_values_and_supports_reset) {
+    owned_type entity;
     {
-        owned_type entity(&target);
-        const auto baseline = target.live_allocations();
-        {
-            ruvia::string text(std::pmr::string(200, 'x', ruvia::process_resource()), {.resource_ = &source});
-            entity.set<"text">(std::move(text));
-            std::pmr::vector<std::optional<std::pmr::string>> values(&source);
-            values.emplace_back(std::pmr::string(200, 'y', &source));
-            values.emplace_back(std::nullopt);
-            entity.set<"values">(std::move(values));
-        }
-        EXPECT_EQ(source.live_allocations(), std::size_t{0});
-        EXPECT_EQ(std::string_view(entity.get<"text">()), std::pmr::string(200, 'x', ruvia::process_resource()));
-        EXPECT_EQ(std::string_view(*entity.get<"values">()[0]), std::pmr::string(200, 'y', ruvia::process_resource()));
-        EXPECT_TRUE(entity.get<"values">()[0]->get_allocator().resource() == &target);
-        entity.reset<"text">();
-        entity.reset<"values">();
-        EXPECT_EQ(target.live_allocations(), baseline);
+        ruvia::string text(std::string(200, 'x'));
+        entity.set<"text">(std::move(text));
+        std::vector<std::optional<std::string>> values;
+        values.emplace_back(std::string(200, 'y'));
+        values.emplace_back(std::nullopt);
+        entity.set<"values">(std::move(values));
     }
-    EXPECT_EQ(target.allocation_count(), target.deallocation_count());
-}
-
-TEST(Ruvia, db_entity_string_vector_assignment_normalizes_equivalent_resource_allocators) {
-    ruvia::test::counting_memory_resource upstream;
-    ruvia::test::equivalent_tracking_resource target(upstream);
-    {
-        string_array_entity entity(&target);
-        {
-            ruvia::test::equivalent_tracking_resource source_value(upstream);
-            EXPECT_TRUE(source_value.is_equal(target));
-            std::pmr::vector<std::pmr::string> values(&source_value);
-            values.emplace_back(200, 'a');
-            values.emplace_back(240, 'b');
-            entity.set<"values">(values);
-            EXPECT_EQ(values.size(), std::size_t{2});
-            EXPECT_EQ(values[0], std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
-            EXPECT_EQ(values[1], std::string_view(std::pmr::string(240, 'b', ruvia::process_resource())));
-            EXPECT_TRUE(values.get_allocator().resource() == &source_value);
-            EXPECT_TRUE(values[0].get_allocator().resource() == &source_value);
-        }
-        const auto& lvalue_stored = entity.get<"values">();
-        EXPECT_TRUE(lvalue_stored.get_allocator().resource() == &target);
-        EXPECT_TRUE(lvalue_stored[0].get_allocator().resource() == &target);
-        EXPECT_TRUE(lvalue_stored[1].get_allocator().resource() == &target);
-        EXPECT_EQ(lvalue_stored[0], std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
-        EXPECT_EQ(lvalue_stored[1], std::string_view(std::pmr::string(240, 'b', ruvia::process_resource())));
-
-        {
-            ruvia::test::equivalent_tracking_resource source_value(upstream);
-            std::pmr::vector<std::pmr::string> values(&source_value);
-            values.emplace_back(260, 'b');
-            values.emplace_back(280, 'c');
-            entity.set<"values">(std::move(values));
-        }
-        const auto& rvalue_stored = entity.get<"values">();
-        EXPECT_TRUE(rvalue_stored.get_allocator().resource() == &target);
-        EXPECT_TRUE(rvalue_stored[0].get_allocator().resource() == &target);
-        EXPECT_TRUE(rvalue_stored[1].get_allocator().resource() == &target);
-        EXPECT_EQ(rvalue_stored[0], std::string_view(std::pmr::string(260, 'b', ruvia::process_resource())));
-        EXPECT_EQ(rvalue_stored[1], std::string_view(std::pmr::string(280, 'c', ruvia::process_resource())));
-
-        target.reject_allocations_after(0);
-        EXPECT_TRUE(ruvia::test::throws_on([&] {
-            ruvia::test::equivalent_tracking_resource source_value(upstream);
-            std::pmr::vector<std::pmr::string> values(&source_value);
-            values.emplace_back(220, 'd');
-            entity.set<"values">(std::move(values));
-        }));
-        target.allow_allocations();
-        EXPECT_TRUE(entity.is_set<"values">());
-        EXPECT_EQ(entity.get<"values">().size(), std::size_t{2});
-        EXPECT_EQ(entity.get<"values">()[0], std::string_view(std::pmr::string(260, 'b', ruvia::process_resource())));
-        EXPECT_TRUE(entity.get<"values">().get_allocator().resource() == &target);
-        EXPECT_TRUE(entity.get<"values">()[0].get_allocator().resource() == &target);
-    }
-    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
-}
-
-TEST(Ruvia, db_entity_reset_owned_containers_preserves_value_on_allocation_failure) {
-    for (const bool text : {false, true}) {
-        ruvia::test::counting_memory_resource upstream;
-        ruvia::test::equivalent_tracking_resource target(upstream);
-        {
-            owned_container_entity entity(&target);
-            entity.set<"text">(std::pmr::string(200, 'a', ruvia::process_resource()));
-            std::pmr::vector<std::pmr::string> values(&upstream);
-            values.emplace_back(240, 'b');
-            entity.set<"values">(values);
-            bool failed = false;
-            target.reject_allocations_after(0);
-            try {
-                if (text) {
-                    entity.reset<"text">();
-                } else {
-                    entity.reset<"values">();
-                }
-            } catch (const std::bad_alloc&) {
-                failed = true;
-            }
-            target.allow_allocations();
-            if (failed) {
-                EXPECT_TRUE(entity.is_set<"text">());
-                EXPECT_TRUE(entity.is_set<"values">());
-                EXPECT_EQ(entity.get<"text">(), std::string_view(std::pmr::string(200, 'a', ruvia::process_resource())));
-                EXPECT_EQ(entity.get<"values">().size(), std::size_t{1});
-                EXPECT_EQ(entity.get<"values">()[0], std::string_view(std::pmr::string(240, 'b', ruvia::process_resource())));
-                EXPECT_TRUE(entity.get<"text">().get_allocator().resource() == &target);
-                EXPECT_TRUE(entity.get<"values">().get_allocator().resource() == &target);
-                EXPECT_TRUE(entity.get<"values">()[0].get_allocator().resource() == &target);
-            } else {
-                // Implementations without debug proxies can clear without allocating.
-                EXPECT_TRUE(text ? !entity.is_set<"text">() : !entity.is_set<"values">());
-            }
-        }
-        EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-        EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
-    }
-}
-
-TEST(Ruvia, db_entity_rows_reject_elements_from_a_different_memory_resource) {
-    ruvia::test::counting_memory_resource result_resource;
-    ruvia::test::counting_memory_resource entity_resource;
-    {
-        ruvia::entity_rows<entity> rows(&result_resource);
-        entity entity(&entity_resource);
-        entity.set<"id">(7);
-        entity.set<"name">(std::pmr::string(200, 'x', ruvia::process_resource()));
-        EXPECT_TRUE(ruvia::test::throws_on([&] { rows.push_back(std::move(entity)); }));
-        EXPECT_TRUE(rows.empty());
-    }
-    EXPECT_EQ(result_resource.live_allocations(), std::size_t{0});
-    EXPECT_EQ(entity_resource.live_allocations(), std::size_t{0});
-    EXPECT_EQ(entity_resource.allocation_count(), entity_resource.deallocation_count());
-}
-
-RUVIA_DB_PROJECTION(entity_projection,
-    RUVIA_DB_COLUMN(id, int),
-    RUVIA_DB_COLUMN(name, std::pmr::string))
-
-TEST(Ruvia, db_entities_projections_and_rows_construct_from_resource_owners) {
-    ruvia::test::counting_memory_resource resource;
-    entity owner_entity(&resource);
-    entity from_owner(owner_entity);
-    EXPECT_EQ(from_owner.resource(), &resource);
-
-    entity_projection proj_from_owner(owner_entity);
-    EXPECT_EQ(proj_from_owner.resource(), &resource);
-
-    ruvia::entity_rows<entity> rows(owner_entity);
-    EXPECT_EQ(rows.resource(), &resource);
+    EXPECT_EQ(std::string_view(entity.get<"text">()), std::string(200, 'x'));
+    EXPECT_EQ(std::string_view(*entity.get<"values">()[0]), std::string(200, 'y'));
+    entity.reset<"text">();
+    entity.reset<"values">();
+    EXPECT_FALSE(entity.is_set<"text">());
+    EXPECT_FALSE(entity.is_set<"values">());
 }
 
 }  // namespace
-
-RUVIA_DB_ENTITY(equivalent_rebind_entity, "equivalent_rebind",
-    ruvia::db_column<"text", std::pmr::string>,
-    ruvia::db_column<"opt_text", ruvia::string>,
-    ruvia::db_column<"numbers", std::pmr::vector<int>>,
-    ruvia::db_column<"strings", std::pmr::vector<std::pmr::string>>)
-
-TEST(Ruvia, db_entity_set_rebinds_rvalues_across_equivalent_resources_without_stealing_from_retired_source) {
-    ruvia::test::counting_memory_resource upstream;
-    {
-        ruvia::test::equivalent_tracking_resource source(upstream);
-        ruvia::test::equivalent_tracking_resource target(upstream);
-        EXPECT_TRUE(source.is_equal(target));
-        std::optional<equivalent_rebind_entity> entity(std::in_place, &target);
-        {
-            std::pmr::string text(200, 't', &source);
-            ruvia::string opt_text(std::pmr::string(200, 'o', ruvia::process_resource()), ruvia::model_options{.resource_ = &source});
-            std::pmr::vector<int> numbers(64, 42, &source);
-            std::pmr::vector<std::pmr::string> strings(&source);
-            strings.emplace_back(200, 's');
-
-            entity->set<"text">(std::move(text));
-            entity->set<"opt_text">(std::move(opt_text));
-            entity->set<"numbers">(std::move(numbers));
-            entity->set<"strings">(std::move(strings));
-        }
-        source.retire();
-        EXPECT_EQ(entity->get<"text">(), std::string_view(std::pmr::string(200, 't', ruvia::process_resource())));
-        EXPECT_EQ(entity->get<"opt_text">().view(), std::string_view(std::pmr::string(200, 'o', ruvia::process_resource())));
-        EXPECT_EQ(entity->get<"numbers">().size(), std::size_t{64});
-        EXPECT_EQ(entity->get<"strings">().size(), std::size_t{1});
-        EXPECT_EQ(entity->get<"strings">()[0], std::string_view(std::pmr::string(200, 's', ruvia::process_resource())));
-        entity.reset();
-        EXPECT_EQ(source.callbacks_after_retirement(), std::size_t{0});
-    }
-    EXPECT_EQ(upstream.live_allocations(), std::size_t{0});
-    EXPECT_EQ(upstream.allocation_count(), upstream.deallocation_count());
-}
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_DB_ENTITY(numeric_decode_entity, "numeric_decode",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
     ruvia::db_column<"ratio", double>,
-    ruvia::db_column<"ratios", std::pmr::vector<double>>,
-    ruvia::db_column<"counts", std::pmr::vector<std::int64_t>>)
+    ruvia::db_column<"ratios", std::vector<double>>,
+    ruvia::db_column<"counts", std::vector<std::int64_t>>)
 
 TEST(Ruvia, db_field_and_array_decoding_reject_nonfinite_floats_and_prioritize_format_errors) {
     using namespace ruvia;
-    std::pmr::vector<test::backend_startup_peer::postgres_reply> replies({
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("nan", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("nan(123)", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("inf", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("-infinity", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("999999999999999999999abc", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("val", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("999999999999999999999", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("ratios", ruvia::process_resource()), .type_ = 1022, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("{nan}", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("ratios", ruvia::process_resource()), .type_ = 1022, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("{inf}", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("counts", ruvia::process_resource()), .type_ = 1016, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("{999999999999999999999abc}", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                             {.column_ = std::pmr::string("counts", ruvia::process_resource()), .type_ = 1016, .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("{999999999999999999999}", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                         },
-        ruvia::process_resource());
+    std::vector<test::backend_startup_peer::postgres_reply> replies({
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("nan")})},
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("nan(123)")})},
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("inf")})},
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("-infinity")})},
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("999999999999999999999abc")})},
+        {.column_ = std::string("val"), .rows_ = std::vector<std::string>({std::string("999999999999999999999")})},
+        {.column_ = std::string("ratios"), .type_ = 1022, .rows_ = std::vector<std::string>({std::string("{nan}")})},
+        {.column_ = std::string("ratios"), .type_ = 1022, .rows_ = std::vector<std::string>({std::string("{inf}")})},
+        {.column_ = std::string("counts"), .type_ = 1016, .rows_ = std::vector<std::string>({std::string("{999999999999999999999abc}")})},
+        {.column_ = std::string("counts"), .type_ = 1016, .rows_ = std::vector<std::string>({std::string("{999999999999999999999}")})},
+    });
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();

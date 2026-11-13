@@ -2,12 +2,10 @@
 
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_response.h"
@@ -26,12 +24,11 @@ template <typename stream_type>
 struct http_lazy_buffered_body_route_state final {
     std::optional<request_body_loader_binding<lazy_buffered_body<stream_type>>> body_;
 
-    void emplace(stream_type& stream, std::pmr::polymorphic_allocator<char> worker_allocator,
-        std::pmr::memory_resource* request_resource, std::string_view body_and_pipeline,
+    void emplace(stream_type& stream, inbound_buffer_account* inbound_buffers, std::string_view body_and_pipeline,
         http1_request_body_plan body_plan, protocol_byte_limit body_limit_value,
         connection_scanner::entry& scanner_entry, http_interim_response_output& interim_output,
-        const worker_handle& worker) {
-        body_.emplace(stream, worker_allocator, request_resource, body_and_pipeline, body_plan, body_limit_value,
+        const worker_ref& worker) {
+        body_.emplace(stream, inbound_buffers, body_and_pipeline, body_plan, body_limit_value,
             scanner_entry, interim_output, worker);
     }
 
@@ -59,9 +56,8 @@ template <typename stream_type>
     const http1_route_dispatch<stream_type>& d, protocol_byte_limit body_limit_value,
     std::string_view body_and_pipeline) {
     try {
-        auto* resource = &d.inbound_buffer_pool_;
         // Every HTTP/1 request's services carry its session's interim lane.
-        state_value.emplace(d.stream_, std::pmr::polymorphic_allocator<char>(resource), resource,
+        state_value.emplace(d.stream_, &d.inbound_buffers_,
             body_and_pipeline, d.parsed_.body_plan(), body_limit_value, d.scanner_entry_,
             *d.base_route_services_.interim_output(), d.base_route_services_.worker());
         return nullptr;
@@ -79,14 +75,13 @@ template <typename stream_type>
 
 inline task<http1_session_request_completion> complete_failed_http_route(
     connection_scanner::entry& scanner_entry, std::exception_ptr exception,
-    const http1_server_request_parse_state& parsed_value, const route_table& routes_value,
-    request_memory& request_memory_value, const context_services& exception_services,
+    const http1_server_request_parse_state& parsed_value, const route_table& routes_value, const context_services& exception_services,
     http_response& response) {
     if (auto* lifecycle = exception_services.connection_lifecycle_value()) {
         lifecycle->note_exception(exception);
     }
     response = co_await routes_value.handle_exception(
-        parsed_value.request(), request_memory_value, exception, exception_services);
+        parsed_value.request(), exception, exception_services);
     scanner_entry.touch();
     co_return close_with_framework_response(response, parsed_value.connection_plan());
 }
@@ -103,7 +98,7 @@ template <typename take_pipeline_type>
     connection_scanner::entry& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
     http1_request_body_consumption body_consumption, std::size_t request_bytes,
-    std::pmr::string& pipeline_stash, take_pipeline_type take_pipeline) {
+    std::string& pipeline_stash, take_pipeline_type take_pipeline) {
     connection_plan = apply_request_body_consumption(connection_plan, body_consumption);
     connection_plan = request_sequence.complete_uncommitted_response(connection_plan);
     scanner_entry.touch();
@@ -128,11 +123,11 @@ template <typename stream_type>
 [[nodiscard]] inline http1_session_request_completion complete_successful_http_body_route(
     connection_scanner::entry& scanner_entry, http_response& response,
     http1_request_connection_plan connection_plan, http1_request_sequence& request_sequence,
-    std::size_t request_bytes, std::pmr::string& pipeline_stash, stream_body_reader<stream_type>& reader) {
+    std::size_t request_bytes, std::string& pipeline_stash, stream_body_reader<stream_type>& reader) {
     reader.consume_buffered_body();
     return complete_successful_http_body_route(scanner_entry, response, connection_plan, request_sequence,
         reader.consumption(), request_bytes, pipeline_stash,
-        [&reader](std::pmr::string& stash) { return reader.take_pipeline(stash); });
+        [&reader](std::string& stash) { return reader.take_pipeline(stash); });
 }
 
 // Completes a response produced without reading the request body (an

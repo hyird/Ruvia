@@ -85,7 +85,7 @@ ruvia::task<ruvia::http_response> answer_error(ruvia::context& context, ruvia::h
 // App-wide middleware: it must run for routed requests only.
 class marking_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next_value) {
         ++middleware_runs();
         context.draft().header("x-middleware", "ran");
         co_await next_value();
@@ -100,7 +100,7 @@ std::atomic<unsigned> reset_finished{0};
 constexpr unsigned proxy_chunk_count = 512;
 constexpr std::string_view reset_failure = "streamed refusal cancelled by peer";
 
-ruvia::task<void> await_refusal_reader(const ruvia::worker_handle& worker, ruvia::stop_token stop) {
+ruvia::task<void> await_refusal_reader(const ruvia::worker_ref& worker, ruvia::stop_token stop) {
     for (int attempt = 0; attempt != 5000 && !refusal_read.load() && !stop.stop_requested(); ++attempt) {
         (void)co_await ruvia::sleep_for(worker, 1ms, stop);
     }
@@ -110,7 +110,7 @@ ruvia::task<void> await_refusal_reader(const ruvia::worker_handle& worker, ruvia
 // A refusal handler sets refusal_returned only after its response ended on
 // the wire, which the client can observe first. Each exchange waits for its
 // own handler to return, so a late store cannot leak into the next exchange.
-ruvia::task<void> await_refusal_return(const ruvia::worker_handle& worker, const std::string& label) {
+ruvia::task<void> await_refusal_return(const ruvia::worker_ref& worker, const std::string& label) {
     for (int attempt = 0; attempt != 5000 && !refusal_returned.load(); ++attempt) {
         (void)co_await ruvia::sleep_for(worker, 1ms);
     }
@@ -422,8 +422,8 @@ ruvia::task<void> serve(ruvia::request_stream& stream) {
     return payload;
 }
 
-ruvia::task<void> exercise(ruvia::http_client_handle client, ruvia::http_protocol_version version,
-    std::string label, ruvia::worker_handle worker) {
+ruvia::task<void> exercise(ruvia::http_client_ref client, ruvia::http_protocol_version version,
+    std::string label, ruvia::worker_ref worker) {
     const auto payload = large_payload();
     {
         auto response = co_await client.post("/echo")
@@ -696,7 +696,7 @@ ruvia::task<void> exercise_all(ruvia::event_loop loop, std::vector<client_target
             config.advertisements_.receive_alternative_services_ = true;
             config.tls_.ca_file_ = ca_file;
             owner.emplace(loop, config);
-            co_await exercise(owner->client(), target.version_, target.label_, loop.handle());
+            co_await exercise(owner->client(), target.version_, target.label_, loop.worker());
         } catch (...) {
             failure = std::current_exception();
         }
@@ -840,7 +840,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     {
         const asio::ip::udp::endpoint endpoint(asio::ip::address_v4::loopback(), http3_port);
         ruvia::test::http3_test_client initial(endpoint, identity.ca_file_, "localhost", 10s);
-        EXPECT_EQ(initial.request("GET", "/early").header("x-early-data").value_or(std::pmr::string{}), "no");
+        EXPECT_EQ(initial.request("GET", "/early").header("x-early-data").value_or(std::string{}), "no");
         for (const auto path : {"/state-none", "/state-zero", "/state-unknown"}) {
             const bool ended = std::string_view(path) == "/state-none";
             const auto stream = ended ? initial.start_request("POST", path)
@@ -859,7 +859,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         const auto early = resumed.start_early_request("GET", "/early");
         const auto response = resumed.finish_response(early);
         EXPECT_EQ(response.status_, 200);
-        EXPECT_EQ(response.header("x-early-data").value_or(std::pmr::string{}), "yes");
+        EXPECT_EQ(response.header("x-early-data").value_or(std::string{}), "yes");
         EXPECT_TRUE(resumed.early_data_accepted());
 
         constexpr std::array fields{ruvia::http_header_view{"capsule-protocol", "?1"}};
@@ -905,11 +905,11 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
     {
         asio::ip::tcp::socket socket(io);
         socket.connect(plain_endpoint);
-        std::pmr::string wire(ruvia::http2_client_preface, ruvia::process_resource());
+        std::string wire(ruvia::http2_client_preface);
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
         std::uint32_t id = 1;
         for (const auto path : {"/state-none", "/state-zero", "/state-unknown"}) {
-            std::pmr::string block(ruvia::process_resource());
+            std::string block;
             ruvia::hpack_encoder::encode_header(block, ":method", "POST");
             ruvia::hpack_encoder::encode_header(block, ":scheme", "http");
             ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
@@ -1180,7 +1180,7 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
         bool resume_body = false;
         bool survivor_pending = false;
         std::optional<ruvia::task<std::optional<std::span<const std::byte>>>> cold;
-        const auto worker = attachment.loop().handle();
+        const auto worker = attachment.loop().worker();
         ruvia::worker_signal retirement(worker);
         std::uint64_t retiring_connection = 0;
         bool connection_retired = false;
@@ -1708,7 +1708,7 @@ TEST(Ruvia, tunnel_operation_options_bound_each_wait) {
             return ruvia::operation_options{.stop_token_ = stop.token()};
         };
         // A read stopped from another thread while it waits.
-        const auto stop_pending_read = [&](const ruvia::worker_handle& worker, auto read) -> ruvia::task<void> {
+        const auto stop_pending_read = [&](const ruvia::worker_ref& worker, auto read) -> ruvia::task<void> {
             ruvia::stop_source stop;
             std::exception_ptr failure;
             ruvia::task_scope reads(worker);

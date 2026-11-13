@@ -42,7 +42,7 @@ private:
     }
 };
 
-ruvia::task<aligned_result> make_value(ruvia::worker_handle worker_value,
+ruvia::task<aligned_result> make_value(ruvia::worker_ref worker_value,
     std::unique_ptr<aligned_result> result_value) {
     if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");
@@ -52,7 +52,7 @@ ruvia::task<aligned_result> make_value(ruvia::worker_handle worker_value,
     co_return std::move(*result_value);
 }
 
-ruvia::task<void> complete_void(ruvia::worker_handle worker_value, bool& completed) {
+ruvia::task<void> complete_void(ruvia::worker_ref worker_value, bool& completed) {
     if (!worker_value.is_current()) {
         throw std::logic_error("task started outside its event loop");
     }
@@ -115,7 +115,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     }
     ruvia::event_loop_pool loops({.loop_count_ = 1});
     const auto loop = loops.loop(0);
-    const auto worker_value = loop.handle();
+    const auto worker_value = loop.worker();
     bool void_completed = false;
 
     auto value = loop.start(ruvia::test::asio_task_tests::make_value(
@@ -124,7 +124,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     auto failure = loop.start(ruvia::test::asio_task_tests::fail());
     std::promise<bool> same_loop_get_rejected;
     auto same_loop_get_result = same_loop_get_rejected.get_future();
-    const auto probe_posted = loop.handle().post([&] {
+    const auto probe_posted = loop.worker().post([&] {
         try {
             static_cast<void>(std::move(value).get());
             same_loop_get_rejected.set_value(false);

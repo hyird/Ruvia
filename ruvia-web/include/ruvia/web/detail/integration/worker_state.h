@@ -12,14 +12,12 @@
 #include <exception>
 #include <functional>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 
 namespace ruvia::detail {
@@ -58,18 +56,17 @@ public:
             "worker state factory must return a value that constructs T");
         worker_state_definition definition;
         definition.type_key_ = detail::type_key<t_type>();
-        definition.factory_ =
-            construct_pmr_object<stored_type>(process_resource(), std::forward<factory_type>(factory));
+        definition.factory_ = new stored_type(std::forward<factory_type>(factory));
         // Named apart from the enclosing `factory` parameter: these lambdas are
         // captureless and receive the erased pointer, not that object.
         definition.destroy_factory_ = [](void* stored_factory) noexcept {
-            destroy_pmr_object(static_cast<stored_type*>(stored_factory), process_resource());
+            delete static_cast<stored_type*>(stored_factory);
         };
         definition.create_instance_ = [](void* stored_factory) -> void* {
-            return construct_pmr_object<t_type>(process_resource(), (*static_cast<stored_type*>(stored_factory))());
+            return new t_type((*static_cast<stored_type*>(stored_factory))());
         };
         definition.destroy_instance_ = [](void* instance) noexcept {
-            destroy_pmr_object(static_cast<t_type*>(instance), process_resource());
+            delete static_cast<t_type*>(instance);
         };
         return definition;
     }
@@ -116,7 +113,7 @@ private:
 // The single startup validation point for worker state recipes: the registry
 // only ever receives definitions that passed through here.
 inline void append_worker_state_definition(
-    std::pmr::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
+    std::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
     if (!definition.valid()) {
         throw std::invalid_argument("worker state definition is invalid");
     }
@@ -137,10 +134,8 @@ inline void append_worker_state_definition(
 class worker_state_registry final {
 public:
     // `definitions` were validated by append_worker_state_definition.
-    explicit worker_state_registry(std::span<const worker_state_definition> definitions)
-        : definitions_(definitions),
-          entries_(process_resource()),
-          type_index_(process_resource()) {}
+    explicit worker_state_registry(std::span<const worker_state_definition> definitions) noexcept
+        : definitions_(definitions) {}
 
     worker_state_registry(const worker_state_registry&) = delete;
     worker_state_registry& operator=(const worker_state_registry&) = delete;
@@ -215,8 +210,8 @@ private:
     }
 
     std::span<const worker_state_definition> definitions_;
-    std::pmr::vector<instance_entry_type> entries_;
-    std::pmr::vector<type_index_entry_type> type_index_;
+    std::vector<instance_entry_type> entries_;
+    std::vector<type_index_entry_type> type_index_;
     bool initialized_{false};
 };
 

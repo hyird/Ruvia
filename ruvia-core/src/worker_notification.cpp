@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <system_error>
@@ -18,14 +17,13 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 
 #include "worker_notification.h"
 
 namespace ruvia::detail {
 
-void* worker_notification_wait_resource::do_allocate(std::size_t bytes_value, std::size_t alignment) {
+void* worker_notification_wait_resource::allocate(std::size_t bytes_value, std::size_t alignment) {
     if (allocated() || bytes_value > buffer_size || alignment > max_alignment) {
         throw std::bad_alloc();
     }
@@ -38,17 +36,12 @@ void* worker_notification_wait_resource::do_allocate(std::size_t bytes_value, st
     return allocation_;
 }
 
-void worker_notification_wait_resource::do_deallocate(
+void worker_notification_wait_resource::deallocate(
     void* pointer, std::size_t, std::size_t) noexcept {
     if (!allocated() || pointer != allocation_) {
         std::terminate();
     }
     allocation_ = nullptr;
-}
-
-bool worker_notification_wait_resource::do_is_equal(
-    const std::pmr::memory_resource& other) const noexcept {
-    return this == &other;
 }
 
 static_assert(std::atomic<std::uint64_t>::is_always_lock_free);
@@ -59,7 +52,7 @@ void throw_native_wake_error(const char* operation, int error) {
 }
 
 worker_notification_state::worker_notification_state(asio::io_context& io_context,
-    const worker_handle& worker, worker_notification_options options)
+    const worker_ref& worker, worker_notification_options options)
     : io_context_(io_context),
       worker_(worker) {
     if (!worker_.valid() || !worker_.accepting()) {
@@ -157,7 +150,7 @@ bool worker_notification_state::begin_wait(std::coroutine_handle<> continuation)
     wait_continuation_ = continuation;
     try {
         auto handler = asio::bind_allocator(
-            std::pmr::polymorphic_allocator<std::byte>(&wait_resource_),
+            worker_notification_wait_allocator<std::byte>(wait_resource_),
 #ifdef _WIN32
             [this](const asio::error_code& error, std::size_t bytes_transferred) noexcept {
                 complete_wait(error, bytes_transferred);
@@ -262,7 +255,7 @@ void worker_notification_state::ensure_receiver() {
         if (error) {
             throw std::system_error(error, "assign worker notification receiver");
         }
-        wake_.receiver_ = invalid_native_wake_handle;
+        wake_.receiver_ = invalid_native_wake_descriptor;
     } catch (...) {
         static_cast<void>(activity_.fetch_or(closed, std::memory_order_acq_rel));
         if (receiver_stream_) {
@@ -339,11 +332,11 @@ void worker_notification_state::complete_wait(
 namespace {
 
 // The only place a notification's state is built; every public constructor
-// hands its runtime's io_context and handle to this entry.
-[[nodiscard]] std::unique_ptr<worker_notification_state, pmr_object_deleter<worker_notification_state>>
+// hands its runtime's io_context and worker_ref to this entry.
+[[nodiscard]] std::unique_ptr<worker_notification_state>
 make_worker_notification_state(
-    asio::io_context& io_context, const worker_handle& worker, worker_notification_options options) {
-    return make_pmr_object<worker_notification_state>(process_resource(), io_context, worker, options);
+    asio::io_context& io_context, const worker_ref& worker, worker_notification_options options) {
+    return std::make_unique<worker_notification_state>(io_context, worker, options);
 }
 
 }  // namespace
@@ -373,11 +366,11 @@ worker_notification::worker_notification(state_pointer state) noexcept
 
 worker_notification::worker_notification(
     worker_runtime& runtime, worker_notification_options options)
-    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.handle(), options)) {}
+    : worker_notification(detail::make_worker_notification_state(runtime.io_context(), runtime.worker(), options)) {}
 
 worker_notification::worker_notification(
     const event_loop& loop, worker_notification_options options)
-    : worker_notification(detail::make_worker_notification_state(loop.io_context(), loop.handle(), options)) {}
+    : worker_notification(detail::make_worker_notification_state(loop.io_context(), loop.worker(), options)) {}
 worker_notification::~worker_notification() = default;
 
 worker_notification_status worker_notification::notify() noexcept {

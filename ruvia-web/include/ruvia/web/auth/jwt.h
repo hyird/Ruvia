@@ -6,7 +6,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 
 namespace ruvia {
@@ -69,7 +67,7 @@ public:
     jwt_claim(const jwt_claim&) = delete;
     jwt_claim& operator=(const jwt_claim&) = delete;
     jwt_claim(jwt_claim&&) noexcept = default;
-    jwt_claim& operator=(jwt_claim&& other);
+    jwt_claim& operator=(jwt_claim&& other) noexcept;
 
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         return name_;
@@ -84,12 +82,12 @@ public:
 private:
     friend struct detail::jwt_payload_access;
 
-    jwt_claim(std::pmr::string name, std::pmr::string value) noexcept
+    jwt_claim(std::string name, std::string value) noexcept
         : name_(std::move(name)),
           value_(std::move(value)) {}
 
-    std::pmr::string name_;
-    std::pmr::string value_;
+    std::string name_;
+    std::string value_;
 };
 
 struct jwt_sign_options final {
@@ -104,7 +102,6 @@ struct jwt_sign_options final {
     std::optional<std::chrono::seconds> expires_in_{std::chrono::hours(1)};
     std::optional<std::chrono::seconds> not_before_delay_{};
     borrowed_span<jwt_claim_view> claims_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 struct jwt_verify_options final {
@@ -120,22 +117,20 @@ struct jwt_verify_options final {
     borrowed_text audience_{};
     std::chrono::seconds leeway_{0};
     jwt_expiration_claim_policy expiration_claim_{jwt_expiration_claim_policy::require};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 struct jwt_decode_unverified_options final {
     borrowed_text token_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // JWT NumericDate 的精确十进制表示，不受宿主时钟范围或浮点精度限制。
-// 存储归所属 payload 的 PMR；资源必须覆盖结果及其析构。移动后源值为 0。
+// 移动后源值为 0。
 class jwt_numeric_date final {
 public:
     jwt_numeric_date(const jwt_numeric_date&) = delete;
     jwt_numeric_date& operator=(const jwt_numeric_date&) = delete;
     jwt_numeric_date(jwt_numeric_date&& other) noexcept;
-    jwt_numeric_date& operator=(jwt_numeric_date&& other);
+    jwt_numeric_date& operator=(jwt_numeric_date&& other) noexcept;
 
     [[nodiscard]] std::string_view text() const& noexcept RUVIA_LIFETIMEBOUND;
     std::string_view text() const&& = delete;
@@ -145,8 +140,8 @@ public:
 
 private:
     friend struct detail::jwt_payload_access;
-    jwt_numeric_date(std::string_view text, std::pmr::memory_resource* resource);
-    std::pmr::string text_;
+    explicit jwt_numeric_date(std::string_view text);
+    std::string text_;
 };
 
 class jwt_payload final {
@@ -154,7 +149,7 @@ public:
     jwt_payload(const jwt_payload&) = delete;
     jwt_payload& operator=(const jwt_payload&) = delete;
     jwt_payload(jwt_payload&&) noexcept = default;
-    jwt_payload& operator=(jwt_payload&& other);
+    jwt_payload& operator=(jwt_payload&& other) noexcept;
     [[nodiscard]] std::string_view issuer() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view issuer() const&& = delete;
     [[nodiscard]] std::string_view subject() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -163,8 +158,8 @@ public:
     // (RFC 7519 §4.1.3); use has_audience to test membership across all of them.
     [[nodiscard]] std::string_view audience() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view audience() const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> audiences() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::span<const std::pmr::string> audiences() const&& = delete;
+    [[nodiscard]] std::span<const std::string> audiences() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::string> audiences() const&& = delete;
     [[nodiscard]] bool has_audience(std::string_view audience) const noexcept;
     [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] std::string_view id() const&& = delete;
@@ -187,19 +182,19 @@ public:
 private:
     friend struct detail::jwt_payload_access;
 
-    explicit jwt_payload(std::pmr::memory_resource* resource);
+    jwt_payload() noexcept = default;
 
-    std::pmr::string issuer_;
-    std::pmr::string subject_;
-    std::pmr::vector<std::pmr::string> audiences_;
-    std::pmr::string id_;
+    std::string issuer_;
+    std::string subject_;
+    std::vector<std::string> audiences_;
+    std::string id_;
     std::optional<jwt_numeric_date> expires_at_;
     std::optional<jwt_numeric_date> not_before_;
     std::optional<jwt_numeric_date> issued_at_;
-    std::pmr::vector<jwt_claim> claims_;
+    std::vector<jwt_claim> claims_;
 };
 
-[[nodiscard]] std::pmr::string jwt_sign(const jwt_sign_options& options);
+[[nodiscard]] std::string jwt_sign(const jwt_sign_options& options);
 [[nodiscard]] jwt_payload jwt_verify(const jwt_verify_options& options);
 // Decodes and validates the three-part token structure, JOSE header (requiring
 // a non-empty "alg" string and rejecting duplicate keys / "crit" / "b64"), and

@@ -9,7 +9,6 @@
 #include <exception>
 #include <future>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <system_error>
@@ -24,7 +23,6 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_runtime.h"
 
 namespace {
@@ -413,7 +411,7 @@ TEST(Ruvia, worker_notification_borrows_attached_loop_on_unsafe_io_context) {
         std::terminate();
     }
     worker_value.join();
-    EXPECT_TRUE(!loop.handle().accepting());
+    EXPECT_TRUE(!loop.worker().accepting());
 }
 
 TEST(Ruvia, worker_notification_many_producers_coalesce_without_lost_final_state) {
@@ -427,7 +425,7 @@ TEST(Ruvia, worker_notification_many_producers_coalesce_without_lost_final_state
     auto task_value = spawn(worker, wait_for_producers(notification, state, producer_count));
     EXPECT_TRUE(worker.start());
 
-    std::pmr::vector<std::thread> producers(ruvia::process_resource());
+    std::vector<std::thread> producers;
     producers.reserve(producer_count);
     for (std::size_t producer_index = 0; producer_index < producer_count; ++producer_index) {
         producers.emplace_back([&] {
@@ -578,7 +576,7 @@ TEST(Ruvia, worker_notification_close_races_producers_without_waiting_for_them) 
     std::atomic<bool> begin{false};
     std::atomic<std::size_t> open_calls{0};
     std::atomic<std::size_t> closed_returns{0};
-    std::pmr::vector<std::thread> producers(ruvia::process_resource());
+    std::vector<std::thread> producers;
     producers.reserve(producer_count);
     for (std::size_t index = 0; index < producer_count; ++index) {
         producers.emplace_back([&] {
@@ -636,7 +634,7 @@ TEST(Ruvia, worker_notification_close_races_producers_without_waiting_for_them) 
 TEST(Ruvia, worker_notification_wakes_while_public_post_queue_is_full) {
     ruvia::worker_runtime worker_value({.queue_capacity_ = 1});
     ruvia::worker_notification notification(worker_value);
-    const auto worker_handle_value = worker_value.handle();
+    const auto worker_ref_value = worker_value.worker();
     std::promise<void> wait_started;
     auto wait_started_future = wait_started.get_future();
     std::atomic<int> wait_result{0};
@@ -649,7 +647,7 @@ TEST(Ruvia, worker_notification_wakes_while_public_post_queue_is_full) {
     bool release_worker = false;
     std::promise<void> blocked;
     auto blocked_future = blocked.get_future();
-    const auto blocker = worker_handle_value.post([&] {
+    const auto blocker = worker_ref_value.post([&] {
         blocked.set_value();
         std::unique_lock lock(gate_mutex);
         static_cast<void>(gate_changed.wait_until(lock,
@@ -658,8 +656,8 @@ TEST(Ruvia, worker_notification_wakes_while_public_post_queue_is_full) {
     const bool blocker_entered = blocked_future.wait_for(wait_timeout) == std::future_status::ready;
 
     std::atomic<bool> queued_ran{false};
-    const auto queued = worker_handle_value.post([&] { queued_ran.store(true, std::memory_order_release); });
-    const auto full = worker_handle_value.post([] {});
+    const auto queued = worker_ref_value.post([&] { queued_ran.store(true, std::memory_order_release); });
+    const auto full = worker_ref_value.post([] {});
     const auto notification_result = notification.notify();
     {
         const std::lock_guard lock(gate_mutex);

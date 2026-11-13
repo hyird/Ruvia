@@ -1,8 +1,5 @@
 #pragma once
 
-#include <memory_resource>
-
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_response.h"
@@ -13,6 +10,7 @@
 #include "server/http1_request_sequence.h"
 #include "server/http_response_compression.h"
 #include "server/http_server_options.h"
+#include "server/inbound_buffer_budget.h"
 
 // What every HTTP/1 route dispatch needs from the session that owns the
 // request: the transport, the scanner entry, the parsed head, the route table
@@ -34,12 +32,11 @@ struct http1_route_dispatch final {
     // Admission's CORS policy for this request; null when none applies.
     const http_cors_policy* cors_;
     const route_table& routes_;
-    request_memory& request_memory_;
     context_services base_route_services_;
     const http_server_options& options_;
     http_response& response_;
     http1_request_sequence& request_sequence_;
-    std::pmr::memory_resource& inbound_buffer_pool_;
+    inbound_buffer_account& inbound_buffers_;
     // The request was already buffered behind the previous one when the
     // session started it: the client sent it before that response finished.
     bool request_pipelined_;

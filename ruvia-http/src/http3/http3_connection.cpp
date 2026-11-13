@@ -8,13 +8,11 @@
 #include <deque>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <new>
 #include <stdexcept>
 #include <unordered_map>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_section.h"
 #include "ruvia/http/http_number_format.h"
@@ -30,6 +28,8 @@
 #include "field/http_request_field_validation.h"
 #include "http1/http_client_response_head.h"
 #include "http3/http3_control_extension_output.h"
+#include "memory/http_address_overlap.h"
+#include "memory/http_c_library_memory.h"
 #include "parser/http_header_descriptor_storage.h"
 #include "request/http_binary_request_fields.h"
 #include "response/http_binary_response_fields.h"
@@ -37,11 +37,9 @@
 #include "response/http_framed_response_head_plan.h"
 #include "response/http_local_content_state.h"
 #include "response/http_response_header_state.h"
-#include "util/http_address_overlap.h"
-#include "util/http_c_library_memory.h"
-#include "util/quic_varint.h"
 #include "websocket/websocket_extended_connect_fields.h"
 #include "websocket/websocket_server_negotiation.h"
+#include "wire/quic_varint.h"
 
 namespace ruvia {
 
@@ -69,11 +67,9 @@ namespace {
 // nghttp3 copies the section when it is submitted.
 class outbound_field_section final {
 public:
-    outbound_field_section(std::pmr::memory_resource* resource, std::size_t name_bytes,
+    outbound_field_section(std::size_t name_bytes,
         std::size_t field_count)
-        : name_bytes_(name_bytes),
-          names_(resource),
-          fields_(resource) {
+        : name_bytes_(name_bytes) {
         fields_.reserve(field_count);
     }
 
@@ -128,7 +124,7 @@ public:
 
 private:
     std::size_t name_bytes_;
-    std::pmr::string names_;
+    std::string names_;
     std::array<char, 96> values_{};
     std::size_t value_bytes_{0};
     detail::http_header_descriptor_storage<nghttp3_nv> fields_;
@@ -207,10 +203,9 @@ namespace detail {
 // after which returned credit is dropped.
 class http3_received_data_ledger final {
 public:
-    http3_received_data_ledger(std::pmr::memory_resource* resource, http3_received_data_credit_sink_type sink,
+    http3_received_data_ledger(http3_received_data_credit_sink_type sink,
         void* context) noexcept
-        : resource_(resource),
-          sink_(sink),
+        : sink_(sink),
           context_(context) {}
     http3_received_data_ledger(const http3_received_data_ledger&) = delete;
     http3_received_data_ledger& operator=(const http3_received_data_ledger&) = delete;
@@ -224,7 +219,7 @@ public:
             std::terminate();
         }
         if (--references_ == 0) {
-            destroy_http_pmr_object(this, resource_);
+            delete this;
         }
     }
 
@@ -241,7 +236,6 @@ public:
 
 private:
     std::size_t references_{1};
-    std::pmr::memory_resource* resource_;
     http3_received_data_credit_sink_type sink_;
     void* context_;
 };
@@ -293,10 +287,9 @@ void http3_received_data_credit::swap(http3_received_data_credit& other) noexcep
 }
 
 http3_data_event::http3_data_event(std::int64_t stream_id, std::string_view bytes,
-    std::pmr::memory_resource* resource, bool own_bytes, http3_received_data_credit credit)
+    bool own_bytes, http3_received_data_credit credit)
     : stream_id_(stream_id),
       bytes_(bytes),
-      owned_bytes_(detail::http_pmr_resource_or_default(resource)),
       owns_bytes_(own_bytes),
       credit_(std::move(credit)) {
     if (owns_bytes_) {
@@ -316,21 +309,11 @@ http3_data_event::http3_data_event(http3_data_event&& other) noexcept
     }
 }
 
-http3_data_event& http3_data_event::operator=(http3_data_event&& other) {
+http3_data_event& http3_data_event::operator=(http3_data_event&& other) noexcept {
     if (this == &other) {
         return *this;
     }
-    // Owned bytes are prepared in the target's resource before anything
-    // changes; codec events never borrow another event's storage.
-    std::pmr::string owned(owned_bytes_.get_allocator());
-    if (other.owns_bytes_) {
-        if (owned.get_allocator() == other.owned_bytes_.get_allocator()) {
-            owned.swap(other.owned_bytes_);
-        } else {
-            owned.assign(other.owned_bytes_);
-        }
-    }
-    owned_bytes_.swap(owned);
+    owned_bytes_ = std::move(other.owned_bytes_);
     owns_bytes_ = other.owns_bytes_;
     bytes_ = owns_bytes_ ? std::string_view(owned_bytes_) : other.bytes_;
     stream_id_ = other.stream_id_;
@@ -350,11 +333,10 @@ std::size_t http3_stream_output::size() const noexcept {
 class http3_connection::impl final {
 public:
     struct body_chunk final {
-        body_chunk(std::span<const std::byte> bytes,
-            std::pmr::memory_resource* resource)
-            : bytes_(reinterpret_cast<const char*>(bytes.data()), bytes.size(), resource) {}
+        explicit body_chunk(std::span<const std::byte> bytes)
+            : bytes_(reinterpret_cast<const char*>(bytes.data()), bytes.size()) {}
 
-        std::pmr::string bytes_;
+        std::string bytes_;
         std::size_t acknowledged_{0};
         bool provided_{false};
     };
@@ -367,16 +349,14 @@ public:
         trailers_ended,
     };
     struct stream_state final {
-        explicit stream_state(std::pmr::memory_resource* resource)
-            : body_(resource),
-              received_trailers_(resource),
-              building_header_size_(0) {}
+        stream_state() noexcept
+            : building_header_size_(0) {}
 
-        std::pmr::deque<body_chunk> body_;
+        std::deque<body_chunk> body_;
         // The section being decoded; its kind is building_trailers_.
-        std::optional<std::pmr::vector<http_header>> building_fields_;
+        std::optional<std::vector<http_header>> building_fields_;
         // The received trailer section, published with the message end.
-        std::pmr::vector<http_header> received_trailers_;
+        std::vector<http_header> received_trailers_;
         detail::binary_field_section_size building_header_size_;
         // Submitted DATA payload not yet acknowledged by the peer.
         std::size_t pending_bytes_{0};
@@ -424,8 +404,6 @@ public:
     };
     impl(http3_role role, const http3_connection_options& options)
         : role_(role),
-          resource_(detail::http_pmr_resource_or_default(options.resource_)),
-          memory_(resource_),
           memory_table_(detail::make_c_library_mem_table<nghttp3_mem>(memory_)),
           max_field_section_size_(options.max_field_section_size_),
           max_stream_output_bytes_(options.max_stream_output_bytes_),
@@ -434,13 +412,8 @@ public:
           frame_observer_(options.frame_observer_),
           field_observer_(options.field_observer_),
           observer_context_(options.observer_context_),
-          credit_ledger_(detail::construct_http_pmr_object<detail::http3_received_data_ledger>(
-              resource_, resource_, options.received_data_credit_sink_, options.received_data_credit_context_)),
-          events_(resource_),
-          streams_(resource_),
-          frame_scanners_(resource_),
-          initial_origin_payload_(resource_),
-          control_output_(resource_) {
+          credit_ledger_(new detail::http3_received_data_ledger(
+              options.received_data_credit_sink_, options.received_data_credit_context_)) {
         if (options.max_concurrent_streams_ == 0 ||
             options.max_stream_output_bytes_ == 0 ||
             options.qpack_max_dtable_capacity_ >
@@ -611,7 +584,7 @@ public:
     }
 
     [[nodiscard]] stream_state& ensure_stream(std::int64_t stream_id) {
-        auto [position, inserted] = streams_.try_emplace(stream_id, resource_);
+        auto [position, inserted] = streams_.try_emplace(stream_id);
         (void)inserted;
         return position->second;
     }
@@ -699,7 +672,7 @@ public:
         }
     }
 
-    [[nodiscard]] bool validate_received_response_trailers(stream_state& stream, std::pmr::vector<http_header>& fields) {
+    [[nodiscard]] bool validate_received_response_trailers(stream_state& stream, std::vector<http_header>& fields) {
         if (!stream.received_head_ || !stream.remote_content_.length_complete()) {
             return false;
         }
@@ -721,7 +694,7 @@ public:
     // Validates a received response head and queues its event. False rejects
     // the response as malformed (RFC 9114 §4.1.2).
     [[nodiscard]] bool publish_received_response_head(std::int64_t stream_id, stream_state& stream,
-        std::pmr::vector<http_header>& fields, bool stream_ended) {
+        std::vector<http_header>& fields, bool stream_ended) {
         if (stream.received_head_ || fields.empty() || fields.front().name() != ":status") {
             return false;
         }
@@ -748,7 +721,7 @@ public:
                 has_length = true;
             }
         }
-        auto head = detail::http_client_response_head_access::make(*status, http_protocol_version::http3, resource_);
+        auto head = detail::http_client_response_head_access::make(*status, http_protocol_version::http3);
         fields.erase(fields.begin());
         if (!fields.empty()) {
             detail::http_client_response_head_access::headers(head) = std::move(fields);
@@ -866,7 +839,7 @@ public:
                 stream->remote_content_.commit(size);
             }
             self.publish(http3_data_event(stream_id, {reinterpret_cast<const char*>(data), size},
-                self.resource_, self.own_data_events_,
+                self.own_data_events_,
                 http3_received_data_credit(self.credit_ledger_.ledger_, stream_id, size)));
         });
     }
@@ -890,7 +863,7 @@ public:
             if (result != 0) {
                 throw std::logic_error("failed to bind nghttp3 stream state");
             }
-            stream.building_fields_.emplace(self.resource_);
+            stream.building_fields_.emplace();
             stream.building_trailers_ = trailers;
             stream.building_header_size_ = detail::binary_field_section_size(self.max_field_section_size_);
             ++self.active_header_blocks_;
@@ -927,7 +900,7 @@ public:
             return NGHTTP3_ERR_CALLBACK_FAILURE;
         }
         return callback_guard(self, [&] {
-            stream->building_fields_->emplace_back(name_view, value_view, self.resource_);
+            stream->building_fields_->emplace_back(name_view, value_view);
             if (!stream->building_trailers_ && self.role_ == http3_role::server) {
                 if (name_view == ":method") {
                     stream->request_method_ = classify_http_method(value_view);
@@ -941,7 +914,7 @@ public:
 
     // A completed section: a client validates response heads and trailers, a
     // server request heads; trailers wait for the message end.
-    void receive_section(std::int64_t stream_id, stream_state& stream, std::pmr::vector<http_header> fields,
+    void receive_section(std::int64_t stream_id, stream_state& stream, std::vector<http_header> fields,
         bool trailers, bool stream_ended) {
         if (stream.read_aborted_) {
             return;
@@ -961,7 +934,7 @@ public:
             return;
         }
         stream.received_head_ = true;
-        auto head = http3_request_head::try_create(stream_id, std::move(fields), stream_ended, stream.early_data_, resource_);
+        auto head = http3_request_head::try_create(stream_id, std::move(fields), stream_ended, stream.early_data_);
         if (!head) {
             reject_received_message(stream_id, stream);
             return;
@@ -1023,7 +996,7 @@ public:
                 self.reject_received_message(stream_id, *stream);
                 return;
             }
-            auto trailers = std::exchange(stream->received_trailers_, std::pmr::vector<http_header>(self.resource_));
+            auto trailers = std::exchange(stream->received_trailers_, std::vector<http_header>{});
             self.publish(http3_message_end_event(stream_id, std::move(trailers)));
         });
     }
@@ -1031,7 +1004,7 @@ public:
     // Client: every open request stream at or above the GOAWAY identifier
     // stays unprocessed (RFC 9114 §5.2), reported in stream order.
     void report_goaway_unprocessed(std::int64_t goaway_id) {
-        std::pmr::vector<std::int64_t> ids(resource_);
+        std::vector<std::int64_t> ids;
         for (const auto& [stream_id, stream] : streams_) {
             if ((stream_id & 3) == 0 && stream_id >= goaway_id && stream.head_submitted() && !stream.unprocessed_) {
                 ids.push_back(stream_id);
@@ -1066,7 +1039,7 @@ public:
         }
         return callback_guard(self, [&] {
             if (!self.building_origins_) {
-                self.building_origins_.emplace(self.resource_);
+                self.building_origins_.emplace();
             }
             self.building_origin_bytes_ += size;
             const std::string_view candidate(reinterpret_cast<const char*>(origin), size);
@@ -1080,7 +1053,7 @@ public:
         auto& self = *static_cast<impl*>(user_data);
         return callback_guard(self, [&] {
             if (!self.building_origins_) {
-                self.building_origins_.emplace(self.resource_);
+                self.building_origins_.emplace();
             }
             self.publish(std::move(*self.building_origins_));
             self.building_origins_.reset();
@@ -1153,7 +1126,7 @@ public:
         auto position = streams_.find(stream_id);
         bool inserted = false;
         if (position == streams_.end()) {
-            auto result = streams_.try_emplace(stream_id, resource_);
+            auto result = streams_.try_emplace(stream_id);
             position = result.first;
             inserted = result.second;
         }
@@ -1192,7 +1165,7 @@ public:
 
     // A server request stream that exists and has no final head yet.
     [[nodiscard]] std::optional<http3_response_head_error> response_head_admission_error(
-        std::int64_t stream_id) noexcept {
+        std::int64_t stream_id, std::optional<http_status_code> final_status = std::nullopt) noexcept {
         if (connection_error_) {
             return http3_response_head_error::closed;
         }
@@ -1203,7 +1176,8 @@ public:
         if (stream == nullptr || stream->write_aborted_) {
             return http3_response_head_error::closed;
         }
-        if (stream->head_submitted()) {
+        if (!stream->received_head_ || stream->head_submitted() ||
+            (final_status.has_value() && final_status->is_successful() && stream->connect_)) {
             return http3_response_head_error::invalid_state;
         }
         return std::nullopt;
@@ -1229,7 +1203,7 @@ public:
         for (const auto& header : response.headers()) {
             name_bytes += header.name().size();
         }
-        outbound_field_section section(resource_, name_bytes, response.headers().size() + 3);
+        outbound_field_section section(name_bytes, response.headers().size() + 3);
         if (!detail::append_http_binary_response_fields(section, response, plan, outbound_field_limit())) {
             return http3_response_head_error::invalid_message;
         }
@@ -1337,7 +1311,6 @@ public:
     }
 
     http3_role role_;
-    std::pmr::memory_resource* resource_;
     detail::http_c_library_memory memory_;
     nghttp3_mem memory_table_;
     std::uint64_t max_field_section_size_;
@@ -1352,13 +1325,13 @@ public:
     std::optional<http3_peer_settings> peer_settings_;
     std::optional<http3_peer_settings> remembered_settings_;
     nghttp3_conn* connection_{nullptr};
-    std::pmr::vector<http3_event> events_;
+    std::vector<http3_event> events_;
     std::size_t event_offset_{0};
-    std::pmr::unordered_map<std::int64_t, stream_state> streams_;
+    std::unordered_map<std::int64_t, stream_state> streams_;
     // Per received stream, only with a frame observer.
-    std::pmr::unordered_map<std::int64_t, received_frame_scanner> frame_scanners_;
+    std::unordered_map<std::int64_t, received_frame_scanner> frame_scanners_;
     std::uint64_t frame_observation_sequence_{0};
-    std::pmr::vector<char> initial_origin_payload_;
+    std::vector<char> initial_origin_payload_;
     nghttp3_vec initial_origin_vec_{};
     std::optional<std::int64_t> control_stream_id_;
     detail::http3_control_extension_output control_output_;
@@ -1375,7 +1348,7 @@ public:
 
 http3_connection::http3_connection(
     http3_role role, const http3_connection_options& options)
-    : impl_(detail::make_http_pmr_object<impl>(options.resource_, role, options)) {}
+    : impl_(std::make_unique<impl>(role, options)) {}
 
 http3_connection http3_connection::client(http3_connection_options options) {
     return http3_connection(http3_role::client, options);
@@ -1581,7 +1554,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     for (const auto& header : headers) {
         name_bytes += header.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, headers.size() + 6);
+    outbound_field_section section(name_bytes, headers.size() + 6);
     section.add(":method", request.method_);
     section.add(":scheme", request.scheme_);
     if (authority) {
@@ -1629,7 +1602,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     for (const auto& header : headers) {
         name_bytes += header.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, headers.size() + 2);
+    outbound_field_section section(name_bytes, headers.size() + 2);
     section.add(":method", "CONNECT");
     section.add(":authority", request.authority_);
     for (const auto& header : headers) {
@@ -1680,7 +1653,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     for (const auto& header : headers) {
         name_bytes += header.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, headers.size() + 5);
+    outbound_field_section section(name_bytes, headers.size() + 5);
     section.add(":method", "CONNECT");
     section.add(":protocol", protocol);
     section.add(":scheme", request.scheme_);
@@ -1724,7 +1697,7 @@ http3_data_submit_result http3_connection::submit_data(
     if (accepted == 0) {
         return {.status_ = http3_data_submit_status::backpressured};
     }
-    stream->body_.emplace_back(bytes.first(accepted), impl_->resource_);
+    stream->body_.emplace_back(bytes.first(accepted));
     stream->pending_bytes_ += accepted;
     const int result = nghttp3_conn_resume_stream(impl_->connection_, stream_id);
     if (result != 0) {
@@ -1796,7 +1769,7 @@ http3_finish_status http3_connection::finish_request(std::int64_t stream_id,
         }
         name_bytes += field.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, trailers.size());
+    outbound_field_section section(name_bytes, trailers.size());
     for (const auto& field : trailers) {
         section.add_lowercase(field.name(), field.value());
     }
@@ -1806,10 +1779,11 @@ http3_finish_status http3_connection::finish_request(std::int64_t stream_id,
 std::variant<http_buffered_response_write_plan, http3_response_head_error>
 http3_connection::submit_response_head(std::int64_t stream_id, const http_response& response,
     http_buffered_response_write_plan write_plan) {
-    if (const auto error = impl_->response_head_admission_error(stream_id)) {
+    if (const auto error = impl_->response_head_admission_error(stream_id, response.status())) {
         return *error;
     }
-    if (!write_plan.matches_response(response)) {
+    if (write_plan.body_plan().request_method() != impl_->find_stream(stream_id)->request_method_ ||
+        !write_plan.matches_response(response)) {
         return http3_response_head_error::response_plan_mismatch;
     }
     if (detail::http_binary_final_response_control_plan(response).has_value()) {
@@ -1835,7 +1809,7 @@ http3_connection::submit_response_head(std::int64_t stream_id, const http_respon
 std::variant<http_response_stream_commit_plan, http3_response_head_error>
 http3_connection::submit_streaming_response_head(std::int64_t stream_id,
     http_response head, http_response_trailer_intent trailer_intent) {
-    if (const auto error = impl_->response_head_admission_error(stream_id)) {
+    if (const auto error = impl_->response_head_admission_error(stream_id, head.status())) {
         return *error;
     }
     auto commit_plan = plan_http_response_stream_commit(http_response_stream_framing::http3_frames,
@@ -1869,7 +1843,7 @@ http3_submit_status http3_connection::submit_interim_response_head(
     if (impl_->role_ != http3_role::server || stream == nullptr) {
         return stream == nullptr ? http3_submit_status::closed : http3_submit_status::invalid_state;
     }
-    if (stream->head_submitted()) {
+    if (!stream->received_head_ || stream->head_submitted()) {
         return http3_submit_status::invalid_state;
     }
     const auto headers = response.headers();
@@ -1877,7 +1851,7 @@ http3_submit_status http3_connection::submit_interim_response_head(
     for (const auto& header : headers) {
         name_bytes += header.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, headers.size() + 1);
+    outbound_field_section section(name_bytes, headers.size() + 1);
     if (!detail::append_http_binary_interim_response_fields(section, response, impl_->outbound_field_limit())) {
         return http3_submit_status::invalid_message;
     }
@@ -1905,7 +1879,7 @@ http3_finish_status http3_connection::finish_response(
         }
         name_bytes += field.name().size();
     }
-    outbound_field_section section(impl_->resource_, name_bytes, fields.size());
+    outbound_field_section section(name_bytes, fields.size());
     for (const auto& field : fields) {
         section.add_lowercase(field.name(), field.value());
     }
@@ -1947,8 +1921,8 @@ http3_connection::submit_websocket_handshake(std::int64_t stream_id, const http_
     if (!stream->received_head_ || !stream->connect_ || !stream->websocket_ || validation.accepted() == nullptr) {
         return http3_response_head_error::invalid_state;
     }
-    auto negotiation = detail::make_websocket_server_negotiation(request, options, impl_->resource_);
-    outbound_field_section section(impl_->resource_, 0, negotiation.response_headers().size() + 4);
+    auto negotiation = detail::make_websocket_server_negotiation(request, options);
+    outbound_field_section section(0, negotiation.response_headers().size() + 4);
     if (!detail::append_http_binary_websocket_response_fields(section, negotiation, impl_->outbound_field_limit())) {
         return http3_response_head_error::invalid_message;
     }
@@ -1981,7 +1955,7 @@ http3_transport_result http3_connection::read_datagram(std::span<const std::byte
         (stream->received_head_ || (impl_->role_ == http3_role::client && stream->head_submitted()))) {
         const auto content = payload.subspan(std::get<0>(parsed).encoded_bytes_);
         impl_->publish(http3_datagram_event(
-            id, std::pmr::string(reinterpret_cast<const char*>(content.data()), content.size(), impl_->resource_)));
+            id, std::string(reinterpret_cast<const char*>(content.data()), content.size())));
     }
     return {};
 }

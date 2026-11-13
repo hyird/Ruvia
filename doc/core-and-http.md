@@ -23,7 +23,7 @@
 - **根任务替换**：`root_task` 移动赋值先接管源状态，再退役旧状态；旧结果析构时重写源句柄或释放其宿主，不会丢失已接管的任务。
 - **作用域任务移交**：`make_scoped_operation()` 的结果可直接交给 `task_scope::spawn()`；执行完毕后的内部移交仍保留作用域登记，直到帧释放才允许 `close_and_join()` 完成。
 - **关闭重入**：冷帧清理可重入已开始关闭的 `operation_scope::close()`；存在运行中任务或尚未释放帧的完成任务时，仍须使用 `close_and_join()`，不能同步关闭。
-- **Worker 句柄借用**：`task_scope`、`worker_signal` 构造及 `operation_scope::bind_worker()`、`sleep_for()`、`sleep_until()` 只接受左值 `worker_handle`，拒绝含 `const` 的右值；句柄须地址稳定并覆盖作用域、信号或等待操作的寿命。
+- **Worker 引用借用**：`task_scope`、`worker_signal` 构造及 `operation_scope::bind_worker()`、`sleep_for()`、`sleep_until()` 只接受左值 `worker_ref`，拒绝含 `const` 的右值；引用宿主须地址稳定并覆盖作用域、信号或等待操作的寿命。
 
 ---
 
@@ -36,8 +36,8 @@
 | `"ruvia/core/operation_timeout.h"` | `class operation_timeout final` | 单次操作上限规格：正的相对时长（自操作启动计时）或绝对 `steady_clock::time_point` 截止期（可已过期），构造即合法。相对构造（整数 chrono 时长、`timeout_duration`）隐式、非正抛 `std::invalid_argument`；`try_create()` 是非正返回 `std::nullopt` 的容错入口；`duration()` / `deadline()` 分别只在对应形态有值，`deadline_from(start)` 解析截止期 |
 | `"ruvia/core/operation_options.h"` | `struct operation_options final { std::optional<operation_timeout> timeout_; stop_token stop_token_; }`、`override_operation_options(base, overrides)` | 唯一的操作入参形状 |
 | `"ruvia/core/operation_deadline.h"` | `class operation_deadline final`、`template <typename Kind = std::monostate> class deadline_lifecycle final` | `operation_deadline` 是已启动操作解析后的截止期，在异步阶段间共享：默认无上限，`operation_deadline(std::optional<operation_timeout>)` 按当前时刻解析；`remaining()` 返回 `std::optional<std::chrono::milliseconds>`，`timeout()` 以绝对形态转交给嵌套操作。`deadline_lifecycle` 是分配无关的截止期状态（inactive / active / expired 互斥） |
-| `"ruvia/core/worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_handle::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
-| `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_handle&, timeout_duration, [stop_token])`、`sleep_until(const worker_handle&, steady_clock::time_point, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长或直至截止时间点；时长是睡眠目标而非操作上限，`sleep_for(d)` 等价于 `sleep_until(now + d)`，非正时长与已过截止期一样不挂起直接 `elapsed`；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
+| `"ruvia/core/worker_timer.h"` | `class worker_timer_registration final`、`class worker_timer_cancellation final`、`enum class worker_timer_outcome { expired, cancelled }` | 单 Worker 侵入式定时器注册句柄，配合 `worker_ref::schedule_timer` 使用；提供 `cancel()`（静默取消）与 `cancel_and_notify()` |
+| `"ruvia/core/timer.h"` | `enum class timer_sleep_result { elapsed, stop_requested }`、`class sleep_operation final`、`sleep_for(const worker_ref&, timeout_duration, [stop_token])`、`sleep_until(const worker_ref&, steady_clock::time_point, [stop_token])` | 在绑定 Worker 上挂起当前协程指定时长或直至截止时间点；时长是睡眠目标而非操作上限，`sleep_for(d)` 等价于 `sleep_until(now + d)`，非正时长与已过截止期一样不挂起直接 `elapsed`；返回可丢弃、仅启动前可移动的单次冷 `sleep_operation`，须在绑定 Worker 上 `co_await` 启动。若传入的 `stop_token` 触发或 Worker 停止定时器，返回 `stop_requested` 而不抛异常 |
 
 - **注册重入边界**：两种 `register_callback()` 入口均先固定取消状态，再内部移交回调或退役旧注册；后续不再读取 token 宿主，旧载荷析构可清空或销毁 token。
 - **取消目标借用**：`worker_cancellation_registration` 不保留目标的共享引用，只接受左值 `shared_ptr`、拒绝含 `const` 的右值；目标须由调用方持续持有，直至 `reset()` 等待回调结束并清除操作身份。
@@ -67,10 +67,10 @@ ruvia::event_loop_pool pool({.loop_count_ = 2, .queue_capacity_ = 1024});
 pool.start();
 
 ruvia::event_loop loop = pool.next_loop();
-auto root = loop.start([](ruvia::worker_handle worker) -> ruvia::task<int> {
+auto root = loop.start([](ruvia::worker_ref worker) -> ruvia::task<int> {
     (void)co_await ruvia::sleep_for(worker, std::chrono::milliseconds(10));
     co_return 42;
-}(loop.handle()));
+}(loop.worker()));
 
 int answer = std::move(root).get();
 pool.join();
@@ -78,21 +78,21 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
-| `"ruvia/core/event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final`、`class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量句柄，只承担循环生命周期职责（`valid()`、`handle()`、`io_context()`、`executor()`、`report_failure(e)`、`defer_cleanup(fn)`、`try_start(task<T>)` / `start(task<T>)`、`on_stop(fn)`）；准入状态、身份、投递与定时器经 `handle()` 返回的 `worker_handle` 访问，以及将 Ruvia Worker 挂载到外部自管 `asio::io_context` 的适配器（`loop()`、`run()`、`stop()`、`valid()`） |
+| `"ruvia/core/event_loop.h"` | `class event_loop final`、`class event_loop_stop_registration final`、`class event_loop_attachment final`、`attach_event_loop(asio::io_context&, options = {})` | 指向单个 Worker 运行时及其 `asio::io_context` 的轻量引用，只承担循环生命周期职责（`valid()`、`worker()`、`io_context()`、`executor()`、`report_failure(e)`、`defer_cleanup(fn)`、`try_start(task<T>)` / `start(task<T>)`、`on_stop(fn)`）；准入状态、身份、投递与定时器经 `worker()` 返回的 `worker_ref` 访问，以及将 Ruvia Worker 挂载到外部自管 `asio::io_context` 的适配器（`loop()`、`run()`、`stop()`、`valid()`） |
 | `"ruvia/core/event_loop_pool.h"` | `class event_loop_pool final`、`struct event_loop_pool_options` | 管理固定数量独立事件循环线程的池。提供 `start()`、`stop()`、`join()`、`loop_count()`、`loop(index)`、`next_loop()`、`loop_for(key)` |
-| `"ruvia/core/worker_handle.h"` | `class worker_handle final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final`、`class worker_shutdown_registration final`、`enum class worker_registration_status { registered, worker_stopping }`、`concept worker_shutdown_observer` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`blocking_pool()`（借用的阻塞池或空）、`executor()`、`post(fn)`、`post_factory(factory)`、`post_payload(payload, wrap)`（准入后才把负载包装成回调，拒绝时退回负载）、`schedule_timer(...)`、`defer_resume(handle)`、`defer_completion(fn)`、`register_shutdown(owner, &Owner::registration)` |
+| `"ruvia/core/worker_ref.h"` | `class worker_ref final`、`using worker_id_type = std::uint64_t`、`enum class post_status`、`template <typename Sig> class post_outcome final`、`class worker_shutdown_registration final`、`enum class worker_registration_status { registered, worker_stopping }`、`concept worker_shutdown_observer` | 跨线程安全的稳定派发端点与有界队列投递结果。提供 `valid()`、`accepting()`、`is_current()`、`id()`、`blocking_pool()`（借用的阻塞池或空）、`executor()`、`post(fn)`、`post_factory(factory)`、`post_payload(payload, wrap)`（准入后才把负载包装成回调，拒绝时退回负载）、`schedule_timer(...)`、`defer_resume(handle)`、`defer_completion(fn)`、`register_shutdown(owner, &Owner::registration)` |
 | `"ruvia/core/worker_runtime.h"` | `class worker_runtime final`、`struct worker_runtime_options`、`struct worker_runtime_hooks`、`enum class worker_runtime_state` | 底层单 Worker 线程与两阶段启停状态机（`startup -> ready -> serve -> stop_admission -> finalize -> drain -> shutdown -> join`）；`take_failure()` 接管首个失败的上报责任，析构不再上报，重复调用返回同一失败；`loop() &` 返回该 Worker 的 `event_loop`（首次调用时创建，`report_failure()` 使运行时失败），此后运行时的 `stop_admission` 等待循环的根任务、停机回调与清理排空后才执行；循环借用运行时，任何副本不得比运行时活得久 |
 | `"ruvia/core/worker_group.h"` | `class worker_group final` | 协调多个 `worker_runtime` 同步完成两阶段启动屏障（`start()` / `serve()`）与停机回收（`request_stop()` / `join()`） |
-| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_handle, [operation_options], fn)`、`using blocking_submit_result` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_handle::blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待（相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享）；已停止的令牌或已过期截止期同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
+| `"ruvia/core/blocking_pool.h"` | `class blocking_pool final`、`template <typename T> class blocking_result final`、`run_blocking(worker_ref, [operation_options], fn)`、`using blocking_submit_result` | 固定大小阻塞卸载线程池，由调用方拥有：通过 `event_loop_pool_options`、`attach_event_loop` 的选项或 `worker_runtime_options` 的 `blocking_pool_` 交给事件循环借用，须比事件循环存活更久；core 不持有隐式进程级池。`run_blocking` 在绑定 Worker 上 `co_await`，将 `fn` 提交至该 Worker 借用的池并在完成后回到原 Worker 恢复协程；Worker 没有池时返回 `blocking_status::unavailable`，不提交 `fn`（`worker_ref::blocking_pool()` 可预先查询）。`operation_options` 的 `timeout_` / `stop_token_` 只限定等待（相对上限自任务启动计时，绝对截止期可与调用方其他阶段共享）；已停止的令牌或已过期截止期同样不提交 `fn`。调用或交付值的异常保存在结果中并由 `value()` 或 `take_value()` 重新抛出。超时、取消或 Worker 停机先释放等待者；已开始的调用继续完成，但只持有自身数据，迟到结果被丢弃 |
 
 - **启动准入**：`try_start()` 先取有界准入槽位再移动任务，结果 `event_loop_start_result<T>`（即 `worker_delivery_result<task<T>, post_status, accepted, root_task<T>>`）的类别构造后固定；接受时以 `value()` / `take_value()` 取得 `root_task`，`queue_full` 或 `worker_stopping` 时以 `rejected()` / `take_rejected()` 退回未消费的冷任务，仅分配失败抛异常。
 - **严格启动**：`start()` 基于 `try_start()`，拒绝时销毁冷任务并抛 `event_loop_start_rejected`（`std::runtime_error` 子类），`status()` 区分队列满与停机；已准入但因停机未运行的根任务同样以该异常（`worker_stopping`）完成。
-- **完成通道**：`worker_handle::defer_completion(fn)` 是已准入操作的完成、取消与恢复通道，不受队列满拒绝，本线程调用也在后续轮次执行，不另取退役保护；执行上下文分离后返回 `false` 并在调用线程销毁 `fn`。
+- **完成通道**：`worker_ref::defer_completion(fn)` 是已准入操作的完成、取消与恢复通道，不受队列满拒绝，本线程调用也在后续轮次执行，不另取退役保护；执行上下文分离后返回 `false` 并在调用线程销毁 `fn`。
 - **循环清理**：`event_loop::defer_cleanup(fn)` 是循环级冷路径资源清理，不属于任何已准入操作：绕过有界准入但取退役保护，回调及其输入在循环释放执行上下文前退役；退役开始后可返回 `false`。
 - **停机观察**：`register_shutdown(owner, &Owner::registration)` 将所有者成员链入 Worker 停机登记，停机线程先对全部所有者调用 `worker_stopping() noexcept`，再调用 `worker_stopping_complete() noexcept`；仅持弱引用，已在析构的所有者被跳过。
 - **停机登记寿命**：`worker_shutdown_registration` 须为所有者首个数据成员，析构即摘链；Worker 已停止接收时返回 `worker_stopping` 且不链入，重复登记抛 `std::logic_error`。
-- **原生执行器**：`worker_handle::executor()` 返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
-- **执行器寿命**：空句柄或已退役 Worker 获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
+- **原生执行器**：`worker_ref::executor()` 返回 `asio::io_context::executor_type`，可直接创建 socket、定时器并接入其他 Asio 库；不是有界业务准入入口。
+- **执行器寿命**：空引用或已退役 Worker 获取执行器抛 `std::logic_error`；停机排空期间仍可供在途操作完成。执行器借用物理 context，不延长其寿命；调用方须在运行时退役前结束原生操作。
 - **外部循环失败出口**：`event_loop_attachment_options::failure_` 拥有接收 `std::exception_ptr` 的回调；未配置时保留默认诊断。具名 options 通过 `std::move` 交给 `attach_event_loop()`。
 - **失败交付线程**：先请求停止，再在报告线程锁外同步调用；可能跨线程并发或重入，接收器负责自身同步。回调异常仅进入诊断，不逃出宿主 `run()`，不打断清理。
 - **失败出口寿命**：回调保留到最后一个 loop-state owner 释放；借用捕获须覆盖该寿命，禁止捕获 owning loop 形成环。全部 owner 消失后的迟到根任务异常回落默认诊断。
@@ -118,14 +118,13 @@ pool.join();
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
 | `"ruvia/core/worker_wait_result.h"` | `enum class worker_wait_status { value, closed, worker_stopping, timed_out, cancelled }`、`template <typename T> class worker_wait_result final` | Worker 等待操作的统一返回包装（提供 `status()`、`has_value()`、`value()`、`take_value()`）；`with_value(value)` / `with_status(status)` 构造同类结果，`with_status(value)` 抛 `std::invalid_argument`。同头的 `worker_delivery_result<T, Status, Accepted, AcceptedValue = void>` 是 post / submit / send / complete / start 的统一投递结果：拒绝时持有未消费负载，`AcceptedValue` 非 `void` 时接受结果持有其值（`value()` / `take_value()`）；只能由投递原语产生，外部不可构造 |
-| `"ruvia/core/worker_wait.h"` | `template <typename T, typename State> class worker_wait_slot final`、`template <typename T, typename State> class worker_single_wait_awaiter final`、`concept worker_wait_state`、`make_worker_wait_state<State>(resource, args...)` | 单挂起等待者的 Worker 绑定等待构件，`channel` 与 `one_shot` 即由其组合；外部原语按同一契约组合超时、取消与 `worker_stopping` |
-| `"ruvia/core/channel.h"` | `make_channel<T>(worker_handle, channel_options)`、`class channel_sender<T>`、`class channel_receiver<T>`、`channel_receiver<T>::receive_operation` | 有界 MPSC 通道：`channel_sender` 可拷贝并支持多生产者跨线程 `send(value)`；`channel_receiver` 绑定单个目标 Worker，`receive(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `receive_operation`，须在绑定 Worker 上 `co_await` 启动。`send_wait(value, operation_options = {})` 返回冷 `channel_send_operation<T>`：有空位立即投递，满载时挂起，多个等待发送方按 FIFO 取得接收方释放的空位（空位预留给队首等待者，经其 Worker 的恢复通道恢复，不内联）；须在某个 Worker 线程上 `co_await`，在该 Worker 恢复，不在 Worker 上抛 `std::logic_error`；关闭、任一方 Worker 停机（`worker_stopping`）、超时（`timed_out`）或取消（`cancelled`）时经结果完整退回值，`send()` 永不返回后两者。容量限制排队值与正在构造的发送预留；预分配一个额外交付槽，若所有槽均暂被接收或销毁操作占用，发送可返回 `full`。并发发送按发布顺序交付；构造期间关闭通道则返回被拒绝的值。`send()` 调用期间须保持调用者对象存活，包括值的移动和析构 |
-| `"ruvia/core/one_shot.h"` | `make_one_shot<T>(worker_handle, one_shot_options = {})`、`class one_shot_completion<T>`、`class one_shot_receiver<T>`、`one_shot_receiver<T>::wait_operation` | 跨线程单次值交付原语：`complete(value)` 可在任意线程调用，`wait(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `wait_operation`，须在绑定 Worker 上 `co_await` 启动。另一交付正在构造值时返回 `in_progress` 和被拒绝的值；构造失败后可重试，构造期间接收端关闭或 Worker 停机则拒绝交付。已交付值在接收端移动失败时异常传给接收端且值已消费。调用期间须保持 completion 句柄存活，包括值的移动和析构 |
+| `"ruvia/core/worker_wait.h"` | `template <typename T, typename State> class worker_wait_slot final`、`template <typename T, typename State> class worker_single_wait_awaiter final`、`concept worker_wait_state`、`make_worker_wait_state<State>(args...)` | 单挂起等待者的 Worker 绑定等待构件，`channel` 与 `one_shot` 即由其组合；外部原语按同一契约组合超时、取消与 `worker_stopping` |
+| `"ruvia/core/channel.h"` | `make_channel<T>(worker_ref, channel_options)`、`class channel_sender<T>`、`class channel_receiver<T>`、`channel_receiver<T>::receive_operation` | 有界 MPSC 通道：`channel_sender` 可拷贝并支持多生产者跨线程 `send(value)`；`channel_receiver` 绑定单个目标 Worker，`receive(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `receive_operation`，须在绑定 Worker 上 `co_await` 启动。`send_wait(value, operation_options = {})` 返回冷 `channel_send_operation<T>`：有空位立即投递，满载时挂起，多个等待发送方按 FIFO 取得接收方释放的空位（空位预留给队首等待者，经其 Worker 的恢复通道恢复，不内联）；须在某个 Worker 线程上 `co_await`，在该 Worker 恢复，不在 Worker 上抛 `std::logic_error`；关闭、任一方 Worker 停机（`worker_stopping`）、超时（`timed_out`）或取消（`cancelled`）时经结果完整退回值，`send()` 永不返回后两者。容量限制排队值与正在构造的发送预留；预分配一个额外交付槽，若所有槽均暂被接收或销毁操作占用，发送可返回 `full`。并发发送按发布顺序交付；构造期间关闭通道则返回被拒绝的值。`send()` 调用期间须保持调用者对象存活，包括值的移动和析构 |
+| `"ruvia/core/one_shot.h"` | `make_one_shot<T>(worker_ref)`、`class one_shot_completion<T>`、`class one_shot_receiver<T>`、`one_shot_receiver<T>::wait_operation` | 跨线程单次值交付原语：`complete(value)` 可在任意线程调用，`wait(operation_options = {})` 返回可丢弃、仅启动前可移动的单次冷 `wait_operation`，须在绑定 Worker 上 `co_await` 启动。另一交付正在构造值时返回 `in_progress` 和被拒绝的值；构造失败后可重试，构造期间接收端关闭或 Worker 停机则拒绝交付。已交付值在接收端移动失败时异常传给接收端且值已消费。调用期间须保持 completion 存活，包括值的移动和析构 |
 | `"ruvia/core/worker_signal.h"` | `class worker_signal final`、`worker_signal::wait_operation` | 同 Worker 内部闩锁合并通知；`wait()` 返回可丢弃、仅启动前可移动的单次冷等待器，不是 `task<void>`。创建和启动须在所属 Worker，`notify()` 同样须在所属 Worker 调用，否则二者都抛 `std::logic_error`；启动后必须等待完成；支持多个等待者，直接挂入调用方协程帧 |
 | `"ruvia/core/worker_notification.h"` | `class worker_notification final` | 跨线程闩锁合并通知原语（任意线程无锁 `notify()`，所属 Worker 上 `co_await notification.wait()`）。从 `event_loop` 构造时仅接受左值、拒绝含 `const` 的右值；借用的 loop 须保持地址稳定并覆盖通知对象的寿命 |
 | `"ruvia/core/pool_lease_scheduler.h"` | `class pool_lease_scheduler final`、`class pool_lease_acquire final` | 单 Worker 连接/槽位池租约调度器（空闲时同步返回槽位下标，满载时挂起排队并支持超时与取消）；`acquire(operation_options = {})`。与 `channel` / `one_shot` 一致，绑定 Worker 的停机通知到达或定时器队列停止后，排队中与新到的满载 acquire 以 `worker_stopping` 完成，空闲槽位仍同步租出 |
-| `"ruvia/core/memory/request_memory.h"` | `class request_memory final`、`request_arena_initial_bytes`、`collect_thread_heap()` | 单次请求单调 Arena（支持 `allocator<T>()`、`resource()`、`fork()`），初始块按字节数配置；调用线程 mimalloc 线程堆的手动收集 |
-| `"ruvia/core/memory/pmr_object.h"` | `std::pmr::memory_resource* process_resource() noexcept`、`pmr_resource_or_default(resource)`、`construct_pmr_object`、`destroy_pmr_object`、`make_pmr_object` | 进程级线程安全 mimalloc PMR 适配资源、回退辅助与 PMR 对象构造/销毁工具 |
+| `"ruvia/core/memory.h"` | `void collect_thread_heap() noexcept` | 强制收集调用线程的 mimalloc 线程堆及共享 arena 的待回收范围，不影响存活分配 |
 | `"ruvia/core/move_only_function.h"` | `template <typename Sig> class move_only_function` | 带 `3 * sizeof(void*)` 小对象内联优化（SBO）的仅移动可调用包装器；支持普通与 `noexcept` 签名，后者编译期拒绝可抛目标。`const` 包装器仍可调用可变目标，跨线程调用须由目标同步。移动赋值与赋空共用退役路径：先提取源并提交，再于独立存储销毁旧目标，支持旧目标拥有源包装器；旧目标析构时的重入赋值最终生效 |
 | `"ruvia/core/fnv1a.h"` | `fnv1a_offset_basis`、`fnv1a_prime`、`fnv1a_accumulate`、`fnv1a_accumulate_integer` | 零分配、可编译期求值的 64 位 FNV-1a 非密码学散列；整数按小端字节混入，跨平台结果一致 |
 | `"ruvia/core/bytes.h"` / `"ruvia/core/failure_report.h"` / `"ruvia/core/socket.h"` | `as_bytes`、`as_chars`、`error_code_text`、`system_error_text`、`parse_ip_address`、`close_socket` | 字节/字符零拷贝视图转换（拒绝绑定临时拥有型字符串或连续字节容器，调用方须保持底层存储存活到消费完成）、跨平台 UTF-8 系统错误文本转换、严格 IPv4/IPv6 字面量解析（返回 `std::optional<asio::ip::address>`）与取消未完成 I/O 后关闭 TCP socket |
@@ -140,26 +139,22 @@ pool.join();
 - **交付状态保活**：`one_shot_completion::complete()` 与 `channel_sender::send()` 在移动 payload 前固定状态所有权；同步重绑调用句柄不改变本次操作目标，原状态保留至提交或拒绝处理完成。
 
 - **等待构件状态**：共享状态提供 `worker()`、`lock_state()` 与 `wait_slot()`，所有槽位调用都持该锁；`worker_wait_state` 还要求名为 `shutdown_registration_` 的 `worker_shutdown_registration` 数据成员并满足 `worker_shutdown_observer`，经它把 `worker_stopping` 交给槽位。
-- **等待构件创建**：`make_worker_wait_state<State>(resource, args...)` 从 `resource` 分配状态并把 `shutdown_registration_` 链入其 Worker 的停机登记；Worker 已停止接收时抛 `std::runtime_error`。
+- **等待构件创建**：`make_worker_wait_state<State>(args...)` 分配状态并把 `shutdown_registration_` 链入其 Worker 的停机登记；Worker 已停止接收时抛 `std::runtime_error`。
 - **等待构件协议**：每次等待按值持有一个 `worker_single_wait_awaiter`；`await_ready` 先 `start()`，再持锁 `complete_ready()` 已有结果或 `complete_or_publish()` 挂起，随后 `suspend()` / `take_result()`。
-- **等待构件交付**：领域事件持锁经 `wait_slot().complete(...)` 交付值或终止状态；启动前可移动，启动后地址固定，同一状态只允许一个挂起等待者。
+- **等待构件交付**：领域事件持锁经 `wait_slot().complete(...)` 交付平凡可移动值或终止状态；启动前可移动，启动后地址固定，同一状态只允许一个挂起等待者。
 
 `pool_lease_scheduler` 的空闲槽位仍同步获取；`release(slot)` 向排队者提交槽位归属后，通过后续 Worker 轮次恢复该协程，不在释放调用栈内执行下一位消费者，避免连续立即释放形成递归链。`close()` 同样先向全部排队者提交 `closed` 结果，再通过后续 Worker 轮次恢复它们，调用方的关闭序列在任何等待者观察到关闭前完成。提交后的取消或 `close()` 不撤销已交接槽位；尚未交接的等待者按原取消、超时和关闭规则完成。不得依赖 `release()` 或 `close()` 返回代表排队协程已经完成，销毁 scheduler 前仍须等待已启动的 acquire 完成。
 
-框架默认内存由 mimalloc 承载：`process_resource()` 是存活至进程结束的线程安全 PMR 适配器，供跨线程共享状态与停止状态使用；协程帧直接使用 mimalloc。接受显式 PMR 的 API 优先使用调用方资源，调用方须保证资源覆盖所分配对象的生命周期。
+框架内存由 mimalloc 原生承载，全仓使用标准容器，不设 `std::pmr` 包装层或额外池层；协程帧直接使用 mimalloc。
 
-- **原生线程堆**：不另建 `mi_heap_t` 或 Worker 级 PMR 资源；`process_resource()` 的分配直接落在调用线程的 mimalloc 线程堆，可在任意线程释放；不叠加尺寸类缓存、对象头或协程帧缓存。
+- **原生线程堆**：不另建 `mi_heap_t` 或 Worker 级池；分配直接落在调用线程的 mimalloc 线程堆，可在任意线程释放；不叠加尺寸类缓存、对象头或协程帧缓存。
 - **Asio 缓存**：`ruvia::core` 公开传递 `ASIO_DISABLE_SMALL_BLOCK_RECYCLING` 与 `ASIO_DISABLE_AWAITABLE_FRAME_RECYCLING`，所有翻译单元保持一致；不在 mimalloc 之上叠加 handler 或 awaitable 帧缓存。
-- **请求 Arena**：`request_memory(initial_bytes)` 以 `process_resource()` 为上游按请求批量释放，初始块字节数须大于零；`fork()` 只沿用初始块大小，不借用父 Arena 的存储。
 - **HTTP/1 工作集**：仅在活跃请求期间持有，流水线请求连续复用；连接空闲、关闭或异常退出时直接释放给 mimalloc，不维护空闲工作集缓存。
-- **原生回收**：不覆盖 mimalloc 的原生回收默认值；回收延迟不是 RSS 归还期限或保留内存上限。完全空闲的线程不会自行执行到期收集，因此 Web 在完整空闲扫描周期后于该 Worker 上触发一次 `collect_thread_heap()`，不自建回收线程。
-- **手动收集**：`collect_thread_heap()` 强制收集调用线程的线程堆及共享 arena 的待回收范围，不影响存活分配。
-- **透明大页**：Linux 的 `x64-linux` 与 `x64-linux-musl` triplet 为 mimalloc 设置 `-DMI_NO_THP=ON`，由分配器初始化时关闭进程 THP；外部依赖构建须采用相同选项，不在 Ruvia 中重复调用 `prctl` 或覆盖 `allow_thp`。
-- **musl 构建**：`x64-linux-musl` triplet 另设 mimalloc 官方选项 `-DMI_LIBC_MUSL=ON`，由 mimalloc 选择适配 musl 的 TLS 模型与线程指针访问；外部 musl 依赖构建须采用相同选项。
-- **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。
-- **错误文本资源**：`error_code_text()` 与 `system_error_text()` 返回绑定 `process_resource()` 的 `std::pmr::string`；标准异常构造、`std::error_category::message()` 与第三方固定类型接口仍保留必要的 `std::string` 边界。
+- **原生回收与手动收集**：不覆盖 mimalloc 的原生回收默认值；Web 在完整空闲扫描周期后于该 Worker 上触发一次 `collect_thread_heap()`，强制收集调用线程的线程堆及共享 arena 的待回收范围，不自建回收线程。
+- **透明大页与 musl 构建**：Linux 的 `x64-linux` 与 `x64-linux-musl` triplet 为 mimalloc 设置 `-DMI_NO_THP=ON`；`x64-linux-musl` 另设 `-DMI_LIBC_MUSL=ON`。
+- **失败与检测**：分配失败抛 `std::bad_alloc`；sanitizer 构建使用系统分配器，不保留自建缓存。`error_code_text()` 与 `system_error_text()` 返回 `std::string`。
 
-非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖，仅通过显式 API 承载框架资源和协程帧，不替换宿主标准分配接口。两种接入都不替换 `std::pmr::get_default_resource()` 对象，也不改变显式 PMR 的优先级。独立 `ruvia::http` 不依赖 core 或 mimalloc，未显式指定 PMR 时仍遵循调用方的标准 PMR 默认资源。
+非 Windows 构建启用 mimalloc 普通 `override`，在最终链接中保留静态库，对标准 `malloc` / `free` 与全局 `new` / `delete` 使用 mimalloc；不得叠加另一套全局 allocator replacement。Windows 保持原静态 CRT 与普通 mimalloc 依赖。独立 `ruvia::http` 不依赖 core 或 mimalloc。
 
 ---
 
@@ -171,25 +166,25 @@ pool.join();
 
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
-| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final`、`template <typename element_type> class borrowed_span final` | 只读字符串与连续元素序列借用视图，拒绝直接绑定临时拥有型字符串、临时连续容器（`std::vector`、`std::pmr::vector`、`std::array`）及 `std::initializer_list`，但不延长底层 owner 的生命周期；调用方仍须保持命名存储有效直到消费入口完成读取或拥有化 |
+| `"ruvia/http/borrowed_text.h"` | `class borrowed_text final`、`template <typename element_type> class borrowed_span final` | 只读字符串与连续元素序列借用视图，拒绝直接绑定临时拥有型字符串、临时连续容器（`std::vector`、`std::array`）及 `std::initializer_list`，但不延长底层 owner 的生命周期；调用方仍须保持命名存储有效直到消费入口完成读取或拥有化 |
 | `"ruvia/http/port_number.h"` | `class port_number final` | 原始整数宽度受检的端口值；在格式化或原生 API 边界用 `value()` 显式解包 |
 | `"ruvia/http/ip_address.h"` / `"ruvia/http/http_client_ip.h"` | `ip_address`、`ip_address_family`、`ip_endpoint`、`ip_cidr`、`http_client_ip_extractor`、`http_client_ip_config`、`extract_http_client_ip` | 无 Asio 的网络字节序 IP 地址、CIDR 前缀匹配（IPv4 块自动匹配 `::ffff:a.b.c.d`）、`normalized_ipv4()` 规范化，以及支持可信代理集合、按优先级解析 `Forwarded`（RFC 7239）、逗号列表型（`X-Forwarded-For`）及单 IP 型转发头并可选提取 `X-Forwarded-Proto` / `Forwarded` `proto` 的无状态客户端 IP 提取器 |
 | `"ruvia/http/proxy_protocol.h"` | `proxy_protocol_parser`、`proxy_protocol_header`、`proxy_protocol_parse_result` | [HAProxy PROXY protocol v1/v2](https://www.haproxy.org/download/2.9/doc/proxy-protocol.txt) 单遍增量解析；`parse(span)` 只消费头字节，`complete_` 后通过 `header()` 读取源/目标与 TLV 视图；非法或超限抛 `proxy_protocol_error` 并进入 failed，仅 `reset()` 可复用。v1 上限 107 字节，v2 默认整头 4096 字节，可配置且至少 52；`LOCAL` 忽略其不透明负载，源/目标为空 |
 | `"ruvia/http/protocol_byte_limit.h"` | `class protocol_byte_limit final` | 显式有限／无限字节预算：默认和 `unlimited()` 不限量，`limited(n)` 接受原始整数，在窄化前检查严格正数且可表示为 `std::size_t`，否则抛出 `std::invalid_argument`；浮点和枚举不隐式接受，不要预先窄化输入；`SIZE_MAX` 仍是有限预算，不是无限哨兵 |
-| `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | PMR 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费。`prepare_spare()` 优先返回尾部空间，仅尾部耗尽且已消费前缀覆盖存活后缀时压缩；可返回空 span，调用方需要更多空间时使用 `prepare(n)`，并按实际 span 长度读取 |
+| `"ruvia/http/http_io_buffer.h"` | `class http_io_buffer final` | 流式读写缓冲区：`prepare(n)` / `prepare_spare()`、`commit(n)`、`append(bytes)`、`data()` / `view()`、`consume(n)`、`clear_retaining_small()`；返回借用的四个入口只接受左值，缓冲区存储须覆盖异步 I/O 与视图消费。`prepare_spare()` 优先返回尾部空间，仅尾部耗尽且已消费前缀覆盖存活后缀时压缩；可返回空 span，调用方需要更多空间时使用 `prepare(n)`，并按实际 span 长度读取 |
 | `"ruvia/http/http_protocol_version.h"` / `"ruvia/http/http_known_method.h"` | `http_protocol_version`（`http10`, `http11`, `http2`）、`http_scheme`（`http`, `https`）、`http_known_method`、`classify_http_method`、`is_valid_http_method_token` | 协议版本、Scheme 与 HTTP 方法分类及幂等/安全性判断 |
 | `"ruvia/http/http_status.h"` | `class http_status_code final`、`namespace ruvia::http_status`、`http_reason_phrase` | 强类型 HTTP 状态码（`100..599`）与标准状态码常量（`http_status::ok`、`not_found` 等） |
 | `"ruvia/http/http_protocol_error.h"` | `class http_protocol_error final : public std::exception`、`enum class http_parse_error` | 零动态分配的协议错误异常（`http_protocol_error(status, code, message)`：携带 `http_status_code`、静态存储期的稳定 snake_case 机器码 `code()`（如 `missing_host`、`conflicting_content_length`）与定长诊断文本）与解析错误枚举 |
 | `"ruvia/http/http_request_target.h"` / `"ruvia/http/http_request_content_semantics.h"` / `"ruvia/http/http_field_section.h"` | `http_authority_view`、`http_origin_view`、`parse_http_authority`、`normalize_http_proxy_request_target`、`parse_http_max_forwards`、`http_method_sends_zero_content_length`、`estimate_http1_response_head_bytes`、`estimate_http1_field_section_bytes` | RFC 9110 / RFC 3986 请求目标、代理 `absolute-form` 规范化（含空路径 `OPTIONS` 转 `*`）、`Max-Forwards` 单值校验与饱和递减、无请求体方法 `Content-Length: 0` 语义查询，以及 HTTP/1.1 线面头部/Trailer 等价字节数估算 |
 | `"ruvia/http/http_target_origin.h"` | `decide_http_target_origin`、`http_target_origin`、`http_target_origin_connection`、`http_target_origin_action` | RFC 9110 §7.4 目标源判定：服务器提供连接事实（是否 TLS、对端是否可信网关），返回接受、需按证书校验的主机（DNS 名去掉末尾点 / IPv4 / IPv6 网络字节序）或 `421` 拒绝；明文连接上的 `https` 目标直接判为 misdirected，零分配 |
-| `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`uri_paths_equivalent`、`compare_uri_paths`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码（`decode_url_component` 与 `percent_encode_uri_reference` 无需变换时返回输入视图本身、不分配，否则把结果写入调用方提供的 `std::pmr::string` 并返回其视图；解码只在百分号编码非法时返回 `nullopt`）、路由使用的路径规范形式比较（字面 `/` 分段、段内按百分号解码后的字节比较，`%2F` 不作分隔符）、十六进制转换、标准与 URL-safe Base64 编解码 |
+| `"ruvia/http/url_encoding.h"` / `"ruvia/http/http_hex.h"` / `"ruvia/http/http_base64.h"` | `decode_url_component`、`validate_url_encoding`、`visit_url_encoded_pairs`、`percent_encode_uri_reference`、`uri_paths_equivalent`、`compare_uri_paths`、`http_encode_lower_hex`、`http_base64_encode`、`http_base64_decode` | URL 百分号/表单编解码、RFC 3986 URI-reference 规范化编码（`decode_url_component` 与 `percent_encode_uri_reference` 无需变换时返回输入视图本身、不分配，否则把结果写入调用方提供的 `std::string` 并返回其视图；解码只在百分号编码非法时返回 `nullopt`）、路由使用的路径规范形式比较（字面 `/` 分段、段内按百分号解码后的字节比较，`%2F` 不作分隔符）、十六进制转换、标准与 URL-safe Base64 编解码 |
 | `"ruvia/http/http_utf8.h"` | `struct utf8_sequence final`、`scan_utf8_sequence`、`is_valid_utf8` | `ruvia` 命名空间下的共享 UTF-8 公开 API，`constexpr`、`noexcept`、零分配；整串校验或单序列扫描。扫描要求索引有效且首字节 ≥ `0x80`，返回完整序列或非法序列最大子部分的字节数及合法性；跨库调用不依赖 `detail` |
-| `"ruvia/http/http_number_format.h"` | `http_format_signed`、`http_format_unsigned`、`http_append_signed`、`http_append_unsigned`、`http_append_formatted_number`、`http_append_formatted_finite_number` | 整数切片格式化与 PMR 追加共用同一入口；浮点按原类型生成最短十进制文本，有限值入口在修改输出前拒绝 NaN 与无穷大 |
+| `"ruvia/http/http_number_format.h"` | `http_format_signed`、`http_format_unsigned`、`http_append_signed`、`http_append_unsigned`、`http_append_formatted_number`、`http_append_formatted_finite_number` | 整数切片格式化与字符串追加共用同一入口；浮点按原类型生成最短十进制文本，有限值入口在修改输出前拒绝 NaN 与无穷大 |
 
 - **缓冲退役顺序**：`http_io_buffer` 清空或重分配时先提交状态，再释放旧存储；`append()` 的新增字节一并提交，退役回调的重入写入保留。
 - **缓冲分配失败**：保留原窗口与已借用字节，恢复资源后可使用原输入重试。
 
-`decode_url_component()` 与 `percent_encode_uri_reference()` 的文本输入使用 `borrowed_text`：字符串字面量、`std::string_view` 和命名的 `std::string` / `std::pmr::string` 可直接传入，临时拥有型字符串（含 `const` 右值）在编译期拒绝。返回值可能借用原始输入，也可能借用输出 `storage`，两者的 owner 均须覆盖结果消费；不要根据某次内容是否需要转换来推断寿命。需要传入生成的字符串时先保存为命名 owner，需要独立结果时在 owner 仍有效期间复制视图；显式构造 `string_view` 不会延长 owner 寿命。支持零拷贝和输入／输出别名。
+`decode_url_component()` 与 `percent_encode_uri_reference()` 的文本输入使用 `borrowed_text`：字符串字面量、`std::string_view` 和命名的 `std::string` 可直接传入，临时拥有型字符串（含 `const` 右值）在编译期拒绝。返回值可能借用原始输入，也可能借用输出 `storage`，两者的 owner 均须覆盖结果消费；不要根据某次内容是否需要转换来推断寿命。需要传入生成的字符串时先保存为命名 owner，需要独立结果时在 owner 仍有效期间复制视图；显式构造 `string_view` 不会延长 owner 寿命。支持零拷贝和输入／输出别名。
 
 - **URL 编码失败回滚**：`http_append_percent_byte()` 与 `percent_encode_uri_reference()` 发生分配或长度错误时保留原输出内容，允许恢复资源后重试。
 
@@ -249,17 +244,16 @@ pool.join();
 - **SSE 解析**：`sse_parser` 按 WHATWG HTML“Parsing an event stream”解析任意分块的响应体：`parse(input) &` 消费到下一个完整事件为止，返回 `sse_parse_result{consumed_bytes_, event_}`，调用方以未消费后缀继续调用；`sse_event` 的 `type()`（未命名时为 `message`）、`data()`（多行以 LF 连接、无末尾 LF）与 `last_event_id()` 借用解析器，有效至下一次 `parse()` / `finish()` / `reset()`。支持 `event` / `data` / `id` / `retry`，忽略注释与未知字段；跳过一个前导 UTF-8 BOM，行尾为 CRLF、LF 或 CR（含跨块 CRLF）；值中的非法 UTF-8 按最大子序列替换为 U+FFFD，含 NUL 的 `id` 被忽略，`retry` 仅接受非空 ASCII 数字（超出范围饱和），由 `reconnection_time()` 读取；`last_event_id()` 是重连时 `Last-Event-ID` 的取值。每个字节只扫描一次，未完成行只保留路由后的字段值而不缓存原始行。`sse_parser_options::event_limit_`（缺省 `default_max_sse_event_bytes`，16 MiB）限制一个事件缓冲的数据行、事件类型与待提交字段值字节，注释与忽略字段不占配额；超限进入 `failed`。`finish()` 丢弃未完成事件并进入 `finished`；非 `active` 状态调用 `parse()` 抛 `std::logic_error`，仅 `reset()` 回到新流并保留不超过 4 KiB 的缓冲容量。
 - **Multipart 流式缓冲**：`multipart_parser` 复用 `http_io_buffer`，增长时只复制未消费字节。
 - **Multipart 借用重试**：`feed()` 可接收最新分片的正文视图；分配失败后，该视图仍可用于原样重试。
-- **Multipart 值赋值**：`multipart_part` 先准备全部元数据再提交；复制或跨资源移动失败时保留两端原值，同资源移动不分配。
-- **Multipart 资源归属**：复制构造沿用源 PMR，赋值保留目标 PMR；解码文本由该资源持有，未改写字段与正文仍借用原始输入。
+- **Multipart 值赋值**：`multipart_part` 先准备全部元数据再提交；复制失败时保留两端原值，移动不分配。解码文本由对象独立持有，未改写字段与正文仍借用原始输入。
 
-`http_response::body_segment_count()` 枚举表示的存储片段，不等同于待发送的字节数。长度为零的文件范围仍返回一个 file segment，保留路径、句柄与 identity，调用方必须完成适用的文件验证，不能因 `send_body() == false` 丢弃它；普通空字节正文没有 segment。`send_body()` 仍只表示方法/状态允许且正文长度非零时需要传送 payload。
+`http_response::body_segment_count()` 枚举表示的存储片段，不等同于待发送的字节数。长度为零的文件范围仍返回一个 file segment，保留路径、描述符与 identity，调用方必须完成适用的文件验证，不能因 `send_body() == false` 丢弃它；普通空字节正文没有 segment。`send_body()` 仍只表示方法/状态允许且正文长度非零时需要传送 payload。
 
-- **响应资源退役**：`http_response` 与 `http_response_file_handle` 移动赋值先清空源并提交接管，再释放旧资源；保留释放回调复用源对象或重入赋值的新写入，各句柄只释放一次。
+- **响应资源退役**：`http_response` 与 `http_response_file_descriptor` 移动赋值先清空源并提交接管，再释放旧资源；保留释放回调复用源对象或重入赋值的新写入，各文件描述符只释放一次。
 - **正文替换退役**：先发布完整的新正文表示，再释放旧正文资源；释放回调重入替换的结果保留。
 
-`encode_http_content` 的两个 overload（单个 coding，或按声明顺序依次编码的 coding 列表）与 `http_content_encode_context::encode` 统一返回 `std::optional<std::pmr::string>`：有值表示完整编码成功，`std::nullopt` 只表示结果超过 `max_encoded_bytes_`。预算为零只允许零字节表示；多 coding 按声明顺序编码，每个中间表示都受同一预算约束。输出使用 `options.resource_`；可复用上下文的状态使用构造时的资源，该资源必须覆盖上下文寿命，且上下文不可并发使用。成功、超预算或异常后上下文均可继续编码独立表示，不携带上一次的压缩历史；异常后内部状态直接丢弃，下次编码重新创建。`decode_http_content` 接受单个 coding 或 `Content-Encoding` 给出的 coding 列表，列表按逆序解码，每个中间表示都受同一解码上限约束；超过上限的 identity 表示在分配前即被拒绝；`http_content_decode_error` 只描述表示本身的数据错误（`unsupported_coding`、`invalid_content`、`decoded_size_exceeded`）。解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超出该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口，这是协议要求的下限。编码、解码与增量编码器在编解码器自身无法运行（状态无法创建或重置、库内部错误）时统一抛出 `http_content_codec_error`，分配异常保留原始类型。接收方用 `parse_http_content_coding`（单个字段值）、`parse_http_content_coding_headers`（字段行序列或 `http_response_headers`）或 `request_content_coding`（已解析的请求）读取 `Content-Encoding`。
+`encode_http_content` 的两个 overload（单个 coding，或按声明顺序依次编码的 coding 列表）与 `http_content_encode_context::encode` 统一返回 `std::optional<std::string>`：有值表示完整编码成功，`std::nullopt` 只表示结果超过 `max_encoded_bytes_`。预算为零只允许零字节表示；多 coding 按声明顺序编码，每个中间表示都受同一预算约束。可复用上下文不可并发使用；成功、超预算或异常后上下文均可继续编码独立表示，不携带上一次的压缩历史；异常后内部状态直接丢弃，下次编码重新创建。`decode_http_content` 接受单个 coding 或 `Content-Encoding` 给出的 coding 列表，列表按逆序解码，每个中间表示都受同一解码上限约束；超过上限的 identity 表示在分配前即被拒绝；`http_content_decode_error` 只描述表示本身的数据错误（`unsupported_coding`、`invalid_content`、`decoded_size_exceeded`）。解码器工作内存同样受解码上限约束：`br` 声明的环形缓冲超出该上限可容纳的大小时（约为上限的三倍加 3 MiB 固定表空间）直接返回 `decoded_size_exceeded`，不按对端声明的窗口分配；`zstd` 解码器按 RFC 9659 接受最大 8 MiB 窗口，这是协议要求的下限。编码、解码与增量编码器在编解码器自身无法运行（状态无法创建或重置、库内部错误）时统一抛出 `http_content_codec_error`，分配异常保留原始类型。接收方用 `parse_http_content_coding`（单个字段值）、`parse_http_content_coding_headers`（字段行序列或 `http_response_headers`）或 `request_content_coding`（已解析的请求）读取 `Content-Encoding`。
 
-- **编码器重置内存**：`http_content_encoder::reset()` 对 zlib/Zstd 复用工作内存；Brotli 无原生重置接口，使用原 PMR 重建状态，可能重新分配。
+- **编码器重置内存**：`http_content_encoder::reset()` 对 zlib/Zstd 复用工作内存；Brotli 无原生重置接口，重建状态时可能重新分配。
 - **编码器重置失败**：保持失败态并拒绝后续写入；再次显式 `reset()` 成功后才可继续使用。
 
 Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常的“不划算”结果，仍回退 identity；请求拒绝 identity 时不设该预算，任何可接受的编码都优于 `406`。真实故障沿现有失败边界记录并翻译，不作为预算结果忽略。静态根预压缩同样只略过不划算的表示，真实编码异常使构建或刷新失败，不发布不完整的新快照。
@@ -268,29 +262,25 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 ### 4. HTTP/1.x、HTTP/2 与 HTTP/3 Sans-I/O 状态机
 
-- **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才整体迁入调用方 PMR（缺省为默认资源）。
+- **跨协议描述符存储**：协议解析与首部写出共用 `parser/http_header_descriptor_storage.h`；预留或追加超过 32 项时才迁入堆存储。
 - **响应长度语义**：HTTP/1、HTTP/2 与 HTTP/3 共用 `Content-Length` 选择；HTTP/1 仅叠加 chunked 与 close-delimited 分帧，保留 HEAD 元数据及 204、205、CONNECT 规则。
 - **流式提交事实**：`http_response_stream_commit_plan` 从 `body_plan()` 派生头后阶段与 Trailer 状态资格，不保留第二份状态或状态码规则。
-- **通告值资源**：`http_origin_advertisement` 与 `http_alternative_service_advertisement` 复制构造沿用源 PMR，赋值保留目标 PMR；嵌套字符串同步绑定目标资源。
-- **通告赋值提交**：复制或跨资源移动分配失败时保留两端原值；同资源移动不分配，完成提交后才释放旧存储。
+- **通告赋值提交**：`http_origin_advertisement` 与 `http_alternative_service_advertisement` 复制分配失败时保留两端原值；移动不分配，完成提交后才释放旧存储。
 - **请求内容计划**：HTTP/2 与 HTTP/3 普通请求头视图共用 `"ruvia/http/http_request_content_plan.h"` 的 `http_request_content_plan`（`none()`、`known_length()`、`streaming()`），它同时决定生成的 `Content-Length` 与请求头是否结束流；两侧 `authority_` 均为 `std::optional<borrowed_text>`。
 - **出站失败形态**：HTTP/2 与 HTTP/3 对同一类失败使用同一形态。调用方可能转发对端数据的情形（DATA 超出或未达声明长度、非法或超限的 Trailer、超出字段节上限的头）以 `invalid_message` 值返回且不改变状态；对已结束或未打开内容的流提交 DATA 或再次结束等调用顺序误用抛 `std::logic_error`；流已消失或被重置返回 `closed`。
 
 #### 4.1 HTTP/1.0 & HTTP/1.1 状态机
 
 - **服务端解析与序列化**：
-  - `"ruvia/http/http1_server_request_parser.h"`：`http1_server_request_parse_state::parse_head(buffer, offset, resource)` 解析请求行、首部、连接复用计划（`http1_request_connection_plan`）与请求体分帧计划（`http1_request_body_plan`），经左值访问器 `request()` / `body_plan()` / `connection_plan()` 只读借用（右值重载已删除），或以 `std::move(state).take_request()` / `take_body_plan()` / `take_connection_plan()` 提取（留下默认值，此后只可再次 `parse_head()` 或析构；取走请求即释放其描述符存储）。首行不包含 HTTP-version 词的明文输入（例如 TLS 记录、SSH banner）按非 HTTP 流量静默丢弃，不返回状态行；只有声明了版本号的非法请求行才回 400（RFC 9112 §2.2 的 400 为 SHOULD）。
-  - `"ruvia/http/http1_chunked_body_decoder.h"`：`http1_chunked_body_decoder::decode(available)` 增量解码 `chunked` 请求体与 Trailer。每个 chunk-size 行与 Trailer 区段各自受 `max_http_header_bytes`（64 KiB）约束；此外，同一消息所有 chunk-size 行中超出最短十六进制长度的字节（前导零与 chunk-ext）累计不得超过 `max_http_header_bytes`（RFC 9112 §7.1.1），超限与单行超限同样报告 `framing_limit_exceeded`（请求映射为 `413 chunked_framing_too_large`）。Trailer 中的 obs-fold 由 `http1_chunked_body_decoder_config::obs_fold_` 决定：默认 `reject`（请求，服务端可回 `400`），`accept` 时按展开后的字段校验并发布展开值（RFC 9112 §5.2）。完成结果的 `trailers()` 是 `std::span<const http_header>`：字段名小写、值去掉首尾 OWS，按 `trailer_message_`（默认 `request`）丢弃发送方不得生成的 Trailer 字段（RFC 9110 §6.5.1、RFC 9112 §7.1.2）；字段归解码器所有，仅在保留了字段时从 `resource_` 分配，视图有效至下一次 `decode()` 或解码器被移动、赋值、析构。
+  - `"ruvia/http/http1_server_request_parser.h"`：`http1_server_request_parse_state::parse_head(buffer, offset)` 解析请求行、首部、连接复用计划（`http1_request_connection_plan`）与请求体分帧计划（`http1_request_body_plan`），经左值访问器 `request()` / `body_plan()` / `connection_plan()` 只读借用（右值重载已删除），或以 `std::move(state).take_request()` / `take_body_plan()` / `take_connection_plan()` 提取（留下默认值，此后只可再次 `parse_head()` 或析构；取走请求即释放其描述符存储）。首行不包含 HTTP-version 词的明文输入（例如 TLS 记录、SSH banner）按非 HTTP 流量静默丢弃，不返回状态行；只有声明了版本号的非法请求行才回 400（RFC 9112 §2.2 的 400 为 SHOULD）。
+  - `"ruvia/http/http1_chunked_body_decoder.h"`：`http1_chunked_body_decoder::decode(available)` 增量解码 `chunked` 请求体与 Trailer。每个 chunk-size 行与 Trailer 区段各自受 `max_http_header_bytes`（64 KiB）约束；此外，同一消息所有 chunk-size 行中超出最短十六进制长度的字节（前导零与 chunk-ext）累计不得超过 `max_http_header_bytes`（RFC 9112 §7.1.1），超限与单行超限同样报告 `framing_limit_exceeded`（请求映射为 `413 chunked_framing_too_large`）。Trailer 中的 obs-fold 由 `http1_chunked_body_decoder_config::obs_fold_` 决定：默认 `reject`（请求，服务端可回 `400`），`accept` 时按展开后的字段校验并发布展开值（RFC 9112 §5.2）。完成结果的 `trailers()` 是 `std::span<const http_header>`：字段名小写、值去掉首尾 OWS，按 `trailer_message_`（默认 `request`）丢弃发送方不得生成的 Trailer 字段（RFC 9110 §6.5.1、RFC 9112 §7.1.2）；字段归解码器所有，有效至下一次 `decode()` 或解码器被移动、赋值、析构。
   - `"ruvia/http/http1_server_semantics.h"` & `"ruvia/http/http1_response_head_plan.h"`：提交最终响应头与流式响应头分帧计划。临时、最终、`CONNECT` 与 `CONNECT-UDP` 响应头违反消息规则或超出头部大小上限时，统一抛出 `"ruvia/http/http1_response_head_error.h"` 的 `http1_response_head_error`（派生自 `std::invalid_argument`），表示应用或运行时缺陷而非对端错误。
   - 响应分帧只由协议 writer 决定（RFC 9112 §6.1、RFC 9113 §8.2.2）：应用在最终响应上设置的 `Transfer-Encoding` 只在值（忽略 ASCII 大小写）恰为单个 `chunked` 时作为分帧提示接受，HTTP/1 与 HTTP/2 采用同一规则。公开响应字段 setter 仍要求规范化字段值，首尾 SP/HTAB 在设置时即以 `std::invalid_argument` 拒绝；writer 的 OWS 去除不放宽此入口契约。HTTP/1 用分帧计划自己的字段替换它（仅分块流写出规范的 `Transfer-Encoding: chunked`；缓冲、HTTP/1.0 关闭定界、HEAD 与 `204` / `205` / `304` 不写出），HTTP/2 直接省略该分帧提示。其他任何值（如 `gzip`、`gzip, chunked`、`identity`、空值或畸形列表）声明了 writer 不会施加的编码，两种协议都拒绝写出该响应：HTTP/1 的 `http1_commit_final_response`（修改响应前）、`append_http1_response_head` 与 HTTP/1 分帧的 `prepare_http_response_stream_head` 抛 `http1_response_head_error`，HTTP/2 的 `submit_response_head` / `submit_streaming_response_head` 返回 `invalid_message`，`http2_frames` 分帧的 `prepare_http_response_stream_head` 抛 `std::invalid_argument`。Web 层在响应头尚未提交时可将此异常转换为独立的 `500` 错误响应，不会把非法编码或应用正文写上线。`Content-Length` 按协议规范化；HTTP/2 仍拒绝 `Connection`、`Upgrade`、`Keep-Alive` 与 `Proxy-Connection`。
   - `"ruvia/http/http_response_head_buffer.h"`：响应头缓冲保留 inline scratch 的两阶段写入能力。`stack_cursor(bound)` 只检查当前剩余空间，不占用独占 reservation；对象须存活且地址不变。`commit_stack(end)` 将 inline 已提交长度设到本对象数组内的端点（允许 one-past 和缩短长度），允许抛出异常：已经 spill 到堆时抛 `std::logic_error`，空指针或其他对象的端点抛 `std::invalid_argument`，拒绝时保留已有内容。失败的 reserve 不会使仍处于 inline 状态的 cursor 失效；堆状态须先 `reset()` 再取得新的 inline cursor。
-  - **响应头缓冲资源**：`http_response_head_buffer` 复制构造沿用源 PMR，赋值保留目标 PMR；同资源移动不分配。
-  - **响应头缓冲提交**：复制或跨资源移动赋值分配失败时，保留两端已提交内容；未提交的 inline scratch 不属于复制契约。
-  - **响应头缓冲赋值退役**：复制或跨资源移动赋值扩容时，先提交两端状态，再释放目标旧存储；释放回调的重入写入保留，容量足够时仍原地复用。
-  - **响应头缓冲重置**：`reset()` 在释放超限堆存储前提交空 inline 状态，保留释放回调的重入写入。
+  - **响应头缓冲提交与退役**：复制分配失败时保留两端已提交内容；移动不分配，扩容时先提交两端状态再释放旧存储；`reset()` 在释放超限堆存储前提交空 inline 状态。
 - **客户端写出与响应解析**：
   - `"ruvia/http/http1_client_request_writer.h"` & `"ruvia/http/http1_request_content_writer.h"`：生成客户端请求头与流式分块请求体，产出 `http1_client_exchange_state`。`http1_client_request_wire_policy::target_form_`（`http1_request_target_form`，缺省 `origin`）选择非 CONNECT 请求行的目标形式：`origin` 写出 origin-form / asterisk-form；`absolute` 用于经正向代理的请求（RFC 9112 §3.2.2），以源站的 `http` / `https` scheme 与 authority（默认端口省略）前缀 origin-form 目标，生成的 `Host` 与之同源（§3.2），`OPTIONS *` 写为空路径的 `scheme://authority`（§3.2.4）。CONNECT 始终经 `prepare_connect()` 写 authority-form，对其设置 `absolute` 或使用未知枚举值返回 `invalid_target_form`。
-  - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。客户端按接收方规则处理响应：首部与 Trailer 中的 obs-fold 均替换为空格（响应体解码器的 `trailers()->fields()` 是已校验、已展开、字段名小写且已丢弃响应 Trailer 禁用字段的 `std::span<const http_header>`，归解码器所有，仅在保留了字段时从其 PMR 分配，有效至下一次 `decode()` / `finish_input()`）；`000..099` 与 `600..999` 状态码按 `500` 处理，`received_status()` 保留原值；HTTP/1.0 响应携带 `Transfer-Encoding` 时按分帧故障处理：忽略 transfer codings，回退到 `Content-Length` 或关闭定界，并在该响应后关闭连接（RFC 9112 §6.1，HEAD/204/304 同样关闭）；`1xx` 永不终止交换，其 `Connection` 选项不改变连接生命周期，最终响应才决定复用（RFC 9110 §15.2）；`Connection` 仅拒绝点名影响响应处理的字段（`Content-Length`、`Transfer-Encoding`、`Set-Cookie`），请求端接收方另拒绝 `Host`、`Authorization`、`Cookie`、`Origin`。发送方（客户端请求含 `forwarded` 来源、CONNECT-UDP 握手与服务端响应）不得发送点名 `Content-Length`、`Transfer-Encoding`、`Host` 等由协议层管理或面向全部接收方的字段的 `Connection` 选项（RFC 9110 §7.6.1），也不得点名请求来源元数据 `Forwarded`（RFC 7239）、`X-Forwarded-For`、`X-Forwarded-Proto`、`X-Forwarded-Host`：下一跳按逐跳字段移除它们后，路由与客户端地址判定将失去依据（同 Pingora 的受保护集合；伪首部形式的名称不是 token，列表语法已拒绝）。HTTP/1 客户端 writer 对此返回 `invalid_connection`，响应首部写入同样拒绝；`TE`、`Upgrade`、`keep-alive`、`close`、`Proxy-Authorization` 与自定义逐跳字段仍可列出。接收方收到点名这些请求来源字段的 `Connection` 不因此报错。
+  - `"ruvia/http/http1_client_response_parser.h"` & `"ruvia/http/http1_client_response_body_decoder.h"`：增量解析服务端 `1xx` 临时响应、最终响应头及定长/分块/EOF 定界响应体。客户端按接收方规则处理响应：首部与 Trailer 中的 obs-fold 均替换为空格（响应体解码器的 `trailers()->fields()` 是已校验、已展开、字段名小写且已丢弃响应 Trailer 禁用字段的 `std::span<const http_header>`，归解码器所有，有效至下一次 `decode()` / `finish_input()`）；`000..099` 与 `600..999` 状态码按 `500` 处理，`received_status()` 保留原值；HTTP/1.0 响应携带 `Transfer-Encoding` 时按分帧故障处理：忽略 transfer codings，回退到 `Content-Length` 或关闭定界，并在该响应后关闭连接（RFC 9112 §6.1，HEAD/204/304 同样关闭）；`1xx` 永不终止交换，其 `Connection` 选项不改变连接生命周期，最终响应才决定复用（RFC 9110 §15.2）；接收方 `Connection` 仅拒绝分帧/路由歧义字段（`Content-Length`、`Transfer-Encoding`，请求接收方另拒绝 `Host`），不将发送方禁止提名端到端字段的义务误作接收方拒绝规则（RFC 9110 §7.6.1）。发送方（客户端请求含 `forwarded` 来源、CONNECT-UDP 握手与服务端响应）仍严格禁止在 `Connection` 中点名协议管理、端到端或请求来源元数据字段（`Forwarded`、`X-Forwarded-*` 等）。
   - `http1_client_response_parser::parse` 在状态行的换行到达时即校验状态行（以裸 LF 结尾报告 `invalid_status_line`，其余错误与完整头部相同），之后任一以裸 LF 结尾的字段行立即报告 `invalid_header`（RFC 9112 §2.2），不必等到空行、64 KiB 上限或读超时，与服务端请求头的提前拒绝一致；非 HTTP 上游（如 SSH banner）因此在首行即失败。
 
 `http1_request_content_writer::chunk` 与 `http_datagram_write_plan` 是对应写入器／会话产出的只读分段快照，不允许默认构造，也不暴露可写的前缀缓冲、长度及正文成员。保留具名计划，通过 `prefix()`、`payload()`（请求块另有 `suffix()`）组成 scatter-gather 写入。`prefix()` 借用计划自身的内联存储，只允许左值调用；计划必须存活且不变，直到传输已消费前缀。`payload()` 仍借用原始输入，其寿命独立于计划，调用方同样须保留输入直到消费完成。复制／移动计划保留独立的内联前缀与原有正文借用，不分配、不复制正文。
@@ -305,9 +295,7 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 - **输入拥有期**：服务端请求视图零拷贝借用输入缓冲区；客户端最终响应头拥有字段数据，原始输入可在解析完成后释放。
 - **分配失败**：以 `std::bad_alloc` 传出，不发布 `head_ready` 或成功状态。
 - **失败重试边界**：释放资源后可用同一缓冲区与偏移重试；部分元数据可能残留，不保证回滚。
-- **请求 PMR 拥有期**：覆盖 `http_request::reset()` 或对象析构；`reset()` 先恢复默认构造状态并解除旧 PMR 引用。
-- **请求退役提交**：移动赋值先整体接管新请求，再释放旧首部描述符，不分配内存；资源释放回调重入赋值或 `reset()` 时，其最终状态保留。
-- **响应 PMR 拥有期**：覆盖响应头或 `take_headers()` 返回向量的析构。
+- **请求与响应退役提交**：`http_request::reset()` 先恢复默认构造状态再释放首部描述符；移动赋值先整体接管新对象再释放旧存储，不分配内存。
 
 请求转发使用 `"ruvia/http/http_client.h"` 的 `enum class http_request_field_source : std::uint8_t { generated, forwarded }`，不要把收到的字段当成新配置字段逐项送入 `is_valid_http_request_application_field`：
 
@@ -319,14 +307,14 @@ Web 缓冲响应用“小于原文”的预算尝试压缩，超预算是正常�
 
 #### 4.2 HTTP/2 与 HPACK 状态机（`"ruvia/http/http2_connection.h"`, `"ruvia/http/hpack.h"`）
 
-`ruvia::http2_connection` 实现了符合 RFC 9113 / RFC 7541 / RFC 8441 的完整客户端与服务端 Sans-I/O HTTP/2 连接状态机。每个连接内部持有一个 `nghttp2` 会话：分帧、HPACK、流状态、流量控制以及 `SETTINGS` / `PING` / `GOAWAY` 处理均由 `nghttp2` 完成，`ruvia-http` 负责 HTTP 消息语义（字段校验、内容长度、`CONNECT` / 隧道阶段）、请求租约、流控凭证与防滥用预算。`feed()` 一次接受整段输入，不完整的尾帧由 `nghttp2` 自行缓存，没有“需要更多输入”的结果；`nghttp2` 的全部内部分配均经连接的 PMR 资源完成。
+`ruvia::http2_connection` 实现了符合 RFC 9113 / RFC 7541 / RFC 8441 的完整客户端与服务端 Sans-I/O HTTP/2 连接状态机。每个连接内部持有一个 `nghttp2` 会话：分帧、HPACK、流状态、流量控制以及 `SETTINGS` / `PING` / `GOAWAY` 处理均由 `nghttp2` 完成，`ruvia-http` 负责 HTTP 消息语义（字段校验、内容长度、`CONNECT` / 隧道阶段）、请求租约、流控凭证与防滥用预算。`feed()` 一次接受整段输入，不完整的尾帧由 `nghttp2` 自行缓存，没有“需要更多输入”的结果。
 
 ```cpp
 #include "ruvia/http/http2_connection.h"
 
 // 构造客户端或服务端状态机（enable_push_ 与 receive_origin_advertisements_ 仅限客户端，
 // 传给 server() 时抛出 std::invalid_argument）：
-auto conn = ruvia::http2_connection::server({.resource_ = resource});
+auto conn = ruvia::http2_connection::server({});
 
 // 1. 喂入从网络收到的原始字节：
 auto feed_res = conn.feed(inbound_bytes);
@@ -335,7 +323,7 @@ auto feed_res = conn.feed(inbound_bytes);
 while (auto ev = conn.next_event()) {
     if (auto* req_head = ev->request_head()) {
         std::uint32_t stream_id = req_head->stream_id();
-        ruvia::http_response resp(resource);
+        ruvia::http_response resp;
         resp.status(ruvia::http_status::no_content);
         // 无正文响应由 HEADERS 一次结束；有正文时保留请求租约并驱动下述 DATA 契约。
         (void)conn.submit_streaming_response_head(stream_id, std::move(resp));
@@ -344,7 +332,7 @@ while (auto ev = conn.next_event()) {
 }
 
 // 3. 取出待发往网络的编码字节（按整帧边界分批，游标始终停在帧边界）：
-std::pmr::string out(resource);
+std::string out;
 while (conn.wants_write()) {
     out.clear();
     (void)conn.take_output_batch(16384, out);
@@ -354,7 +342,7 @@ while (conn.wants_write()) {
 
 
 `hpack_decoder::set_max_dynamic_table_size()` 的容量输入使用 `hpack_table_size`：窄化前检查 `0..UINT32_MAX`，负数或超范围抛出 `std::invalid_argument`（无异常探测用 `hpack_table_size::try_from_value()`）。不隐式接受浮点或枚举，需要整数时用 `value()` 解包；不要预先窄化输入。`hpack_encoder` 只提供 `encode_header()` 与 `encode_status()` 两个字段级入口，编码器使用容量为零的动态表，调用之间不保留状态：完全命中静态表的字段用索引表示，其余字段用不索引的字面量（`authorization`、`proxy-authorization`、`cookie`、`set-cookie` 用 never-indexed，RFC 7541 §7.1.3），较短时使用 Huffman 编码。
-独立 `hpack_decoder` 基于 `nghttp2` 的 HPACK inflater，全部分配（含动态表）使用构造时的 PMR 资源。每次 `decode()` 处理一个完整字段块；回调只借用本次字段的名称和值，必须保持 decoder 的实现存活直到调用返回。同一实现处于字段块解码期间，再次 `decode()` 或调用 `set_max_dynamic_table_size()` 均抛出 `std::logic_error`，且不提交该嵌套操作；容量修改移到块之间，不同 decoder 仍可嵌套使用。这是库的状态独占契约，不是 RFC 的额外输入限制。回调返回 `false` 或抛出异常时停止后续回调，但仍解码完当前块以保持动态表同步，随后分别报告 `callback_rejected` 或重抛该异常。`hpack_decode_error` 只区分 `compression_error` 与 `callback_rejected`：任何格式错误或截断都是同一种解压失败（RFC 7541 §3.2 将其规定为连接错误），不再细分原因。解码器不回滚：压缩错误或分配失败后动态表已与对端失去同步，decoder 进入不可恢复状态，此后每次 `decode()` 都报告 `compression_error`，只能丢弃。块首的容量更新按线上顺序生效，出现在字段之后或超过所设上限的容量更新均为压缩错误。把上限降到当前动态表容量以下会立即驱逐条目，且下一个块必须以不大于此后所设最小上限的容量更新开头（RFC 7541 §4.2），否则为压缩错误；调高上限不要求容量更新。
+独立 `hpack_decoder` 基于 `nghttp2` 的 HPACK inflater。每次 `decode()` 处理一个完整字段块；回调只借用本次字段的名称和值，必须保持 decoder 的实现存活直到调用返回。同一实现处于字段块解码期间，再次 `decode()` 或调用 `set_max_dynamic_table_size()` 均抛出 `std::logic_error`，且不提交该嵌套操作；容量修改移到块之间，不同 decoder 仍可嵌套使用。这是库的状态独占契约，不是 RFC 的额外输入限制。回调返回 `false` 或抛出异常时停止后续回调，但仍解码完当前块以保持动态表同步，随后分别报告 `callback_rejected` 或重抛该异常。`hpack_decode_error` 只区分 `compression_error` 与 `callback_rejected`：任何格式错误或截断都是同一种解压失败（RFC 7541 §3.2 将其规定为连接错误），不再细分原因。解码器不回滚：压缩错误或分配失败后动态表已与对端失去同步，decoder 进入不可恢复状态，此后每次 `decode()` 都报告 `compression_error`，只能丢弃。块首的容量更新按线上顺序生效，出现在字段之后或超过所设上限的容量更新均为压缩错误。把上限降到当前动态表容量以下会立即驱逐条目，且下一个块必须以不大于此后所设最小上限的容量更新开头（RFC 7541 §4.2），否则为压缩错误；调高上限不要求容量更新。
 
 HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量固定为零，普通字段不建立索引，凭据字段使用 never-indexed 表示，避免跨连接共享压缩状态。入站字段块由 `nghttp2` 解码：回调判定字段非法时以流错误重置该流，`nghttp2` 继续解码余下字段块以保持连接级动态表同步；HPACK 解码失败是 `COMPRESSION_ERROR` 连接错误。
 
@@ -475,7 +463,7 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **借用与重入**：回调仅在 `read_stream()` 内同步执行，记录与字段视图仅在回调期间有效；返回前不得修改、重入、移动或销毁该连接。
 - **关闭成本**：空观察器不保留输入、不分配；开启帧观察时每条接收流只保存一个定长帧头扫描状态。
 
-`http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件的 PMR 存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方经 `crypto_callbacks_`（`http3_quic_crypto_callbacks`，仅含 QUIC-TLS 适配器回调）与 `owner_callbacks_`（`http3_quic_owner_callbacks`：连接 ID 签发与移除、握手完成与确认、无状态重置、早期数据被拒，均收到 `callback_user_data_`）提供回调，流数据、确认与关闭回调由包装器独占、无法传入；另提供 TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。`native_handle()` 只供适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用。`http3_quic_result` 以 `transport_error_code_`（RFC 9000 §20.1）或 `application_error_code_`（`http3_error_code`）给出本端发送或从对端收到的 CONNECTION_CLOSE 的错误码（空闲超时与无状态重置两者皆空），`transport_error()` / `application_error()` 查询同一事实。
+`http3_quic_connection` 用 `ngtcp2` 承担 QUIC v1 包处理、丢包恢复、流量控制、流 ID 与定时到期，并把流数据桥接到 `http3_connection`。ngtcp2 的解密回调缓冲在回调返回后失效，因此该包装器强制启用 `own_data_events_`，在返回 `receive_datagram()` 前把 DATA 复制到事件自有存储；直接使用 `http3_connection` 时可保留默认借用模式。调用方经 `crypto_callbacks_`（`http3_quic_crypto_callbacks`，仅含 QUIC-TLS 适配器回调）与 `owner_callbacks_`（`http3_quic_owner_callbacks`：连接 ID 签发与移除、握手完成与确认、无状态重置、早期数据被拒，均收到 `callback_context_`）提供回调，流数据、确认与关闭回调由包装器独占、无法传入；另提供 TLS native handle 和 UDP I/O：`receive_datagram()` 输入一个 UDP 数据报，`next_datagram()` 产出一个拥有字节与目标路径的数据报，`expiry()` / `handle_expiry()` 驱动最近到期事件。TLS 使用 `ngtcp2_crypto_ossl` 时适配层属于 `ruvia::web` 的 OpenSSL 依赖；`ruvia::http` 本身只链接 ngtcp2 core 与 nghttp3。`native_handle()` 只供适配器的 `ngtcp2_crypto_conn_ref::get_conn` 使用。`http3_quic_result` 以 `transport_error_code_`（RFC 9000 §20.1）或 `application_error_code_`（`http3_error_code`）给出本端发送或从对端收到的 CONNECTION_CLOSE 的错误码（空闲超时与无状态重置两者皆空），`transport_error()` / `application_error()` 查询同一事实。
 
 nghttp3 在帧层识别的格式错误（伪首部缺失或非法、连接专属字段等）由 `read_stream()` 报告为连接错误 `H3_MESSAGE_ERROR`，这是 RFC 9114 §8 允许的“把流错误升级为连接错误”。
 
@@ -497,7 +485,7 @@ HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制�
 | 头文件 | 核心公开类型 / 函数 | 说明 |
 | --- | --- | --- |
 | `"ruvia/http/websocket_handshake.h"` / `"ruvia/http/websocket_client_negotiation.h"` / `"ruvia/http/http2_connection.h"` / `"ruvia/http/http3_connection.h"` | `validate_websocket_handshake`、`make_websocket_server_handshake`、`struct websocket_server_handshake_options`、`class websocket_client_negotiation final`、`prepare_http1_websocket_client_request`、`validate_http1_websocket_client_response`、`submit_http2_websocket_client_request`、`submit_http3_websocket_client_request`、`validate_extended_connect_websocket_client_response`、`enum class websocket_client_handshake_error` | WebSocket 服务端与客户端在 HTTP/1.1 Upgrade 及 HTTP/2、HTTP/3 Extended CONNECT 下的握手校验、子协议选择与 `permessage-deflate` 扩展参数协商；各 HTTP 版本共用同一服务端握手选项与同一客户端握手错误枚举。`websocket_client_negotiation::validate_fields` 只校验给定字段中服务端的子协议与扩展选择（不检查状态码与连接专用字段） |
-| `"ruvia/http/websocket_connection.h"` / `"ruvia/http/websocket_protocol.h"` | `class websocket_connection final`、`struct websocket_frame_options final`、`class websocket_borrowed_payload final`、`enum class websocket_feed_status`、`struct websocket_event`、`enum class websocket_event_kind`、`struct websocket_deflater_config`、`validate_websocket_deflater_config`、`enum class websocket_termination` | Sans-I/O WebSocket 帧状态机与协议类型：支持增量输入 `feed`（默认构造的连接拥有自己的输入缓冲区，连接实现与全部协议缓冲分配自 `websocket_connection_options::resource_`；`max_buffered_input_bytes_` 限制等待 `next_event` 的字节，超限时返回 `websocket_feed_status::backpressured` 且不消费输入，连接不再活动时返回 `inactive`），也可从调用方的 `http_io_buffer` 读取输入（追加收到的字节后调用 `next_event`，全部协议缓冲分配自该缓冲区的 PMR，连接实现也分配自该 PMR，除非设置了 `resource_`）；事件轮询 `next_event`（`kind()` 返回 `websocket_event_kind`）覆盖消息重组、Ping/Pong、Close 与协议错误，帧与关闭提交 `submit_frame` / `submit_close`（`submit_frame(opcode, payload, websocket_frame_options{.final_, .compress_})` 是唯一帧入口：数据帧即其消息的分片，`final_ = true` 且未处于分片消息中即整条消息，`final_ = false` 打开或延续分片消息，期间另一种数据 opcode 返回 `message_in_progress`，非 final 控制帧返回 `invalid_opcode`；`std::string_view` 负载在返回前复制，`websocket_borrowed_payload` 负载（拒绝临时拥有型字符串）在未掩码且未压缩时以 `output_plan().borrowed_bytes()` 借用，须保持存活且不变直到 `consume_output()` 确认、`abort()` 或连接析构），以及 RFC 7692 `permessage-deflate` 压缩编解码（压缩级别与 memLevel 由 `websocket_deflater_config` 统一表示并校验）；关闭握手完成后服务端角色规划结束传输，客户端角色进入 `websocket_liveness_mode::awaiting_peer_eof`，丢弃后续输入并保持传输打开，直到 `notify_transport_eof()`（RFC 6455 §7.1.1 由服务端先关闭 TCP）；`termination()` 返回首个结束原因 `enum class websocket_termination`（驱动经 `abort(cause)` 记录超时、I/O 失败等运行期原因），`bytes_received()` / `bytes_sent()` 统计完整帧线上字节，取值与口径见 [WebSocket API](streaming-websocket.md#32-ruviawebsocket-与-ruviawebsocket_message-api) |
+| `"ruvia/http/websocket_connection.h"` / `"ruvia/http/websocket_protocol.h"` | `class websocket_connection final`、`struct websocket_frame_options final`、`class websocket_borrowed_payload final`、`enum class websocket_feed_status`、`struct websocket_event`、`enum class websocket_event_kind`、`struct websocket_deflater_config`、`validate_websocket_deflater_config`、`enum class websocket_termination` | Sans-I/O WebSocket 帧状态机与协议类型：支持增量输入 `feed`（默认构造的连接拥有自己的输入缓冲区，`max_buffered_input_bytes_` 限制等待 `next_event` 的字节，超限时返回 `websocket_feed_status::backpressured` 且不消费输入，连接不再活动时返回 `inactive`），也可从调用方的 `http_io_buffer` 读取输入（追加收到的字节后调用 `next_event`）；事件轮询 `next_event`（`kind()` 返回 `websocket_event_kind`）覆盖消息重组、Ping/Pong、Close 与协议错误，帧与关闭提交 `submit_frame` / `submit_close`（`submit_frame(opcode, payload, websocket_frame_options{.final_, .compress_})` 是唯一帧入口：数据帧即其消息的分片，`final_ = true` 且未处于分片消息中即整条消息，`final_ = false` 打开或延续分片消息，期间另一种数据 opcode 返回 `message_in_progress`，非 final 控制帧返回 `invalid_opcode`；`std::string_view` 负载在返回前复制，`websocket_borrowed_payload` 负载（拒绝临时拥有型字符串）在未掩码且未压缩时以 `output_plan().borrowed_bytes()` 借用，须保持存活且不变直到 `consume_output()` 确认、`abort()` 或连接析构），以及 RFC 7692 `permessage-deflate` 压缩编解码（压缩级别与 memLevel 由 `websocket_deflater_config` 统一表示并校验）；关闭握手完成后服务端角色规划结束传输，客户端角色进入 `websocket_liveness_mode::awaiting_peer_eof`，丢弃后续输入并保持传输打开，直到 `notify_transport_eof()`（RFC 6455 §7.1.1 由服务端先关闭 TCP）；`termination()` 返回首个结束原因 `enum class websocket_termination`（驱动经 `abort(cause)` 记录超时、I/O 失败等运行期原因），`bytes_received()` / `bytes_sent()` 统计完整帧线上字节，取值与口径见 [WebSocket API](streaming-websocket.md#32-ruviawebsocket-与-ruviawebsocket_message-api) |
 | `"ruvia/http/http_connect_udp.h"` / `"ruvia/http/http_datagram.h"` | `encode_http_connect_udp_path`、`parse_http_connect_udp_path`、`validate_http_connect_udp_request`、`class http_capsule_decoder final`、`class http_datagram_session final` | RFC 9298 `CONNECT-UDP` 请求/目标校验与 RFC 9297 HTTP Capsule / Datagram 帧增量编解码 |
 
 - **WebSocket 出站缓冲**：复用 `http_io_buffer`；部分写出只推进游标，追加优先使用尾部空间。
@@ -506,5 +494,4 @@ HTTP/2 与 HTTP/3 分别由 `RUVIA_ENABLE_HTTP2`、`RUVIA_ENABLE_HTTP3` 控制�
 
 `websocket_connection::submit_close()` 接受 `websocket_close_code`；`from_value()` / `try_from_value()` 在整数窄化前校验，发送与接收的状态码判定共用该值类型。`websocket_close_status::{normal_closure, going_away, internal_error}` 提供现有生命周期使用的常量，其余支持值由工厂构造；范围、保留码和 Web 关闭配置的用法见[WebSocket 关闭 API](streaming-websocket.md#32-ruviawebsocket-与-ruviawebsocket_message-api)。服务端主动发送客户端专属 `1010` 仍返回 `invalid_code`，UTF-8 原因与控制帧大小均按协议校验。
 
-- **CONNECT-UDP 目标所有权**：`http_connect_udp_target` 的复制与移动构造继承源 PMR；赋值保留目标资源，跨资源分配失败保留双方内容。
-- **CONNECT-UDP 目标构造**：使用 `http_connect_udp_target{std::pmr::string(host, resource), port}`，端口参数经 `port_number` 检查；该类型不再支持指定成员初始化，`host_`、`port_` 保持公开。
+- **CONNECT-UDP 目标构造**：使用 `http_connect_udp_target{std::string(host), port}`，端口参数经 `port_number` 检查；该类型不再支持指定成员初始化，`host_`、`port_` 保持公开。

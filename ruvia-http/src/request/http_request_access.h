@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string_view>
@@ -81,10 +80,6 @@ struct http_request_access final {
         return true;
     }
 
-    static void set_resource(http_request& request, std::pmr::memory_resource* resource) noexcept {
-        request.resource_ = resource;
-    }
-
     static void set_method(http_request& request, std::string_view method) noexcept {
         request.method_ = method;
         request.known_method_ = classify_http_method(method);
@@ -124,13 +119,11 @@ struct http_request_access final {
     }
 
     // Call once after syntax validation, with the exact semantic field count.
-    // Binding happens before allocation; changing the auxiliary request resource
-    // later does not change ownership of an existing descriptor block.
     static void reserve_headers(http_request& request, std::size_t count) {
         if (count > (std::numeric_limits<std::uint16_t>::max)() || !request.headers_.empty()) {
             throw std::logic_error("invalid request header block reservation");
         }
-        request.headers_.reserve(count, request.resource());
+        request.headers_.reserve(count);
     }
 
     static bool add_header(
@@ -182,10 +175,9 @@ struct binary_request_materialization_spec final {
 
 template <typename header_accessor_type>
 [[nodiscard]] inline http_request materialize_binary_http_request(
-    std::pmr::memory_resource* resource, const binary_request_materialization_spec& spec,
+    const binary_request_materialization_spec& spec,
     header_accessor_type&& header_at) {
     auto request = http_request_access::make();
-    http_request_access::set_resource(request, resource);
     if (spec.method_.empty()) {
         throw std::logic_error(spec.failure_message_);
     }

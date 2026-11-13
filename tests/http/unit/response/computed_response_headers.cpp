@@ -3,7 +3,6 @@
 #include <array>
 #include <cstdint>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -11,10 +10,6 @@
 
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response.h"
-
-#include "failing_memory_resource.h"
-
-using ruvia::test::failing_memory_resource;
 
 namespace {
 
@@ -26,7 +21,7 @@ constexpr std::uint32_t method_bit(http_known_method method) {
 }
 
 http_response make_response() {
-    return http_response(std::pmr::new_delete_resource());
+    return http_response{};
 }
 
 }  // namespace
@@ -47,7 +42,7 @@ TEST(Ruvia, allow_header_lists_methods_in_canonical_order) {
     one.allow_methods(method_bit(http_known_method::delete_value));
     EXPECT_EQ(one.header("Allow").value_or(""), std::string_view("DELETE"));
 
-    std::pmr::string extension = "PROPFIND";
+    std::string extension = "PROPFIND";
     const std::string_view extension_methods[]{extension};
     one.allow_methods(method_bit(http_known_method::get), extension_methods);
     extension.assign("CHANGED!");
@@ -102,35 +97,4 @@ TEST(Ruvia, allow_header_accepts_extension_tokens_and_empty_method_set) {
     EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, custom, !#$%&'*+-.^_`|~"));
     response.allow_methods(0);
     EXPECT_EQ(response.header("Allow"), std::optional(std::string_view{}));
-}
-
-TEST(Ruvia, allow_header_preserves_borrowed_methods_when_replacement_allocation_fails) {
-    failing_memory_resource resource;
-    {
-        http_response response(&resource);
-        response.header("Allow", "FOO, BAR");
-        const auto current = response.header("Allow").value();
-        const std::array extension_methods{current.substr(5), current.substr(0, 3)};
-        const auto live_allocations = resource.live_allocations();
-        resource.fail_after(0);
-        bool failed = false;
-        try {
-            response.allow_methods(method_bit(http_known_method::get), extension_methods);
-        } catch (const std::bad_alloc&) {
-            failed = true;
-        }
-        EXPECT_TRUE(failed);
-        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("FOO, BAR"));
-        EXPECT_EQ(current, std::string_view("FOO, BAR"));
-        EXPECT_EQ(resource.live_allocations(), live_allocations);
-        response.allow_methods(method_bit(http_known_method::get), extension_methods);
-        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, BAR, FOO"));
-
-        const std::array external_methods{std::string_view("FOO"), std::string_view("BAR")};
-        resource.fail_after(0);
-        response.allow_methods(method_bit(http_known_method::get), external_methods);
-        resource.allow_allocations();
-        EXPECT_EQ(response.header("Allow").value_or(""), std::string_view("GET, FOO, BAR"));
-    }
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
 }

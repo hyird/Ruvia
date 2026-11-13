@@ -1,15 +1,13 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/db/db_types.h"
 
 #include "backend_client_fixture.h"
@@ -22,11 +20,11 @@ using peer_type = ruvia::test::backend_startup_peer;
 // What one concurrent caller observed. Failures are recorded rather than
 // thrown so every caller in a scope finishes on its own.
 struct outcome final {
-    std::pmr::string value_{ruvia::process_resource()};
+    std::string value_{};
     std::uint64_t affected_rows_{0};
     std::optional<std::uint64_t> insert_id_;
     std::optional<ruvia::db_error::code_type> error_;
-    std::pmr::string sql_state_{ruvia::process_resource()};
+    std::string sql_state_{};
     // The statement was refused for its shape (rows where none were wanted,
     // or none where rows were).
     bool refused_{false};
@@ -37,10 +35,10 @@ inline void record_failure(const ruvia::db_error& error, outcome& result) {
     result.sql_state_ = error.sql_state().value_or("");
 }
 
-inline ruvia::task<void> query(ruvia::db_handle handle, std::string_view sql, outcome& result) {
+inline ruvia::task<void> query(ruvia::db_session handle, std::string_view sql, outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql);
-        result.value_ = std::pmr::string(rows.front()["v"].as<std::string_view>().value_or(""), ruvia::process_resource());
+        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
     } catch (const ruvia::db_error& error) {
         record_failure(error, result);
     } catch (const std::invalid_argument&) {
@@ -48,16 +46,16 @@ inline ruvia::task<void> query(ruvia::db_handle handle, std::string_view sql, ou
     }
 }
 
-inline ruvia::task<void> query_id(ruvia::db_handle handle, std::string_view sql, std::int64_t id, outcome& result) {
+inline ruvia::task<void> query_id(ruvia::db_session handle, std::string_view sql, std::int64_t id, outcome& result) {
     try {
         const ruvia::db_rows rows = co_await handle.query(sql, id);
-        result.value_ = std::pmr::string(rows.front()["v"].as<std::string_view>().value_or(""), ruvia::process_resource());
+        result.value_ = std::string(rows.front()["v"].as<std::string_view>().value_or(""));
     } catch (const ruvia::db_error& error) {
         record_failure(error, result);
     }
 }
 
-inline ruvia::task<void> execute(ruvia::db_handle handle, std::string_view sql, outcome& result) {
+inline ruvia::task<void> execute(ruvia::db_session handle, std::string_view sql, outcome& result) {
     try {
         const auto executed = co_await handle.execute(sql);
         result.affected_rows_ = executed.affected_rows();
@@ -69,7 +67,7 @@ inline ruvia::task<void> execute(ruvia::db_handle handle, std::string_view sql, 
     }
 }
 
-inline ruvia::task<void> begin_and_commit(ruvia::db_handle handle, outcome& result) {
+inline ruvia::task<void> begin_and_commit(ruvia::db_session handle, outcome& result) {
     try {
         auto transaction = co_await handle.begin_transaction();
         co_await transaction.commit();

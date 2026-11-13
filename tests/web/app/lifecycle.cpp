@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <semaphore>
@@ -22,7 +21,6 @@
 #include <asio/socket_base.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -62,7 +60,7 @@ shared_state& state() {
 // so the worker keeps serving lifecycle controls meanwhile.
 class held_upgrade final {
 public:
-    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next_value) {
         auto& state_value = state();
         state_value.upgrade_held_ = true;
         const auto stop = context.stop_token();
@@ -158,7 +156,7 @@ using ruvia::test::app_run;
 // Appends received bytes until `done` holds or the peer ends the stream.
 // Returns true when the peer ended it.
 template <typename predicate_type>
-bool read_until(asio::ip::tcp::socket& socket, std::pmr::string& received, predicate_type&& done,
+bool read_until(asio::ip::tcp::socket& socket, std::string& received, predicate_type&& done,
     std::chrono::milliseconds limit = 5s) {
     socket.non_blocking(true);
     const auto deadline = std::chrono::steady_clock::now() + limit;
@@ -178,8 +176,8 @@ bool read_until(asio::ip::tcp::socket& socket, std::pmr::string& received, predi
     return false;
 }
 
-bool read_to_end(asio::ip::tcp::socket& socket, std::pmr::string& received, std::chrono::milliseconds limit = 5s) {
-    return read_until(socket, received, [](const std::pmr::string&) { return false; }, limit);
+bool read_to_end(asio::ip::tcp::socket& socket, std::string& received, std::chrono::milliseconds limit = 5s) {
+    return read_until(socket, received, [](const std::string&) { return false; }, limit);
 }
 
 // The bytes after the response head, or empty while the head is incomplete.
@@ -216,7 +214,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
         app_run run(app);
         EXPECT_TRUE(state().started_.try_acquire_for(3s));
         EXPECT_EQ(app.workers().size(), std::size_t{2});
-        std::pmr::vector<asio::ip::tcp::socket> idle{ruvia::process_resource()};
+        std::vector<asio::ip::tcp::socket> idle{};
         if (cycle != 0) {
             // Connecting without sending data must not hold up later accepts.
             for (unsigned i = 0; i < 16; ++i) {
@@ -229,14 +227,14 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
                 aborted.set_option(asio::socket_base::linger(true, 0));
                 aborted.close();
             }
-            std::pmr::vector<asio::ip::tcp::socket> requests{ruvia::process_resource()};
+            std::vector<asio::ip::tcp::socket> requests{};
             for (unsigned i = 0; i < 24; ++i) {
                 requests.emplace_back(io);
                 requests.back().connect(endpoint);
                 send(requests.back(), "GET /fast HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
             }
             for (auto& socket : requests) {
-                std::pmr::string response{ruvia::process_resource()};
+                std::string response{};
                 EXPECT_TRUE(read_to_end(socket, response));
                 EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
                 EXPECT_TRUE(response.ends_with("fast"));
@@ -248,7 +246,7 @@ TEST(Ruvia, app_multi_worker_restarts_after_idle_connections_and_pending_accepts
         run.join();
         EXPECT_TRUE(run.failure() == nullptr);
         for (auto& socket : idle) {
-            std::pmr::string response{ruvia::process_resource()};
+            std::string response{};
             EXPECT_TRUE(read_to_end(socket, response));
             EXPECT_TRUE(response.empty());
         }
@@ -283,7 +281,7 @@ TEST(Ruvia, app_unsigned_max_timeouts_preserve_response_delivery) {
     asio::ip::tcp::socket client(io);
     client.connect(endpoint);
     send(client, "GET /fast HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n");
-    std::pmr::string response{ruvia::process_resource()};
+    std::string response{};
     EXPECT_TRUE(read_to_end(client, response));
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
     EXPECT_TRUE(response.ends_with("fast"));
@@ -318,8 +316,8 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     asio::ip::tcp::socket idle(io);
     idle.connect(endpoint);
     send(idle, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-    std::pmr::string idle_response{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(idle, idle_response, [](const std::pmr::string& value) { return value.ends_with("fast"); }));
+    std::string idle_response{};
+    EXPECT_TRUE(!read_until(idle, idle_response, [](const std::string& value) { return value.ends_with("fast"); }));
     EXPECT_TRUE(idle_response.starts_with("HTTP/1.1 200 "));
 
     asio::ip::tcp::socket partial(io);
@@ -335,7 +333,7 @@ TEST(Ruvia, app_stop_closes_every_connection_at_once) {
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
     for (auto* socket : {&idle, &partial, &busy}) {
-        std::pmr::string rest{ruvia::process_resource()};
+        std::string rest{};
         EXPECT_TRUE(read_to_end(*socket, rest, 3s));
         EXPECT_TRUE(rest.empty());
     }
@@ -370,7 +368,7 @@ TEST(Ruvia, app_stop_cancels_a_request_that_never_ends) {
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    std::pmr::string response{ruvia::process_resource()};
+    std::string response{};
     EXPECT_TRUE(read_to_end(socket, response, 3s));
     EXPECT_TRUE(response.empty());
     run.join();
@@ -403,7 +401,7 @@ TEST(Ruvia, app_stop_closes_an_upgrade_still_in_its_route_chain) {
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    std::pmr::string received{ruvia::process_resource()};
+    std::string received{};
     EXPECT_TRUE(read_to_end(upgrading, received, 3s));
     EXPECT_TRUE(received.empty());
     run.join();
@@ -430,8 +428,8 @@ TEST(Ruvia, app_stop_closes_websockets_without_close_handshake) {
     asio::ip::tcp::socket client(io);
     client.connect(endpoint);
     send_websocket_upgrade(client, "/socket");
-    std::pmr::string received{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(client, received, [](const std::pmr::string& value) { return value.find("\r\n\r\n") != std::pmr::string::npos; }));
+    std::string received{};
+    EXPECT_TRUE(!read_until(client, received, [](const std::string& value) { return value.find("\r\n\r\n") != std::string::npos; }));
     EXPECT_TRUE(received.starts_with("HTTP/1.1 101 "));
     ruvia::test::wait_until([&] { return state_value.socket_open_.load(); }, 3s);
 
@@ -462,18 +460,18 @@ TEST(Ruvia, app_stop_closes_tunnels_at_once) {
     asio::ip::tcp::socket tunnel(io);
     tunnel.connect(endpoint);
     send(tunnel, "CONNECT lifecycle-target.test:443 HTTP/1.1\r\nHost: lifecycle-target.test:443\r\n\r\n");
-    std::pmr::string head{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(tunnel, head, [](const std::pmr::string& value) { return value.ends_with("\r\n\r\n"); }));
+    std::string head{};
+    EXPECT_TRUE(!read_until(tunnel, head, [](const std::string& value) { return value.ends_with("\r\n\r\n"); }));
     EXPECT_TRUE(head.starts_with("HTTP/1.1 200 "));
     ruvia::test::wait_until([&] { return state_value.tunnel_open_.load(); }, 3s);
     send(tunnel, "ping");
-    std::pmr::string echoed{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(tunnel, echoed, [](const std::pmr::string& value) { return value.size() >= 4; }));
-    EXPECT_EQ(echoed, std::pmr::string("ping", ruvia::process_resource()));
+    std::string echoed{};
+    EXPECT_TRUE(!read_until(tunnel, echoed, [](const std::string& value) { return value.size() >= 4; }));
+    EXPECT_EQ(echoed, std::string("ping"));
 
     const auto stop_started = std::chrono::steady_clock::now();
     app.stop();
-    std::pmr::string rest{ruvia::process_resource()};
+    std::string rest{};
     EXPECT_TRUE(read_to_end(tunnel, rest, 3s));
     EXPECT_TRUE(rest.empty());
     run.join();
@@ -501,9 +499,9 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     EXPECT_TRUE(state_value.started_.try_acquire_for(3s));
     const auto served = [](asio::ip::tcp::socket& socket) {
         send(socket, "GET /fast HTTP/1.1\r\nHost: localhost\r\n\r\n");
-        std::pmr::string response{ruvia::process_resource()};
+        std::string response{};
         const bool ended =
-            read_until(socket, response, [](const std::pmr::string& value) { return value.ends_with("fast"); });
+            read_until(socket, response, [](const std::string& value) { return value.ends_with("fast"); });
         return !ended && response.starts_with("HTTP/1.1 200 ");
     };
     asio::ip::tcp::socket oldest(io);
@@ -517,7 +515,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     asio::ip::tcp::socket admitted(io);
     admitted.connect(endpoint);
     EXPECT_TRUE(served(admitted));
-    std::pmr::string evicted{ruvia::process_resource()};
+    std::string evicted{};
     EXPECT_TRUE(read_to_end(oldest, evicted));
     EXPECT_TRUE(evicted.empty());
     EXPECT_TRUE(served(newer));
@@ -530,7 +528,7 @@ TEST(Ruvia, app_connection_cap_evicts_the_oldest_idle_connection) {
     ruvia::test::wait_until([&] { return state_value.slow_entered_.load(); }, 3s);
     asio::ip::tcp::socket refused(io);
     refused.connect(endpoint);
-    std::pmr::string refused_bytes{ruvia::process_resource()};
+    std::string refused_bytes{};
     EXPECT_TRUE(read_to_end(refused, refused_bytes));
     EXPECT_TRUE(refused_bytes.empty());
     EXPECT_EQ(app.stats().connections_refused_, std::size_t{1});
@@ -564,15 +562,15 @@ TEST(Ruvia, app_connection_timeouts_honor_coarse_scan_clock) {
         send(active, "a");
     }
     send(active, "\r\n\r\n");
-    std::pmr::string response{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(active, response, [](const std::pmr::string& value) { return value.ends_with("fast"); }));
+    std::string response{};
+    EXPECT_TRUE(!read_until(active, response, [](const std::string& value) { return value.ends_with("fast"); }));
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
 
     // A connection that sends nothing is closed, but not before its timeout.
     const auto connected = std::chrono::steady_clock::now();
     asio::ip::tcp::socket silent(io);
     silent.connect(endpoint);
-    std::pmr::string silent_bytes{ruvia::process_resource()};
+    std::string silent_bytes{};
     EXPECT_TRUE(read_to_end(silent, silent_bytes, 5s));
     EXPECT_TRUE(std::chrono::steady_clock::now() - connected >= header_timeout);
     EXPECT_TRUE(silent_bytes.empty());
@@ -609,8 +607,8 @@ TEST(Ruvia, app_stop_during_capability_connect_returns_normally) {
         return !error;
     },
         3s);
-    std::pmr::string auth{ruvia::process_resource()};
-    EXPECT_TRUE(!read_until(peer, auth, [](const std::pmr::string& value) { return !value.empty(); }));
+    std::string auth{};
+    EXPECT_TRUE(!read_until(peer, auth, [](const std::string& value) { return !value.empty(); }));
     EXPECT_TRUE(!auth.empty());
     EXPECT_TRUE(app.workers().empty());
     EXPECT_TRUE(!app.worker_for(std::uint64_t{0}).valid());

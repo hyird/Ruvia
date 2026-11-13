@@ -1,7 +1,6 @@
 #include <algorithm>
 #include <array>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -13,8 +12,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
@@ -39,7 +37,7 @@
 #include "http/request_query_values.h"
 #include "http/static_path_normalization.h"
 #include "http/unsupported_request_content_coding.h"
-#include "util/operation_interrupt.h"
+#include "integration/operation_interrupt.h"
 
 namespace ruvia {
 
@@ -78,27 +76,51 @@ namespace {
 
 [[nodiscard]] const request_name_value_list& empty_request_fields() noexcept {
     static const request_name_value_list empty =
-        detail::request_name_value_list_access::make(process_resource());
+        detail::request_name_value_list_access::make();
     return empty;
 }
 
 // Unencoded names and values borrow the request query string; decoded ones
 // live in the request arena. Form decoding keeps an invalid '%' literally.
-void ensure_request_query(const context& context_value, const http_request& request,
+void ensure_request_query(const http_request& request,
     detail::context_request_storage& request_storage) {
     auto& cache = request_storage.query_;
     if (cache) {
         return;
     }
-    auto* const arena = context_value.arena();
-    auto query = detail::request_name_value_list_access::make(arena);
-    (void)visit_url_encoded_pairs(request.query_string(), [&query, arena](std::string_view key, std::string_view value) {
-        const auto name = *detail::decode_url_component_in_arena(key, url_decode_mode::form, false, arena);
-        const auto decoded_value = *detail::decode_url_component_in_arena(value, url_decode_mode::form, false, arena);
+    std::size_t pair_count = 0;
+    std::size_t decoded_capacity = 0;
+    (void)visit_url_encoded_pairs(request.query_string(), [&](std::string_view key, std::string_view value) {
+        ++pair_count;
+        if (has_url_encoding(key, url_decode_mode::form)) {
+            decoded_capacity += key.size();
+        }
+        if (has_url_encoding(value, url_decode_mode::form)) {
+            decoded_capacity += value.size();
+        }
+        return true;
+    });
+    auto& cached = cache.emplace();
+    auto& decoded_bytes = cached.decoded_bytes();
+    decoded_bytes.resize(decoded_capacity);
+    std::size_t cursor = 0;
+    const auto decode_form = [&](std::string_view input) noexcept -> std::string_view {
+        if (!has_url_encoding(input, url_decode_mode::form)) {
+            return input;
+        }
+        char* const out = decoded_bytes.data() + cursor;
+        const auto size = *detail::decode_url_bytes(input, out, url_decode_mode::form, false);
+        cursor += size;
+        return std::string_view(out, size);
+    };
+    auto& query = cached.mutable_fields();
+    detail::request_name_value_list_access::reserve(query, pair_count);
+    (void)visit_url_encoded_pairs(request.query_string(), [&](std::string_view key, std::string_view value) {
+        const auto name = decode_form(key);
+        const auto decoded_value = decode_form(value);
         detail::request_name_value_list_access::push_back(query, http_header_view{name, decoded_value});
         return true;
     });
-    cache.emplace(std::move(query), arena);
 }
 
 // Counts encoded captures only; decoding validates them once, in ensure_route_params.
@@ -119,7 +141,7 @@ void ensure_request_query(const context& context_value, const http_request& requ
 
 // Route names and unencoded captures borrow stable route/request storage; a
 // "*" capture rejects escapes revealing a path separator, as static paths do.
-void ensure_route_params(const context& context_value, const std::string_view* param_names,
+void ensure_route_params(const std::string_view* param_names,
     const std::string_view* param_values, std::size_t param_count,
     detail::context_request_storage& request_storage) {
     auto& cache = request_storage.route_params_;
@@ -130,17 +152,33 @@ void ensure_route_params(const context& context_value, const std::string_view* p
     if (request_storage.route_params_invalid_) {
         detail::throw_invalid_param();
     }
-    auto* const arena = context_value.arena();
-    auto params = detail::request_name_value_list_access::make(arena);
+    std::size_t decoded_capacity = 0;
+    for (std::size_t i = 0; i < param_count; ++i) {
+        if (has_url_encoding(param_values[i], url_decode_mode::percent)) {
+            decoded_capacity += param_values[i].size();
+        }
+    }
+    auto& decoded_bytes = request_storage.decoded_route_params_;
+    decoded_bytes.clear();
+    decoded_bytes.resize(decoded_capacity);
+    std::size_t cursor = 0;
+    auto params = detail::request_name_value_list_access::make();
     detail::request_name_value_list_access::reserve(params, param_count);
     for (std::size_t i = 0; i < param_count; ++i) {
-        const auto value = detail::decode_url_component_in_arena(
-            param_values[i], url_decode_mode::percent, param_names[i] == "*", arena);
-        if (!value) {
-            request_storage.route_params_invalid_ = true;
-            detail::throw_invalid_param();
+        std::string_view decoded_value = param_values[i];
+        if (has_url_encoding(decoded_value, url_decode_mode::percent)) {
+            char* const out = decoded_bytes.data() + cursor;
+            const auto size = detail::decode_url_bytes(
+                decoded_value, out, url_decode_mode::percent, param_names[i] == "*");
+            if (!size) {
+                decoded_bytes.clear();
+                request_storage.route_params_invalid_ = true;
+                detail::throw_invalid_param();
+            }
+            decoded_value = std::string_view(out, *size);
+            cursor += *size;
         }
-        detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], *value});
+        detail::request_name_value_list_access::push_back(params, http_header_view{param_names[i], decoded_value});
     }
     cache.emplace(std::move(params));
 }
@@ -183,14 +221,14 @@ void ensure_route_params(const context& context_value, const std::string_view* p
 // the route's decoded-size cap still bounds the work.
 inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
 
-[[nodiscard]] task<std::variant<std::pmr::string, http_content_decode_error>> decode_request_content(
-    const worker_handle& worker_value, const stop_token& stop_token_value,
+[[nodiscard]] task<std::variant<std::string, http_content_decode_error>> decode_request_content(
+    const worker_ref& worker_value, const stop_token& stop_token_value,
     std::span<const http_content_coding> codings, std::string_view raw,
     http_content_decode_options options) {
     if (worker_value.blocking_pool() != nullptr && options.max_decoded_bytes_ > inline_request_decode_bytes) {
         if (raw.size() <= inline_request_decode_bytes) {
             auto inline_result = decode_http_content(codings, raw,
-                {.max_decoded_bytes_ = inline_request_decode_bytes, .resource_ = options.resource_});
+                {.max_decoded_bytes_ = inline_request_decode_bytes});
             const auto* failure = std::get_if<http_content_decode_error>(&inline_result);
             if (failure == nullptr || *failure != http_content_decode_error::decoded_size_exceeded) {
                 co_return inline_result;
@@ -200,20 +238,16 @@ inline constexpr std::size_t inline_request_decode_bytes = 64 * 1024;
         std::array<http_content_coding, max_content_codings> owned_codings{};
         const auto coding_count = (std::min)(codings.size(), max_content_codings);
         std::copy_n(codings.data(), coding_count, owned_codings.data());
-        std::pmr::string owned_raw(raw, process_resource());
+        std::string owned_raw(raw);
         auto offloaded = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value},
             [owned_codings, coding_count, owned_raw = std::move(owned_raw),
                 limit = options.max_decoded_bytes_]() {
                 return decode_http_content(std::span<const http_content_coding>(owned_codings.data(), coding_count),
-                    owned_raw, {.max_decoded_bytes_ = limit, .resource_ = process_resource()});
+                    owned_raw, {.max_decoded_bytes_ = limit});
             });
         // A codec failure on the pool is rethrown here; pool saturation or
         // shutdown throws blocking_operation_rejected (mapped to 503).
-        auto result_value = std::move(offloaded).take_value();
-        if (const auto* content = std::get_if<std::pmr::string>(&result_value)) {
-            co_return std::pmr::string(*content, options.resource_);
-        }
-        co_return std::get<http_content_decode_error>(result_value);
+        co_return std::move(offloaded).take_value();
     }
     co_return decode_http_content(codings, raw, options);
 }
@@ -257,9 +291,6 @@ task<std::string_view> read_request_text(const context& context_value, operation
     // Transparently decode a request body whose Content-Encoding we understand,
     // so handlers always see the decoded representation (RFC 9110 §8.4).
     const auto& services = detail::context_access::services(context_value);
-    auto* const decode_resource = services.inbound_buffer_pool() != nullptr
-                                      ? services.inbound_buffer_pool()
-                                      : ruvia::process_resource();
     const auto parsed_coding = require_decodable_request_coding(
         request, detail::unsupported_request_content_coding::read_type::decoded);
     const auto codings = parsed_coding.codings();
@@ -268,9 +299,8 @@ task<std::string_view> read_request_text(const context& context_value, operation
         co_return raw;
     }
     auto decode_result = co_await decode_request_content(services.worker(), context_value.stop_token(), codings, raw,
-        {.max_decoded_bytes_ = services.max_decoded_request_body_bytes(),
-            .resource_ = decode_resource});
-    auto* decoded_content = std::get_if<std::pmr::string>(&decode_result);
+        {.max_decoded_bytes_ = services.max_decoded_request_body_bytes()});
+    auto* decoded_content = std::get_if<std::string>(&decode_result);
     if (decoded_content == nullptr) {
         throw http_request_content_decode_error(std::get<http_content_decode_error>(decode_result));
     }
@@ -282,10 +312,10 @@ task<std::span<const std::byte>> read_request_bytes(const context& context_value
     co_return std::as_bytes(std::span(body));
 }
 
-task<std::pmr::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
+task<std::vector<multipart_part>> read_request_multipart(const context& context_value, operation_options operation) {
     const auto boundary = get_multipart_boundary(detail::context_access::request(context_value));
     const auto request_body = co_await read_request_text(context_value, std::move(operation));
-    co_return parse_multipart_body(request_body, {.boundary_ = boundary, .resource_ = context_value.arena()});
+    co_return parse_multipart_body(request_body, {.boundary_ = boundary});
 }
 
 task<void> discard_request_body(const context& context_value, operation_options operation) {
@@ -386,7 +416,7 @@ const request_name_value_list& context_request::query_fields() const {
         return empty_request_fields();
     }
     auto& storage = context_->request_storage();
-    ensure_request_query(*context_, context_->request_, storage);
+    ensure_request_query(context_->request_, storage);
     return storage.query_->fields();
 }
 
@@ -395,7 +425,7 @@ std::optional<std::string_view> context_request::query(std::string_view name) co
         return std::nullopt;
     }
     auto& storage = context_->request_storage();
-    ensure_request_query(*context_, context_->request_, storage);
+    ensure_request_query(context_->request_, storage);
     return storage.query_->fields().get(name);
 }
 
@@ -404,7 +434,7 @@ std::span<const std::string_view> context_request::queries(std::string_view name
         return {};
     }
     auto& storage = context_->request_storage();
-    ensure_request_query(*context_, context_->request_, storage);
+    ensure_request_query(context_->request_, storage);
     return storage.query_->values().values(name);
 }
 
@@ -429,7 +459,7 @@ const request_name_value_list& context_request::cookie_fields() const {
             continue;
         }
         if (!cookies) {
-            cookies.emplace(detail::request_name_value_list_access::make(ruvia::process_resource()));
+            cookies.emplace(detail::request_name_value_list_access::make());
         }
         http_visit_cookie_pairs(header_field.value(),
             [&cookies](std::string_view key, std::string_view value) {
@@ -450,8 +480,7 @@ const request_name_value_list& context_request::param_fields() const {
         return empty_request_fields();
     }
     auto& storage = context_->request_storage();
-    ensure_route_params(
-        *context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    ensure_route_params(context_->param_names_, context_->param_values_, context_->param_count_, storage);
     return *storage.route_params_;
 }
 
@@ -471,8 +500,7 @@ std::optional<std::string_view> context_request::param(std::string_view name) co
         }
         return std::nullopt;
     }
-    ensure_route_params(
-        *context_, context_->param_names_, context_->param_values_, context_->param_count_, storage);
+    ensure_route_params(context_->param_names_, context_->param_values_, context_->param_count_, storage);
     return storage.route_params_->get(name);
 }
 
@@ -582,14 +610,14 @@ std::optional<std::string_view> context_request::signed_cookie(
     const auto value = stored->substr(0, value_size);
     const auto signature = stored->substr(value_size + 1);
     char expected[detail::cookie_signature_size];
-    detail::write_cookie_signature(expected, secret, name, value, ruvia::process_resource());
+    detail::write_cookie_signature(expected, secret, name, value);
     if (!detail::constant_time_bytes_equal(signature, std::string_view(expected, sizeof(expected)))) {
         return std::nullopt;
     }
     return value;
 }
 
-task<std::pmr::vector<multipart_part>> context_request::multipart(operation_options operation) const {
+task<std::vector<multipart_part>> context_request::multipart(operation_options operation) const {
     return ::ruvia::make_scoped_operation(
         context_->operation_scope_, read_request_multipart(*context_, std::move(operation)));
 }
@@ -617,6 +645,6 @@ multipart_reader context_request::multipart_reader() const {
         throw detail::unsupported_request_content_coding(
             detail::unsupported_request_content_coding::read_type::streaming);
     }
-    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary, .resource_ = ruvia::process_resource()});
+    return ::ruvia::multipart_reader(body_reader(), {.boundary_ = boundary});
 }
 }  // namespace ruvia

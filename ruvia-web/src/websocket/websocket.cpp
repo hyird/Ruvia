@@ -3,8 +3,7 @@
 #include "ruvia/core/bytes.h"
 #include "ruvia/http/websocket_connection.h"
 
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
+#include "integration/operation_lane_lease.h"
 #include "websocket/websocket_state.h"
 
 namespace {
@@ -20,7 +19,7 @@ using websocket_write_type = ruvia::task<void> (*)(void*, ruvia::websocket_opcod
 
 // The final fragment releases the data lane of its fragmented message.
 ruvia::task<void> write_websocket_payload(void* target, websocket_write_type write, ruvia::websocket_opcode opcode,
-    std::pmr::string payload_value, bool& write_active, bool compress, ruvia::detail::websocket_write_extent extent,
+    std::string payload_value, bool& write_active, bool compress, ruvia::detail::websocket_write_extent extent,
     ruvia::operation_options operation, bool& fragmented_message_active) {
     auto lease = ruvia::detail::claim_operation_lane(write_active, "concurrent websocket output operations are not supported");
     co_await write(target, opcode, payload_value, compress, extent, std::move(operation));
@@ -45,7 +44,7 @@ ruvia::task<void> write_websocket_message(void* target, websocket_write_type wri
 
 ruvia::task<void> close_websocket_with_reason(void* target,
     ruvia::task<void> (*close)(void*, ruvia::websocket_close_options, ruvia::operation_options),
-    ruvia::websocket_close_options options, std::pmr::string reason, ruvia::operation_options operation,
+    ruvia::websocket_close_options options, std::string reason, ruvia::operation_options operation,
     bool& read_active, bool& write_active, const bool& message_send_active) {
     // The write lane also excludes another close.
     auto write_lease = ruvia::detail::claim_operation_lane(write_active, "websocket close cannot overlap an output operation");
@@ -116,7 +115,7 @@ task<void> websocket::ping(std::string_view payload, operation_options operation
 task<void> websocket::pong(std::string_view payload, operation_options operation) & {
     return require_websocket(state_).pong(payload, std::move(operation));
 }
-task<void> websocket::write_owned(websocket_opcode opcode, std::pmr::string&& payload, bool compress, operation_options operation) {
+task<void> websocket::write_owned(websocket_opcode opcode, std::string&& payload, bool compress, operation_options operation) {
     return require_websocket(state_).write(opcode, std::move(payload), compress, std::move(operation));
 }
 task<void> websocket::send(websocket_message&& message, websocket_send_options options, operation_options operation) & {
@@ -149,7 +148,7 @@ bool websocket::connected() const noexcept {
     state_->require_active();
     return state_->protocol_(state_->target_).liveness_mode() == websocket_liveness_mode::open;
 }
-const worker_handle& websocket::worker() const& {
+const worker_ref& websocket::worker() const& {
     return *require_websocket(state_).worker_;
 }
 std::optional<std::uint16_t> websocket::peer_close_code() const noexcept {
@@ -212,7 +211,7 @@ task<void> detail::websocket_state::send(websocket_message&& message, websocket_
 task<void> detail::websocket_state::close(websocket_close_options options, operation_options operation) & {
     require_active();
     operation = override_operation_options(defaults_, std::move(operation));
-    std::pmr::string owned(options.reason_.view(), resource_);
+    std::string owned(options.reason_.view());
     return make_scoped_operation(operation_scope_,
         close_websocket_with_reason(target_, close_, options, std::move(owned), std::move(operation),
             read_active_, write_active_, message_send_active_));
@@ -281,11 +280,10 @@ std::uint64_t detail::websocket_state::bytes_sent() const noexcept {
 task<void> detail::websocket_state::write(websocket_opcode opcode, std::string_view payload_value, bool compress, operation_options operation,
     detail::websocket_write_extent extent) {
     require_active();
-    std::pmr::string owned(payload_value, resource_);
-    return write(opcode, std::move(owned), compress, std::move(operation), extent);
+    return write(opcode, std::string(payload_value), compress, std::move(operation), extent);
 }
 
-task<void> detail::websocket_state::write(websocket_opcode opcode, std::pmr::string&& payload_value, bool compress, operation_options operation,
+task<void> detail::websocket_state::write(websocket_opcode opcode, std::string&& payload_value, bool compress, operation_options operation,
     detail::websocket_write_extent extent) {
     require_active();
     if (extent == detail::websocket_write_extent::message && fragmented_message_active_ &&
@@ -293,9 +291,8 @@ task<void> detail::websocket_state::write(websocket_opcode opcode, std::pmr::str
         throw std::logic_error("a fragmented websocket message is in progress");
     }
     operation = override_operation_options(defaults_, std::move(operation));
-    auto owned = detail::rebind_owned_storage(payload_value, resource_);
     return make_scoped_operation(operation_scope_,
-        write_websocket_payload(target_, write_, opcode, std::move(owned), write_active_, compress, extent,
+        write_websocket_payload(target_, write_, opcode, std::move(payload_value), write_active_, compress, extent,
             std::move(operation), fragmented_message_active_));
 }
 
@@ -381,7 +378,7 @@ task<void> websocket_message_writer::submit(std::string_view chunk, bool final, 
 }
 
 task<void> websocket_message_writer::submit_owned(
-    std::pmr::string&& chunk, bool final, operation_options operation) {
+    std::string&& chunk, bool final, operation_options operation) {
     registration_.require_active();
     if (!message_open()) {
         throw std::logic_error("websocket message writer is finished");

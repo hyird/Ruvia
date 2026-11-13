@@ -151,11 +151,11 @@ timer_sleep_result sleep_operation::await_resume() const noexcept {
                : timer_sleep_result::stop_requested;
 }
 
-sleep_operation sleep_for(const worker_handle& worker_value, timeout_duration duration, stop_token stop_token_value) {
+sleep_operation sleep_for(const worker_ref& worker_value, timeout_duration duration, stop_token stop_token_value) {
     return sleep_operation(worker_value, duration, std::move(stop_token_value));
 }
 
-sleep_operation sleep_until(const worker_handle& worker_value,
+sleep_operation sleep_until(const worker_ref& worker_value,
     std::chrono::steady_clock::time_point deadline, stop_token stop_token_value) {
     return sleep_operation(worker_value, deadline, std::move(stop_token_value));
 }
@@ -349,7 +349,7 @@ void worker_dispatcher::release_drained_timer_heap() noexcept {
     // pairs across threads, so only the heap, which nothing references, shrinks.
     // The heap regrows geometrically on the next burst.
     if (timers_.empty() && timers_.capacity() > capacity_) {
-        std::pmr::vector<timer_entry>(timers_.get_allocator()).swap(timers_);
+        std::vector<timer_entry>().swap(timers_);
     }
 }
 
@@ -376,7 +376,7 @@ void worker_dispatcher::stop_timers() noexcept {
     if (timer_) {
         timer_->cancel();
         // The timer object is bound to the worker io_context service.  A
-        // worker_handle may keep the dispatcher endpoint alive after shutdown,
+        // worker_ref may keep the dispatcher endpoint alive after shutdown,
         // so stopping timers must release the Asio object while the context is
         // still known to be alive rather than leaving that work to the
         // dispatcher's eventual destructor.

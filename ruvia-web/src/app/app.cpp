@@ -1,4 +1,3 @@
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <string_view>
@@ -6,7 +5,7 @@
 
 #include <openssl/ssl.h>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "app/app_runtime_graph.h"
 #include "app/app_state.h"
@@ -32,8 +31,7 @@ application& app() {
 }
 
 application::application()
-    : state_(std::allocate_shared<detail::app_state>(
-          std::pmr::polymorphic_allocator<detail::app_state>(process_resource()))) {}
+    : state_(std::make_shared<detail::app_state>()) {}
 
 application::~application() = default;
 
@@ -78,10 +76,10 @@ blocking_pool_stats application::blocking_pool_stats() const {
     return state_value.runtime_->blocking_pool_->stats();
 }
 
-std::pmr::vector<web_worker_handle> application::workers() const {
+std::vector<web_worker_ref> application::workers() const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
-    std::pmr::vector<web_worker_handle> result(process_resource());
+    std::vector<web_worker_ref> result;
     if (!state_value.runtime_ || !state_value.runtime_->workers_ready_) {
         return result;
     }
@@ -92,7 +90,7 @@ std::pmr::vector<web_worker_handle> application::workers() const {
     return result;
 }
 
-web_worker_handle application::worker_for(std::uint64_t key) const {
+web_worker_ref application::worker_for(std::uint64_t key) const {
     auto& state_value = *state_;
     std::lock_guard lock(state_value.mutex_);
     if (!state_value.runtime_ || !state_value.runtime_->workers_ready_ ||
@@ -102,7 +100,7 @@ web_worker_handle application::worker_for(std::uint64_t key) const {
     return state_value.runtime_->workers_[key % state_value.runtime_->workers_.size()].runtime_->web_worker();
 }
 
-web_worker_handle application::worker_for(std::string_view key) const {
+web_worker_ref application::worker_for(std::string_view key) const {
     return worker_for(ruvia::worker_selection_hash(key));
 }
 

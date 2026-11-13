@@ -13,12 +13,12 @@ namespace ruvia {
 
 http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     const http_byte_range_set& ranges, http_content_length representation_length_value,
-    std::string_view media_type, std::string_view boundary, std::pmr::memory_resource* resource) {
+    std::string_view media_type, std::string_view boundary) {
     const auto representation_length = representation_length_value.value();
     if (ranges.ignored() || ranges.unsatisfiable() || ranges.size() < 2 ||
         ranges.size() > http_byte_range_set::capacity || representation_length == 0 ||
         !is_valid_http_content_type_field_value(media_type) ||
-        !multipart_boundary::try_create(boundary).has_value() || resource == nullptr) {
+        !multipart_boundary::try_create(boundary).has_value()) {
         throw std::invalid_argument("invalid multipart byte-range plan input");
     }
 
@@ -48,7 +48,7 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
         total_content_length += part_metadata_size + range.length_;
     }
 
-    http_multipart_byte_range_plan plan(resource);
+    http_multipart_byte_range_plan plan;
     auto& storage = *plan.state_;
     auto& metadata = storage.metadata_;
     static constexpr std::string_view content_type_prefix = "multipart/byteranges; boundary=";
@@ -110,15 +110,11 @@ http_multipart_byte_range_plan make_http_multipart_byte_range_plan(
     return plan;
 }
 
-http_multipart_byte_range_plan http_multipart_byte_range_plan::clone(
-    std::pmr::memory_resource* resource) const {
-    if (resource == nullptr) {
-        throw std::invalid_argument("multipart plan clone requires a memory resource");
-    }
+http_multipart_byte_range_plan http_multipart_byte_range_plan::clone() const {
     if (state_ == nullptr) {
         throw std::invalid_argument("multipart response plan must contain segments");
     }
-    http_multipart_byte_range_plan copy(resource);
+    http_multipart_byte_range_plan copy;
     copy.state_->content_type_.assign(state_->content_type_);
     copy.state_->metadata_.assign(state_->metadata_);
     copy.state_->segments_ = state_->segments_;
@@ -130,15 +126,14 @@ http_multipart_byte_range_plan http_multipart_byte_range_plan::clone(
 http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
     http_content_length representation_length_value, http_byte_range_options options) {
     const auto representation_length = representation_length_value.value();
-    http_byte_range_set result(options.resource_);
+    http_byte_range_set result;
     if (options.max_ranges_ == 0) {
         return result;
     }
     field_value = http_trim_ows(field_value);
     constexpr std::string_view unit = "bytes";
     if (field_value.size() <= unit.size() || field_value[unit.size()] != '=' ||
-        !http_ascii_equals_ignore_case(field_value.substr(0, unit.size()), unit) ||
-        representation_length == 0) {
+        !http_ascii_equals_ignore_case(field_value.substr(0, unit.size()), unit)) {
         return result;
     }
 
@@ -218,14 +213,14 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         specs = has_more ? specs.substr(comma + 1) : std::string_view{};
         if (spec.empty()) {
             if (++empty_members > 32) {
-                return http_byte_range_set(options.resource_);
+                return http_byte_range_set{};
             }
             continue;
         }
         saw_range_spec = true;
         const auto dash = spec.find('-');
         if (dash == std::string_view::npos || spec.find('-', dash + 1) != std::string_view::npos) {
-            return http_byte_range_set(options.resource_);
+            return http_byte_range_set{};
         }
         const auto first = spec.substr(0, dash);
         const auto last = spec.substr(dash + 1);
@@ -234,23 +229,23 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         if (first.empty()) {
             std::uint64_t suffix{};
             if (!parse_number(last, suffix)) {
-                return http_byte_range_set(options.resource_);
+                return http_byte_range_set{};
             }
-            if (suffix == 0) {
+            if (suffix == 0 || representation_length == 0) {
                 continue;
             }
             const auto length = (std::min)(suffix, representation_length);
             if (!add_range(representation_length - length, length)) {
-                return http_byte_range_set(options.resource_);
+                return http_byte_range_set{};
             }
             continue;
         }
         if (!parse_number(first, start) || (!last.empty() && !parse_number(last, end))) {
-            return http_byte_range_set(options.resource_);
+            return http_byte_range_set{};
         }
         if (!last.empty()) {
             if (start > end) {
-                return http_byte_range_set(options.resource_);
+                return http_byte_range_set{};
             }
             if (start == (std::numeric_limits<std::uint64_t>::max)() && end == start) {
                 auto normalized_first = first;
@@ -264,7 +259,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
                 if (normalized_first.size() > normalized_last.size() ||
                     (normalized_first.size() == normalized_last.size() &&
                         normalized_first > normalized_last)) {
-                    return http_byte_range_set(options.resource_);
+                    return http_byte_range_set{};
                 }
             }
         }
@@ -274,11 +269,11 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value,
         const auto clamped_end =
             last.empty() ? representation_length - 1 : (std::min)(end, representation_length - 1);
         if (!add_range(start, clamped_end - start + 1)) {
-            return http_byte_range_set(options.resource_);
+            return http_byte_range_set{};
         }
     } while (has_more);
     if (result.count_ == 0 && !saw_range_spec) {
-        return http_byte_range_set(options.resource_);
+        return http_byte_range_set{};
     }
     return result;
 }
@@ -376,20 +371,19 @@ std::optional<std::uint64_t> compute_http_byte_range_content_length(
 
 http_byte_range_slicer::http_byte_range_slicer(const http_byte_range_set& ranges,
     http_content_length representation_length, std::string_view media_type,
-    std::string_view boundary, std::pmr::memory_resource* resource)
+    std::string_view boundary)
     : http_byte_range_slicer(
           ranges.ignored() ? std::span<const http_byte_range>{} : ranges.ranges(),
-          representation_length, media_type, boundary, resource) {}
+          representation_length, media_type, boundary) {}
 
 http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> ranges,
     http_content_length representation_length_value, std::string_view media_type,
-    std::string_view boundary, std::pmr::memory_resource* resource)
-    : resource_(detail::http_pmr_resource_or_default(resource)),
-      ranges_(ranges.begin(), ranges.end(), resource_),
-      media_type_(media_type, resource_),
-      boundary_(boundary, resource_),
-      content_type_(resource_),
-      content_range_(resource_),
+    std::string_view boundary)
+    : ranges_(ranges.begin(), ranges.end()),
+      media_type_(media_type),
+      boundary_(boundary),
+      content_type_(),
+      content_range_(),
       representation_length_(representation_length_value.value()) {
     if (ranges_.empty() || representation_length_ == 0) {
         throw std::invalid_argument("HTTP byte-range slicer requires at least one range");
@@ -448,7 +442,7 @@ http_byte_range_slicer::http_byte_range_slicer(std::span<const http_byte_range> 
 }
 
 void http_byte_range_slicer::emit_part_header(
-    std::size_t index, std::pmr::string& output) const {
+    std::size_t index, std::string& output) const {
     const auto range = ranges_[index];
     output.append("--");
     output.append(boundary_);
@@ -463,12 +457,12 @@ void http_byte_range_slicer::emit_part_header(
     output.append("\r\n\r\n");
 }
 
-void http_byte_range_slicer::write(std::string_view chunk, std::pmr::string& output) {
+void http_byte_range_slicer::write(std::string_view chunk, std::string& output) {
     write(current_offset_, chunk, output);
 }
 
 void http_byte_range_slicer::write(
-    std::uint64_t chunk_offset, std::string_view chunk, std::pmr::string& output) {
+    std::uint64_t chunk_offset, std::string_view chunk, std::string& output) {
     if (chunk_offset < current_offset_ || chunk_offset > representation_length_ ||
         chunk.size() > representation_length_ - chunk_offset) {
         throw std::invalid_argument("HTTP byte-range slicer chunk offset is out of bounds");
@@ -525,7 +519,7 @@ void http_byte_range_slicer::write(
     }
 }
 
-void http_byte_range_slicer::finish(std::pmr::string&) {
+void http_byte_range_slicer::finish(std::string&) {
     if (!complete_) {
         throw std::logic_error("HTTP byte-range slicer finished before all ranges completed");
     }

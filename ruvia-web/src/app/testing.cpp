@@ -12,8 +12,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_protocol_error.h"
@@ -26,12 +24,12 @@
 #include "integration/worker_capabilities.h"
 #include "router/route_table.h"
 #include "router/router_impl.h"
+#include "server/config_validation.h"
 #include "server/http_request_admission.h"
 #include "server/http_server_options.h"
 #include "server/http_server_options_validation.h"
 #include "server/response_file_source.h"
 #include "server/worker_codecs.h"
-#include "util/config_validation.h"
 
 namespace ruvia {
 
@@ -46,7 +44,7 @@ struct test_app::impl_type final {
 
     detail::app_configuration configuration_;
     detail::controller_store controllers_;
-    detail::compiled_route_plan_ptr_type route_plan_{nullptr, pmr_object_deleter<detail::compiled_route_plan>{}};
+    detail::compiled_route_plan_ptr_type route_plan_;
     std::optional<detail::route_table> routes_;
     env env_;
     detail::worker_codecs codecs_;
@@ -56,7 +54,7 @@ struct test_app::impl_type final {
     blocking_pool blocking_pool_{{.thread_count_ = 1}};
     event_loop_pool event_loop_pool_{{.loop_count_ = 1, .blocking_pool_ = &blocking_pool_}};
     event_loop event_loop_{event_loop_pool_.loop(0)};
-    worker_handle worker_{event_loop_.handle()};
+    worker_ref worker_{event_loop_.worker()};
     stop_source stop_source_;
     stop_token stop_token_{stop_source_.token()};
     std::optional<detail::worker_capabilities> capabilities_;
@@ -136,9 +134,8 @@ struct test_app::impl_type final {
 
     [[nodiscard]] task<dispatch_response> execute_request(const test_request& request) {
         const auto request_start = std::chrono::steady_clock::now();
-        request_memory request_memory_value(options_.server_.request_arena_initial_bytes_);
         detail::inline_http_header_views<16> active_headers(
-            request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U), request_memory_value.resource());
+            request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
         for (const auto& [name, value] : request.headers_) {
             active_headers.push_back(http_header_view(name, value));
         }
@@ -149,11 +146,10 @@ struct test_app::impl_type final {
         auto parsed_value = [&]() {
             try {
                 return make_parsed_http_request(request.method_, request.target_, active_headers.view(),
-                    std::as_bytes(std::span(request.body_.data(), request.body_.size())),
-                    request_memory_value.resource());
+                    std::as_bytes(std::span(request.body_.data(), request.body_.size())));
             } catch (const http_protocol_error& error) {
                 parse_error = error;
-                return make_parsed_http_request("GET", "/", {}, {}, request_memory_value.resource());
+                return make_parsed_http_request("GET", "/", {}, {});
             }
         }();
 
@@ -166,12 +162,12 @@ struct test_app::impl_type final {
         // A malformed request is rejected before admission, with no coding
         // promise, exactly as a server answers a malformed head.
         std::optional<detail::http_request_admission> admission;
-        http_response response(request_memory_value.resource());
+        http_response response;
         if (parse_error.has_value()) {
             const auto rejection = detail::http_request_rejection::error(
-                detail::copy_http_protocol_error_info(request_memory_value.resource(), *parse_error));
-            response = co_await detail::respond_http_request_rejection(routes_value, parsed_value,
-                request_memory_value, rejection, services);
+                detail::copy_http_protocol_error_info(*parse_error));
+            response = co_await detail::respond_http_request_rejection(
+                routes_value, parsed_value, rejection, services);
         } else {
             // These borrowed arguments must remain in the coroutine frame across
             // suspension. MSVC cannot tail-transfer this call with braced temporaries.
@@ -179,13 +175,12 @@ struct test_app::impl_type final {
                 .request_ = parsed_value,
                 .resolution_ = resolution,
                 .coding_ = http_response_coding_selection_for(parsed_value),
-                .resource_ = request_memory_value.resource(),
                 .start_ = request_start,
                 .pinned_arrival_ = request.arrival_,
             };
             const auto policy = detail::http_request_admission_policy::server(options_);
             auto admitted = co_await detail::admit_and_dispatch_buffered_request(
-                routes_value, input, policy, services, request_memory_value, response);
+                routes_value, input, policy, services, response);
             admission.emplace(std::move(admitted));
         }
         const auto& request_services = admission ? admission->services() : services;
@@ -196,10 +191,9 @@ struct test_app::impl_type final {
                                           detail::http_response_coding_policy::disabled(),
                                           remote_ip, remote_ip, request_start);
         const auto prepared = co_await tail.prepare_or_finish(
-            response, options_, worker_, routes_value, request_memory_value, request_services);
+            response, options_, worker_, routes_value, request_services);
 
-        // Copy everything out while the request arena is still alive.
-        dispatch_response result_value(process_resource());
+        dispatch_response result_value;
         result_value.copy_head_from(response);
         // On the wire, HEAD responses and content-forbidden statuses carry no
         // body, so the facade must not surface one
@@ -229,7 +223,7 @@ struct test_app::impl_type final {
 };
 
 test_app::test_app()
-    : impl_(make_pmr_object<impl_type>(process_resource())) {}
+    : impl_(std::make_unique<impl_type>()) {}
 
 test_app::~test_app() = default;
 

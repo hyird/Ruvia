@@ -3,7 +3,6 @@
 #include <array>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -18,8 +17,6 @@
 #include <asio/write.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_connect_udp.h"
 #include "ruvia/http/http_expectations.h"
@@ -82,7 +79,7 @@ template <typename stream_type>
 // protocol plan copies the views before this temporary pointer table is freed.
 [[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
     return inline_http_header_views<>(
-        context_access::handshake_headers(context_value), process_resource());
+        context_access::handshake_headers(context_value));
 }
 
 // Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
@@ -91,11 +88,10 @@ template <typename stream_type>
 // (100 Continue before 101, RFC 9110 section 7.8).
 template <typename stream_type>
 task<std::error_code> write_websocket_handshake(stream_type& stream,
-    const websocket_server_handshake& handshake, const http_request_expectations& expectations,
-    std::pmr::memory_resource& resource, connection_scanner::entry& scanner_entry) {
+    const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
     static constexpr std::size_t inline_head_capacity = 512;
     std::array<char, inline_head_capacity> inline_head;
-    std::pmr::string overflow_head(&resource);
+    std::string overflow_head;
     std::size_t inline_size = 0;
     bool using_overflow = false;
     handshake.for_each_response_part([&](std::string_view part) {
@@ -151,7 +147,7 @@ namespace ruvia::detail {
 [[nodiscard]] inline websocket_rejection reject_request_stream_websocket(
     context& context_value, const websocket_handshake_failure& failure) {
     const auto error = failure.protocol_error();
-    auto response = context_value.error(copy_http_protocol_error_info(context_value.arena(), error));
+    auto response = context_value.error(copy_http_protocol_error_info(error));
     failure.apply_required_response_headers(response);
     const websocket_rejection rejection{response.status(), error.code()};
     context_access::set_response(context_value, std::move(response));
@@ -195,14 +191,14 @@ struct websocket_accept_access final {
 // upgrading; an established or abandoned upgrade returns std::nullopt.
 template <typename session_type, typename establish_type, typename finish_type>
 [[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(
-    const route_table& routes, const http_request& request, const resolved_route& resolved, request_memory& memory,
+    const route_table& routes, const http_request& request, const resolved_route& resolved,
     const context_services& services, std::optional<session_type>& session, establish_type& establish,
     finish_type& finish) {
     const auto terminal = callback_access::bind<task<void>(context&)>(establish);
     std::optional<http_response> buffered;
     std::exception_ptr failure;
     try {
-        buffered = co_await routes.dispatch_upgrade(request, resolved, memory, terminal, services);
+        buffered = co_await routes.dispatch_upgrade(request, resolved, terminal, services);
     } catch (...) {
         failure = std::current_exception();
     }
@@ -223,10 +219,9 @@ public:
     using stream_argument_type = typename websocket_session_connection<stream_type>::stream_argument_type;
 
     websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression,
-        std::string_view subprotocol, std::pmr::memory_resource& resource)
+        std::string_view subprotocol)
         : stream_(hold_stream(std::forward<stream_argument_type>(stream))),
-          compression_(compression),
-          subprotocol_(&resource) {
+          compression_(compression) {
         try {
             subprotocol_.assign(subprotocol);
         } catch (...) {
@@ -251,7 +246,7 @@ public:
     }
     std::string_view subprotocol() const&& = delete;
 
-    [[nodiscard]] std::pmr::string&& release_subprotocol() noexcept {
+    [[nodiscard]] std::string&& release_subprotocol() noexcept {
         return std::move(subprotocol_);
     }
 
@@ -276,7 +271,7 @@ private:
 
     held_stream_type stream_;
     websocket_compression compression_{};
-    std::pmr::string subprotocol_;
+    std::string subprotocol_;
 };
 
 // A committed upgrade, or the refusal its handshake check selected.
@@ -293,7 +288,7 @@ struct tunnel_upgrade_session_operation final {
     const context_services& services_;
     const http_server_options& options_;
     connection_scanner::entry& scanner_entry_;
-    std::pmr::memory_resource& inbound_;
+    inbound_buffer_account& inbound_;
     bool udp_;
     std::string_view pending_;
     commit_upgrade_type& commit_upgrade_;
@@ -303,7 +298,7 @@ struct tunnel_upgrade_session_operation final {
     std::optional<websocket_session_connection<transport_type>> websocket_session_{};
     struct websocket_borrow final {
         explicit websocket_borrow(websocket_session_connection<transport_type>& connection)
-            : value_(make_websocket_facade(connection, *process_resource())) {}
+            : value_(make_websocket_facade(connection)) {}
         websocket value_;
     };
     std::optional<websocket_borrow> websocket_{};
@@ -320,7 +315,7 @@ struct tunnel_upgrade_session_operation final {
             transport.emplace(commit_upgrade_(context_value, head_response));
         }
         try {
-            session_.emplace(std::move(*transport), services_.worker(), *process_resource(), inbound_,
+            session_.emplace(std::move(*transport), services_.worker(), &inbound_,
                 config_.datagrams_, pending_);
         } catch (...) {
             transport->abort();
@@ -351,10 +346,10 @@ struct tunnel_upgrade_session_operation final {
             websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
                 websocket_endpoint.lifecycle(),
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-                inbound_, pending_,
+                pending_,
                 make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(),
                     websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)),
-                committed->release_subprotocol());
+                committed->release_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;
@@ -406,9 +401,8 @@ struct tunnel_upgrade_session_operation final {
 
 template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
 [[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(
-    const route_table& routes, const http_request& request, const resolved_route& resolved,
-    request_memory& memory, const context_services& services, const http_server_options& options,
-    connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound, bool udp,
+    const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options,
+    connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp,
     std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
     const auto& endpoint = *resolved.route().endpoint().tunnel();
     using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type, commit_websocket_type>;
@@ -428,7 +422,7 @@ template <typename transport_type, typename commit_upgrade_type, typename commit
         .session_ = session,
     };
     co_return co_await run_http_upgrade_route(
-        routes, request, resolved, memory, services, session, operation, operation);
+        routes, request, resolved, services, session, operation, operation);
 }
 
 template <typename stream_type, typename commit_upgrade_type>
@@ -440,7 +434,7 @@ struct websocket_upgrade_session_operation final {
     const context_services& services_;
     const http_server_options& options_;
     connection_scanner::entry& scanner_entry_;
-    std::pmr::memory_resource& inbound_;
+    inbound_buffer_account& inbound_;
     std::string_view pending_frames_;
     commit_upgrade_type& commit_upgrade_;
     std::optional<session_type>& session_;
@@ -457,11 +451,11 @@ struct websocket_upgrade_session_operation final {
             session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_,
                 websocket_endpoint_.lifecycle(),
                 protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_),
-                inbound_, pending_frames_,
+                pending_frames_,
                 make_websocket_session_connection_options(
                     options_, committed->compression(), websocket_endpoint_.deflate(),
                     websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)),
-                committed->release_subprotocol());
+                committed->release_subprotocol(), &inbound_);
         } catch (...) {
             committed->abort();
             throw;
@@ -478,9 +472,8 @@ struct websocket_upgrade_session_operation final {
 
 template <typename stream_type, typename commit_upgrade_type>
 [[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(
-    const route_table& routes, const http_request& request, const resolved_route& resolved,
-    request_memory& memory, const context_services& services, const http_server_options& options,
-    connection_scanner::entry& scanner_entry, std::pmr::memory_resource& inbound,
+    const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options,
+    connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound,
     std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
     const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
     using operation_type = websocket_upgrade_session_operation<stream_type, commit_upgrade_type>;
@@ -497,7 +490,7 @@ template <typename stream_type, typename commit_upgrade_type>
         .session_ = session,
     };
     co_return co_await run_http_upgrade_route(
-        routes, request, resolved, memory, services, session, operation, operation);
+        routes, request, resolved, services, session, operation, operation);
 }
 
 }  // namespace ruvia::detail

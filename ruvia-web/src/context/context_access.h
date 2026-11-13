@@ -30,10 +30,6 @@ struct context_access final {
         }
     }
 
-    [[nodiscard]] static request_memory& memory(context& value) noexcept {
-        return value.memory_;
-    }
-
     // A request-stream router borrows the already-bound transport context.
     // Restore every borrowed route view before its resolution frame retires;
     // retain the output state, since a stream may have committed in that scope.
@@ -87,16 +83,21 @@ struct context_access final {
     };
 
     [[nodiscard]] static context make(
-        request_memory& memory, const http_request& request, const context_services& services) {
-        return context(memory, request, services);
+        const http_request& request, const context_services& services) {
+        return context(request, services);
     }
 
-    [[nodiscard]] static context make(request_memory& memory, const http_request& request,
+    [[nodiscard]] static context make(const http_request& request,
         std::string_view route_path, const std::string_view* param_names,
         const std::string_view* param_values, std::size_t param_count,
         std::uintptr_t route_rate_limit_scope, const context_services& services) {
-        return context(memory, request, route_path, param_names, param_values, param_count,
+        return context(request, route_path, param_names, param_values, param_count,
             route_rate_limit_scope, services);
+    }
+
+    [[nodiscard]] static std::byte* allocate_request_storage(
+        context& context_value, std::size_t size, std::size_t alignment) {
+        return context_value.request_storage().allocate_raw(size, alignment);
     }
 
     // The response for an indexed entry already resolved below `root`. The
@@ -120,7 +121,7 @@ struct context_access final {
     }
 
     [[nodiscard]] static http_response make_owned_json_response(
-        context& context_value, std::pmr::string& json_body) {
+        context& context_value, std::string& json_body) {
         return context_value.json_serialized(json_body);
     }
 
@@ -162,9 +163,12 @@ struct context_access final {
     }
 
     [[nodiscard]] static std::string_view store_decoded_body(
-        const context& context_value, std::pmr::string&& decoded_content) {
+        const context& context_value, std::string&& decoded_content) {
+        auto& storage = context_value.request_storage();
+        storage.decoded_body_reservation_.resize_to(inbound_string_heap_bytes(decoded_content));
         auto& decoded = context_value.decoded_body();
         decoded = std::move(decoded_content);
+        storage.decoded_body_reservation_.resize_to(inbound_string_heap_bytes(decoded));
         context_value.body_decoded_ = true;
         return std::string_view(decoded);
     }

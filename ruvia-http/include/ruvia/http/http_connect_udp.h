@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -30,15 +29,13 @@ struct http_connect_udp_target_view final {
 };
 struct http_connect_udp_target final {
     http_connect_udp_target() noexcept = default;
-    http_connect_udp_target(std::pmr::string host, port_number port = {}) noexcept;
-    http_connect_udp_target(const http_connect_udp_target& other);
+    http_connect_udp_target(std::string host, port_number port = {}) noexcept;
+    http_connect_udp_target(const http_connect_udp_target&) = default;
     http_connect_udp_target(http_connect_udp_target&&) noexcept = default;
     http_connect_udp_target& operator=(const http_connect_udp_target&) = default;
-    http_connect_udp_target& operator=(http_connect_udp_target&&) = default;
+    http_connect_udp_target& operator=(http_connect_udp_target&&) noexcept = default;
 
-    // Construction inherits the source resource; assignment retains the
-    // destination resource. The resource backing host_ must outlive this value.
-    std::pmr::string host_;
+    std::string host_;
     std::uint16_t port_{0};
 };
 enum class http_connect_udp_error : std::uint8_t {
@@ -50,10 +47,10 @@ enum class http_connect_udp_error : std::uint8_t {
 };
 // RFC 9298's default URI template. IPv6 hosts have no brackets or zone ID;
 // all reserved bytes are percent-encoded during template expansion.
-[[nodiscard]] std::variant<std::pmr::string, http_connect_udp_error> encode_http_connect_udp_path(
-    http_connect_udp_target_view target, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+[[nodiscard]] std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(
+    http_connect_udp_target_view target);
 [[nodiscard]] std::variant<http_connect_udp_target, http_connect_udp_error> parse_http_connect_udp_path(
-    std::string_view path, std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+    std::string_view path);
 
 struct http_connect_udp_request_view final {
     // HTTP/1.1 Upgrade versus HTTP/2 Extended CONNECT.

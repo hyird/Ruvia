@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <filesystem>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,8 +14,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
@@ -166,10 +163,6 @@ struct server_config final {
     std::size_t max_inbound_buffer_bytes_per_connection_{64 * 1024 * 1024};
     std::optional<std::size_t> max_stream_body_bytes_{};
     std::size_t max_websocket_message_bytes_{default_max_websocket_message_bytes};
-    // Request arena sizing. Worker allocations use mimalloc's own thread
-    // heap; the connection scanner asks mimalloc to collect it after a whole
-    // quiet scan interval.
-    std::size_t request_arena_initial_bytes_{request_arena_initial_bytes};
     // Shared by all registered outbound HTTP client aliases on each worker.
     http_client_worker_config http_client_worker_{};
     // Host-wide representation policies applied to every HTTP response this
@@ -184,10 +177,10 @@ struct server_config final {
 struct trusted_proxy_config final {
     // CIDR lengths count bits in the literal's address family. For example,
     // 127.0.0.0/8 and ::ffff:127.0.0.0/104 describe the same mapped network.
-    std::pmr::vector<std::pmr::string> cidrs_{process_resource()};
+    std::vector<std::string> cidrs_{};
     // Priority-ordered forwarding headers. When empty, defaults to
     // {"X-Forwarded-For", "Forwarded"}.
-    std::pmr::vector<http_forwarded_header_spec> forwarding_headers_{process_resource()};
+    std::vector<http_forwarded_header_spec> forwarding_headers_{};
     // Enable only when every trusted proxy sanitizes and appends matching
     // X-Forwarded-For / X-Forwarded-Proto elements.
     bool trust_x_forwarded_proto_{false};
@@ -210,9 +203,9 @@ using native_socket = int;
 // When http_ and https_ name the same port there is one TCP socket group,
 // held only in https_; http_ must be empty for inheritance.
 struct listener_sockets final {
-    std::pmr::vector<native_socket> http_{process_resource()};
-    std::pmr::vector<native_socket> https_{process_resource()};
-    std::pmr::vector<native_socket> http3_{process_resource()};
+    std::vector<native_socket> http_{};
+    std::vector<native_socket> https_{};
+    std::vector<native_socket> http3_{};
 };
 
 namespace detail {
@@ -563,7 +556,7 @@ struct http_server_stats final {
     // One entry per listener in listener order, with the connections it
     // admitted that are still live. A removed listener stays listed until
     // its last connection ended.
-    std::pmr::vector<listener_stats> listeners_{process_resource()};
+    std::vector<listener_stats> listeners_{};
     // Connections held right now, against server_config::max_connections_per_worker_.
     std::size_t active_connections_{0};
     // Connections closed on accept because that budget was full and no idle

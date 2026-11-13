@@ -14,12 +14,12 @@
 #include <variant>
 
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 #include "ruvia/http/websocket_protocol.h"
 #include "ruvia/web/websocket.h"
 
-#include "util/steady_clock.h"
+#include "server/connection_scanner.h"
 
 namespace ruvia::detail {
 
@@ -232,9 +232,9 @@ private:
 
 class websocket_write_lane final {
 public:
-    explicit websocket_write_lane(const worker_handle& worker_value)
+    explicit websocket_write_lane(const worker_ref& worker_value)
         : signal_(worker_value) {}
-    websocket_write_lane(worker_handle&&) = delete;
+    websocket_write_lane(worker_ref&&) = delete;
 
     [[nodiscard]] bool write_in_progress() const noexcept {
         return write_in_progress_;

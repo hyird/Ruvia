@@ -1,6 +1,5 @@
 #include <algorithm>
 #include <array>
-#include <memory_resource>
 #include <string>
 #include <utility>
 
@@ -10,9 +9,7 @@
 #include "field/http_lower_header_name.h"
 #include "field/http_request_field_validation.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_header_rules.h"
 #include "http2/http2_request_headers.h"
-#include "http2/http2_response_headers.h"
 #include "parser/http_request_target.h"
 #include "request/http_binary_request_fields.h"
 #include "websocket/http_websocket_handshake_fields.h"
@@ -260,7 +257,7 @@ std::variant<std::uint32_t, http2_push_submit_error> http2_connection::submit_pu
         stream->mark_authority();
         stream->mark_path();
         std::array<char, 64> lower_name_stack;
-        std::pmr::string lower_name_scratch(resource_);
+        std::string lower_name_scratch;
         for (std::size_t i = 0; i < request.headers_.size(); ++i) {
             const auto& header = request.headers_[i];
             const auto kind = classify_http_field(header.name());

@@ -4,10 +4,10 @@
 
 #include "ruvia/http/url_encoding.h"
 
+#include "memory/geometric_reserve.h"
+#include "memory/http_address_overlap.h"
 #include "parser/http_request_target.h"
 #include "parser/http_uri_grammar.h"
-#include "util/geometric_reserve.h"
-#include "util/http_address_overlap.h"
 namespace ruvia {
 namespace {
 
@@ -93,13 +93,13 @@ struct uri_reference_layout final {
 
 }  // namespace
 
-std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::string& storage) {
+std::string_view percent_encode_uri_reference(borrowed_text text, std::string& storage) {
     const auto reference = text.view();
     const auto layout = find_uri_reference_layout(reference);
     bool fragment_seen = false;
     const bool initially_empty = storage.empty();
-    std::pmr::string staged(storage.get_allocator());
-    std::pmr::string* encoded = nullptr;
+    std::string staged;
+    std::string* encoded = nullptr;
     try {
         for (std::size_t i = 0; i < reference.size(); ++i) {
             const auto byte = static_cast<unsigned char>(reference[i]);
@@ -154,10 +154,10 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::pmr::stri
 }
 
 std::optional<std::string_view> decode_url_component(
-    borrowed_text text, std::pmr::string& storage, url_decode_mode mode) {
+    borrowed_text text, std::string& storage, url_decode_mode mode) {
     const auto input = text.view();
-    std::pmr::string staged(storage.get_allocator());
-    std::pmr::string* target = nullptr;
+    std::string staged;
+    std::string* target = nullptr;
     for (std::size_t i = 0; i < input.size(); ++i) {
         char c = input[i];
         std::size_t advance = 0;

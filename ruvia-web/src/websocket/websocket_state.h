@@ -16,12 +16,11 @@ public:
     using peer_close_reason_type = std::string_view (*)(void*) noexcept;
     using protocol_type = const websocket_connection& (*)(void*) noexcept;
 
-    websocket_state(std::pmr::memory_resource& resource, const worker_handle& worker, void* target,
+    websocket_state(const worker_ref& worker, void* target,
         std::string_view subprotocol, read_type read, write_type write, close_type close,
         abort_type abort, peer_close_code_type peer_close_code, peer_close_reason_type peer_close_reason,
         protocol_type protocol) noexcept
-        : resource_(&resource),
-          worker_storage_(worker),
+        : worker_storage_(worker),
           worker_(&worker_storage_),
           target_(target),
           subprotocol_(subprotocol),
@@ -63,7 +62,7 @@ public:
     websocket_message_writer begin_binary(websocket_send_options) &;
     websocket_message_writer begin_message(websocket_opcode, bool);
     task<void> write(websocket_opcode, std::string_view, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
-    task<void> write(websocket_opcode, std::pmr::string&&, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
+    task<void> write(websocket_opcode, std::string&&, bool, operation_options, websocket_write_extent = websocket_write_extent::message);
 
     [[nodiscard]] std::string_view subprotocol() const noexcept {
         if (!worker_->is_current()) {
@@ -77,9 +76,8 @@ public:
     [[nodiscard]] std::uint64_t bytes_received() const noexcept;
     [[nodiscard]] std::uint64_t bytes_sent() const noexcept;
 
-    std::pmr::memory_resource* resource_;
-    worker_handle worker_storage_;
-    const worker_handle* worker_;
+    worker_ref worker_storage_;
+    const worker_ref* worker_;
     void* target_;
     std::string_view subprotocol_;
     read_type read_;

@@ -4,7 +4,6 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -13,7 +12,7 @@
 #include "ruvia/http/websocket_deflate_codecs.h"
 
 #include "coding/http_zlib_stream.h"
-#include "util/http_address_overlap.h"
+#include "memory/http_address_overlap.h"
 
 // The one RFC 7692 whole-message deflate and inflate loop, shared by
 // per-connection codecs and the shared no-context-takeover codec set. Context
@@ -37,11 +36,10 @@ namespace ruvia::detail {
 // 0x00 0x00 0xFF 0xFF flush marker is removed (RFC 7692 §7.2.1); earlier
 // fragments keep it, which the receiver inflates as an empty stored block.
 [[nodiscard]] inline bool websocket_deflate_message(zlib_deflate_stream& deflater, std::string_view input,
-    std::pmr::string& out, std::pmr::memory_resource* resource = nullptr, bool message_end = true) {
-    std::optional<std::pmr::string> owned_input;
+    std::string& out, bool message_end = true) {
+    std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
-        input = owned_input.emplace(
-            input, resource != nullptr ? resource : out.get_allocator().resource());
+        input = owned_input.emplace(input);
     }
     auto& stream = deflater.native();
     const zlib_borrow_scope borrow(stream);
@@ -84,7 +82,7 @@ namespace ruvia::detail {
 // One inflate pass over `data`; the message limit covers everything appended
 // to `out` since `start`.
 [[nodiscard]] inline websocket_inflate_result websocket_inflate_chunk(zlib_inflate_stream& inflater, const char* data,
-    std::size_t size, std::pmr::string& out, std::size_t start, protocol_byte_limit message_limit) {
+    std::size_t size, std::string& out, std::size_t start, protocol_byte_limit message_limit) {
     auto& stream = inflater.native();
     const zlib_borrow_scope borrow(stream);
     stream.avail_in = 0;
@@ -127,13 +125,11 @@ namespace ruvia::detail {
 // message limit across the appended bytes to defuse decompression bombs
 // (RFC 7692 §7.2.2).
 [[nodiscard]] inline websocket_inflate_result websocket_inflate_message(zlib_inflate_stream& inflater,
-    std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit,
-    std::pmr::memory_resource* resource = nullptr) {
+    std::string_view input, std::string& out, protocol_byte_limit message_limit) {
     static constexpr unsigned char flush_marker[4] = {0x00, 0x00, 0xFF, 0xFF};
-    std::optional<std::pmr::string> owned_input;
+    std::optional<std::string> owned_input;
     if (http_text_aliases_string(input, out)) {
-        input = owned_input.emplace(
-            input, resource != nullptr ? resource : out.get_allocator().resource());
+        input = owned_input.emplace(input);
     }
     const auto start = out.size();
     if (const auto result_value = websocket_inflate_chunk(

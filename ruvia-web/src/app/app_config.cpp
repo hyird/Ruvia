@@ -6,7 +6,6 @@
 #include <exception>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -24,7 +23,6 @@
 #include <openssl/crypto.h>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/socket.h"
 #include "ruvia/core/worker_runtime.h"
@@ -35,12 +33,12 @@
 #include "integration/named_capability.h"
 #include "integration/runtime_control_completion.h"
 #include "router/router_impl.h"
+#include "server/config_validation.h"
 #include "server/http_server_options_validation.h"
 #include "server/http_server_tls_contexts.h"
 #include "server/http_server_tls_identity.h"
 #include "server/owned_listen_configs.h"
 #include "server/prepared_listener_state.h"
-#include "util/config_validation.h"
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_config_storage.h"
@@ -64,7 +62,7 @@ application& application::load_dotenv(const std::filesystem::path& path, dotenv_
 }
 
 namespace {
-void cleanse_secret(std::pmr::string& secret) noexcept {
+void cleanse_secret(std::string& secret) noexcept {
     OPENSSL_cleanse(secret.data(), secret.size());
     secret.clear();
 }
@@ -165,7 +163,7 @@ private:
 }
 
 void append_listen_config(
-    std::pmr::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
+    std::vector<detail::http_server_listener_definition>& replacement, const listen_config& config) {
     const auto address = normalize_listen_address(config.address_.view());
     if (config.ipv6_only_ && !address.is_v6()) {
         throw std::invalid_argument("IPV6_V6ONLY requires an IPv6 listen address");
@@ -239,7 +237,7 @@ void append_listen_config(
             replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
         }
         if (connection_alpn.has_value()) {
-            replacement.back().connection_.emplace(std::string_view{}, replacement.get_allocator().resource());
+            replacement.back().connection_.emplace(std::string_view{});
         }
         replacement.back().ipv6_only_ = config.ipv6_only_;
         replacement.back().proxy_protocol_ = config.proxy_protocol_;
@@ -252,7 +250,7 @@ void append_listen_config(
         }
         // Credentials load once, here; the definition keeps no identity file
         // name, in-memory PEM or password.
-        auto tls = detail::load_http_server_tls(config.tls_, replacement.get_allocator().resource());
+        auto tls = detail::load_http_server_tls(config.tls_);
         if (mixed) {
             tls.tcp_mode_ = detail::http_server_listener_definition::tls_tcp_mode::detect_plain_or_tls;
             if (config.auto_https_redirect_) {
@@ -265,7 +263,7 @@ void append_listen_config(
         replacement.back().proxy_protocol_ = config.proxy_protocol_;
         replacement.back().request_stream_ = config.dispatch_ == listener_dispatch::request_stream;
         if (connection_alpn.has_value()) {
-            replacement.back().connection_.emplace(*connection_alpn, replacement.get_allocator().resource());
+            replacement.back().connection_.emplace(*connection_alpn);
         }
     }
 }
@@ -416,17 +414,15 @@ void adopt_inherited_sockets(std::span<detail::http_server_listener_definition> 
                     socket, endpoint, "inherited HTTP/3 sockets must be UDP sockets bound to the configured address and port", config.ipv6_only_);
             }
         }
-        auto* resource = process_resource();
-        definition.inherited_sockets_ = std::allocate_shared<detail::inherited_listener_sockets>(
-            std::pmr::polymorphic_allocator<detail::inherited_listener_sockets>(resource),
-            std::pmr::vector<native_socket>(tcp.begin(), tcp.end(), resource),
-            std::pmr::vector<native_socket>(udp.begin(), udp.end(), resource));
+        definition.inherited_sockets_ = std::make_shared<detail::inherited_listener_sockets>(
+            std::vector<native_socket>(tcp.begin(), tcp.end()),
+            std::vector<native_socket>(udp.begin(), udp.end()));
     }
 }
 
 // The listener definitions `configs` describe, with their inherited sockets.
 void append_listen_configs(
-    std::pmr::vector<detail::http_server_listener_definition>& replacement, std::span<const listen_config> configs) {
+    std::vector<detail::http_server_listener_definition>& replacement, std::span<const listen_config> configs) {
     ensure_distinct_inherited_sockets(configs);
     std::size_t endpoint_count = 0;
     for (const auto& config : configs) {
@@ -491,7 +487,7 @@ struct owned_tls_config final {
 // receipt joins actual execution/destruction, so no accepted preparation or
 // exception escapes the runtime control, even when its caller is stopping.
 template <typename function_type>
-task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_handle caller, function_type function) {
+task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_ref caller, function_type function) {
     using result_type = std::invoke_result_t<function_type&>;
     detail::runtime_control_completion completion(caller);
     auto result = co_await run_blocking(caller, completion.make_command(
@@ -549,7 +545,7 @@ task<std::invoke_result_t<function_type&>> prepare_runtime_control(worker_handle
     return index;
 }
 
-using control_list = std::pmr::vector<move_only_function<void()>>;
+using control_list = std::vector<move_only_function<void()>>;
 
 // Builds, before anything is posted, one control per worker that runs
 // `run(worker, worker_index)` on that worker's thread for `publication`.
@@ -588,9 +584,9 @@ void make_worker_controls(control_list& controls, detail::app_runtime_graph& run
 // step precedes adoption; owner controls replace the empty tables in place.
 struct runtime_route_candidate final {
     detail::compiled_route_plan_ptr_type plan_;
-    std::pmr::vector<detail::controller_store> controllers_{process_resource()};
-    std::pmr::vector<std::unique_ptr<detail::route_table, pmr_object_deleter<detail::route_table>>> tables_{process_resource()};
-    std::pmr::vector<std::unique_ptr<detail::rate_limiter, pmr_object_deleter<detail::rate_limiter>>> rate_limiters_{process_resource()};
+    std::vector<detail::controller_store> controllers_;
+    std::vector<std::unique_ptr<detail::route_table>> tables_;
+    std::vector<std::unique_ptr<detail::rate_limiter>> rate_limiters_;
 };
 
 [[nodiscard]] runtime_route_candidate prepare_runtime_routes(
@@ -608,22 +604,22 @@ struct runtime_route_candidate final {
         if (index != 0) {
             controllers.emplace_back(registrars);
         }
-        tables.push_back(make_pmr_object<detail::route_table>(process_resource(), *result.plan_, controllers.back()));
+        tables.push_back(std::make_unique<detail::route_table>(*result.plan_, controllers.back()));
     }
     if (tables.front()->has_route_rate_limit() && !state_value.options_.default_rate_limit_per_worker_.has_value()) {
         rate_limiters.reserve(worker_count);
         for (std::size_t index = 0; index < worker_count; ++index) {
-            rate_limiters.push_back(make_pmr_object<detail::rate_limiter>(process_resource(), std::nullopt,
+            rate_limiters.push_back(std::make_unique<detail::rate_limiter>(std::nullopt,
                 detail::route_rate_limit_presence::present, state_value.options_.rate_limit_capacity_per_worker_));
         }
     }
     return result;
 }
 
-task<void> enable_runtime_routes(worker_handle caller, detail::app_runtime_graph& runtime,
+task<void> enable_runtime_routes(worker_ref caller, detail::app_runtime_graph& runtime,
     runtime_route_candidate& candidate) {
     detail::runtime_control_completion publication(caller);
-    control_list controls(process_resource());
+    control_list controls;
     make_worker_controls(controls, runtime, publication,
         [&runtime, &candidate](detail::web_worker_runtime& worker, std::size_t index) noexcept {
             auto& controllers = candidate.controllers_;
@@ -706,10 +702,10 @@ void detail::ensure_new_listener_endpoints(std::span<const http_server_listener_
     }
 }
 
-std::pmr::vector<detail::http_server_listener_definition> detail::load_server_listeners(
+std::vector<detail::http_server_listener_definition> detail::load_server_listeners(
     std::span<const listen_config> configs) {
     const tls_secret_span_cleanser secret_cleanser(configs);
-    std::pmr::vector<http_server_listener_definition> listeners(process_resource());
+    std::vector<http_server_listener_definition> listeners;
     try {
         if (configs.empty()) {
             throw std::invalid_argument("listen config list must not be empty");
@@ -766,7 +762,7 @@ detail::owned_listen_configs::~owned_listen_configs() {
     }
 }
 
-std::pmr::vector<detail::http_server_listener_definition> detail::owned_listen_configs::load() {
+std::vector<detail::http_server_listener_definition> detail::owned_listen_configs::load() {
     inherited_owned_ = false;
     return load_server_listeners(configs_);
 }
@@ -801,7 +797,7 @@ application& application::listen(std::initializer_list<listen_config> configs) &
 }
 
 namespace {
-task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_handle caller,
+task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, worker_ref caller,
     asio::ip::tcp::endpoint target, owned_tls_config input) {
     std::shared_ptr<const detail::http_server_tls_identities> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
@@ -811,10 +807,10 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
         (void)find_replaceable_tls_listener(*state, target, input.config_);
     }
     auto identities = co_await prepare_runtime_control(caller, [input = std::move(input)]() mutable {
-        return detail::load_http_server_tls_identities(input.config_, process_resource());
+        return detail::load_http_server_tls_identities(input.config_);
     });
     detail::runtime_control_completion completion(caller);
-    control_list controls(process_resource());
+    control_list controls;
     auto& runtime = active.runtime();
     std::size_t index = 0;
     bool posted = false;
@@ -845,7 +841,7 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
 }  // namespace
 
 task<void> application::replace_tls_identities(
-    worker_handle caller, const listener_endpoint& endpoint, tls_config config) & {
+    worker_ref caller, const listener_endpoint& endpoint, tls_config config) & {
     owned_tls_config input(std::move(config));
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return replace_app_tls_identities(state_, std::move(caller), target, std::move(input));
@@ -853,13 +849,13 @@ task<void> application::replace_tls_identities(
 
 namespace {
 task<bool> close_app_connection(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, std::uint64_t connection_id) {
+    std::shared_ptr<detail::app_state> state, worker_ref caller, std::uint64_t connection_id) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "connections can be closed only while the app is running");
     auto& runtime = active.runtime();
     std::atomic<bool> closed{false};
     detail::runtime_control_completion completion(caller);
-    control_list controls(process_resource());
+    control_list controls;
     make_worker_controls(controls, runtime, completion,
         [connection_id, &closed](detail::web_worker_runtime& worker, std::size_t) noexcept {
             if (worker.close_connection(connection_id)) {
@@ -878,12 +874,12 @@ task<bool> close_app_connection(
 }
 }  // namespace
 
-task<bool> application::close_connection(worker_handle caller, std::uint64_t connection_id) & {
+task<bool> application::close_connection(worker_ref caller, std::uint64_t connection_id) & {
     return close_app_connection(state_, std::move(caller), connection_id);
 }
 
 namespace {
-task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_handle caller,
+task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker_ref caller,
     asio::ip::tcp::endpoint target, operation_options options) {
     detail::operation_steps steps(options);
     active_app_control active(state, "connections can be awaited only while the app is running");
@@ -908,16 +904,16 @@ task<void> wait_app_connections(std::shared_ptr<detail::app_state> state, worker
 }
 }  // namespace
 
-task<void> application::wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options) & {
+task<void> application::wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options) & {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return wait_app_connections(state_, std::move(caller), target, std::move(options));
 }
 
 namespace {
 struct listener_addition_candidate final {
-    std::pmr::vector<detail::http_server_listener_definition> added_{process_resource()};
-    std::pmr::vector<detail::http_server_listener_definition> prepared_{process_resource()};
-    std::pmr::vector<std::pmr::vector<detail::prepared_http_server_session>> sessions_{process_resource()};
+    std::vector<detail::http_server_listener_definition> added_;
+    std::vector<detail::http_server_listener_definition> prepared_;
+    std::vector<std::vector<detail::prepared_http_server_session>> sessions_;
     std::optional<runtime_route_candidate> routes_;
 };
 
@@ -937,7 +933,7 @@ struct listener_addition_candidate final {
 }
 
 task<void> add_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, detail::owned_listen_configs input,
+    std::shared_ptr<detail::app_state> state, worker_ref caller, detail::owned_listen_configs input,
     std::shared_ptr<detail::prepared_listener_state> transaction) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be added only while the app is running");
@@ -955,7 +951,7 @@ task<void> add_app_listener(
             result.prepared_.reserve(result.added_.size());
             for (const auto& definition : result.added_) {
                 result.prepared_.push_back(detail::validate_run_listener(
-                    definition, state->options_, key_origin, process_resource()));
+                    definition, state->options_, key_origin));
             }
             result.sessions_.reserve(worker_count);
             for (std::size_t worker = 0; worker < worker_count; ++worker) {
@@ -984,7 +980,7 @@ task<void> add_app_listener(
     auto candidate = inexpensive ? prepare() : (co_await prepare_runtime_control(caller, std::move(prepare)));
     auto& added = candidate.added_;
     auto& prepared = candidate.prepared_;
-    std::pmr::vector<std::optional<std::size_t>> http3_slots(process_resource());
+    std::vector<std::optional<std::size_t>> http3_slots;
     std::size_t first_slot = 0;
 #if defined(RUVIA_ENABLE_HTTP3)
     detail::http3_worker_directory* directory = nullptr;
@@ -998,9 +994,9 @@ task<void> add_app_listener(
 #if defined(RUVIA_ENABLE_HTTP3)
         if (runtime.http3_directory_ == nullptr &&
             std::ranges::any_of(prepared, [](const auto& definition) { return definition.http3_.has_value(); })) {
-            auto created = make_pmr_object<detail::http3_worker_directory>(process_resource(), runtime.workers_.size());
+            auto created = std::make_unique<detail::http3_worker_directory>(runtime.workers_.size());
             for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
-                created->bind_worker(index, runtime.workers_[index].runtime_->runtime().handle());
+                created->bind_worker(index, runtime.workers_[index].runtime_->runtime().worker());
             }
             runtime.http3_directory_ = std::move(created);
         }
@@ -1029,9 +1025,9 @@ task<void> add_app_listener(
     detail::runtime_control_completion prepared_completion(caller);
     detail::runtime_control_completion discarded_completion(caller);
     detail::runtime_control_completion opened_completion(caller);
-    control_list prepare_controls(process_resource());
-    control_list discard_controls(process_resource());
-    control_list open_controls(process_resource());
+    control_list prepare_controls;
+    control_list discard_controls;
+    control_list open_controls;
     make_worker_controls(prepare_controls, runtime, prepared_completion,
         [&](detail::web_worker_runtime& worker, std::size_t worker_index) {
             for (std::size_t index = 0; index < prepared.size(); ++index) {
@@ -1143,25 +1139,25 @@ task<void> add_app_listener(
 }
 }  // namespace
 
-task<prepared_listener> application::prepare_listener(worker_handle caller, listen_config config) & {
+task<prepared_listener> application::prepare_listener(worker_ref caller, listen_config config) & {
     detail::owned_listen_configs input(std::move(config));
     auto transaction = detail::prepared_listener_access::make(caller);
     return detail::prepared_listener_access::launch(transaction,
         add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
-task<prepared_listener> application::prepare_listeners(worker_handle caller, std::span<const listen_config> configs) & {
+task<prepared_listener> application::prepare_listeners(worker_ref caller, std::span<const listen_config> configs) & {
     detail::owned_listen_configs input(configs);
     auto transaction = detail::prepared_listener_access::make(caller);
     return detail::prepared_listener_access::launch(transaction,
         add_app_listener(state_, std::move(caller), std::move(input), transaction));
 }
-task<void> application::add_listener(worker_handle caller, listen_config config) & {
+task<void> application::add_listener(worker_ref caller, listen_config config) & {
     return detail::prepared_listener_access::add(prepare_listener(std::move(caller), std::move(config)));
 }
 
 namespace {
 task<void> remove_app_listener(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
+    std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target, listener_remove_options options) {
     std::optional<detail::http_server_listener_definition> retired;
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listeners can be removed only while the app is running");
@@ -1187,7 +1183,7 @@ task<void> remove_app_listener(
     }
 #endif
     detail::runtime_control_completion completion(caller);
-    control_list controls(process_resource());
+    control_list controls;
     auto lifetime = std::make_shared<detail::runtime_control_completion::receipt>(completion.make_receipt());
     make_worker_controls(controls, runtime, completion,
         [slot, receipt = std::move(lifetime), options](detail::web_worker_runtime& worker, std::size_t) {
@@ -1217,7 +1213,7 @@ task<void> remove_app_listener(
 }
 }  // namespace
 
-task<void> application::remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options) & {
+task<void> application::remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options) & {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return remove_app_listener(state_, std::move(caller), target, options);
 }
@@ -1225,13 +1221,13 @@ task<void> application::remove_listener(worker_handle caller, const listener_end
 #if !defined(_WIN32)
 namespace {
 task<listener_sockets> duplicate_app_listener_sockets(
-    std::shared_ptr<detail::app_state> state, worker_handle caller, asio::ip::tcp::endpoint target) {
+    std::shared_ptr<detail::app_state> state, worker_ref caller, asio::ip::tcp::endpoint target) {
     const auto serialized = co_await state->runtime_control_gate_.acquire(caller);
     active_app_control active(state, "listener sockets can be duplicated only while the app is running");
     auto& runtime = active.runtime();
-    std::pmr::vector<detail::listener_socket_duplicates> duplicates(process_resource());
+    std::vector<detail::listener_socket_duplicates> duplicates;
     detail::runtime_control_completion completion(caller);
-    control_list controls(process_resource());
+    control_list controls;
     bool https = false;
     bool http3 = false;
     {
@@ -1277,7 +1273,7 @@ task<listener_sockets> duplicate_app_listener_sockets(
 }  // namespace
 
 task<listener_sockets> application::duplicate_listener_sockets(
-    worker_handle caller, const listener_endpoint& endpoint) const& {
+    worker_ref caller, const listener_endpoint& endpoint) const& {
     const asio::ip::tcp::endpoint target(normalize_listen_address(endpoint.address_.view()), endpoint.port_.value());
     return duplicate_app_listener_sockets(state_, std::move(caller), target);
 }
@@ -1303,7 +1299,7 @@ application& application::on_start(app_hook hook) & {
 application& application::on_start(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_start hook while app is running",
-        [retired = std::pmr::vector<detail::callback_registration<app_hook>>(process_resource())](detail::app_state& state_value) mutable {
+        [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
             // The cleared targets retire with this lambda, after the app lock.
             retired.swap(state_value.on_start_hooks_);
         });
@@ -1323,7 +1319,7 @@ application& application::on_stop(app_hook hook) & {
 application& application::on_stop(std::nullptr_t) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot register on_stop hook while app is running",
-        [retired = std::pmr::vector<detail::callback_registration<app_hook>>(process_resource())](detail::app_state& state_value) mutable {
+        [retired = std::vector<detail::callback_registration<app_hook>>{}](detail::app_state& state_value) mutable {
             retired.swap(state_value.on_stop_hooks_);
         });
 }
@@ -1519,13 +1515,12 @@ application& application::on_request_stream(std::nullptr_t) & {
 application& application::database(db_registration_config config) & {
     return detail::mutate_stopped_app(*this, *state_,
         "cannot configure database while app is running", [&](detail::app_state& state_value) {
-            auto* resource = process_resource();
             detail::validate_capability_alias(config.alias_.view(), "database alias must not be empty");
-            detail::db_definition replacement{std::pmr::string(config.alias_.view(), resource),
-                detail::db_config_storage(config.config_, resource)};
+            detail::db_definition replacement{std::string(config.alias_.view()),
+                detail::db_config_storage(config.config_)};
             if (config.query_cache_) {
 #ifdef RUVIA_ENABLE_REDIS
-                replacement.query_cache_.emplace(*config.query_cache_, resource);
+                replacement.query_cache_.emplace(*config.query_cache_);
 #else
                 throw std::invalid_argument("database query cache requires Redis support");
 #endif

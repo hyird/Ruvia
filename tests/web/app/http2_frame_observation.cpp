@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
-#include <memory_resource>
 #include <mutex>
 #include <semaphore>
 #include <string>
@@ -80,19 +79,19 @@ private:
     std::map<std::uint64_t, observation> connections_;
 };
 
-void setting(std::pmr::string& payload, std::uint16_t id, std::uint32_t value) {
+void setting(std::string& payload, std::uint16_t id, std::uint32_t value) {
     const std::array<char, 6> bytes{static_cast<char>(id >> 8), static_cast<char>(id),
         static_cast<char>(value >> 24), static_cast<char>(value >> 16),
         static_cast<char>(value >> 8), static_cast<char>(value)};
     payload.append(bytes.data(), bytes.size());
 }
 
-std::pmr::string opening(bool reverse, bool empty_initial) {
-    std::pmr::string wire(ruvia::http2_client_preface);
+std::string opening(bool reverse, bool empty_initial) {
+    std::string wire(ruvia::http2_client_preface);
     if (empty_initial) {
         ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     }
-    std::pmr::string payload;
+    std::string payload;
     setting(payload, 3, 17);
     setting(payload, 0xfafa, 101);
     setting(payload, 3, 29);
@@ -102,7 +101,7 @@ std::pmr::string opening(bool reverse, bool empty_initial) {
         std::string_view("\x80\0\0\0\xff", 5));
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::window_update, 0, 0,
         std::string_view("\0\x70\0\x01", 4));
-    std::pmr::string block;
+    std::string block;
     const std::array names = reverse
                                  ? std::array{":path", ":authority", ":scheme", ":method"}
                                  : std::array{":method", ":scheme", ":authority", ":path"};

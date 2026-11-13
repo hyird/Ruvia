@@ -3,21 +3,18 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
-
 #include "coding/http_content_codec.h"
 #include "coding/http_zlib_stream.h"
 
-// gzip (RFC 1952) and zlib-wrapped deflate through zlib, with zlib's allocator
-// routed to the caller's memory resource so neither direction makes a global allocation.
+// gzip (RFC 1952) and zlib-wrapped deflate through zlib, with tracked working memory.
 
 namespace ruvia::detail {
 
-static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_content(std::string_view input,
-    std::size_t max_decoded_bytes, std::pmr::memory_resource* resource, int window_bits,
+static std::variant<std::string, http_content_decode_error> decode_zlib_content(std::string_view input,
+    std::size_t max_decoded_bytes, int window_bits,
     bool allow_concatenated_members) {
-    std::pmr::string output("", http_pmr_resource_or_default(resource));
-    zlib_inflate_stream inflater(output.get_allocator().resource(), window_bits);
+    std::string output;
+    zlib_inflate_stream inflater(window_bits);
     if (!inflater.initialized()) {
         throw http_content_codec_error("zlib decoder initialization failed");
     }
@@ -77,30 +74,30 @@ static std::variant<std::pmr::string, http_content_decode_error> decode_zlib_con
     }
 }
 
-std::optional<std::pmr::string> encode_zlib_content(zlib_deflate_stream& deflater,
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* output_resource) {
-    return encode_whole_content_with_stream(deflater, Z_FINISH, input, max_encoded_bytes, output_resource);
+std::optional<std::string> encode_zlib_content(zlib_deflate_stream& deflater,
+    std::string_view input, std::size_t max_encoded_bytes) {
+    return encode_whole_content_with_stream(deflater, Z_FINISH, input, max_encoded_bytes);
 }
-std::variant<std::pmr::string, http_content_decode_error> decode_gzip_content(
-    std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    return decode_zlib_content(input, max_decoded_bytes, resource, zlib_gzip_window_bits, true);
-}
-
-std::variant<std::pmr::string, http_content_decode_error> decode_deflate_content(
-    std::string_view input, std::size_t max_decoded_bytes, std::pmr::memory_resource* resource) {
-    return decode_zlib_content(input, max_decoded_bytes, resource, zlib_deflate_window_bits, false);
+std::variant<std::string, http_content_decode_error> decode_gzip_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    return decode_zlib_content(input, max_decoded_bytes, zlib_gzip_window_bits, true);
 }
 
-std::optional<std::pmr::string> encode_gzip_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+std::variant<std::string, http_content_decode_error> decode_deflate_content(
+    std::string_view input, std::size_t max_decoded_bytes) {
+    return decode_zlib_content(input, max_decoded_bytes, zlib_deflate_window_bits, false);
+}
+
+std::optional<std::string> encode_gzip_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content<zlib_deflate_stream>(
-        "zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, resource, zlib_content_format::gzip);
+        "zlib encoder initialization failed", Z_FINISH, input, max_encoded_bytes, zlib_content_format::gzip);
 }
 
-std::optional<std::pmr::string> encode_deflate_content(
-    std::string_view input, std::size_t max_encoded_bytes, std::pmr::memory_resource* resource) {
+std::optional<std::string> encode_deflate_content(
+    std::string_view input, std::size_t max_encoded_bytes) {
     return encode_whole_content<zlib_deflate_stream>("zlib encoder initialization failed", Z_FINISH, input,
-        max_encoded_bytes, resource, zlib_content_format::deflate);
+        max_encoded_bytes, zlib_content_format::deflate);
 }
 
 }  // namespace ruvia::detail

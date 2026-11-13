@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -9,7 +8,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_protocol_version.h"
 #include "ruvia/http/http_status.h"
@@ -27,8 +25,7 @@ enum class http_client_request_content_signal : std::uint8_t {
     exchange_complete,
 };
 
-// Owns response fields in the parser/connection PMR. That resource must outlive
-// the head and any field vector extracted from it.
+// Owns response fields.
 // Decoding a head without fields does not allocate field storage.
 // HEAD response fields remain metadata even for status 205: Content-Length
 // does not become the response's received-content length.
@@ -76,31 +73,21 @@ public:
 
     // Transfers the owned parsed fields to a consumer that retains the head's
     // metadata but needs to extend the fields' lifetime independently.
-    // Repeated extraction, including after moving the head, returns an empty
-    // vector in the original PMR resource, which must still be alive.
-    // Checked STL builds may allocate iterator metadata. If that allocation
-    // fails, the head retains its fields and the exception propagates.
-    [[nodiscard]] std::pmr::vector<http_header> take_headers() && {
-        return std::pmr::vector<http_header>(std::move(headers_), headers_.get_allocator());
+    [[nodiscard]] std::vector<http_header> take_headers() && noexcept {
+        return std::move(headers_);
     }
 
 private:
     friend struct detail::http_client_response_head_access;
 
-    http_client_response_head(http_received_status status, http_protocol_version protocol_version,
-        std::pmr::memory_resource* resource)
-        : http_client_response_head(detail::http_resolved_pmr_resource_tag{}, status, protocol_version,
-              detail::http_pmr_resource_or_default(resource)) {}
-
-    http_client_response_head(detail::http_resolved_pmr_resource_tag, http_received_status status,
-        http_protocol_version protocol_version, std::pmr::memory_resource* resource)
+    http_client_response_head(
+        http_received_status status, http_protocol_version protocol_version) noexcept
         : status_(status),
-          protocol_version_(protocol_version),
-          headers_(0, http_header({}, {}, resource), resource) {}
+          protocol_version_(protocol_version) {}
 
     http_received_status status_;
     http_protocol_version protocol_version_;
-    std::pmr::vector<http_header> headers_;
+    std::vector<http_header> headers_;
     std::optional<std::uint64_t> content_length_;
 };
 

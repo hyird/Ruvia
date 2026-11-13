@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -35,7 +34,7 @@ namespace ruvia::detail {
 // Surface certificate presence independently of its Subject: RFC 5280 section
 // 4.1.2.6 permits an empty DN with a critical subjectAltName. Conversion failure
 // must not turn a verified identity into the "no certificate" alternative.
-inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, std::pmr::string& out) {
+inline std::optional<std::string_view> extract_tls_client_certificate(SSL* ssl, std::string& out) {
     out.clear();
     const X509* const certificate = SSL_get0_peer_certificate(ssl);
     if (certificate == nullptr) {

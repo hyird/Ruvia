@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -160,7 +159,7 @@ int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* ou
 // still in server preference and failing an offer that names none of them.
 int select_connection_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length,
     const unsigned char* in, unsigned int in_length, void* argument) noexcept {
-    const auto& protocols = *static_cast<const std::pmr::string*>(argument);
+    const auto& protocols = *static_cast<const std::string*>(argument);
     return select_tcp_alpn(ssl,
         {reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()},
         out, out_length, in, in_length);
@@ -240,12 +239,12 @@ std::span<const std::byte> client_hello_list(SSL* ssl, unsigned int type, std::s
     return {reinterpret_cast<const std::byte*>(bytes + prefix), length};
 }
 
-std::pmr::vector<std::uint16_t> decode_u16_list(
-    std::span<const std::byte> raw, std::pmr::memory_resource* resource) {
+std::vector<std::uint16_t> decode_u16_list(
+    std::span<const std::byte> raw) {
     if (raw.size() % 2U != 0U) {
         throw std::invalid_argument("malformed TLS uint16 extension list");
     }
-    std::pmr::vector<std::uint16_t> decoded(resource);
+    std::vector<std::uint16_t> decoded;
     decoded.reserve(raw.size() / 2U);
     for (std::size_t i = 0; i < raw.size(); i += 2U) {
         const auto hi = static_cast<std::uint16_t>(std::to_integer<unsigned int>(raw[i]));
@@ -255,9 +254,9 @@ std::pmr::vector<std::uint16_t> decode_u16_list(
     return decoded;
 }
 
-std::pmr::vector<std::string_view> decode_alpn_list(
-    std::span<const std::byte> raw, std::pmr::memory_resource* resource) {
-    std::pmr::vector<std::string_view> protocols(resource);
+std::vector<std::string_view> decode_alpn_list(
+    std::span<const std::byte> raw) {
+    std::vector<std::string_view> protocols;
     for (std::size_t pos = 0; pos < raw.size();) {
         const auto length = static_cast<std::size_t>(std::to_integer<unsigned int>(raw[pos]));
         if (length == 0U || pos + 1U + length > raw.size()) {
@@ -327,22 +326,18 @@ bool select_handshake_certificate(SSL* ssl, http_server_session_config& session,
                 if (!binding || binding->fields_.connection_id_ == 0 || local == nullptr) {
                     throw std::logic_error("TLS certificate selector requires connection metadata");
                 }
-                std::array<std::byte, 2048> stack_buffer;
-                std::pmr::monotonic_buffer_resource arena(
-                    stack_buffer.data(), stack_buffer.size(), process_resource());
                 const unsigned char* ciphers = nullptr;
                 const auto cipher_size = SSL_client_hello_get0_ciphers(ssl, &ciphers);
                 const auto cipher_suites = decode_u16_list(
-                    {reinterpret_cast<const std::byte*>(ciphers), cipher_size}, &arena);
+                    {reinterpret_cast<const std::byte*>(ciphers), cipher_size});
                 const auto signature_algorithms = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2), &arena);
+                    client_hello_list(ssl, TLSEXT_TYPE_signature_algorithms, 2));
                 const auto supported_versions = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1), &arena);
+                    client_hello_list(ssl, TLSEXT_TYPE_supported_versions, 1));
                 const auto supported_groups = decode_u16_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2), &arena);
+                    client_hello_list(ssl, TLSEXT_TYPE_supported_groups, 2));
                 const auto alpn = decode_alpn_list(
-                    client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2),
-                    &arena);
+                    client_hello_list(ssl, TLSEXT_TYPE_application_layer_protocol_negotiation, 2));
                 const tls_certificate_selection input{
                     .connection_id_ = binding->fields_.connection_id_,
                     .remote_address_ = ip_address::parse(binding->fields_.remote_address_).value_or(ip_address{}),
@@ -491,7 +486,7 @@ void configure_http_server_tls_contexts(http_server_session_config& session, boo
 
 prepared_http_server_session prepare_http_server_session_config(
     const http_server_listener_definition& definition, bool observe_client_hello) {
-    auto session = make_pmr_object<http_server_session_config>(process_resource(), definition, process_resource());
+    auto session = std::make_unique<http_server_session_config>(definition);
     configure_http_server_tls_contexts(*session, observe_client_hello);
     return session;
 }

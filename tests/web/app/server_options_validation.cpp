@@ -4,7 +4,6 @@
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -13,15 +12,10 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 
-#include "memory_resource_fixture.h"
-
 namespace {
-
-using ruvia::test::tracking_resource;
 
 template <typename fn_type>
 bool throws_invalid(fn_type&& fn) {
@@ -38,7 +32,7 @@ ruvia::tls_config tls_config(std::filesystem::path certificate_chain_file,
     return {.identity_ = {
                 .certificate_chain_file_ = std::move(certificate_chain_file),
                 .private_key_file_ = std::move(private_key_file),
-                .private_key_password_ = std::pmr::string(private_key_password, ruvia::process_resource()),
+                .private_key_password_ = std::string(private_key_password),
             }};
 }
 
@@ -143,7 +137,7 @@ TEST(Ruvia, listener_config_rejects_invalid_listener_and_tls_states_at_construct
     EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = {}, .http_ = 8080}); }));
     EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "localhost", .http_ = 8080}); }));
     EXPECT_TRUE(throws_invalid([] {
-        const std::pmr::string bad_address("127.0.0.1\0bad", 13, ruvia::process_resource());
+        const std::string bad_address("127.0.0.1\0bad", 13);
         ruvia::app().listen({.address_ = bad_address, .http_ = 8080});
     }));
     EXPECT_TRUE(throws_invalid([] { ruvia::app().listen({.address_ = "127.0.0.1", .http_ = 0}); }));
@@ -220,7 +214,7 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
                 .tls_ =
                     {
                         .identity_ = {.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"},
-                        .sni_ = std::pmr::vector<ruvia::tls_sni_config>(sni, ruvia::process_resource()),
+                        .sni_ = std::vector<ruvia::tls_sni_config>(sni),
                     },
             });
         });
@@ -237,7 +231,7 @@ TEST(Ruvia, tls_config_rejects_empty_or_duplicate_sni_identity) {
 }
 
 TEST(Ruvia, tls_config_rejects_invalid_or_duplicate_sni_wildcards) {
-    const auto listen_with = [](std::pmr::vector<ruvia::tls_sni_config> sni) {
+    const auto listen_with = [](std::vector<ruvia::tls_sni_config> sni) {
         ruvia::app().listen({
             .address_ = "127.0.0.1",
             .https_ = 8443,
@@ -274,7 +268,7 @@ TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
     EXPECT_TRUE(rejects({.identity_ = {.private_key_pem_ = "pem"}}));
 
     const ruvia::tls_identity_config files{.certificate_chain_file_ = "cert.pem", .private_key_file_ = "key.pem"};
-    const auto rejects_local = [&](std::pmr::vector<ruvia::tls_local_address_config> local) {
+    const auto rejects_local = [&](std::vector<ruvia::tls_local_address_config> local) {
         return rejects({.identity_ = files, .local_addresses_ = std::move(local)});
     };
     for (const char* address : {"", "localhost", "127.0.0.1:443", "0.0.0.0", "::", "::ffff:0.0.0.0"}) {
@@ -295,19 +289,15 @@ TEST(Ruvia, tls_config_rejects_ambiguous_identity_sources_and_local_addresses) {
     }));
 }
 
-TEST(Ruvia, tls_identity_owns_password_independently_of_caller_resource) {
-    tracking_resource caller_resource;
-    const std::pmr::string expected(80, 's', ruvia::process_resource());
+TEST(Ruvia, tls_identity_owns_password_independently_of_caller_buffer) {
+    const std::string expected(80, 's');
     std::optional<ruvia::tls_config> identity;
     {
-        const std::pmr::string password(expected, &caller_resource);
-        identity.emplace(
-            tls_config("cert.pem", "key.pem", std::string_view(password)));
+        std::string password(expected);
+        identity.emplace(tls_config("cert.pem", "key.pem", std::string_view(password)));
+        password.assign(password.size(), 'x');
     }
-    caller_resource.release();
     EXPECT_EQ(identity->identity_.private_key_password_, std::string_view(expected));
-    identity.reset();
-    EXPECT_TRUE(!caller_resource.deallocated_after_release());
 }
 
 TEST(Ruvia, self_contained_app_callbacks_release_owned_state) {

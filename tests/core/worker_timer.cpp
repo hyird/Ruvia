@@ -12,7 +12,6 @@
 #include <future>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <ratio>
 #include <stdexcept>
@@ -29,7 +28,6 @@
 #include "ruvia/core/async.h"
 #include "ruvia/core/channel.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/one_shot.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
@@ -52,18 +50,18 @@ concept can_sleep_until = requires(worker_type&& worker, token_types&&... tokens
         std::forward<token_types>(tokens)...);
 };
 
-static_assert(can_sleep_for<ruvia::worker_handle&>);
-static_assert(can_sleep_for<const ruvia::worker_handle&>);
-static_assert(!can_sleep_for<ruvia::worker_handle&&>);
-static_assert(!can_sleep_for<const ruvia::worker_handle&&>);
-static_assert(can_sleep_for<const ruvia::worker_handle&, ruvia::stop_token>);
-static_assert(!can_sleep_for<const ruvia::worker_handle&&, ruvia::stop_token>);
-static_assert(can_sleep_until<ruvia::worker_handle&>);
-static_assert(can_sleep_until<const ruvia::worker_handle&>);
-static_assert(!can_sleep_until<ruvia::worker_handle&&>);
-static_assert(!can_sleep_until<const ruvia::worker_handle&&>);
-static_assert(can_sleep_until<const ruvia::worker_handle&, ruvia::stop_token>);
-static_assert(!can_sleep_until<const ruvia::worker_handle&&, ruvia::stop_token>);
+static_assert(can_sleep_for<ruvia::worker_ref&>);
+static_assert(can_sleep_for<const ruvia::worker_ref&>);
+static_assert(!can_sleep_for<ruvia::worker_ref&&>);
+static_assert(!can_sleep_for<const ruvia::worker_ref&&>);
+static_assert(can_sleep_for<const ruvia::worker_ref&, ruvia::stop_token>);
+static_assert(!can_sleep_for<const ruvia::worker_ref&&, ruvia::stop_token>);
+static_assert(can_sleep_until<ruvia::worker_ref&>);
+static_assert(can_sleep_until<const ruvia::worker_ref&>);
+static_assert(!can_sleep_until<ruvia::worker_ref&&>);
+static_assert(!can_sleep_until<const ruvia::worker_ref&&>);
+static_assert(can_sleep_until<const ruvia::worker_ref&, ruvia::stop_token>);
+static_assert(!can_sleep_until<const ruvia::worker_ref&&, ruvia::stop_token>);
 
 bool timer_duration_conversions_preserve_integer_ticks_and_saturate() {
     using namespace std::chrono;
@@ -94,7 +92,7 @@ bool timer_immediate_shutdown_works() {
     for (int attempt_value = 0; attempt_value < 32; ++attempt_value) {
         io_context.restart();
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 2});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         ruvia::worker_timer_registration registration;
         std::promise<void> stopped;
         auto stopped_ready = stopped.get_future();
@@ -116,7 +114,7 @@ bool off_worker_cancellation_can_race_with_timer_shutdown() {
     for (int attempt_value = 0; attempt_value < 64; ++attempt_value) {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-        const auto worker_value = attachment.loop().handle();
+        const auto worker_value = attachment.loop().worker();
         ruvia::worker_timer_registration registration;
         ruvia::worker_timer_cancellation cancellation;
         std::barrier start(2);
@@ -152,7 +150,7 @@ bool off_worker_cancellation_can_race_with_timer_shutdown() {
 bool off_worker_cancellation_after_context_stop_does_not_expire_later() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 2});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     auto registration = std::make_unique<ruvia::worker_timer_registration>();
     bool expired = false;
     bool cancelled = false;
@@ -179,7 +177,7 @@ bool off_worker_cancellation_after_context_stop_does_not_expire_later() {
 bool off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     auto registration = std::make_unique<ruvia::worker_timer_registration>();
     bool invoked = false;
 
@@ -200,7 +198,7 @@ bool off_worker_cancellation_before_queued_stop_timers_does_not_invoke_callback(
 bool explicit_timer_cancellation_notifies_after_quiet_destruction() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 2});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     auto registration = std::make_unique<ruvia::worker_timer_registration>();
     bool cancelled = false;
 
@@ -224,7 +222,7 @@ bool explicit_timer_cancellation_notifies_after_quiet_destruction() {
 bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 4});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     struct timer_owner final {
         ruvia::worker_timer_registration registration_;
     };
@@ -253,14 +251,14 @@ bool on_worker_token_cancellation_followed_by_owner_cancel_withdraws_callback() 
 }
 
 ruvia::task<void> mark_after_sleep(
-    ruvia::worker_handle worker_value, bool& completed, bool& reported_elapsed) {
+    ruvia::worker_ref worker_value, bool& completed, bool& reported_elapsed) {
     reported_elapsed = co_await ruvia::sleep_for(worker_value, std::chrono::hours(1)) ==
                        ruvia::timer_sleep_result::elapsed;
     completed = true;
 }
 
 ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
-    ruvia::worker_handle worker_value, bool& success) {
+    ruvia::worker_ref worker_value, bool& success) {
     const bool first_sleep_elapsed = co_await ruvia::sleep_for(worker_value, std::chrono::milliseconds(1)) ==
                                      ruvia::timer_sleep_result::elapsed;
 
@@ -305,7 +303,7 @@ ruvia::task<void> exercise(ruvia::event_loop_attachment& attachment,
 // every deadline built on that token. These pin that sleep_for's stoppable
 // overload closes it, and that stopping it does not depend on the timer having
 // been long enough to notice.
-ruvia::task<void> exercise_stoppable_sleep(const ruvia::worker_handle& worker_value, bool& success) {
+ruvia::task<void> exercise_stoppable_sleep(const ruvia::worker_ref& worker_value, bool& success) {
     success = false;
 
     // Not stopped: the sleep runs to completion and reports elapsed.
@@ -386,7 +384,7 @@ bool stoppable_sleep_works() {
     // Keep token cancellation independent of the shutdown cases above.
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     bool success = false;
     asio::co_spawn(io_context,
         ruvia::as_awaitable(exercise_stoppable_sleep(worker_value, success)),
@@ -417,7 +415,7 @@ ruvia::task<void> acquire_after_timer_stop(
 ruvia::task<void> exercise_after_timer_stop(ruvia::event_loop_attachment& attachment, bool& success) {
     success = false;
     const auto loop = attachment.loop();
-    const auto& worker_value = loop.handle();
+    const auto& worker_value = loop.worker();
     auto [sender, receiver] = ruvia::make_channel<int>(worker_value, {.capacity_ = 1});
     auto [completion, one_shot_receiver] = ruvia::make_one_shot<int>(worker_value);
 
@@ -494,8 +492,8 @@ bool expired_registration_reschedules_on_another_worker() {
     asio::io_context second_context;
     auto first = ruvia::attach_event_loop(first_context, {.queue_capacity_ = 8});
     auto second = ruvia::attach_event_loop(second_context, {.queue_capacity_ = 8});
-    const auto first_worker = first.loop().handle();
-    const auto second_worker = second.loop().handle();
+    const auto first_worker = first.loop().worker();
+    const auto second_worker = second.loop().worker();
     ruvia::worker_timer_registration expiring;
     ruvia::worker_timer_registration pending;
     bool first_expired = false;
@@ -564,7 +562,7 @@ bool expired_registration_reschedules_on_another_worker() {
 bool timer_callback_failure_preserves_remaining_operations() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     ruvia::worker_timer_registration failing_timer;
     ruvia::worker_timer_registration remaining_timer;
     ruvia::worker_timer_registration cancelled_timer;
@@ -627,7 +625,7 @@ bool self_rescheduling_due_timer_yields_to_other_handlers() {
     constexpr int round_limit = 256;
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     ruvia::worker_timer_registration timer;
     int rounds = 0;
     int rounds_before_handler = -1;
@@ -661,11 +659,11 @@ bool self_rescheduling_due_timer_yields_to_other_handlers() {
 bool self_rescheduling_due_timer_preserves_other_expirations() {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker = attachment.loop().handle();
+    const auto worker = attachment.loop().worker();
     ruvia::worker_timer_registration repeating;
     ruvia::worker_timer_registration other;
     const auto earlier = std::chrono::steady_clock::now() - std::chrono::seconds(2);
-    std::pmr::string order(ruvia::process_resource());
+    std::string order;
     int rounds = 0;
     std::function<void(ruvia::worker_timer_outcome)> tick;
     tick = [&](ruvia::worker_timer_outcome outcome) {
@@ -727,7 +725,7 @@ struct stop_during_move_callback final {
 ruvia::task<void> schedule_with_stop_during_callback_move(
     ruvia::event_loop_attachment& attachment, stop_during_move_state& current, bool& success) {
     const auto loop = attachment.loop();
-    const auto& worker = loop.handle();
+    const auto& worker = loop.worker();
     ruvia::worker_timer_registration registration;
     ruvia::move_only_function<void(ruvia::worker_timer_outcome)> completion{stop_during_move_callback(current)};
     current.moves_ = 0;
@@ -767,7 +765,7 @@ bool timer_registration_survives_stop_during_callback_move() {
 
 bool timer_registration_rejects_reentrant_acquire() {
     struct state final {
-        const ruvia::worker_handle* worker_;
+        const ruvia::worker_ref* worker_;
         ruvia::worker_timer_registration* registration_;
         int trigger_;
         int moves_{};
@@ -800,7 +798,7 @@ bool timer_registration_rejects_reentrant_acquire() {
         asio::io_context io_context;
         auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
         const auto loop = attachment.loop();
-        const auto& worker = loop.handle();
+        const auto& worker = loop.worker();
         ruvia::worker_timer_registration registration;
         state current{&worker, &registration, trigger};
         bool success = false;
@@ -924,7 +922,7 @@ TEST(Ruvia, TimerSelfReschedulingPreservesOtherExpirations) {
 TEST(Ruvia, WorkerTimerLifecycle) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     bool success = false;
     asio::co_spawn(io_context, ruvia::as_awaitable(exercise(attachment, worker_value, success)),
         asio::detached);

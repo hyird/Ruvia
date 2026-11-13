@@ -5,14 +5,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_accept_match.h"
 #include "ruvia/http/http_content_codec.h"
@@ -180,23 +178,23 @@ http_content_coding_field_result request_content_coding(const http_request& requ
 
 namespace {
 
-[[nodiscard]] std::variant<std::pmr::string, http_content_decode_error> decode_content_stage(
+[[nodiscard]] std::variant<std::string, http_content_decode_error> decode_content_stage(
     http_content_coding coding, std::string_view input, http_content_decode_options options) {
     // A zero-length coded representation carries no content: user agents treat
     // it as empty rather than as a truncated coding stream. An out-of-range coding
     // has no token and stays unsupported even for empty input.
     if (input.empty() && !http_content_coding_token(coding).empty()) {
-        return std::pmr::string(detail::http_pmr_resource_or_default(options.resource_));
+        return std::string{};
     }
     switch (coding) {
         case http_content_coding::gzip:
-            return detail::decode_gzip_content(input, options.max_decoded_bytes_, options.resource_);
+            return detail::decode_gzip_content(input, options.max_decoded_bytes_);
         case http_content_coding::deflate:
-            return detail::decode_deflate_content(input, options.max_decoded_bytes_, options.resource_);
+            return detail::decode_deflate_content(input, options.max_decoded_bytes_);
         case http_content_coding::brotli:
-            return detail::decode_brotli_content(input, options.max_decoded_bytes_, options.resource_);
+            return detail::decode_brotli_content(input, options.max_decoded_bytes_);
         case http_content_coding::zstd:
-            return detail::decode_zstd_content(input, options.max_decoded_bytes_, options.resource_);
+            return detail::decode_zstd_content(input, options.max_decoded_bytes_);
         case http_content_coding::identity:
             // Identity stages are skipped by decode_http_content.
             break;
@@ -206,32 +204,31 @@ namespace {
 
 }  // namespace
 
-std::optional<std::pmr::string> encode_http_content(
+std::optional<std::string> encode_http_content(
     http_content_coding coding, std::string_view input, http_content_encode_options options) {
     switch (coding) {
         case http_content_coding::brotli:
-            return detail::encode_brotli_content(input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_brotli_content(input, options.max_encoded_bytes_);
         case http_content_coding::zstd:
-            return detail::encode_zstd_content(input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_zstd_content(input, options.max_encoded_bytes_);
         case http_content_coding::gzip:
-            return detail::encode_gzip_content(input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_gzip_content(input, options.max_encoded_bytes_);
         case http_content_coding::deflate:
-            return detail::encode_deflate_content(input, options.max_encoded_bytes_, options.resource_);
+            return detail::encode_deflate_content(input, options.max_encoded_bytes_);
         case http_content_coding::identity:
             if (input.size() > options.max_encoded_bytes_) {
                 return std::nullopt;
             }
-            return std::pmr::string(
-                input, detail::http_pmr_resource_or_default(options.resource_));
+            return std::string(input);
     }
     throw http_content_codec_error("unsupported content coding");
 }
 
-std::optional<std::pmr::string> encode_http_content(
+std::optional<std::string> encode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_encode_options options) {
     // Nothing is allocated until a stage produces content.
-    std::optional<std::pmr::string> current;
+    std::optional<std::string> current;
     for (const auto coding : codings) {
         // identity transforms nothing; only the size limit below applies to it.
         if (coding == http_content_coding::identity) {
@@ -250,17 +247,17 @@ std::optional<std::pmr::string> encode_http_content(
     return encode_http_content(http_content_coding::identity, input, options);
 }
 
-std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+std::variant<std::string, http_content_decode_error> decode_http_content(
     http_content_coding coding, std::string_view input, http_content_decode_options options) {
     return decode_http_content(std::span<const http_content_coding>(&coding, 1), input, options);
 }
 
-std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
+std::variant<std::string, http_content_decode_error> decode_http_content(
     std::span<const http_content_coding> codings, std::string_view input,
     http_content_decode_options options) {
     // Nothing is allocated until a stage produces content, so an oversized
     // identity body is rejected before any allocation.
-    std::optional<std::pmr::string> current;
+    std::optional<std::string> current;
     for (auto coding = codings.rbegin(); coding != codings.rend(); ++coding) {
         // identity transforms nothing; only the size limit below applies to it.
         if (*coding == http_content_coding::identity) {
@@ -268,7 +265,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
         }
         const std::string_view source_value = current.has_value() ? std::string_view(*current) : input;
         auto stage = decode_content_stage(*coding, source_value, options);
-        auto* content = std::get_if<std::pmr::string>(&stage);
+        auto* content = std::get_if<std::string>(&stage);
         if (content == nullptr) {
             return std::get<http_content_decode_error>(stage);
         }
@@ -280,7 +277,7 @@ std::variant<std::pmr::string, http_content_decode_error> decode_http_content(
     if (input.size() > options.max_decoded_bytes_) {
         return http_content_decode_error::decoded_size_exceeded;
     }
-    return std::pmr::string(input, detail::http_pmr_resource_or_default(options.resource_));
+    return std::string(input);
 }
 
 namespace {
@@ -392,7 +389,7 @@ http_response_content_coding_status evaluate_http_response_content_coding(
     };
     std::array<extension_quality, 8> local{};
     std::size_t local_size = 0;
-    std::pmr::vector<extension_quality> overflow(response.memory_resource());
+    std::vector<extension_quality> overflow;
     const auto extensions = [&]() noexcept -> std::span<extension_quality> {
         return overflow.empty() ? std::span(local.data(), local_size) : std::span(overflow);
     };

@@ -239,13 +239,9 @@ template <typename header_span_type>
 }
 }  // namespace
 
-http_client_ip_extractor::http_client_ip_extractor(
-    const http_client_ip_config& config, std::pmr::memory_resource* resource)
-    : trusted_cidrs_(detail::http_pmr_resource_or_default(resource)),
-      headers_(detail::http_pmr_resource_or_default(resource)),
-      enabled_(config.enabled_),
+http_client_ip_extractor::http_client_ip_extractor(const http_client_ip_config& config)
+    : enabled_(config.enabled_),
       trust_x_forwarded_proto_(config.trust_x_forwarded_proto_) {
-    auto* const target_resource = trusted_cidrs_.get_allocator().resource();
     trusted_cidrs_.reserve(config.trusted_proxies_.size());
     for (const auto& cidr_text : config.trusted_proxies_) {
         const auto parsed = ip_cidr::parse(cidr_text);
@@ -256,12 +252,12 @@ http_client_ip_extractor::http_client_ip_extractor(
     }
 
     if (config.forwarding_headers_.empty()) {
-        compiled_header xff(target_resource);
+        compiled_header xff;
         xff.name_.assign("X-Forwarded-For");
         xff.kind_ = http_forwarded_header_kind::comma_separated_list;
         headers_.push_back(std::move(xff));
 
-        compiled_header fwd(target_resource);
+        compiled_header fwd;
         fwd.name_.assign("Forwarded");
         fwd.kind_ = http_forwarded_header_kind::rfc7239_forwarded;
         headers_.push_back(std::move(fwd));
@@ -273,7 +269,7 @@ http_client_ip_extractor::http_client_ip_extractor(
         if (!is_valid_http_header_name(spec.name_)) {
             throw std::invalid_argument("forwarding header name must be a valid HTTP field name");
         }
-        compiled_header entry(target_resource);
+        compiled_header entry;
         entry.name_.assign(spec.name_);
         entry.kind_ = resolve_header_kind(spec.name_, spec.kind_);
         headers_.push_back(std::move(entry));

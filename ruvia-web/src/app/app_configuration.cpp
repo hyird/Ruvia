@@ -4,8 +4,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 #include "router/router_impl.h"
 
 namespace ruvia::detail {
@@ -22,17 +20,12 @@ void append_prefix_handler(handlers_type& handlers, std::string_view prefix, han
             throw std::invalid_argument("duplicate fallback prefix");
         }
     }
-    handlers.emplace_back(
-        std::pmr::string(normalized, handlers.get_allocator().resource()), std::move(handler));
+    handlers.emplace_back(std::string(normalized), std::move(handler));
 }
 
 }  // namespace
 
-app_configuration::app_configuration()
-    : prefix_error_handlers_(process_resource()),
-      prefix_not_found_handlers_(process_resource()),
-      middlewares_(process_resource()),
-      worker_states_(process_resource()) {}
+app_configuration::app_configuration() = default;
 
 void app_configuration::add_middleware(owned_middleware_descriptor&& descriptor) {
     const auto& value = descriptor.descriptor();
@@ -99,7 +92,7 @@ void app_configuration::apply(router& routes_value) const {
     routes_value.set_prefix_error_handlers(prefix_error_handlers_);
     routes_value.set_prefix_not_found_handlers(prefix_not_found_handlers_);
     if (!middlewares_.empty()) {
-        std::pmr::vector<controller_middleware_descriptor> descriptors(process_resource());
+        std::vector<controller_middleware_descriptor> descriptors;
         descriptors.reserve(middlewares_.size());
         for (const auto& middleware_value : middlewares_) {
             descriptors.push_back(middleware_value.descriptor());

@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -10,7 +9,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http2_observation.h"
 #include "ruvia/http/http3_connection.h"
 
@@ -21,33 +19,17 @@ namespace ruvia {
 }
 
 struct tls_client_hello_fingerprints final {
-    explicit tls_client_hello_fingerprints(std::pmr::memory_resource* resource = nullptr)
-        : ja3_(detail::http_pmr_resource_or_default(resource)),
-          ja3_raw_(detail::http_pmr_resource_or_default(resource)),
-          ja4_(detail::http_pmr_resource_or_default(resource)),
-          peetprint_(detail::http_pmr_resource_or_default(resource)),
-          peetprint_hash_(detail::http_pmr_resource_or_default(resource)) {}
-
-    std::pmr::string ja3_;
-    std::pmr::string ja3_raw_;
-    std::pmr::string ja4_;
-    std::pmr::string peetprint_;
-    std::pmr::string peetprint_hash_;
+    std::string ja3_;
+    std::string ja3_raw_;
+    std::string ja4_;
+    std::string peetprint_;
+    std::string peetprint_hash_;
 };
 
 // Parsed TLS ClientHello handshake fields with GREASE values filtered out.
 class tls_client_hello_info final {
 public:
-    explicit tls_client_hello_info(std::pmr::memory_resource* resource = nullptr)
-        : cipher_suites_(detail::http_pmr_resource_or_default(resource)),
-          extensions_(detail::http_pmr_resource_or_default(resource)),
-          supported_groups_(detail::http_pmr_resource_or_default(resource)),
-          ec_point_formats_(detail::http_pmr_resource_or_default(resource)),
-          alpn_(detail::http_pmr_resource_or_default(resource)),
-          signature_algorithms_(detail::http_pmr_resource_or_default(resource)),
-          supported_versions_(detail::http_pmr_resource_or_default(resource)),
-          server_name_(detail::http_pmr_resource_or_default(resource)) {}
-
+    tls_client_hello_info() noexcept = default;
     [[nodiscard]] constexpr std::uint16_t legacy_version() const noexcept {
         return legacy_version_;
     }
@@ -68,10 +50,10 @@ public:
         return ec_point_formats_;
     }
     std::span<const std::uint8_t> ec_point_formats() const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> alpn() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const std::string> alpn() const& noexcept RUVIA_LIFETIMEBOUND {
         return alpn_;
     }
-    std::span<const std::pmr::string> alpn() const&& = delete;
+    std::span<const std::string> alpn() const&& = delete;
     [[nodiscard]] std::span<const std::uint16_t> signature_algorithms() const& noexcept RUVIA_LIFETIMEBOUND {
         return signature_algorithms_;
     }
@@ -85,48 +67,41 @@ public:
     }
     std::string_view server_name() const&& = delete;
 
-    [[nodiscard]] std::pmr::string ja3_raw(std::pmr::memory_resource* resource = nullptr) const;
-    [[nodiscard]] std::pmr::string ja3(std::pmr::memory_resource* resource = nullptr) const;
-    [[nodiscard]] std::pmr::string ja4(
-        bool quic = false, std::pmr::memory_resource* resource = nullptr) const;
-    [[nodiscard]] std::pmr::string peetprint(std::pmr::memory_resource* resource = nullptr) const;
-    [[nodiscard]] std::pmr::string peetprint_hash(
-        std::pmr::memory_resource* resource = nullptr) const;
-    [[nodiscard]] tls_client_hello_fingerprints fingerprints(
-        bool quic = false, std::pmr::memory_resource* resource = nullptr) const;
+    [[nodiscard]] std::string ja3_raw() const;
+    [[nodiscard]] std::string ja3() const;
+    [[nodiscard]] std::string ja4(bool quic = false) const;
+    [[nodiscard]] std::string peetprint() const;
+    [[nodiscard]] std::string peetprint_hash() const;
+    [[nodiscard]] tls_client_hello_fingerprints fingerprints(bool quic = false) const;
 
     std::uint16_t legacy_version_{0};
-    std::pmr::vector<std::uint16_t> cipher_suites_;
-    std::pmr::vector<std::uint16_t> extensions_;
-    std::pmr::vector<std::uint16_t> supported_groups_;
-    std::pmr::vector<std::uint8_t> ec_point_formats_;
-    std::pmr::vector<std::pmr::string> alpn_;
-    std::pmr::vector<std::uint16_t> signature_algorithms_;
-    std::pmr::vector<std::uint16_t> supported_versions_;
-    std::pmr::string server_name_;
+    std::vector<std::uint16_t> cipher_suites_;
+    std::vector<std::uint16_t> extensions_;
+    std::vector<std::uint16_t> supported_groups_;
+    std::vector<std::uint8_t> ec_point_formats_;
+    std::vector<std::string> alpn_;
+    std::vector<std::uint16_t> signature_algorithms_;
+    std::vector<std::uint16_t> supported_versions_;
+    std::string server_name_;
 };
 
 [[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::span<const std::byte> message, std::pmr::memory_resource* resource = nullptr);
+    std::span<const std::byte> message);
 [[nodiscard]] std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::string_view message, std::pmr::memory_resource* resource = nullptr);
+    std::string_view message);
 
 [[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::span<const std::byte> message, bool quic = false,
-    std::pmr::memory_resource* resource = nullptr);
+    std::span<const std::byte> message, bool quic = false);
 [[nodiscard]] std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::string_view message, bool quic = false,
-    std::pmr::memory_resource* resource = nullptr);
+    std::string_view message, bool quic = false);
 [[nodiscard]] inline tls_client_hello_fingerprints compute_tls_client_hello_fingerprints(
-    const tls_client_hello_info& hello, bool quic = false,
-    std::pmr::memory_resource* resource = nullptr) {
-    return hello.fingerprints(quic, resource);
+    const tls_client_hello_info& hello, bool quic = false) {
+    return hello.fingerprints(quic);
 }
 
 struct http2_akamai_fingerprint_options final {
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // Collects HTTP/2 frame and HPACK header observations up to the end of the
@@ -134,8 +109,7 @@ struct http2_akamai_fingerprint_options final {
 // fingerprint string: "SETTINGS|WINDOW_UPDATE|PRIORITY|PSEUDO_HEADER_ORDER".
 class http2_akamai_fingerprint_collector final {
 public:
-    explicit http2_akamai_fingerprint_collector(std::pmr::memory_resource* resource = nullptr);
-    explicit http2_akamai_fingerprint_collector(http2_akamai_fingerprint_options options);
+    explicit http2_akamai_fingerprint_collector(http2_akamai_fingerprint_options options = {});
 
     void observe_frame(const http2_frame_metadata& frame) noexcept;
     void observe_header(const http2_header_metadata& header) noexcept;
@@ -166,11 +140,10 @@ private:
         failed,
     };
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::string settings_;
-    std::pmr::string priorities_;
-    std::pmr::string pseudo_headers_;
-    std::pmr::string fingerprint_;
+    std::string settings_;
+    std::string priorities_;
+    std::string pseudo_headers_;
+    std::string fingerprint_;
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};
     std::size_t frames_seen_{0};
@@ -185,7 +158,6 @@ private:
 struct http3_fingerprint_options final {
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
 // Collects HTTP/3 frame and QPACK field observations up to the end of the
@@ -193,8 +165,7 @@ struct http3_fingerprint_options final {
 // fingerprint string: "CONTROL_FRAMES|FIRST_STREAM_ID|PSEUDO_HEADER_ORDER".
 class http3_fingerprint_collector final {
 public:
-    explicit http3_fingerprint_collector(std::pmr::memory_resource* resource = nullptr);
-    explicit http3_fingerprint_collector(http3_fingerprint_options options);
+    explicit http3_fingerprint_collector(http3_fingerprint_options options = {});
 
     void observe_frame(const http3_frame_metadata& frame) noexcept;
     void observe_field(const http3_field_metadata& field) noexcept;
@@ -225,10 +196,9 @@ private:
         failed,
     };
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::string control_frames_;
-    std::pmr::string pseudo_headers_;
-    std::pmr::string fingerprint_;
+    std::string control_frames_;
+    std::string pseudo_headers_;
+    std::string fingerprint_;
     std::size_t max_frames_{32};
     std::size_t max_bytes_{16384};
     std::size_t frames_seen_{0};

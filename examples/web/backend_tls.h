@@ -1,11 +1,9 @@
 #pragma once
 
 #include <filesystem>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/tls_config.h"
 
 #include "environment.h"
@@ -18,7 +16,7 @@ namespace example {
 // RUVIA_DB_CERT/KEY supply a client identity; RUVIA_DB_SERVER_NAME overrides
 // the verified name for drivers that support it. An unset CA uses system trust.
 inline ruvia::client_tls_config backend_tls(std::string_view prefix, const environment& env = environment{}) {
-    const std::pmr::string base(prefix, ruvia::process_resource());
+    const std::string base(prefix);
     ruvia::client_tls_config config{
         .mode_ = env.get<bool>(base + "_TLS").value_or(true)
                      ? ruvia::client_tls_mode::verify_identity
@@ -35,7 +33,7 @@ inline ruvia::client_tls_config backend_tls(std::string_view prefix, const envir
         };
     }
     if (auto name = env.get(base + "_SERVER_NAME"); name && !name->empty()) {
-        config.server_name_.emplace(*name, ruvia::process_resource());
+        config.server_name_.emplace(*name);
     }
     return config;
 }

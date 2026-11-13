@@ -8,7 +8,6 @@
 #include <cstddef>
 #include <future>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -149,25 +148,6 @@ private:
     std::thread thread_;
 };
 
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{};
-    std::size_t deallocations_{};
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        ++allocations_;
-        return process_resource()->allocate(bytes, alignment);
-    }
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        ++deallocations_;
-        process_resource()->deallocate(pointer, bytes, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
 [[nodiscard]] task<void> read_all(tcp_client& client, std::string& received) {
     while (const auto bytes = co_await client.read()) {
         received.append(as_chars(*bytes));
@@ -187,14 +167,10 @@ private:
         return client.write(std::string_view(temporary));
     }();
     auto moved = [&] {
-        counting_resource resource;
-        std::pmr::string owned(5000, 'b', &resource);
-        auto cold = client.write(std::move(owned));
-        EXPECT_EQ(resource.allocations_, 1U);
-        EXPECT_EQ(resource.deallocations_, 1U);
-        return cold;
+        std::string owned(5000, 'b');
+        return client.write(std::move(owned));
     }();
-    // Both the custom PMR allocator and the original source have died before
+    // Both temporary sources have died before
     // either cold write starts; their payloads must now belong to the client.
     co_await std::move(copied);
     co_await std::move(moved);
@@ -230,7 +206,7 @@ private:
     bool failed = false;
     try {
         if (writing) {
-            co_await client.write(std::pmr::string(16 * 1024 * 1024, 'x', process_resource()), options);
+            co_await client.write(std::string(16 * 1024 * 1024, 'x'), options);
         } else {
             (void)co_await client.read(options);
         }
@@ -296,14 +272,12 @@ private:
 [[nodiscard]] task<void> retired_cold_case(event_loop loop, tcp_client_config config) {
     auto client = std::make_unique<tcp_client>(loop, config);
     co_await client->connect();
-    counting_resource resource;
     {
-        auto cold_write = client->write(std::pmr::string(5000, 'x', &resource));
+        auto cold_write = client->write(std::string(5000, 'x'));
         auto cold_read = client->read();
         auto shutdown = client->shutdown();
         client.reset();
         co_await std::move(shutdown);
-        EXPECT_EQ(resource.allocations_, resource.deallocations_);
         // Expired tasks are destroyed cold, with no borrowed backend remaining.
     }
 }

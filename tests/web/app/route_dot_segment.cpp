@@ -1,7 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <memory_resource>
-
 // A route pattern containing a dot segment can never be matched: resolve()
 // rejects every request carrying one before lookup (RFC 3986 6.2.2.2). Such a
 // registration must fail at startup instead of installing an unreachable
@@ -11,7 +9,6 @@
 #include <stdexcept>
 #include <string>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -35,11 +32,11 @@ private:
 
 TEST(Ruvia, route_dot_segment_pattern_is_rejected_at_startup) {
     ruvia::test_app app;
-    std::pmr::string message{ruvia::process_resource()};
+    std::string message{};
     try {
         (void)app.request(ruvia::test_request::get("/b"));
     } catch (const std::invalid_argument& error) {
         message = error.what();
     }
-    EXPECT_TRUE(message.find("dot segment") != std::pmr::string::npos);
+    EXPECT_TRUE(message.find("dot segment") != std::string::npos);
 }

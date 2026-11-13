@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <memory_resource>
 #include <optional>
 
 #include "http_client_response_fixture.h"
@@ -28,7 +27,7 @@ TEST(Ruvia, http_client_informational_responses_ignore_framing_fields) {
     for (const auto fields : {std::string_view("Content-Length: 5"),
              std::string_view("Transfer-Encoding: chunked"),
              std::string_view("Content-Length: invalid\r\nTransfer-Encoding: gzip")}) {
-        std::pmr::string head("HTTP/1.1 103 Early Hints\r\n");
+        std::string head("HTTP/1.1 103 Early Hints\r\n");
         head.append(fields);
         const auto ignored = parse_head("GET", head);
         EXPECT_TRUE(ignored.plan().informational() != nullptr);
@@ -419,23 +418,22 @@ TEST(Ruvia, http_client_connection_fields_use_recipient_list_semantics) {
 }
 
 TEST(Ruvia, http_client_rejects_only_protected_connection_options) {
-    // Only fields that change how a response is processed are protected.
-    for (const std::string_view option : {"Content-Length", "Transfer-Encoding", "Set-Cookie"}) {
-        std::pmr::string response = "HTTP/1.1 200 OK\r\nConnection: ";
+    // Only framing fields are rejected on received responses (RFC 9110 §7.6.1).
+    for (const std::string_view option : {"Content-Length", "Transfer-Encoding"}) {
+        std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
         response.append("\r\nContent-Length: 0");
         EXPECT_TRUE(parse_failure_error("GET", response) ==
                     http1_client_response_parse_error::invalid_connection);
     }
 
-    // RFC 9110 section 7.6.1 forbids only sending these options; the named
-    // end-to-end fields neither frame nor change the response, and the
-    // request-only fields cannot affect how a response is processed.
+    // RFC 9110 section 7.6.1 forbids sending end-to-end field names in
+    // Connection, but recipients accept the message without 400-style rejection.
     for (const std::string_view option :
-        {"X-Hop", "DATE", "Range", "Cache-Control", "Host", "Authorization", "Origin", "Cookie"}) {
-        std::pmr::string response = "HTTP/1.1 200 OK\r\nConnection: ";
+        {"Set-Cookie", "X-Hop", "DATE", "Range", "Cache-Control", "Host", "Authorization", "Origin", "Cookie"}) {
+        std::string response = "HTTP/1.1 200 OK\r\nConnection: ";
         response.append(option);
-        response.append("\r\nX-Hop: local\r\nContent-Length: 0");
+        response.append("\r\nSet-Cookie: sid=1\r\nX-Hop: local\r\nContent-Length: 0");
         const auto accepted = parse_head("GET", response);
         EXPECT_TRUE(accepted.plan().known_length() != nullptr);
     }
@@ -468,11 +466,11 @@ TEST(Ruvia, http_client_switching_protocols_requires_wire_agreement) {
              std::string_view("Content-Length: 5\r\n"),
              std::string_view("Transfer-Encoding: chunked\r\n"),
          }) {
-        std::pmr::string head(valid_response);
+        std::string head(valid_response);
         head.append("\r\n");
         head.append(framing);
         head.append("\r\n");
-        const std::pmr::string wire = head + "protocol_bytes";
+        const std::string wire = head + "protocol_bytes";
         const auto switched = parse_wire("GET", wire, http1_close_policy::allow_reuse, offered);
         EXPECT_TRUE(switched.parsed() != nullptr);
         if (const auto* parsed = switched.parsed()) {
@@ -608,7 +606,7 @@ TEST(Ruvia, http_client_rejected_connect_never_reuses_the_proxy_connection) {
 TEST(Ruvia, http1_client_exchange_state_owns_every_long_lived_response_fact) {
     std::optional<ruvia::http1_client_exchange_state> head_exchange;
     std::array<char, 512> head_wire{};
-    std::pmr::string method = "HEAD";
+    std::string method = "HEAD";
     {
         ruvia::http_client_request_view request{.method_ = method, .target_ = "/resource"};
         auto prepared = ruvia::http1_client_request_writer().prepare(
@@ -629,8 +627,8 @@ TEST(Ruvia, http1_client_exchange_state_owns_every_long_lived_response_fact) {
 
     std::optional<ruvia::http1_client_exchange_state> upgrade_exchange;
     std::array<char, 512> upgrade_wire{};
-    std::pmr::string connection = "Upgrade";
-    std::pmr::string protocol = "websocket";
+    std::string connection = "Upgrade";
+    std::string protocol = "websocket";
     {
         const std::array headers{
             ruvia::http_header_view{"Connection", connection},

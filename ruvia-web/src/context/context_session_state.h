@@ -1,7 +1,6 @@
 #pragma once
 
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
@@ -17,31 +16,30 @@ namespace ruvia::detail {
 struct session_untouched final {};
 
 struct session_unrecognized final {
-    std::pmr::string id_;
+    std::string id_;
 };
 
 struct session_loaded final {
-    std::pmr::string id_;
-    std::pmr::string data_;
+    std::string id_;
+    std::string data_;
 };
 
 struct session_persist_new final {
-    std::pmr::string data_;
+    std::string data_;
 };
 
 struct session_rotate final {
-    std::pmr::string old_id_;
-    std::pmr::string data_;
+    std::string old_id_;
+    std::string data_;
 };
 
 struct session_clear final {
-    std::optional<std::pmr::string> old_id_;
+    std::optional<std::string> old_id_;
 };
 
 class context_session_state final {
 public:
-    explicit context_session_state(std::pmr::memory_resource* resource) noexcept
-        : resource_(resource) {}
+    context_session_state() noexcept = default;
 
     void bind(const session_middleware* owner);
     [[nodiscard]] bool available() const noexcept {
@@ -100,9 +98,7 @@ private:
         committed,
         failed };
     void require_mutable() const;
-    [[nodiscard]] std::pmr::string copy(std::string_view value) const;
 
-    std::pmr::memory_resource* resource_;
     bool available_{false};
     const session_middleware* owner_{nullptr};
     phase_type phase_{phase_type::active};

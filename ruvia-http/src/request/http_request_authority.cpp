@@ -2,7 +2,6 @@
 #include <array>
 #include <limits>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
@@ -98,17 +97,16 @@ std::size_t estimate_http1_response_head_bytes(
         status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
-std::pmr::string normalize_http_proxy_request_target(http_known_method method,
-    std::string_view target, std::pmr::memory_resource* resource) {
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
+std::string normalize_http_proxy_request_target(
+    http_known_method method, std::string_view target) {
     if (target.empty() || target.front() == '/' || target == "*" ||
         method == http_known_method::connect) {
-        return std::pmr::string(target, target_resource);
+        return std::string(target);
     }
     const auto scheme_sep = target.find("://");
     if (scheme_sep == std::string_view::npos ||
         !detail::is_valid_uri_scheme(target.substr(0, scheme_sep))) {
-        return std::pmr::string(target, target_resource);
+        return std::string(target);
     }
     const auto remainder = target.substr(scheme_sep + 3U);
     const auto query_pos = remainder.find('?');
@@ -124,42 +122,40 @@ std::pmr::string normalize_http_proxy_request_target(http_known_method method,
                           ? std::string_view{}
                           : authority_and_path.substr(slash_pos);
     if (authority.empty()) {
-        return std::pmr::string(target, target_resource);
+        return std::string(target);
     }
     if (path.empty()) {
         if (query_suffix.empty() && method == http_known_method::options) {
-            return std::pmr::string("*", target_resource);
+            return std::string("*");
         }
-        std::pmr::string result(target_resource);
+        std::string result;
         result.reserve(1U + query_suffix.size());
         result.push_back('/');
         result.append(query_suffix);
         return result;
     }
-    std::pmr::string result(target_resource);
+    std::string result;
     result.reserve(path.size() + query_suffix.size());
     result.append(path);
     result.append(query_suffix);
     return result;
 }
 
-std::pmr::string normalize_http_proxy_request_target(std::string_view method,
-    std::string_view target, std::pmr::memory_resource* resource) {
-    return normalize_http_proxy_request_target(classify_http_method(method), target, resource);
+std::string normalize_http_proxy_request_target(
+    std::string_view method, std::string_view target) {
+    return normalize_http_proxy_request_target(classify_http_method(method), target);
 }
 
-std::pmr::string normalize_http_proxy_request_target(
-    const http_request& request, std::pmr::memory_resource* resource) {
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
+std::string normalize_http_proxy_request_target(const http_request& request) {
     if (request.target_form() == http_request_target_form::authority) {
-        return std::pmr::string(request.authority(), target_resource);
+        return std::string(request.authority());
     }
     const auto path = request.path();
     const auto query = request.query_string();
     if (query.empty()) {
-        return std::pmr::string(path, target_resource);
+        return std::string(path);
     }
-    std::pmr::string result(target_resource);
+    std::string result;
     result.reserve(path.size() + 1U + query.size());
     result.append(path);
     result.push_back('?');
@@ -167,15 +163,13 @@ std::pmr::string normalize_http_proxy_request_target(
     return result;
 }
 
-std::pmr::string http_max_forwards_result::format_decremented(
-    std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
+std::string http_max_forwards_result::format_decremented() const {
     const auto next_val = decremented();
     if (!next_val.has_value()) {
-        return std::pmr::string(target_resource);
+        return {};
     }
     std::array<char, http_max_unsigned_decimal_size> buffer{};
-    return std::pmr::string(http_format_unsigned(buffer, *next_val), target_resource);
+    return std::string(http_format_unsigned(buffer, *next_val));
 }
 
 std::optional<std::uint64_t> parse_http_max_forwards_value(

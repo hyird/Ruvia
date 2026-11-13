@@ -9,7 +9,7 @@
 #include <asio/steady_timer.hpp>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 #include "worker_dispatcher_impl.h"
@@ -53,13 +53,13 @@ worker_id_type next_worker_dispatcher_id() noexcept {
 
 worker_dispatcher::worker_dispatcher(asio::io_context& io_context, std::size_t capacity, ruvia::blocking_pool* pool)
     : io_context_(io_context),
-      timer_(make_pmr_object<asio::steady_timer>(process_resource(), io_context)),
+      timer_(std::make_unique<asio::steady_timer>(io_context)),
       capacity_(checked_queue_capacity(capacity)),
       blocking_pool_(pool),
-      nodes_(process_resource()),
+      nodes_(),
       worker_id_(next_worker_dispatcher_id()),
-      timers_(process_resource()),
-      timer_slots_(process_resource()) {
+      timers_(),
+      timer_slots_() {
     // At most `capacity_` nodes are pending (reserved or ready) and at most
     // `capacity_` belong to the batch drain() is running, since a batch is
     // the ready list it spliced. Twice the capacity therefore keeps the
@@ -283,7 +283,7 @@ void worker_dispatcher::when_shutdown_notifications_complete(move_only_function<
     if (!callback_value) {
         throw std::invalid_argument("shutdown notification callback requires a callable");
     }
-    auto node = make_pmr_object<waiter_node_type>(process_resource(), std::move(callback_value));
+    auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
     {
         std::lock_guard lock(mutex_);
         if (shutdown_notification_active_) {
@@ -300,7 +300,7 @@ void worker_dispatcher::when_idle(move_only_function<void()> callback_value) {
     if (!callback_value) {
         throw std::invalid_argument("worker idle callback requires a callable");
     }
-    auto node = make_pmr_object<waiter_node_type>(process_resource(), std::move(callback_value));
+    auto node = std::make_unique<waiter_node_type>(std::move(callback_value));
     bool detached = false;
     {
         std::lock_guard lock(mutex_);
@@ -328,8 +328,7 @@ worker_dispatcher::waiter_node_type* worker_dispatcher::take_idle_callbacks_lock
 
 void worker_dispatcher::notify_waiters(waiter_node_type* head, bool invoke) noexcept {
     while (head != nullptr) {
-        std::unique_ptr<waiter_node_type, pmr_object_deleter<waiter_node_type>> current(
-            head, pmr_object_deleter<waiter_node_type>{process_resource()});
+        std::unique_ptr<waiter_node_type> current(head);
         head = current->next_;
         if (!invoke) {
             continue;
@@ -349,8 +348,8 @@ void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
     bool failure_delivered = false;
     std::exception_ptr deferred_failure;
     std::exception_ptr delivered_failure;
-    const auto handle_failure = [this, &failure_delivered, &deferred_failure, &delivered_failure, &failure_handler](
-                                    std::exception_ptr failure) {
+    const auto deliver_failure = [this, &failure_delivered, &deferred_failure, &delivered_failure, &failure_handler](
+                                     std::exception_ptr failure) {
         notify_stopping(begin_stopping(true));
         abandon_queued();
         if (!failure_delivered) {
@@ -377,14 +376,14 @@ void worker_dispatcher::run_context(move_only_function<void()> startup_handler,
             startup_handler();
         }
     } catch (...) {
-        handle_failure(std::current_exception());
+        deliver_failure(std::current_exception());
     }
     for (;;) {
         try {
             io_context_.run();
             break;
         } catch (...) {
-            handle_failure(std::current_exception());
+            deliver_failure(std::current_exception());
         }
     }
     if (shutdown_handler) {
@@ -404,9 +403,8 @@ void worker_dispatcher::close() noexcept {
 }
 
 void worker_dispatcher::detach_context() noexcept {
-    std::pmr::vector<timer_entry> abandoned_timers(timers_.get_allocator());
-    std::unique_ptr<asio::steady_timer, pmr_object_deleter<asio::steady_timer>> detached_timer{
-        nullptr, pmr_object_deleter<asio::steady_timer>{process_resource()}};
+    std::vector<timer_entry> abandoned_timers;
+    std::unique_ptr<asio::steady_timer> detached_timer;
     {
         std::lock_guard lock(mutex_);
         if (!context_attached_) {
@@ -673,45 +671,45 @@ void worker_dispatcher::drain() {
 
 namespace ruvia {
 
-worker_handle::worker_handle(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept
+worker_ref::worker_ref(std::shared_ptr<detail::worker_dispatcher> dispatcher) noexcept
     : dispatcher_(std::move(dispatcher)) {}
 
-bool worker_handle::valid() const noexcept {
+bool worker_ref::valid() const noexcept {
     return dispatcher_ && dispatcher_->attached();
 }
 
-bool worker_handle::accepting() const noexcept {
+bool worker_ref::accepting() const noexcept {
     return dispatcher_ && dispatcher_->accepting();
 }
 
-bool worker_handle::is_current() const noexcept {
+bool worker_ref::is_current() const noexcept {
     return dispatcher_ && dispatcher_->is_current();
 }
 
-worker_id_type worker_handle::id() const noexcept {
+worker_id_type worker_ref::id() const noexcept {
     return dispatcher_ ? dispatcher_->id() : 0;
 }
 
-blocking_pool* worker_handle::blocking_pool() const noexcept {
+blocking_pool* worker_ref::blocking_pool() const noexcept {
     return dispatcher_ ? dispatcher_->blocking_pool() : nullptr;
 }
 
-asio::io_context::executor_type worker_handle::executor() const {
+asio::io_context::executor_type worker_ref::executor() const {
     if (!dispatcher_) {
         throw std::logic_error("worker has no execution context");
     }
     return dispatcher_->executor();
 }
 
-worker_handle detail::worker_handle_access::current() noexcept {
+worker_ref detail::worker_ref_access::current() noexcept {
     const auto* dispatcher = detail::current_worker_dispatcher();
     if (dispatcher == nullptr) {
         return {};
     }
-    return worker_handle(std::const_pointer_cast<detail::worker_dispatcher>(dispatcher->shared_from_this()));
+    return worker_ref(std::const_pointer_cast<detail::worker_dispatcher>(dispatcher->shared_from_this()));
 }
 
-post_result_type worker_handle::post_task(move_only_function<void()> task_value) const {
+post_result_type worker_ref::post_task(move_only_function<void()> task_value) const {
     if (!task_value) {
         throw std::invalid_argument("worker post requires a callable task");
     }
@@ -719,36 +717,36 @@ post_result_type worker_handle::post_task(move_only_function<void()> task_value)
                        : detail::worker_delivery_access::reject<post_result_type>(post_status::worker_stopping, std::move(task_value));
 }
 
-void worker_handle::defer_resume(std::coroutine_handle<> continuation) const noexcept {
+void worker_ref::defer_resume(std::coroutine_handle<> continuation) const noexcept {
     if (!dispatcher_) {
         std::terminate();
     }
     dispatcher_->defer_or_terminate([continuation] { continuation.resume(); });
 }
 
-worker_handle detail::worker_handle_access::make(
+worker_ref detail::worker_ref_access::make(
     const std::shared_ptr<worker_dispatcher>& dispatcher) noexcept {
-    return worker_handle(dispatcher);
+    return worker_ref(dispatcher);
 }
 
-bool worker_handle::defer_completion(move_only_function<void()> completion) const {
+bool worker_ref::defer_completion(move_only_function<void()> completion) const {
     if (!completion) {
         throw std::invalid_argument("worker completion requires a callable task");
     }
-    // The completion's move may release the last owner of this handle.
+    // The completion's move may release the last owner of this worker_ref.
     const auto dispatcher = dispatcher_;
     return dispatcher && dispatcher->defer_if_attached(std::move(completion));
 }
 
-void detail::worker_handle_access::defer_or_terminate(
-    const worker_handle& worker_value, move_only_function<void()> task_value) noexcept {
+void detail::worker_ref_access::defer_or_terminate(
+    const worker_ref& worker_value, move_only_function<void()> task_value) noexcept {
     if (!worker_value.dispatcher_) {
         std::terminate();
     }
     worker_value.dispatcher_->defer_or_terminate(std::move(task_value));
 }
 
-worker_registration_status worker_handle::link_shutdown(worker_shutdown_registration& registration,
+worker_registration_status worker_ref::link_shutdown(worker_shutdown_registration& registration,
     std::weak_ptr<void> owner, const detail::worker_shutdown_operations_type& operations) const {
     if (!dispatcher_) {
         return worker_registration_status::worker_stopping;
@@ -756,8 +754,8 @@ worker_registration_status worker_handle::link_shutdown(worker_shutdown_registra
     return dispatcher_->register_shutdown(registration, std::move(owner), operations);
 }
 
-void detail::worker_handle_access::when_shutdown_notifications_complete(
-    const worker_handle& worker_value, move_only_function<void()> callback_value) {
+void detail::worker_ref_access::when_shutdown_notifications_complete(
+    const worker_ref& worker_value, move_only_function<void()> callback_value) {
     const auto& dispatcher = worker_value.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot observe shutdown notifications on a stopped worker");
@@ -765,8 +763,8 @@ void detail::worker_handle_access::when_shutdown_notifications_complete(
     dispatcher->when_shutdown_notifications_complete(std::move(callback_value));
 }
 
-void detail::worker_handle_access::when_idle(
-    const worker_handle& worker_value, move_only_function<void()> callback_value) {
+void detail::worker_ref_access::when_idle(
+    const worker_ref& worker_value, move_only_function<void()> callback_value) {
     const auto& dispatcher = worker_value.dispatcher_;
     if (!dispatcher) {
         throw std::runtime_error("cannot observe idleness on a stopped worker");
@@ -774,23 +772,23 @@ void detail::worker_handle_access::when_idle(
     dispatcher->when_idle(std::move(callback_value));
 }
 
-void detail::worker_handle_access::wait_for_reservations(const worker_handle& worker_value) noexcept {
+void detail::worker_ref_access::wait_for_reservations(const worker_ref& worker_value) noexcept {
     if (worker_value.dispatcher_) {
         worker_value.dispatcher_->wait_for_reservations();
     }
 }
 
-bool detail::worker_handle_access::timers_stopping(const worker_handle& worker_value) noexcept {
+bool detail::worker_ref_access::timers_stopping(const worker_ref& worker_value) noexcept {
     return !worker_value.dispatcher_ || worker_value.dispatcher_->timers_stopping();
 }
 
-void detail::worker_handle_access::enable_external_runner(const worker_handle& worker_value) noexcept {
+void detail::worker_ref_access::enable_external_runner(const worker_ref& worker_value) noexcept {
     if (worker_value.dispatcher_) {
         worker_value.dispatcher_->enable_external_runner();
     }
 }
 
-worker_timer_schedule_status worker_handle::schedule_timer(worker_timer_registration& registration,
+worker_timer_schedule_status worker_ref::schedule_timer(worker_timer_registration& registration,
     std::chrono::steady_clock::time_point deadline_value,
     move_only_function<void(worker_timer_outcome)> completion) const& {
     if (!dispatcher_) {
@@ -799,7 +797,7 @@ worker_timer_schedule_status worker_handle::schedule_timer(worker_timer_registra
     return dispatcher_->schedule_timer(registration, deadline_value, std::move(completion));
 }
 
-post_status worker_handle::post_factory(move_only_function<move_only_function<void()>()> factory) const {
+post_status worker_ref::post_factory(move_only_function<move_only_function<void()>()> factory) const {
     const auto dispatcher = dispatcher_;
     return dispatcher ? dispatcher->post_factory(std::move(factory)) : post_status::worker_stopping;
 }

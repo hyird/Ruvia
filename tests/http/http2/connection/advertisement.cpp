@@ -1,8 +1,8 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <memory_resource>
 #include <stdexcept>
+#include <string>
 
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_connection.h"
@@ -61,10 +61,9 @@ TEST(Ruvia, http2_connection_server_rejects_client_only_options) {
 }
 
 TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tunnel_and_reserved_frames) {
-    std::pmr::unsynchronized_pool_resource resource;
     ruvia::test::output_relay relay;
-    auto client = ruvia::http2_connection::client({.resource_ = &resource, .enable_push_ = true, .receive_origin_advertisements_ = true});
-    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    auto client = ruvia::http2_connection::client({.enable_push_ = true, .receive_origin_advertisements_ = true});
+    auto server = ruvia::http2_connection::server({});
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
@@ -72,12 +71,12 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
     // 1. Server submit_alternative_service_advertisement rejects incomplete head, CONNECT, reserved push, and closed stream.
     (void)client.submit_request_head(ruvia::http2_regular_request_head_view{.authority_ = "example.test"});
     (void)ruvia::test::drain_output(client);
-    std::pmr::string partial_block(&resource);
+    std::string partial_block;
     ruvia::hpack_encoder::encode_header(partial_block, ":method", "GET");
     ruvia::hpack_encoder::encode_header(partial_block, ":scheme", "https");
     ruvia::hpack_encoder::encode_header(partial_block, ":authority", "example.test");
     ruvia::hpack_encoder::encode_header(partial_block, ":path", "/");
-    std::pmr::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
+    std::string partial_frame(ruvia::http2_frame_header_bytes, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(partial_frame).first(9),
         static_cast<std::uint32_t>(partial_block.size()), ruvia::http2_frame_type::headers, 0x1, 1));
     partial_frame.append(partial_block);
@@ -109,7 +108,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
         (void)server.release(std::move(std::get<0>(pushed)));
     }
 
-    ruvia::http_response resp(&resource);
+    ruvia::http_response resp;
     resp.status(ruvia::http_status::no_content);
     EXPECT_TRUE(std::holds_alternative<ruvia::http_buffered_response_write_plan>(
         server.submit_response_head(1, resp, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, resp))));
@@ -145,7 +144,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
             if (rh->stream_id() == connect_id) {
                 EXPECT_TRUE(server.submit_alternative_service_advertisement(connect_id, "", "h3=\":443\"") ==
                             ruvia::http2_submit_status::invalid_state);
-                ruvia::http_response ok_resp(&resource);
+                ruvia::http_response ok_resp;
                 ok_resp.status(ruvia::http_status::ok);
                 EXPECT_TRUE(server.submit_connect_response_head(connect_id, ok_resp) == ruvia::http2_submit_status::accepted);
                 EXPECT_TRUE(server.submit_alternative_service_advertisement(connect_id, "", "h3=\":443\"") ==
@@ -160,7 +159,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
     while (client.next_event()) {
     }
 
-    std::pmr::string altsvc_on_tunnel(ruvia::http2_frame_header_bytes + 8, '\0');
+    std::string altsvc_on_tunnel(ruvia::http2_frame_header_bytes + 8, '\0');
     EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_tunnel).first(9),
         8, ruvia::http2_frame_type::alternative_service, 0, connect_id));
     EXPECT_TRUE(client.feed(altsvc_on_tunnel) == ruvia::http2_feed_result::accepted);
@@ -181,7 +180,7 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
         relay.transfer(server, client);
         while (client.next_event()) {
         }
-        std::pmr::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
+        std::string altsvc_on_reserved(ruvia::http2_frame_header_bytes + 8, '\0');
         EXPECT_TRUE(ruvia::encode_http2_frame_header(std::span(altsvc_on_reserved).first(9),
             8, ruvia::http2_frame_type::alternative_service, 0, pushed2_id));
         EXPECT_TRUE(client.feed(altsvc_on_reserved) == ruvia::http2_feed_result::accepted);
@@ -199,11 +198,10 @@ TEST(Ruvia, http2_connection_advertisement_validates_stream_state_and_ignores_tu
 }
 
 TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_streams_and_origin_on_reserved_push) {
-    std::pmr::unsynchronized_pool_resource resource;
     ruvia::test::output_relay relay;
     auto client = ruvia::http2_connection::client(
-        {.resource_ = &resource, .enable_push_ = true, .receive_origin_advertisements_ = true});
-    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+        {.enable_push_ = true, .receive_origin_advertisements_ = true});
+    auto server = ruvia::http2_connection::server({});
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
@@ -219,7 +217,7 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
             connect_req.emplace(std::move(*rh));
         }
     }
-    ruvia::http_response ok_resp(&resource);
+    ruvia::http_response ok_resp;
     ok_resp.status(ruvia::http_status::ok);
     EXPECT_TRUE(server.submit_connect_response_head(connect_id, ok_resp) ==
                 ruvia::http2_submit_status::accepted);
@@ -228,9 +226,9 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
     }
 
     const auto altsvc_tunnel =
-        std::get<0>(ruvia::encode_http2_alternative_service_frame(connect_id, "", "h3=\":443\"", 16384, &resource));
+        std::get<0>(ruvia::encode_http2_alternative_service_frame(connect_id, "", "h3=\":443\"", 16384));
     const auto altsvc_idle =
-        std::get<0>(ruvia::encode_http2_alternative_service_frame(99, "", "h3=\":443\"", 16384, &resource));
+        std::get<0>(ruvia::encode_http2_alternative_service_frame(99, "", "h3=\":443\"", 16384));
     EXPECT_TRUE(client.feed(std::string_view(altsvc_tunnel.data(), altsvc_tunnel.size())) ==
                 ruvia::http2_feed_result::accepted);
     EXPECT_TRUE(!client.next_event().has_value());
@@ -258,7 +256,7 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
     }
 
     // Server ignores client-sent ALTSVC on reserved(local) push stream (RFC 7838 section 4).
-    std::pmr::string client_altsvc(&resource);
+    std::string client_altsvc;
     std::array<char, 9> hdr{};
     EXPECT_TRUE(ruvia::encode_http2_frame_header(hdr, 11, ruvia::http2_frame_type::alternative_service, 0, push_id));
     client_altsvc.append(hdr.data(), hdr.size());
@@ -267,7 +265,7 @@ TEST(Ruvia, http2_connection_ignores_valid_altsvc_on_tunnel_idle_and_closed_stre
     EXPECT_TRUE(!server.connection_error().has_value());
 
     // Client ignores server-sent ORIGIN on reserved(remote) push stream (RFC 8336 section 2.2).
-    std::pmr::string server_origin(&resource);
+    std::string server_origin;
     EXPECT_TRUE(ruvia::encode_http2_frame_header(hdr, 0, ruvia::http2_frame_type::origin, 0, push_id));
     server_origin.append(hdr.data(), hdr.size());
     EXPECT_TRUE(client.feed(server_origin) == ruvia::http2_feed_result::accepted);

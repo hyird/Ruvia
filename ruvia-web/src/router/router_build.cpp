@@ -1,13 +1,11 @@
 #include <algorithm>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/detail/router/prefix_fallback.h"
@@ -82,8 +80,8 @@ enum class middleware_scope_coverage : std::uint8_t {
     }
 }
 
-[[nodiscard]] std::pmr::string describe_route(http_known_method method, std::string_view path) {
-    std::pmr::string text(known_http_method_token(method), process_resource());
+[[nodiscard]] std::string describe_route(http_known_method method, std::string_view path) {
+    std::string text(known_http_method_token(method));
     text.push_back(' ');
     text.append(path);
     return text;
@@ -115,9 +113,9 @@ detail::route_table::route_table(const compiled_route_plan& plan, std::span<void
 
 detail::route_table::route_table(const compiled_route_plan& plan)
     : plan_(&plan),
-      handler_targets_(process_resource()),
-      middleware_instances_(process_resource()),
-      middleware_frames_(process_resource()) {}
+      handler_targets_(),
+      middleware_instances_(),
+      middleware_frames_() {}
 
 void detail::route_table::build_middleware_instances() {
     const auto& plan = *plan_;

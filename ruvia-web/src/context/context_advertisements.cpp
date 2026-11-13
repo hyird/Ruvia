@@ -9,12 +9,10 @@
 
 #include "context/context_access.h"
 #include "context/context_services.h"
-#include "context/http_connection_advertisement_output.h"
 #include "context/http_interim_response_output.h"
-#include "context/http_push_output.h"
 #include "http/inline_http_header_views.h"
-#include "util/operation_interrupt.h"
-#include "util/operation_lane_lease.h"
+#include "integration/operation_interrupt.h"
+#include "integration/operation_lane_lease.h"
 namespace ruvia {
 void context::advertise_origins(std::span<const std::string_view> origins) {
     if (services().connection_advertisements() == nullptr || conn().tls() == nullptr) {
@@ -73,21 +71,21 @@ task<void> http_interim_response_output::inform(
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
-    std::pmr::vector<http_header> owned(resource_);
+    std::vector<http_header> owned;
     owned.reserve(response.headers().size());
     for (const auto& field : response.headers()) {
-        owned.emplace_back(field.name(), field.value(), resource_);
+        owned.emplace_back(field.name(), field.value());
     }
     return ::ruvia::make_scoped_operation(
         scope_, write_owned(response.status(), std::move(owned), std::move(operation), context_value));
 }
 task<void> http_interim_response_output::write_owned(http_status_code status,
-    std::pmr::vector<http_header> fields_value, operation_options operation, context& context_value) {
+    std::vector<http_header> fields_value, operation_options operation, context& context_value) {
     auto lease = claim_operation_lane(output_active_, "interim response output is already active");
     if (final_committed_) {
         throw std::logic_error("the final response has already started");
     }
-    const detail::inline_http_header_views<16> active_views(fields_value, resource_);
+    const detail::inline_http_header_views<16> active_views(fields_value);
     const http_interim_response_head head(status, active_views.view());
     operation_interrupt interrupt(interrupts_, context_value.worker(), operation, &context_value,
         &context_access::reset_interrupted_request, "interim response write");

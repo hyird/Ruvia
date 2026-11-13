@@ -9,7 +9,6 @@
 #include <functional>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -20,14 +19,11 @@
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
-#include "ruvia/http/borrowed_text.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/http/cookies.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_interim_response.h"
@@ -55,7 +51,7 @@ class static_root;
 // Capabilities a handler reaches through context; include the defining header
 // where they are used: http_client.h, websocket.h, http_tunnel.h,
 // session.h, streaming.h and multipart_reader.h.
-class http_client_handle;
+class http_client_ref;
 class http_client_response;
 class websocket;
 class http_tunnel;
@@ -69,10 +65,10 @@ class sse_writer;
 class multipart_reader;
 class multipart_part;
 #ifdef RUVIA_ENABLE_DATABASE
-class db_handle;
+class db_session;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-class redis_handle;
+class redis_session;
 #endif
 namespace detail {
 class context_request_storage;
@@ -81,10 +77,10 @@ class context_response_output;
 class context_response_state;
 class context_session_state;
 template <typename t_type>
-[[nodiscard]] request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model);
+[[nodiscard]] request_binding_guard<t_type> bind_validated_model(context& context_value, const t_type& model);
 template <typename t_type>
     requires(!std::is_lvalue_reference_v<t_type>)
-request_binding_handle<std::remove_cvref_t<t_type>> bind_validated_model(context&, t_type&&) = delete;
+request_binding_guard<std::remove_cvref_t<t_type>> bind_validated_model(context&, t_type&&) = delete;
 
 [[noreturn]] void throw_invalid_query();
 [[noreturn]] void throw_invalid_param();
@@ -272,8 +268,7 @@ struct dispatch_options final {
     stop_token stop_token_{};
 };
 
-// Owns its bytes in the calling worker's reclaimable pool (or process resource
-// for test_app), independently of the child request arena.
+// Owns its response metadata and body independently of the child subrequest.
 class dispatch_response final {
 public:
     [[nodiscard]] http_status_code status() const noexcept {
@@ -293,17 +288,15 @@ public:
 private:
     friend class context;
     friend class test_app;
-    explicit dispatch_response(std::pmr::memory_resource* resource = nullptr)
-        : headers_(pmr_resource_or_default(resource)),
-          body_(pmr_resource_or_default(resource)) {}
+    dispatch_response() = default;
     void copy_head_from(const http_response& response);
     http_status_code status_{http_status::ok};
-    std::pmr::vector<http_header> headers_;
-    std::pmr::string body_;
+    std::vector<http_header> headers_;
+    std::string body_;
 };
 
 template <typename t_type>
-using request_state_binding = detail::request_binding_handle<t_type>;
+using request_state_binding = detail::request_binding_guard<t_type>;
 
 // Explicit opt-in for zero-copy response bodies: the response borrows these
 // bytes instead of copying them. The consteval constructors accept only
@@ -419,7 +412,7 @@ public:
     // multipart() decodes a supported Content-Encoding; multipart_reader()
     // decodes none, so a coded body is refused with 415 and an invalid
     // Content-Encoding field with 400.
-    [[nodiscard]] task<std::pmr::vector<multipart_part>> multipart(operation_options operation = {}) const;
+    [[nodiscard]] task<std::vector<multipart_part>> multipart(operation_options operation = {}) const;
     [[nodiscard]] ::ruvia::body_reader& body_reader() const;
     [[nodiscard]] ::ruvia::multipart_reader multipart_reader() const;
 
@@ -546,12 +539,12 @@ private:
     friend struct detail::context_access;
     friend struct detail::session_access;
     template <typename t_type>
-    friend detail::request_binding_handle<t_type> detail::bind_validated_model(
+    friend detail::request_binding_guard<t_type> detail::bind_validated_model(
         context& context_value, const t_type& model);
 
-    context(request_memory& memory, const http_request& request, const detail::context_services& services);
+    context(const http_request& request, const detail::context_services& services);
 
-    context(request_memory& memory, const http_request& request, std::string_view route_path,
+    context(const http_request& request, std::string_view route_path,
         const std::string_view* param_names, const std::string_view* param_values,
         std::size_t param_count, std::uintptr_t route_rate_limit_scope,
         const detail::context_services& services);
@@ -607,10 +600,10 @@ public:
 
     // Borrowed for this request. Copy the returned handle when it must outlive
     // the handler; the copy owns a terminal-safe dispatcher endpoint.
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return capabilities_.worker();
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
 
     // Borrows this worker's registered instance; never hand it to another
     // worker. An unregistered type throws std::logic_error.
@@ -653,27 +646,13 @@ public:
     // Present only while session_middleware is bound for this request.
     [[nodiscard]] ruvia::session session();
 
-    // Request and handshake lifetime resource. Allocations remain in the
-    // request arena until the owning request_memory is destroyed and are not
-    // individually reclaimed.
-    [[nodiscard]] std::pmr::memory_resource* arena() const noexcept {
-        return memory_.resource();
-    }
-
-    // Individually reclaimable storage over mimalloc's calling-thread heap.
-    // No separate worker pool: the resource has process lifetime.
-    [[nodiscard]] std::pmr::memory_resource* pool() const noexcept {
-        return process_resource();
-    }
-
     // Request-scoped typed state: how a middleware hands a value it computed --
     // an authenticated user, a resolved tenant, a trace span -- to everything it
     // calls through next(). The counterpart of worker_state<T>(), which lives for
     // the worker's whole life and is shared by every request on it; this lives
     // for one dynamic next() scope and is private to that request.
     //
-    //   task<void> handle(context& c, next& next_value) {
-    //       const auto user = authenticate(c);          // owned by this frame
+    //   task<void> invoke(context& c, next& next_value) {
     //       const auto binding = c.bind_request_state(user);
     //       co_await next_value();                      // handler sees it
     //   }                                               // unbound here
@@ -705,7 +684,7 @@ public:
     [[nodiscard]] const ruvia::env& env() const noexcept;
 
     // Re-enter the immutable route table on this worker. Authentication,
-    // validation and middleware run in a fresh request context and arena.
+    // validation and middleware run in a fresh request context.
     [[nodiscard]] task<dispatch_response> dispatch(dispatch_options options);
     [[nodiscard]] bool is_subrequest() const noexcept;
 
@@ -719,21 +698,21 @@ public:
     // or a "*" value the route cannot capture back (one holding '\', or
     // starting with '/' at the root), and std::logic_error when the context
     // carries no route table (for example a hand-built test context).
-    [[nodiscard]] std::pmr::string url_for(
+    [[nodiscard]] std::string url_for(
         std::string_view pattern, std::initializer_list<std::string_view> values = {}) const;
 
-    [[nodiscard]] std::pmr::string url_for(
+    [[nodiscard]] std::string url_for(
         std::string_view pattern, std::span<const std::string_view> values) const;
 #ifdef RUVIA_ENABLE_DATABASE
-    [[nodiscard]] db_handle db() const;
-    [[nodiscard]] db_handle db(std::string_view alias) const;
+    [[nodiscard]] db_session db() const;
+    [[nodiscard]] db_session db(std::string_view alias) const;
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-    [[nodiscard]] redis_handle redis() const;
-    [[nodiscard]] redis_handle redis(std::string_view alias) const;
+    [[nodiscard]] redis_session redis() const;
+    [[nodiscard]] redis_session redis(std::string_view alias) const;
 #endif
-    [[nodiscard]] http_client_handle client() const;
-    [[nodiscard]] http_client_handle client(std::string_view alias) const;
+    [[nodiscard]] http_client_ref client() const;
+    [[nodiscard]] http_client_ref client(std::string_view alias) const;
     [[nodiscard]] bool early_data() const noexcept;
     [[nodiscard]] ::ruvia::websocket& websocket() const;
     [[nodiscard]] http_tunnel& tunnel() const;
@@ -745,11 +724,6 @@ public:
     [[nodiscard]] response_stream_writer& stream_text();
 
     [[nodiscard]] sse_writer stream_sse();
-
-    template <typename t_type = std::byte>
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> allocator() const noexcept {
-        return std::pmr::polymorphic_allocator<t_type>(arena());
-    }
 
     // draft() 只编辑下一次构造的响应草稿，与是否调用 next()/respond() 无关。
     // body/text/json/html/file/static_file/redirect 成功后消费草稿，失败则保留；
@@ -783,9 +757,9 @@ public:
 
     // Body builders copy their input into response-owned storage, except
     // static_text, which explicitly borrows static bytes without copying, and
-    // std::pmr::string&&, which transfers compatible arena allocations.
+    // std::string&&, which transfers existing string allocations.
     [[nodiscard]] http_response body(std::string_view body = {});
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] http_response body(string_type&& body_value) {
         return body_owned(std::move(body_value));
     }
@@ -795,7 +769,7 @@ public:
     // text/plain; charset=UTF-8 with X-Content-Type-Options: nosniff (an
     // application-set X-Content-Type-Options is kept), like stream_text().
     [[nodiscard]] http_response text(std::string_view body);
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] http_response text(string_type&& body_value) {
         return text_owned(std::move(body_value));
     }
@@ -806,7 +780,7 @@ public:
     [[nodiscard]] http_response json(const t_type& value);
 
     [[nodiscard]] http_response html(std::string_view body);
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] http_response html(string_type&& body_value) {
         return html_owned(std::move(body_value));
     }
@@ -858,20 +832,20 @@ public:
 
 private:
     [[nodiscard]] http_response streaming_head();
-    [[nodiscard]] http_response body_owned(std::pmr::string&& body);
-    [[nodiscard]] http_response text_owned(std::pmr::string&& body);
-    [[nodiscard]] http_response html_owned(std::pmr::string&& body);
+    [[nodiscard]] http_response body_owned(std::string&& body);
+    [[nodiscard]] http_response text_owned(std::string&& body);
+    [[nodiscard]] http_response html_owned(std::string&& body);
 
     [[nodiscard]] task<http_response> not_found_task();
-    [[nodiscard]] task<dispatch_response> dispatch_task(std::pmr::string method,
-        std::pmr::string target, std::pmr::string body, std::pmr::vector<http_header> headers,
+    [[nodiscard]] task<dispatch_response> dispatch_task(std::string method,
+        std::string target, std::string body, std::vector<http_header> headers,
         ::ruvia::stop_token stop);
     context& set_stable_response_header(std::string_view name, std::string_view value);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code);
 
-    [[nodiscard]] http_response json_serialized(std::pmr::string& body);
+    [[nodiscard]] http_response json_serialized(std::string& body);
 
-    [[nodiscard]] std::pmr::string& decoded_body() const;
+    [[nodiscard]] std::string& decoded_body() const;
     [[nodiscard]] detail::context_request_storage& request_storage() const;
     [[nodiscard]] detail::context_services& services() noexcept;
     [[nodiscard]] const detail::context_services& services() const noexcept;
@@ -881,7 +855,6 @@ private:
     }
     [[nodiscard]] bool has_response() const noexcept;
 
-    request_memory& memory_;
     const http_request& request_;
     // context cannot escape request dispatch and therefore borrows the stable
     // server-owned handle without touching its shared ownership count.
@@ -891,9 +864,8 @@ private:
     const std::string_view* param_values_{nullptr};
     std::size_t param_count_{0};
     std::uintptr_t route_rate_limit_scope_{0};
-    using request_storage_owner_type = std::unique_ptr<detail::context_request_storage,
-        pmr_object_deleter<detail::context_request_storage>>;
-    // One typed arena allocation owns request caches, response/session state,
+    using request_storage_owner_type = std::unique_ptr<detail::context_request_storage>;
+    // One typed allocation owns request caches, response/session state,
     // and bindings. Destroyed after operation_scope_ so outstanding operations
     // still see request-owned objects.
     mutable request_storage_owner_type request_storage_;
@@ -946,7 +918,7 @@ inline const std::remove_cvref_t<t_type>& context::request_state() const {
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
 inline http_response context::json(const t_type& value) {
-    auto body = to_json(value, {.resource_ = arena()});
+    auto body = to_json(value);
     return json_serialized(body);
 }
 
@@ -1000,7 +972,7 @@ template <validation_target target, typename model_type>
         co_return std::nullopt;
     }
     const auto request_body = co_await context_value.req().text(std::move(operation));
-    co_return parse_and_validate_request_model<target, model_type>(request_body, context_value.arena());
+    co_return parse_and_validate_request_model<target, model_type>(request_body);
 }
 
 }  // namespace detail
@@ -1029,7 +1001,7 @@ inline const t_type& context_request::validated() const {
 namespace ruvia::detail {
 
 template <typename t_type>
-inline request_binding_handle<t_type> bind_validated_model(context& context_value, const t_type& model) {
+inline request_binding_guard<t_type> bind_validated_model(context& context_value, const t_type& model) {
     return context_value.request_bindings().bind_validated(model);
 }
 
@@ -1050,18 +1022,18 @@ template <validation_target target>
 }
 
 template <validation_target target, typename body_type>
-task<void> model_validation_middleware<target, body_type>::handle(context& c, next& next_value) {
+task<void> model_validation_middleware<target, body_type>::invoke(context& c, next& next_value) {
     if constexpr (target == validation_target::json || target == validation_target::form) {
         if (!request_has_body_media_type<target>(c.req().header("Content-Type"))) {
             throw_invalid_content_type<target>();
         }
         const auto request_body = co_await c.req().text();
-        auto body = parse_and_validate_request_model<target, body_type>(request_body, c.arena());
+        auto body = parse_and_validate_request_model<target, body_type>(request_body);
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     } else {
         auto body = parse_and_validate_request_model<target, body_type>(
-            std::cref(validation_target_fields<target>(c)), c.arena());
+            std::cref(validation_target_fields<target>(c)));
         auto binding = bind_validated_model(c, body);
         co_await next_value();
     }

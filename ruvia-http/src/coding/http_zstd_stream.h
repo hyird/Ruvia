@@ -3,13 +3,13 @@
 #include <zstd.h>
 
 #include <cstddef>
-#include <memory_resource>
+#include <limits>
 #include <string>
 #include <string_view>
 
-#include "util/http_c_library_memory.h"
+#include "memory/http_c_library_memory.h"
 
-// zstd (RFC 8878) state whose working memory comes from one PMR resource and
+// zstd (RFC 8878) state with tracked working memory and
 // whose window never exceeds the 8 MiB HTTP limit of RFC 9659. zstd
 // retains the allocator context as its opaque pointer, so these types are
 // pinned: owners embed them in storage whose address never changes.
@@ -22,7 +22,8 @@ namespace ruvia::detail {
 
 class zstd_decoder_stream final {
 public:
-    explicit zstd_decoder_stream(std::pmr::memory_resource* resource);
+    explicit zstd_decoder_stream(
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zstd_decoder_stream();
     zstd_decoder_stream(const zstd_decoder_stream&) = delete;
     zstd_decoder_stream& operator=(const zstd_decoder_stream&) = delete;
@@ -48,7 +49,8 @@ private:
 // false means the owner must destroy it.
 class zstd_encoder_stream final {
 public:
-    explicit zstd_encoder_stream(std::pmr::memory_resource* resource);
+    explicit zstd_encoder_stream(
+        std::size_t max_memory_bytes = (std::numeric_limits<std::size_t>::max)());
     ~zstd_encoder_stream();
     zstd_encoder_stream(const zstd_encoder_stream&) = delete;
     zstd_encoder_stream& operator=(const zstd_encoder_stream&) = delete;
@@ -65,7 +67,7 @@ public:
     // means output would exceed `max_encoded_bytes` in total; no byte past
     // that cap is appended. After false or an exception, the owner must reset
     // or discard this stream.
-    [[nodiscard]] bool encode(std::string_view input, std::pmr::string& output,
+    [[nodiscard]] bool encode(std::string_view input, std::string& output,
         ZSTD_EndDirective operation, std::size_t max_encoded_bytes);
 
 private:

@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,7 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_known_method.h"
 #include "ruvia/http/http_response_stream.h"
@@ -98,13 +96,13 @@ public:
 
 private:
     friend class route_endpoint;
-    tunnel_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler::invoke_type invoke,
+    tunnel_route_endpoint(route_stream_handler::invoke_type invoke,
         std::string_view protocol, http_tunnel_route_config config)
         : invoke_(invoke),
-          protocol_(protocol, resource),
+          protocol_(protocol),
           config_(config) {}
     route_stream_handler::invoke_type invoke_;
-    std::pmr::string protocol_;
+    std::string protocol_;
     http_tunnel_route_config config_;
 };
 
@@ -137,11 +135,9 @@ public:
 private:
     friend class route_endpoint;
 
-    websocket_route_endpoint(std::pmr::memory_resource* resource, route_stream_handler::invoke_type invoke,
+    websocket_route_endpoint(route_stream_handler::invoke_type invoke,
         const websocket_route_config& options)
         : invoke_(invoke),
-          subprotocol_storage_(resource),
-          subprotocols_(resource),
           require_subprotocol_(options.require_subprotocol_),
           lifecycle_(options.lifecycle_),
           deflate_(options.deflate_),
@@ -164,8 +160,8 @@ private:
     }
 
     route_stream_handler::invoke_type invoke_;
-    std::pmr::vector<char> subprotocol_storage_;
-    std::pmr::vector<std::string_view> subprotocols_;
+    std::vector<char> subprotocol_storage_;
+    std::vector<std::string_view> subprotocols_;
     bool require_subprotocol_;
     websocket_lifecycle_options lifecycle_;
     websocket_deflate_config deflate_;
@@ -196,8 +192,7 @@ public:
         return route_endpoint(response_stream_route_endpoint(invoke, request_body_mode_value));
     }
 
-    [[nodiscard]] static route_endpoint websocket(std::pmr::memory_resource* resource,
-        route_stream_handler::invoke_type invoke, websocket_route_config options) {
+    [[nodiscard]] static route_endpoint websocket(route_stream_handler::invoke_type invoke, websocket_route_config options) {
         options.lifecycle_ = normalize_websocket_lifecycle_options(options.lifecycle_);
         validate_websocket_deflater_config(options.deflate_.deflater_);
         ruvia::websocket_subprotocol_set subprotocols;
@@ -211,7 +206,7 @@ public:
             throw std::invalid_argument("a websocket route requiring a subprotocol must list subprotocols");
         }
         return route_endpoint(
-            websocket_route_endpoint(pmr_resource_or_default(resource), invoke, options));
+            websocket_route_endpoint(invoke, options));
     }
 
     [[nodiscard]] static http_tunnel_route_config validate_tunnel_config(
@@ -228,14 +223,13 @@ public:
         return config;
     }
 
-    [[nodiscard]] static route_endpoint tunnel(std::pmr::memory_resource* resource,
-        route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
+    [[nodiscard]] static route_endpoint tunnel(route_stream_handler::invoke_type invoke, std::string_view protocol, http_tunnel_route_config config) {
         if (!protocol.empty() && !is_valid_http_header_name(protocol)) {
             throw std::invalid_argument("CONNECT protocol must be an HTTP token");
         }
         config = validate_tunnel_config(!protocol.empty(), protocol == "connect-udp", config);
         return route_endpoint(
-            tunnel_route_endpoint(pmr_resource_or_default(resource), invoke, protocol, config));
+            tunnel_route_endpoint(invoke, protocol, config));
     }
 
     [[nodiscard]] const tunnel_route_endpoint* tunnel() const& noexcept {
@@ -313,12 +307,12 @@ public:
         std::size_t max_request_body_bytes_{0};
     };
 
-    route_entry(std::pmr::memory_resource* resource, init_type init)
+    route_entry(init_type init)
         : index_(init.index_),
           controller_(init.controller_),
           method_(init.method_),
-          method_token_(init.method_token_, resource),
-          path_(init.path_, resource),
+          method_token_(init.method_token_),
+          path_(init.path_),
           endpoint_(std::move(init.endpoint_)),
           dynamic_(init.dynamic_),
           max_request_body_bytes_(init.max_request_body_bytes_) {}
@@ -392,8 +386,8 @@ private:
     std::size_t index_;
     std::size_t controller_;
     http_known_method method_;
-    std::pmr::string method_token_;
-    std::pmr::string path_;
+    std::string method_token_;
+    std::string path_;
     route_endpoint endpoint_;
     bool dynamic_{false};
     std::size_t max_request_body_bytes_{0};
@@ -412,21 +406,21 @@ class route_table;
 class compiled_route_plan final {
 public:
     compiled_route_plan()
-        : routes_(process_resource()),
-          middleware_instances_(process_resource()),
-          middleware_frame_instances_(process_resource()),
-          middleware_scopes_(process_resource()),
-          param_names_(process_resource()),
-          extension_route_indices_(process_resource()),
-          extension_paths_(process_resource()),
-          extension_methods_(process_resource()),
-          connect_route_indices_(process_resource()),
-          connect_protocols_(process_resource()),
-          static_slots_(process_resource()),
-          dynamic_node_arena_(process_resource()),
-          url_patterns_(process_resource()),
-          prefix_error_handlers_(process_resource()),
-          prefix_not_found_handlers_(process_resource()) {}
+        : routes_(),
+          middleware_instances_(),
+          middleware_frame_instances_(),
+          middleware_scopes_(),
+          param_names_(),
+          extension_route_indices_(),
+          extension_paths_(),
+          extension_methods_(),
+          connect_route_indices_(),
+          connect_protocols_(),
+          static_slots_(),
+          dynamic_node_arena_(),
+          url_patterns_(),
+          prefix_error_handlers_(),
+          prefix_not_found_handlers_() {}
 
     compiled_route_plan(const compiled_route_plan&) = delete;
     compiled_route_plan& operator=(const compiled_route_plan&) = delete;
@@ -459,9 +453,9 @@ private:
 
     struct dynamic_node_type final {
         dynamic_node_type()
-            : static_children_(process_resource()) {}
+            : static_children_() {}
 
-        std::pmr::vector<dynamic_static_child_type> static_children_;
+        std::vector<dynamic_static_child_type> static_children_;
         dynamic_node_type* param_child_{nullptr};
         std::size_t route_index_{no_route_index};
         std::size_t wildcard_route_index_{no_route_index};
@@ -469,58 +463,58 @@ private:
 
     struct connect_protocol_index_type final {
         explicit connect_protocol_index_type(std::string_view value)
-            : protocol_(value, process_resource()) {}
-        std::pmr::string protocol_;
+            : protocol_(value) {}
+        std::string protocol_;
         dynamic_node_type root_;
     };
 
     // Normalized prefix, deepest first: selection is a first-match scan.
     template <typename handler_type>
     struct prefix_handler_type final {
-        prefix_handler_type(std::pmr::memory_resource* resource, std::string_view prefix_value,
+        prefix_handler_type(std::string_view prefix_value,
             handler_type handler_value)
-            : prefix_(prefix_value, resource),
+            : prefix_(prefix_value),
               handler_(handler_value) {}
 
-        std::pmr::string prefix_;
+        std::string prefix_;
         handler_type handler_{nullptr};
     };
 
-    std::pmr::vector<route_entry> routes_;
+    std::vector<route_entry> routes_;
     // One descriptor per middleware instance a worker materializes. Frames
     // name their instance by index, so an app-wide middleware is one instance
     // shared by every route of a worker.
-    std::pmr::vector<controller_middleware_descriptor> middleware_instances_;
-    std::pmr::vector<std::size_t> middleware_frame_instances_;
+    std::vector<controller_middleware_descriptor> middleware_instances_;
+    std::vector<std::size_t> middleware_frame_instances_;
     // Parallel to middleware_frame_instances_: the path scope a conditional
     // frame checks at dispatch, or empty for an unconditional frame. Only
     // routes flagged has_conditional_middleware() read it. Views borrow the
     // registration-owned use_at prefixes, which outlive every plan.
-    std::pmr::vector<std::string_view> middleware_scopes_;
+    std::vector<std::string_view> middleware_scopes_;
     // A contiguous block at the end of the frames: the app-wide middlewares
     // that declared they also run when no route matched.
     std::size_t unmatched_middleware_offset_{0};
     std::size_t unmatched_middleware_count_{0};
-    std::pmr::vector<std::string_view> param_names_;
+    std::vector<std::string_view> param_names_;
     // Sorted by case-sensitive method token, then canonical path.
-    std::pmr::vector<std::size_t> extension_route_indices_;
+    std::vector<std::size_t> extension_route_indices_;
     // Sorted distinct canonical paths, naming every registered token for
     // 405/OPTIONS Allow in registration order. The spans slice
     // extension_methods_ and borrow the routes' own path and token storage.
-    std::pmr::vector<extension_path_type> extension_paths_;
-    std::pmr::vector<std::string_view> extension_methods_;
-    std::pmr::vector<std::size_t> connect_route_indices_;
-    std::pmr::vector<connect_protocol_index_type> connect_protocols_;
-    std::pmr::vector<static_route_slot> static_slots_;
+    std::vector<extension_path_type> extension_paths_;
+    std::vector<std::string_view> extension_methods_;
+    std::vector<std::size_t> connect_route_indices_;
+    std::vector<connect_protocol_index_type> connect_protocols_;
+    std::vector<static_route_slot> static_slots_;
     std::array<dynamic_node_type, routable_method_count> dynamic_roots_;
-    std::pmr::vector<dynamic_node_type> dynamic_node_arena_;
+    std::vector<dynamic_node_type> dynamic_node_arena_;
     // Distinct registered route patterns, sorted, so url_for finds its pattern
     // by binary search.
-    std::pmr::vector<std::string_view> url_patterns_;
+    std::vector<std::string_view> url_patterns_;
     http_error_handler_ref error_handler_{nullptr};
     http_not_found_handler_ref not_found_handler_{nullptr};
-    std::pmr::vector<prefix_handler_type<http_error_handler_ref>> prefix_error_handlers_;
-    std::pmr::vector<prefix_handler_type<http_not_found_handler_ref>> prefix_not_found_handlers_;
+    std::vector<prefix_handler_type<http_error_handler_ref>> prefix_error_handlers_;
+    std::vector<prefix_handler_type<http_not_found_handler_ref>> prefix_not_found_handlers_;
     std::uint32_t static_method_mask_{0};
     std::uint32_t dynamic_method_mask_{0};
     std::size_t static_slot_mask_{};
@@ -528,6 +522,6 @@ private:
 };
 
 using compiled_route_plan_ptr_type =
-    std::unique_ptr<compiled_route_plan, pmr_object_deleter<compiled_route_plan>>;
+    std::unique_ptr<compiled_route_plan>;
 
 }  // namespace ruvia::detail

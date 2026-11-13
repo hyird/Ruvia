@@ -9,7 +9,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,7 +20,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/web/detail/model/model_text_storage.h"
 #include "ruvia/web/fixed_string.h"
@@ -59,6 +57,7 @@ template <typename target_type, std::floating_point input_type>
 
 struct model_value_factory;
 struct model_value_rebind_access;
+struct borrowed_model_token_tag final {};
 
 enum class model_string_storage : std::uint8_t {
     borrowed,
@@ -83,25 +82,25 @@ struct model_value_rebind_access final {
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
             return true;
         } else {
-            return requires(const value_type& source_value, std::pmr::memory_resource* target) {
-                source_value.rebind_for_model(target);
+            return requires(const value_type& source_value) {
+                source_value.rebind_for_model();
             };
         }
     }
 
     template <typename t_type>
-    [[nodiscard]] static std::remove_cvref_t<t_type> own(
-        t_type&& value, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static std::remove_cvref_t<t_type> own(t_type&& value) {
         using value_type = std::remove_cvref_t<t_type>;
         if constexpr (requires { typename value_type::ruvia_model_schema_type; }) {
-            return value_type(std::forward<t_type>(value).fields_.rebind(resource));
-        } else if constexpr (requires(value_type& source_value, std::pmr::memory_resource* target) {
-                                 source_value.rebind_for_model(target);
+            return value_type(std::forward<t_type>(value).fields_.rebind());
+        } else if constexpr (requires(value_type& source_value) {
+                                 source_value.rebind_for_model();
                              }) {
-            if constexpr (std::is_lvalue_reference_v<t_type&&>) {
-                return value.rebind_for_model(resource);
+            if constexpr (std::is_lvalue_reference_v<t_type&&> ||
+                          std::is_const_v<std::remove_reference_t<t_type>>) {
+                return value.rebind_for_model();
             } else {
-                return std::move(value).rebind_for_model(resource);
+                return std::move(value).rebind_for_model();
             }
         } else {
             return std::forward<t_type>(value);
@@ -141,18 +140,9 @@ struct model_value_rebind_access final {
 };
 
 template <typename t_type>
-[[nodiscard]] std::remove_cvref_t<t_type> rebind_model_value(
-    t_type&& value, std::pmr::memory_resource* resource) {
-    return model_value_rebind_access::own(std::forward<t_type>(value), resource);
+[[nodiscard]] std::remove_cvref_t<t_type> rebind_model_value(t_type&& value) {
+    return model_value_rebind_access::own(std::forward<t_type>(value));
 }
-
-}  // namespace detail
-
-struct model_options final {
-    std::pmr::memory_resource* resource_{nullptr};
-};
-
-namespace detail {
 
 template <typename value_type, typename factory_type>
 struct model_value_construction final {
@@ -163,12 +153,11 @@ struct model_value_construction final {
     }
 };
 
-// Resource-owning values are normalized only after the container has allocated
+// Borrowed/move-only values are normalized only after the container has allocated
 // their final storage. In particular, a failed growth must not consume an input
 // that aliases an existing element. The captured arguments are consumed inline.
 template <typename value_type, typename... argument_types>
-auto prepare_model_value(std::pmr::memory_resource* resource, const void* destination,
-    argument_types&&... arguments) {
+auto prepare_model_value(const void* destination, argument_types&&... arguments) {
     if constexpr (sizeof...(argument_types) == 1 &&
                   ((std::same_as<std::remove_cvref_t<argument_types>, value_type> &&
                        !std::is_lvalue_reference_v<argument_types> &&
@@ -178,27 +167,21 @@ auto prepare_model_value(std::pmr::memory_resource* resource, const void* destin
             throw_model_move_source_owns_destination();
         }
     }
-    auto construct = [resource, &arguments...]() -> value_type {
+    auto construct = [&arguments...]() -> value_type {
         if constexpr (sizeof...(argument_types) == 1 &&
                       (std::same_as<std::remove_cvref_t<argument_types>, value_type> && ...)) {
             return [&]<typename input_type>(input_type&& value) -> value_type {
                 if constexpr (std::is_lvalue_reference_v<input_type&&> ||
                               std::is_const_v<std::remove_reference_t<input_type>>) {
-                    return rebind_model_value(static_cast<const value_type&>(value), resource);
+                    return rebind_model_value(static_cast<const value_type&>(value));
                 } else {
-                    return rebind_model_value(std::move(value), resource);
+                    return rebind_model_value(std::move(value));
                 }
             }(std::forward<argument_types>(arguments)...);
-        } else if constexpr (sizeof...(argument_types) == 0 && std::constructible_from<value_type, model_options>) {
-            return value_type(model_options{.resource_ = resource});
-        } else if constexpr (requires {
-                                 value_type(std::forward<argument_types>(arguments)...,
-                                     model_options{.resource_ = resource});
-                             }) {
-            return value_type(std::forward<argument_types>(arguments)...,
-                model_options{.resource_ = resource});
+        } else if constexpr (sizeof...(argument_types) == 0 && std::default_initializable<value_type>) {
+            return value_type();
         } else {
-            return rebind_model_value(value_type(std::forward<argument_types>(arguments)...), resource);
+            return value_type(std::forward<argument_types>(arguments)...);
         }
     };
     if constexpr (model_value_rebind_access::has_rebind_for_model<value_type>()) {
@@ -212,7 +195,6 @@ auto prepare_model_value(std::pmr::memory_resource* resource, const void* destin
 }  // namespace detail
 
 struct model_parse_options final {
-    std::pmr::memory_resource* resource_{nullptr};
     // Totals across the complete typed or dynamic JSON document, including nested arrays.
     std::size_t max_array_elements_{64 * 1024};
     std::size_t max_representation_bytes_{16 * 1024 * 1024};
@@ -220,24 +202,19 @@ struct model_parse_options final {
 
 class string final {
 public:
-    explicit string(model_options options = {})
-        : string(resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {
-    }
+    string() noexcept = default;
 
-    string(std::string_view value, model_options options = {})
-        : resource_(pmr_resource_or_default(options.resource_)) {
-        storage_.assign_owned(value, resource_);
+    string(std::string_view value) {
+        storage_.assign_owned(value);
     }
 
     string(const string&) = delete;
     string& operator=(const string&) = delete;
 
-    string(string&& other) noexcept
-        : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {}
+    string(string&& other) noexcept = default;
 
     string& operator=(string&& other) {
-        storage_.assign_from(std::move(other.storage_), resource_);
+        storage_.assign_from(std::move(other.storage_));
         return *this;
     }
 
@@ -268,43 +245,32 @@ public:
         return left.view() == right.view();
     }
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
     void assign_owned(std::string_view value) {
-        storage_.assign_owned(value, resource_);
+        storage_.assign_owned(value);
     }
 
-    void assign_owned(std::pmr::string&& value) {
-        storage_.assign_owned(std::move(value), resource_);
+    void assign_owned(std::string&& value) noexcept {
+        storage_.assign_owned(std::move(value));
     }
 
 private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    string(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : resource_(resource) {}
+    string(detail::borrowed_model_token_tag, std::string_view value) noexcept
+        : storage_(value) {}
 
-    string(resolved_pmr_resource_tag, std::string_view value, std::pmr::memory_resource* resource)
-        : resource_(resource),
-          storage_(value) {}
+    explicit string(detail::model_text_storage&& storage) noexcept
+        : storage_(std::move(storage)) {}
 
-    string(resolved_pmr_resource_tag, detail::model_text_storage&& storage,
-        std::pmr::memory_resource* resource)
-        : resource_(resource),
-          storage_(std::move(storage)) {}
-
-    [[nodiscard]] string rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return string(resolved_pmr_resource_tag{}, storage_.rebind(resource), resource);
+    [[nodiscard]] string rebind_for_model() const& {
+        return string(storage_.rebind());
     }
 
-    [[nodiscard]] string rebind_for_model(std::pmr::memory_resource* resource) && {
-        return string(resolved_pmr_resource_tag{}, std::move(storage_).rebind(resource), resource);
+    [[nodiscard]] string rebind_for_model() && {
+        return string(std::move(storage_).rebind());
     }
 
-    std::pmr::memory_resource* resource_;
     detail::model_text_storage storage_;
 };
 
@@ -386,29 +352,24 @@ using uint64 = integer_value<std::uint64_t>;
 
 class bytes final {
 public:
-    explicit bytes(model_options options = {})
-        : resource_(pmr_resource_or_default(options.resource_)),
-          items_(resource_) {}
+    bytes() noexcept = default;
 
-    bytes(std::span<const std::uint8_t> value, model_options options = {})
-        : resource_(pmr_resource_or_default(options.resource_)),
-          items_(value.begin(), value.end(), resource_) {}
+    bytes(std::span<const std::uint8_t> value)
+        : items_(value.begin(), value.end()) {}
 
     bytes(const bytes&) = delete;
     bytes& operator=(const bytes&) = delete;
 
     bytes(bytes&& other) noexcept
-        : resource_(other.resource_),
-          items_(std::move(other.items_)) {
+        : items_(std::move(other.items_)) {
         other.items_.clear();
     }
 
-    bytes& operator=(bytes&& other) {
-        if (this == &other) {
-            return *this;
+    bytes& operator=(bytes&& other) noexcept {
+        if (this != &other) {
+            items_ = std::move(other.items_);
+            other.items_.clear();
         }
-        auto rebound = std::move(other).rebind_for_model(resource_);
-        items_ = std::move(rebound.items_);
         return *this;
     }
 
@@ -430,22 +391,14 @@ public:
     [[nodiscard]] bool empty() const noexcept {
         return items_.empty();
     }
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
 
     void assign_owned(std::span<const std::uint8_t> value) {
-        std::pmr::vector<std::uint8_t> owned(value.begin(), value.end(), resource_);
+        std::vector<std::uint8_t> owned(value.begin(), value.end());
         items_ = std::move(owned);
     }
 
-    void assign_owned(std::pmr::vector<std::uint8_t>&& value) {
-        if (value.get_allocator().resource() == resource_) {
-            items_ = std::move(value);
-            return;
-        }
-        std::pmr::vector<std::uint8_t> owned(value.begin(), value.end(), resource_);
-        items_ = std::move(owned);
+    void assign_owned(std::vector<std::uint8_t>&& value) noexcept {
+        items_ = std::move(value);
     }
 
     friend bool operator==(const bytes& left, const bytes& right) noexcept {
@@ -456,28 +409,22 @@ public:
 private:
     friend struct detail::model_value_rebind_access;
 
-    [[nodiscard]] bytes rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return bytes(view(), {.resource_ = resource});
+    [[nodiscard]] bytes rebind_for_model() const& {
+        return bytes(view());
     }
 
-    [[nodiscard]] bytes rebind_for_model(std::pmr::memory_resource* resource) && {
-        bytes rebound(model_options{.resource_ = resource});
-        if (resource_ == resource) {
-            rebound.items_ = std::move(items_);
-        } else {
-            rebound.assign_owned(view());
-        }
+    [[nodiscard]] bytes rebind_for_model() && noexcept {
+        bytes rebound;
+        rebound.items_ = std::move(items_);
         items_.clear();
         return rebound;
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<std::uint8_t> items_;
+    std::vector<std::uint8_t> items_;
 };
 
-// array and boxed_array keep the destination resource on move assignment and
-// leave a distinct source empty on success. Scalars on the same resource transfer storage;
-// strings and models are rebound to own their data. A source that owns the
+// array and boxed_array leave a distinct source empty on move assignment.
+// Strings and models are rebound to own their data. A source that owns the
 // destination is rejected; failed rebinding preserves the destination.
 template <typename t_type>
 class array final {
@@ -487,18 +434,18 @@ public:
     using difference_type = std::ptrdiff_t;
     using reference = t_type&;
     using const_reference = const t_type&;
-    using iterator = typename std::pmr::vector<t_type>::iterator;
-    using const_iterator = typename std::pmr::vector<t_type>::const_iterator;
+    using iterator = typename std::vector<t_type>::iterator;
+    using const_iterator = typename std::vector<t_type>::const_iterator;
 
-    explicit array(model_options options = {})
-        : array(resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {}
+    array() noexcept = default;
 
     array(const array&) = delete;
     array& operator=(const array&) = delete;
 
     array(array&& other) noexcept
-        : resource_(other.resource_),
-          items_(std::move(other.items_)) {}
+        : items_(std::move(other.items_)) {
+        other.items_.clear();
+    }
 
     array& operator=(array&& other) {
         if (this == &other) {
@@ -509,7 +456,7 @@ public:
             detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = std::move(other).rebind_for_model(resource_);
+        auto rebound = std::move(other).rebind_for_model();
         items_ = std::move(rebound.items_);
         return *this;
     }
@@ -571,14 +518,6 @@ public:
     }
     iterator end() const&& = delete;
 
-    [[nodiscard]] std::pmr::polymorphic_allocator<t_type> get_allocator() const noexcept {
-        return items_.get_allocator();
-    }
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
     void reserve(size_type count) {
         items_.reserve(count);
     }
@@ -612,7 +551,7 @@ public:
             }
             return;
         }
-        t_type stable = detail::rebind_model_value(value, resource_);
+        t_type stable = detail::rebind_model_value(value);
         reserve(count);
         try {
             while (size() < count) {
@@ -626,7 +565,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
-        return items_.emplace_back(detail::prepare_model_value<t_type>(resource_, this, std::forward<args_type>(args)...));
+        return items_.emplace_back(detail::prepare_model_value<t_type>(this, std::forward<args_type>(args)...));
     }
     template <typename... args_type>
     t_type& emplace_back(args_type&&...) && = delete;
@@ -649,40 +588,29 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    array(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : resource_(resource),
-          items_(resource_) {}
-
     t_type& emplace_parsed(t_type&& value) {
         return items_.emplace_back(std::move(value));
     }
 
-    [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) const& {
-        array rebound(resolved_pmr_resource_tag{}, resource);
+    [[nodiscard]] array rebind_for_model() const& {
+        array rebound;
         rebound.reserve(size());
         for (const auto& value : items_) {
-            (void)rebound.emplace_parsed(detail::rebind_model_value(value, resource));
+            (void)rebound.emplace_parsed(detail::rebind_model_value(value));
         }
         return rebound;
     }
 
-    [[nodiscard]] array rebind_for_model(std::pmr::memory_resource* resource) && {
+    [[nodiscard]] array rebind_for_model() && {
         if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
             // A later element may still allocate; retain every source until the
             // complete candidate exists, including when assigning a field to itself.
-            auto rebound = std::as_const(*this).rebind_for_model(resource);
+            auto rebound = std::as_const(*this).rebind_for_model();
             clear();
             return rebound;
         } else {
-            array rebound(resolved_pmr_resource_tag{}, resource);
-            if (resource == resource_) {
-                rebound.items_ = std::move(items_);
-            } else {
-                rebound.reserve(size());
-                for (auto& value : items_) {
-                    (void)rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
-                }
-            }
+            array rebound;
+            rebound.items_ = std::move(items_);
             clear();
             return rebound;
         }
@@ -702,8 +630,7 @@ private:
         return false;
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<t_type> items_;
+    std::vector<t_type> items_;
 };
 
 template <typename t_type>
@@ -714,16 +641,15 @@ class boxed_array final {
 public:
     using value_type = t_type;
 
-    explicit boxed_array(model_options options = {})
-        : boxed_array(
-              resolved_pmr_resource_tag{}, pmr_resource_or_default(options.resource_)) {}
+    boxed_array() noexcept = default;
 
     boxed_array(const boxed_array&) = delete;
     boxed_array& operator=(const boxed_array&) = delete;
 
     boxed_array(boxed_array&& other) noexcept
-        : resource_(other.resource_),
-          items_(std::move(other.items_)) {}
+        : items_(std::move(other.items_)) {
+        other.items_.clear();
+    }
 
     boxed_array& operator=(boxed_array&& other) {
         if (this == &other) {
@@ -734,7 +660,7 @@ public:
             detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = std::move(other).rebind_for_model(resource_);
+        auto rebound = std::move(other).rebind_for_model();
         clear();
         items_ = std::move(rebound.items_);
         return *this;
@@ -794,7 +720,7 @@ public:
 
     void clear() noexcept {
         for (auto* value : items_) {
-            destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
+            delete value;
         }
         items_.clear();
     }
@@ -809,7 +735,7 @@ public:
             while (size() > count) {
                 auto* value = items_.back();
                 items_.pop_back();
-                destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
+                delete value;
             }
             return;
         }
@@ -822,7 +748,7 @@ public:
             while (size() > old_size) {
                 auto* value = items_.back();
                 items_.pop_back();
-                destroy_pmr_object(resolved_pmr_resource_tag{}, value, resource_);
+                delete value;
             }
             throw;
         }
@@ -830,7 +756,7 @@ public:
 
     template <typename... args_type>
     t_type& emplace_back(args_type&&... args) & RUVIA_LIFETIMEBOUND {
-        return emplace_parsed(detail::prepare_model_value<t_type>(resource_, this, std::forward<args_type>(args)...));
+        return emplace_parsed(detail::prepare_model_value<t_type>(this, std::forward<args_type>(args)...));
     }
     template <typename... args_type>
     t_type& emplace_back(args_type&&...) && = delete;
@@ -844,10 +770,6 @@ public:
         (void)emplace_back(std::move(value));
     }
     void push_back(t_type&&) && = delete;
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
 
     friend bool operator==(const boxed_array& left, const boxed_array& right) {
         if (left.size() != right.size()) {
@@ -865,16 +787,12 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
 
-    boxed_array(resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-        : resource_(resource),
-          items_(resource_) {}
-
     template <bool const_value>
     class iterator_type final {
     public:
         using inner_iterator_type = std::conditional_t<const_value,
-            typename std::pmr::vector<t_type*>::const_iterator,
-            typename std::pmr::vector<t_type*>::iterator>;
+            typename std::vector<t_type*>::const_iterator,
+            typename std::vector<t_type*>::iterator>;
         using difference_type = typename inner_iterator_type::difference_type;
         using value_type = t_type;
         using reference = std::conditional_t<const_value, const t_type&, t_type&>;
@@ -923,38 +841,30 @@ private:
             const auto growth = std::min(std::max(size(), std::size_t{1}), items_.max_size() - size());
             items_.reserve(size() + growth);
         }
-        auto* const stored = construct_pmr_object<t_type>(
-            resolved_pmr_resource_tag{}, resource_, std::forward<input_type>(value));
+        auto* const stored = new t_type(std::forward<input_type>(value));
         items_.push_back(stored);
         return *stored;
     }
 
-    [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) const& {
-        boxed_array rebound(resolved_pmr_resource_tag{}, resource);
+    [[nodiscard]] boxed_array rebind_for_model() const& {
+        boxed_array rebound;
         rebound.reserve(size());
         for (const auto& value : *this) {
-            rebound.emplace_parsed(detail::rebind_model_value(value, resource));
+            rebound.emplace_parsed(detail::rebind_model_value(value));
         }
         return rebound;
     }
 
-    [[nodiscard]] boxed_array rebind_for_model(std::pmr::memory_resource* resource) && {
+    [[nodiscard]] boxed_array rebind_for_model() && {
         if constexpr (detail::model_value_rebind_access::has_rebind_for_model<t_type>()) {
             // Prepare both nested values and their boxes before consuming the source.
-            auto rebound = std::as_const(*this).rebind_for_model(resource);
+            auto rebound = std::as_const(*this).rebind_for_model();
             clear();
             return rebound;
         } else {
-            boxed_array rebound(resolved_pmr_resource_tag{}, resource);
-            if (resource == resource_) {
-                rebound.items_ = std::move(items_);
-            } else {
-                rebound.reserve(size());
-                for (auto& value : *this) {
-                    rebound.emplace_parsed(detail::rebind_model_value(std::move(value), resource));
-                }
-            }
-            clear();
+            boxed_array rebound;
+            rebound.items_ = std::move(items_);
+            items_.clear();
             return rebound;
         }
     }
@@ -973,25 +883,14 @@ private:
         return false;
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<t_type*> items_;
+    std::vector<t_type*> items_;
 };
 
 namespace detail {
 
 struct model_value_factory final {
-    [[nodiscard]] static string make_string(std::pmr::memory_resource* resource) {
-        return string(resolved_pmr_resource_tag{}, resource);
-    }
-
-    [[nodiscard]] static string make_string(
-        std::string_view value, std::pmr::memory_resource* resource) {
-        return string(resolved_pmr_resource_tag{}, value, resource);
-    }
-
-    template <typename list_type>
-    [[nodiscard]] static list_type make_boxed_array(std::pmr::memory_resource* resource) {
-        return list_type(resolved_pmr_resource_tag{}, resource);
+    [[nodiscard]] static string make_borrowed_string(std::string_view value) noexcept {
+        return string(borrowed_model_token_tag{}, value);
     }
 
     template <typename target_type>
@@ -1110,35 +1009,6 @@ template <typename t_type>
 inline constexpr bool is_model_json_value = model_json_value<std::remove_cvref_t<t_type>>;
 
 template <typename t_type>
-[[nodiscard]] t_type make_request_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource) {
-    if constexpr (is_ruvia_string<t_type>) {
-        return model_value_factory::make_string(resource);
-    } else if constexpr (is_ruvia_bytes<t_type>) {
-        return t_type(model_options{.resource_ = resource});
-    } else if constexpr (is_ruvia_array<t_type>) {
-        return t_type(model_options{.resource_ = resource});
-    } else if constexpr (is_ruvia_boxed_array<t_type>) {
-        return model_value_factory::make_boxed_array<t_type>(resource);
-    } else if constexpr (is_model<t_type> || is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
-        return t_type(model_options{.resource_ = resource});
-    } else {
-        (void)resource;
-        return t_type{};
-    }
-}
-
-template <typename t_type>
-[[nodiscard]] t_type make_request_value(std::pmr::memory_resource* resource) {
-    if constexpr (is_ruvia_string<t_type> || is_ruvia_bytes<t_type> || is_ruvia_array<t_type> || is_ruvia_boxed_array<t_type> ||
-                  is_model<t_type> || is_ruvia_json_value<t_type> || is_ruvia_json_object<t_type>) {
-        return make_request_value<t_type>(resolved_pmr_resource_tag{}, pmr_resource_or_default(resource));
-    } else {
-        (void)resource;
-        return t_type{};
-    }
-}
-
-template <typename t_type>
 inline constexpr bool is_validation_number =
     std::is_arithmetic_v<std::remove_cvref_t<t_type>> || is_ruvia_scalar<t_type>;
 
@@ -1210,10 +1080,7 @@ template <typename left_type, typename right_type>
 
 }  // namespace ruvia
 
-#include "ruvia/web/detail/json/json_containers.h"
-#include "ruvia/web/detail/json/json_lex.h"
-#include "ruvia/web/detail/json/json_object_fields.h"
-#include "ruvia/web/detail/json/json_skip.h"
+#include "ruvia/web/detail/json/json_traversal.h"
 #include "ruvia/web/detail/model/model_field.h"
 #include "ruvia/web/detail/model/model_schema.h"
 #include "ruvia/web/detail/model/parse/json_parser.h"
@@ -1227,8 +1094,7 @@ public:
     static constexpr bool has_initial =
         (descriptor_types::options_type::has_initial || ... || false);
 
-    explicit model_storage(::ruvia::model_options options = {}) noexcept
-        : resource_(pmr_resource_or_default(options.resource_)) {
+    model_storage() noexcept {
         static_assert(unique_model_field_names<descriptor_types...>(),
             "Ruvia model source field names must be unique");
         static_assert(
@@ -1239,8 +1105,7 @@ public:
     model_storage& operator=(const model_storage&) = delete;
 
     model_storage(model_storage&& other) noexcept
-        : resource_(other.resource_),
-          fields_(std::move(other.fields_)) {
+        : fields_(std::move(other.fields_)) {
         reset_moved_fields(other.fields_);
     }
 
@@ -1258,7 +1123,7 @@ public:
             ::ruvia::detail::throw_model_move_source_owns_destination();
         }
 
-        auto rebound = rebind_fields(other.fields_, resource_);
+        auto rebound = rebind_fields(other.fields_);
         reset_moved_fields(other.fields_);
         replace_fields(fields_, std::move(rebound));
         return *this;
@@ -1303,7 +1168,7 @@ public:
     template <fixed_string field, typename value_type>
     void set(value_type&& value) & {
         constexpr auto index = model_field_index<field, descriptor_types...>();
-        std::get<index>(fields_).assign(std::forward<value_type>(value), resource_);
+        std::get<index>(fields_).assign(std::forward<value_type>(value));
     }
 
     template <fixed_string field>
@@ -1316,13 +1181,12 @@ public:
 
     template <fixed_string field>
         requires requires(typename std::tuple_element_t<model_field_index<field, descriptor_types...>(),
-                              std::tuple<descriptor_types...>>::field_type& slot,
-            std::pmr::memory_resource* resource) {
-            slot.ensure(resource);
+            std::tuple<descriptor_types...>>::field_type& slot) {
+            slot.ensure();
         }
     [[nodiscard]] decltype(auto) ensure() & RUVIA_LIFETIMEBOUND {
         constexpr auto index = model_field_index<field, descriptor_types...>();
-        return std::get<index>(fields_).ensure(resource_);
+        return std::get<index>(fields_).ensure();
     }
 
     template <fixed_string field>
@@ -1331,10 +1195,6 @@ public:
     void reset() & noexcept {
         constexpr auto index = model_field_index<field, descriptor_types...>();
         std::get<index>(fields_).reset();
-    }
-
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
     }
 
     template <std::size_t index>
@@ -1347,15 +1207,15 @@ public:
         return std::get<index>(fields_);
     }
 
-    [[nodiscard]] model_storage rebind(std::pmr::memory_resource* resource) const& {
-        model_storage rebound(::ruvia::model_options{.resource_ = resource});
-        auto fields_value = rebind_fields(fields_, rebound.resource_);
+    [[nodiscard]] model_storage rebind() const& {
+        model_storage rebound;
+        auto fields_value = rebind_fields(fields_);
         replace_fields(rebound.fields_, std::move(fields_value));
         return rebound;
     }
 
-    [[nodiscard]] model_storage rebind(std::pmr::memory_resource* resource) && {
-        auto rebound = std::as_const(*this).rebind(resource);
+    [[nodiscard]] model_storage rebind() && {
+        auto rebound = std::as_const(*this).rebind();
         reset_moved_fields(fields_);
         return rebound;
     }
@@ -1371,14 +1231,13 @@ private:
     using field_tuple = std::tuple<typename descriptor_types::field_type...>;
 
     template <std::size_t... indices>
-    [[nodiscard]] static field_tuple rebind_fields(const field_tuple& source_value,
-        std::pmr::memory_resource* resource, std::index_sequence<indices...>) {
-        return field_tuple{std::get<indices>(source_value).rebind(resource)...};
+    [[nodiscard]] static field_tuple rebind_fields(
+        const field_tuple& source_value, std::index_sequence<indices...>) {
+        return field_tuple{std::get<indices>(source_value).rebind()...};
     }
 
-    [[nodiscard]] static field_tuple rebind_fields(
-        const field_tuple& source_value, std::pmr::memory_resource* resource) {
-        return rebind_fields(source_value, resource, std::index_sequence_for<descriptor_types...>{});
+    [[nodiscard]] static field_tuple rebind_fields(const field_tuple& source_value) {
+        return rebind_fields(source_value, std::index_sequence_for<descriptor_types...>{});
     }
 
     static void replace_fields(field_tuple& destination, field_tuple&& source_value) noexcept {
@@ -1396,7 +1255,6 @@ private:
         reset_moved_fields(fields_value, std::index_sequence_for<descriptor_types...>{});
     }
 
-    std::pmr::memory_resource* resource_;
     field_tuple fields_;
 };
 
@@ -1440,19 +1298,12 @@ private:
     public:                                                                                                \
         using ruvia_model_schema_type = ::ruvia::detail::model::model_schema<__VA_ARGS__>;                 \
         template <typename model_type = t_type>                                                            \
-        explicit t_type(::ruvia::model_options options = {}) noexcept(!storage_type::has_initial)          \
-            : fields_(options) {                                                                           \
+        t_type() noexcept(!storage_type::has_initial) {                                                    \
             ::ruvia::detail::model::validate_model_schema(typename model_type::ruvia_model_schema_type{}); \
             if constexpr (storage_type::has_initial) {                                                     \
                 ::ruvia::detail::model::initialize_model(*this);                                           \
             }                                                                                              \
         }                                                                                                  \
-        template <typename resource_owner_type>                                                            \
-            requires requires(resource_owner_type& owner) {                                                \
-                { owner.resource() } -> std::convertible_to<std::pmr::memory_resource*>;                   \
-            }                                                                                              \
-        explicit t_type(resource_owner_type& owner) noexcept(!storage_type::has_initial)                   \
-            : t_type(::ruvia::model_options{.resource_ = owner.resource()}) {}                             \
         t_type(const t_type&) = delete;                                                                    \
         t_type& operator=(const t_type&) = delete;                                                         \
         t_type(t_type&&) noexcept = default;                                                               \
@@ -1509,16 +1360,12 @@ private:
         template <::ruvia::fixed_string field>                                                             \
             requires requires(storage_type& storage) { storage.template reset<field>(); }                  \
         t_type& reset() && = delete;                                                                       \
-        [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {                               \
-            return fields_.resource();                                                                     \
-        }                                                                                                  \
                                                                                                            \
     private:                                                                                               \
         friend struct ::ruvia::detail::model::model_access;                                                \
         friend struct ::ruvia::detail::model_value_rebind_access;                                          \
         template <typename model_type = t_type>                                                            \
-        explicit t_type(::ruvia::detail::model::empty_model_tag, ::ruvia::model_options options) noexcept  \
-            : fields_(options) {                                                                           \
+        explicit t_type(::ruvia::detail::model::empty_model_tag) noexcept {                                \
             ::ruvia::detail::model::validate_model_schema(typename model_type::ruvia_model_schema_type{}); \
         }                                                                                                  \
         explicit t_type(storage_type&& fields) noexcept                                                    \
@@ -1582,14 +1429,13 @@ private:
 // basic_string rvalues are rejected before a dangling view can be created.
 // Model fields may copy the JSON token when the parse owns its strings.
 // Dynamic JSON token, not an ordinary field-validation schema. parse() borrows
-// the complete token; from_json<Model>() owns it in the model resource instead.
-// Move construction preserves borrowing/ownership. Move assignment keeps the
-// target resource and owns the result (copying borrowed/incompatible storage).
-// A successful move or rvalue field transfer resets the source to its default
-// token without allocation. Failed rebinding preserves both tokens; self-move
-// assignment is a no-op. Existing views must be refreshed after either changes.
-// Views and potentially borrowed get<T>() results must not outlive their token.
-// Default construction represents JSON null.
+// the complete token; from_json<Model>() owns it instead.
+// Move construction preserves borrowing/ownership. Move assignment owns the
+// result (copying borrowed storage). A successful move or rvalue field transfer
+// resets the source to its default token without allocation. Failed rebinding
+// preserves both tokens; self-move assignment is a no-op. Existing views must
+// be refreshed after either changes. Views and potentially borrowed get<T>()
+// results must not outlive their token. Default construction represents JSON null.
 namespace detail {
 
 template <typename derived_type, fixed_string default_token>
@@ -1599,14 +1445,13 @@ public:
     json_token_base& operator=(const json_token_base&) = delete;
 
     json_token_base(json_token_base&& other) noexcept
-        : resource_(other.resource_),
-          storage_(std::move(other.storage_)) {
+        : storage_(std::move(other.storage_)) {
         other.storage_.assign_borrowed(default_token.view());
     }
 
     json_token_base& operator=(json_token_base&& other) {
         if (this != &other) {
-            storage_.assign_from(std::move(other.storage_), resource_);
+            storage_.assign_from(std::move(other.storage_));
             other.storage_.assign_borrowed(default_token.view());
         }
         return *this;
@@ -1617,17 +1462,13 @@ public:
     }
     [[nodiscard]] std::string_view view() const&& = delete;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return resource_;
-    }
-
     // The callback receives a field name and json_value borrowing this object's
     // token; both are valid only for the duration of the callback.
     template <typename visitor_type>
     [[nodiscard]] bool for_each_field(visitor_type&& visitor) const;
 
-    // Compare retained token bytes exactly, ignoring allocator and JSON
-    // normalization, to preserve the zero-cost view semantics.
+    // Compare retained token bytes exactly, ignoring JSON normalization, to
+    // preserve the zero-cost view semantics.
     [[nodiscard]] friend bool operator==(const derived_type& left, const derived_type& right) noexcept {
         return left.view() == right.view();
     }
@@ -1636,43 +1477,37 @@ protected:
     friend struct model_value_factory;
     friend struct model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> parse_json_view_value(std::string_view&,
-        std::pmr::memory_resource*, std::size_t, model_string_storage, bool, json_parse_budget&);
+    friend std::optional<view_type> parse_json_view_value(
+        std::string_view&, std::size_t, model_string_storage, bool, json_parse_budget&);
 
-    json_token_base(resolved_pmr_resource_tag, std::string_view body,
-        std::pmr::memory_resource* resource) noexcept
-        : resource_(resource),
-          storage_(body) {}
+    json_token_base(borrowed_model_token_tag, std::string_view body) noexcept
+        : storage_(body) {}
 
-    json_token_base(resolved_pmr_resource_tag, std::pmr::memory_resource* resource,
-        model_text_storage&& storage) noexcept
-        : resource_(resource),
-          storage_(std::move(storage)) {}
+    explicit json_token_base(model_text_storage&& storage) noexcept
+        : storage_(std::move(storage)) {}
 
     [[nodiscard]] static derived_type parse_token(
         std::string_view body, model_parse_options options, bool require_object, const char* error_message) {
         if (!is_complete_json_value(body, options, require_object)) {
             throw std::invalid_argument(error_message);
         }
-        return derived_type(
-            resolved_pmr_resource_tag{}, body, pmr_resource_or_default(options.resource_));
+        return derived_type(borrowed_model_token_tag{}, body);
     }
 
     void assign_owned(std::string_view value) {
-        storage_.assign_owned(value, resource_);
+        storage_.assign_owned(value);
     }
 
-    [[nodiscard]] derived_type rebind_for_model(std::pmr::memory_resource* resource) const& {
-        return derived_type(resolved_pmr_resource_tag{}, resource, storage_.rebind(resource));
+    [[nodiscard]] derived_type rebind_for_model() const& {
+        return derived_type(storage_.rebind());
     }
 
-    [[nodiscard]] derived_type rebind_for_model(std::pmr::memory_resource* resource) && {
-        auto rebound = derived_type(resolved_pmr_resource_tag{}, resource, std::move(storage_).rebind(resource));
+    [[nodiscard]] derived_type rebind_for_model() && {
+        auto rebound = derived_type(std::move(storage_).rebind());
         storage_.assign_borrowed(default_token.view());
         return rebound;
     }
 
-    std::pmr::memory_resource* resource_;
     model_text_storage storage_;
 };
 
@@ -1689,9 +1524,8 @@ public:
         boolean,
         null };
 
-    explicit json_value(model_options options = {})
-        : base_type(resolved_pmr_resource_tag{}, "null",
-              pmr_resource_or_default(options.resource_)) {}
+    json_value() noexcept
+        : base_type(detail::borrowed_model_token_tag{}, "null") {}
 
     [[nodiscard]] static json_value parse(std::string_view body, model_parse_options options = {}) {
         return parse_token(body, options, false, "invalid JSON value");
@@ -1787,22 +1621,20 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
-        std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
+    friend std::optional<view_type> detail::parse_json_view_value(
+        std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     using base_type::base_type;
 };
 
 // Object-only dynamic token with the same borrowing, ownership and move
-// contract as json_value. Supplying a resource to parse() does not copy input.
-// Default construction represents an empty JSON object.
+// contract as json_value. Default construction represents an empty JSON object.
 class json_object final : public detail::json_token_base<json_object, "{}"> {
     using base_type = detail::json_token_base<json_object, "{}">;
 
 public:
-    explicit json_object(model_options options = {})
-        : base_type(resolved_pmr_resource_tag{}, "{}",
-              pmr_resource_or_default(options.resource_)) {}
+    json_object() noexcept
+        : base_type(detail::borrowed_model_token_tag{}, "{}") {}
 
     [[nodiscard]] static json_object parse(std::string_view body, model_parse_options options = {}) {
         return parse_token(body, options, true, "invalid JSON object");
@@ -1840,8 +1672,8 @@ private:
     friend struct detail::model_value_factory;
     friend struct detail::model_value_rebind_access;
     template <typename view_type>
-    friend std::optional<view_type> detail::parse_json_view_value(std::string_view&,
-        std::pmr::memory_resource*, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
+    friend std::optional<view_type> detail::parse_json_view_value(
+        std::string_view&, std::size_t, detail::model_string_storage, bool, detail::json_parse_budget&);
 
     using base_type::base_type;
 };
@@ -1852,13 +1684,13 @@ template <typename visitor_type>
         return false;
     }
     auto input = view();
-    if (!detail::consume_json_array_elements(input, 0, [this, &visitor](std::string_view& element_input) {
+    if (!detail::consume_json_array_elements(input, 0, [&visitor](std::string_view& element_input) {
             const auto start = element_input;
             if (!detail::skip_json_value(element_input, 1)) {
                 return false;
             }
-            json_value value(resolved_pmr_resource_tag{},
-                start.substr(0, start.size() - element_input.size()), resource_);
+            json_value value(detail::borrowed_model_token_tag{},
+                start.substr(0, start.size() - element_input.size()));
             return static_cast<bool>(visitor(value));
         })) {
         return false;
@@ -1878,12 +1710,11 @@ template <typename visitor_type>
             return false;
         }
     }
-    return visit_json_object_fields(resolved_pmr_resource_tag{}, view(),
-               resource_, [&](std::string_view key, std::string_view value_view) {
-                   skip_json_whitespace(value_view);
-                   json_value value(resolved_pmr_resource_tag{}, value_view, resource_);
-                   return static_cast<bool>(visitor(key, value));
-               }) == json_object_visit_result::complete;
+    return visit_json_object_fields(view(), [&](std::string_view key, std::string_view value_view) {
+        skip_json_whitespace(value_view);
+        json_value value(borrowed_model_token_tag{}, value_view);
+        return static_cast<bool>(visitor(key, value));
+    }) == json_object_visit_result::complete;
 }
 
 }  // namespace detail
@@ -1894,8 +1725,7 @@ namespace ruvia::detail {
 
 template <typename view_type>
 [[nodiscard]] std::optional<view_type> parse_json_view_value(std::string_view& input,
-    std::pmr::memory_resource* resource, std::size_t depth, model_string_storage string_storage,
-    bool require_object, json_parse_budget& budget) {
+    std::size_t depth, model_string_storage string_storage, bool require_object, json_parse_budget& budget) {
     auto remaining = input;
     skip_json_whitespace(remaining);
     if (require_object && (remaining.empty() || remaining.front() != '{')) {
@@ -1906,7 +1736,7 @@ template <typename view_type>
         return std::nullopt;
     }
     const auto token = start.substr(0, start.size() - remaining.size());
-    view_type value(model_options{.resource_ = resource});
+    view_type value;
     if (string_storage == model_string_storage::owned) {
         if (!budget.consume_owned_text(token.size())) {
             return std::nullopt;
@@ -1928,8 +1758,8 @@ namespace ruvia {
 // ill-formed UTF-8 has each maximal ill-formed subpart replaced by U+FFFD.
 template <typename t_type>
     requires detail::is_model_json_value<t_type>
-[[nodiscard]] inline std::pmr::string to_json(const t_type& value, model_options options = {}) {
-    std::pmr::string output(pmr_resource_or_default(options.resource_));
+[[nodiscard]] inline std::string to_json(const t_type& value) {
+    std::string output;
     if constexpr (!detail::is_ruvia_scalar<t_type>) {
         // MSVC reserve(n) can leave no room for the trailing NUL, so resize(n)
         // allocates again. One extra byte stays in the same allocation.

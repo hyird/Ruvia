@@ -1,11 +1,9 @@
 #pragma once
 
-#include <memory_resource>
 #include <tuple>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/detail/http/context/request_bindings.h"
 #include "ruvia/web/detail/middleware/middleware_descriptor.h"
 #include "ruvia/web/middleware.h"
@@ -15,14 +13,14 @@ namespace ruvia::detail {
 template <middleware middleware_type>
 [[nodiscard]] task<void> invoke_middleware(void* target, context& context_value, next& next_value) {
     if constexpr (requires {
-                      static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
+                      static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke);
                   }) {
         constexpr auto method =
-            static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::handle);
+            static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke);
         return (static_cast<middleware_type*>(target)->*method)(context_value, next_value);
     } else {
         constexpr auto method =
-            static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::handle);
+            static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke);
         return (static_cast<const middleware_type*>(target)->*method)(context_value, next_value);
     }
 }
@@ -36,12 +34,11 @@ template <middleware middleware_type>
 template <typename middleware_type, typename args_type>
 [[nodiscard]] void* create_middleware(const void* args) {
     if constexpr (std::tuple_size_v<args_type> == 0) {
-        return static_cast<void*>(construct_pmr_object<middleware_type>(process_resource()));
+        return static_cast<void*>(new middleware_type());
     } else {
         return std::apply(
             [](const auto&... values) {
-                return static_cast<void*>(
-                    construct_pmr_object<middleware_type>(process_resource(), values...));
+                return static_cast<void*>(new middleware_type(values...));
             },
             *static_cast<const args_type*>(args));
     }
@@ -49,12 +46,12 @@ template <typename middleware_type, typename args_type>
 
 template <typename middleware_type>
 void destroy_middleware(void* target) noexcept {
-    destroy_pmr_object(static_cast<middleware_type*>(target), process_resource());
+    delete static_cast<middleware_type*>(target);
 }
 
 template <typename args_type>
 void release_middleware_args(const void* args) noexcept {
-    destroy_pmr_object(const_cast<args_type*>(static_cast<const args_type*>(args)), process_resource());
+    delete static_cast<const args_type*>(args);
 }
 
 template <typename middleware_type>
@@ -91,7 +88,7 @@ template <typename middleware_type>
 
 // A request-body ceiling this middleware declares for the routes it is on, or 0
 // for none. Read by the server BEFORE the body is accepted, which is why it
-// cannot simply be code inside handle(): by the time a middleware runs, the
+// cannot simply be code inside invoke(): by the time a middleware runs, the
 // bytes it would have rejected are already buffered.
 template <typename middleware_type>
 [[nodiscard]] constexpr std::size_t middleware_request_body_limit() noexcept {
@@ -163,8 +160,7 @@ template <middleware middleware_type, typename... args_types>
         return owned_middleware_descriptor(make_middleware_descriptor<middleware_type>(), nullptr);
     } else {
         using args_tuple_type = std::tuple<std::decay_t<args_types>...>;
-        const auto* stored =
-            construct_pmr_object<args_tuple_type>(process_resource(), std::forward<args_types>(args)...);
+        const auto* stored = new args_tuple_type(std::forward<args_types>(args)...);
         return owned_middleware_descriptor(
             describe_middleware<middleware_type, args_tuple_type>(stored), &release_middleware_args<args_tuple_type>);
     }

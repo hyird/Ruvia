@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -54,6 +53,7 @@ class http_client_result_budget_domain;
 class http_client_result_budget_lease;
 class http_client_state;
 class http_client_websocket_transport;
+class worker_client_registry_view;
 }  // namespace detail
 
 // Immutable metadata retained by its http_client_response. Field views borrow
@@ -76,11 +76,10 @@ public:
 
 private:
     friend class detail::http_client_response_state;
-    http_client_informational_response(http_status_code status, std::pmr::memory_resource* resource)
-        : status_(status),
-          headers_(resource) {}
+    explicit http_client_informational_response(http_status_code status) noexcept
+        : status_(status) {}
     http_status_code status_;
-    std::pmr::vector<http_header> headers_;
+    std::vector<http_header> headers_;
 };
 
 // Independently owned bytes collected from an outbound HTTP response body.
@@ -358,11 +357,11 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
         return write_owned(std::move(bytes), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
     // A successful finish stays idempotent after transport retirement.
     [[nodiscard]] task<void> finish(operation_options operation = {}) &;
@@ -386,7 +385,7 @@ private:
     friend class detail::http_capsule_stream_state;
     friend class http_capsule_stream;
     explicit http_client_tunnel(http_client_response response) noexcept;
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation = {});
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation = {});
     // abort() for received content that violates the tunnel's protocol (RFC 9297
     // section 3.3 capsule error): HTTP/2 resets the stream with PROTOCOL_ERROR.
     void abort_malformed() & noexcept;
@@ -495,11 +494,11 @@ public:
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::string_view bytes, operation_options operation = {}) &;
     task<void> write(std::string_view, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
         return write_owned(std::move(bytes), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
     [[nodiscard]] task<void> end(std::span<const http_header_view> trailers = {}, operation_options operation = {}) &;
     task<void> end(std::span<const http_header_view> = {}, operation_options = {}) && = delete;
@@ -523,7 +522,7 @@ private:
     explicit http_client_request_body_writer(detail::http_client_response_state* state_value) noexcept
         : state_(state_value) {}
     ~http_client_request_body_writer() = default;
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
     detail::http_client_response_state* state_;
 };
 
@@ -555,15 +554,15 @@ private:
     http_client_request_body_writer body_;
 };
 
-class http_client_handle final {
+class http_client_ref final {
 public:
-    http_client_handle(const http_client_handle& other);
-    http_client_handle& operator=(const http_client_handle&) = delete;
+    http_client_ref(const http_client_ref& other);
+    http_client_ref& operator=(const http_client_ref&) = delete;
 
     // Inherits an empty token; a supplied state replaces user cancellation.
     // Timeout can only tighten. Accumulation requires a caller-owned stop_group.
     // Request-host cancellation remains independent and cannot be replaced.
-    [[nodiscard]] http_client_handle with_options(operation_options options) const;
+    [[nodiscard]] http_client_ref with_options(operation_options options) const;
     [[nodiscard]] http_client_request request(std::string_view method, std::string_view path) const;
     [[nodiscard]] http_client_request get(std::string_view path) const;
     [[nodiscard]] http_client_request post(std::string_view path) const;
@@ -580,15 +579,15 @@ public:
     // handshake confirmation, CID availability and path validation together.
     [[nodiscard]] task<void> migrate(std::string_view local_address, std::uint16_t port = 0) const;
     [[nodiscard]] http_client_stats stats() const;
-    [[nodiscard]] std::pmr::vector<http_client_endpoint_address> dns_snapshot() const;
+    [[nodiscard]] std::vector<http_client_endpoint_address> dns_snapshot() const;
     void update_dns(std::span<const http_client_endpoint_address> addresses) const;
     [[nodiscard]] task<void> refresh_dns() const;
     // Non-destructive DNS resolution: resolves the client's dial host (or a
     // specified host) into a sorted, deduplicated IP address list without
     // retiring existing active connections or WebSockets.
-    [[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(
         operation_options options = {}) const;
-    [[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+    [[nodiscard]] task<std::vector<ip_address>> resolve_dns(
         std::string_view host, operation_options options = {}) const;
     [[nodiscard]] bool close_connection(std::uint64_t id) const;
     [[nodiscard]] std::optional<http_client_advertisement> next_advertisement() const;
@@ -616,15 +615,15 @@ private:
     friend class detail::http_client_state;
     friend class context;
     friend class web_worker_context;
-    http_client_handle(detail::http_client_pool& pool, std::pmr::memory_resource* resource,
-        ::ruvia::operation_scope& scope) noexcept;
-    http_client_handle(detail::http_client_pool& pool, std::pmr::memory_resource* resource,
-        ::ruvia::operation_scope& scope, operation_options options) noexcept;
+    friend class detail::worker_client_registry_view;
+    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope) noexcept;
+    http_client_ref(detail::http_client_pool& pool, ::ruvia::operation_scope& scope, operation_options options) noexcept;
+    [[nodiscard]] http_client_ref bind_caller_scope(
+        ::ruvia::operation_scope& scope, const stop_token& host_stop) && noexcept;
     static void expire_capability(void* target) noexcept;
 
     detail::http_client_pool* pool_{nullptr};
     std::shared_ptr<detail::http_client_pool> pool_owner_;
-    std::pmr::memory_resource* resource_{nullptr};
     operation_options options_;
     stop_token host_stop_token_;
     scoped_capability_registration registration_;
@@ -657,36 +656,33 @@ public:
         if (consumed_) {
             throw std::logic_error("HTTP request builder was consumed");
         }
-        auto encoded = to_json(value, {.resource_ = body_.get_allocator().resource()});
+        auto encoded = to_json(value);
         header("Content-Type", "application/json");
         body_.swap(encoded);
         has_body_ = true;
         return *this;
     }
-    http_client_request& redirects(std::size_t maximum) noexcept {
-        max_redirects_ = maximum;
-        return *this;
-    }
+    http_client_request& redirects(std::size_t maximum);
     [[nodiscard]] task<http_client_response> send();
     [[nodiscard]] task<http_client_exchange> upload(http_client_upload_config config = {});
     [[nodiscard]] task<http_client_tunnel_result> upgrade(http_client_tunnel_config config = {});
 
 private:
-    friend class http_client_handle;
+    friend class http_client_ref;
     friend class detail::http_client_response_handoff;
-    http_client_request(const http_client_handle& client, std::string_view method, std::string_view path);
+    http_client_request(const http_client_ref& client, std::string_view method, std::string_view path);
     static task<http_client_response> send_owned(http_client_request request);
     static task<http_client_exchange> upload_owned(
         http_client_request request, http_client_upload_config config);
     static task<http_client_response> follow_redirects(http_client_request request,
         std::optional<http_client_response> initial_response, const operation_deadline& total,
         bool upload_initial_hop);
-    [[nodiscard]] std::pmr::vector<http_header_view> field_views() const;
-    http_client_handle client_;
-    std::pmr::string method_;
-    std::pmr::string target_;
-    std::pmr::vector<http_header> headers_;
-    std::pmr::string body_;
+    [[nodiscard]] std::vector<http_header_view> field_views() const;
+    http_client_ref client_;
+    std::string method_;
+    std::string target_;
+    std::vector<http_header> headers_;
+    std::string body_;
     std::size_t max_redirects_{5};
     // informational_ is moved out into informational_callback_, which every
     // redirect hop's exchange shares.
@@ -712,13 +708,13 @@ public:
     [[nodiscard]] task<http_client_tunnel_result> open(http_client_tunnel_config config = {});
 
 private:
-    friend class http_client_handle;
-    http_client_connect_request(const http_client_handle& client, std::string_view authority, std::string_view target, bool udp);
-    http_client_handle client_;
-    std::pmr::string authority_;
-    std::pmr::string protocol_;
-    std::pmr::string target_;
-    std::pmr::vector<http_header> headers_;
+    friend class http_client_ref;
+    http_client_connect_request(const http_client_ref& client, std::string_view authority, std::string_view target, bool udp);
+    http_client_ref client_;
+    std::string authority_;
+    std::string protocol_;
+    std::string target_;
+    std::vector<http_header> headers_;
     http_client_request_options request_options_;
     std::shared_ptr<http_client_informational_callback> informational_callback_;
     bool udp_;
@@ -746,10 +742,10 @@ public:
     // a handle carries no operation options; derive them with with_options().
     // client() selects the sole configuration, or alias "default" in a set.
     // 默认重定向仅可到达已注册 origin；请求策略可显式扩充集合。
-    [[nodiscard]] http_client_handle client() const&;
-    http_client_handle client() const&& = delete;
-    [[nodiscard]] http_client_handle client(std::string_view alias) const&;
-    http_client_handle client(std::string_view) const&& = delete;
+    [[nodiscard]] http_client_ref client() const&;
+    http_client_ref client() const&& = delete;
+    [[nodiscard]] http_client_ref client(std::string_view alias) const&;
+    http_client_ref client(std::string_view) const&& = delete;
     // Worker-local 发布；调用时拥有配置，await 在 blocking_pool 准备 TLS 后原子替换。
     // 无 TLS 文件准备时无需 blocking_pool；取消或准备失败不改变既有 alias。
     // 旧池取消并 join，最后一个旧句柄/冷操作释放后回收；其他 alias 不变。
@@ -768,8 +764,8 @@ public:
     [[nodiscard]] task<void> shutdown() &;
     task<void> shutdown() && = delete;
 
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND;
-    const worker_handle& worker() const&& = delete;
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND;
+    const worker_ref& worker() const&& = delete;
 
 private:
     std::shared_ptr<detail::http_client_state> state_;
@@ -777,9 +773,9 @@ private:
 
 // Standalone non-destructive asynchronous DNS resolution bound to a worker or
 // event loop. Returns a sorted, deduplicated list of numeric IP addresses.
-[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
-    const worker_handle& worker, std::string_view host, operation_options options = {});
-[[nodiscard]] task<std::pmr::vector<ip_address>> resolve_dns(
+[[nodiscard]] task<std::vector<ip_address>> resolve_dns(
+    const worker_ref& worker, std::string_view host, operation_options options = {});
+[[nodiscard]] task<std::vector<ip_address>> resolve_dns(
     event_loop loop, std::string_view host, operation_options options = {});
 
 }  // namespace ruvia

@@ -5,16 +5,14 @@
 
 #include <asio/error.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 namespace ruvia::detail {
 
-client_happy_eyeballs::client_happy_eyeballs(const worker_handle& worker,
+client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker,
     const asio::ip::tcp::socket::executor_type& executor,
     const asio::ip::tcp::resolver::results_type& addresses)
     : worker_(worker),
       changed_(worker),
-      attempts_(process_resource()) {
+      attempts_() {
     if (addresses.empty()) {
         return;
     }

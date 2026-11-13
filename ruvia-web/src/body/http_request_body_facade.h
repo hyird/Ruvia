@@ -9,7 +9,6 @@
 #include "ruvia/web/streaming.h"
 
 #include "http/request_body_loader.h"
-#include "http/streaming_access.h"
 
 namespace ruvia::detail {
 

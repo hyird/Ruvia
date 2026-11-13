@@ -8,7 +8,6 @@
 #include <deque>
 #include <functional>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,9 +20,9 @@
 #include <vector>
 
 #include "ruvia/web/db/db_entity.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_mapping.h"
 #include "ruvia/web/db/db_query.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/detail/db/db_relation_metadata.h"
 
 namespace ruvia {
@@ -72,36 +71,25 @@ class db_relation_plan final {
 public:
     static constexpr std::size_t root = std::numeric_limits<std::size_t>::max();
     struct node_type final {
-        explicit node_type(std::pmr::memory_resource* resource)
-            : path_(resource),
-              alias_(resource),
-              columns_(resource) {}
-        node_type(const node_type& other, std::pmr::memory_resource* resource)
-            : parent_(other.parent_),
-              relation_(other.relation_),
-              offset_(other.offset_),
-              join_(other.join_),
-              path_(other.path_, resource),
-              alias_(other.alias_, resource),
-              columns_(other.columns_, resource) {}
+        node_type() = default;
         std::size_t parent_{root};
         std::size_t relation_{0};
         std::size_t offset_{0};
         db_join_type join_{db_join_type::left};
-        std::pmr::string path_;
-        std::pmr::string alias_;
-        std::pmr::vector<std::pmr::string> columns_;
+        std::string path_;
+        std::string alias_;
+        std::vector<std::string> columns_;
     };
 
-    explicit db_relation_plan(std::pmr::memory_resource* resource)
-        : resource_(pmr_resource_or_default(resource)),
-          nodes_(resource_) {}
-    db_relation_plan(const db_relation_plan&) = delete;
+    db_relation_plan() = default;
+    db_relation_plan(const db_relation_plan&) = default;
     db_relation_plan& operator=(const db_relation_plan&) = delete;
     db_relation_plan(db_relation_plan&&) noexcept = default;
     db_relation_plan& operator=(db_relation_plan&&) = delete;
 
-    [[nodiscard]] db_relation_plan clone() const;
+    [[nodiscard]] db_relation_plan clone() const {
+        return *this;
+    }
     [[nodiscard]] bool empty() const noexcept {
         return nodes_.empty();
     }
@@ -183,7 +171,7 @@ public:
             validate_db_relation<entity_type, relation_type>();
             using mapping_type = db_relation_mapping<entity_type, relation_type>;
             if constexpr (mapping_type::through_join_table) {
-                std::pmr::string junction(query.resource());
+                std::string junction;
                 junction.reserve(alias.size() + 9U);
                 junction.append(alias);
                 junction.append("_junction");
@@ -210,7 +198,7 @@ public:
     }
 
 private:
-    [[nodiscard]] std::pmr::string normalize(std::string_view root_alias, std::string_view path) const;
+    [[nodiscard]] std::string normalize(std::string_view root_alias, std::string_view path) const;
     [[nodiscard]] static bool uses_source_name(const db_query& query, std::string_view name);
     [[nodiscard]] static bool uses_projection_name(const db_query& query, std::string_view name);
     // Returns the rewritten query, or nullopt when the original query can
@@ -257,8 +245,8 @@ private:
         }
     }
 
-    [[nodiscard]] std::pmr::string unique_alias(const db_query& query, std::string_view reserved);
-    [[nodiscard]] std::pmr::string unique_projection(const db_query& query);
+    [[nodiscard]] std::string unique_alias(const db_query& query, std::string_view reserved);
+    [[nodiscard]] std::string unique_projection(const db_query& query);
     static void conjunction(db_query& query, db_expression& predicate, db_expression term);
 
     template <typename entity_type, typename relation_type>
@@ -334,7 +322,7 @@ private:
             }
             auto index = find(parent_value, i);
             if (index == root) {
-                node_type node(resource_);
+                node_type node;
                 node.parent_ = parent_value;
                 node.relation_ = i;
                 node.offset_ = column_count_;
@@ -346,7 +334,7 @@ private:
                 }
                 node.path_.append(name);
                 node.alias_ = rest.empty() && !requested_alias.empty()
-                                  ? std::pmr::string(requested_alias, resource_)
+                                  ? std::string(requested_alias)
                                   : unique_alias(query, requested_alias);
                 const auto source_alias = parent_value == root ? root_alias : std::string_view(nodes_[parent_value].alias_);
                 append_join<entity_type, relation_type>(
@@ -364,8 +352,7 @@ private:
         });
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<node_type> nodes_;
+    std::vector<node_type> nodes_;
     std::size_t column_count_{0};
     std::size_t next_alias_{0};
     std::size_t next_projection_{0};
@@ -398,17 +385,12 @@ struct db_graph_key_hash final {
 // resulting entities own their nested values without retaining this table.
 class db_relation_decoder final {
 public:
-    db_relation_decoder(const db_relation_plan& plan, std::pmr::memory_resource* resource)
-        : plan_(plan),
-          resource_(pmr_resource_or_default(resource)),
-          columns_(resource_),
-          identities_(resource_),
-          composite_keys_(resource_),
-          key_(resource_) {}
+    explicit db_relation_decoder(const db_relation_plan& plan)
+        : plan_(plan) {}
 
     template <typename entity_type>
     entity_rows<entity_type> decode(const db_rows& rows) {
-        entity_rows<entity_type> result(resource_);
+        entity_rows<entity_type> result;
         if (rows.empty()) {
             return result;
         }
@@ -423,7 +405,7 @@ public:
             db_graph_identity identity;
             if (position == identities_.end()) {
                 identity = {result.size(), next_scope_++};
-                entity_type entity(resource_);
+                entity_type entity;
                 decode_columns(entity, row, 0);
                 result.push_back(std::move(entity));
                 store_identity<entity_type>(*key, identity);
@@ -463,7 +445,7 @@ private:
     template <typename entity_type>
     void decode_columns(entity_type& entity, const db_row& row, std::size_t offset) const {
         for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t i> {
-            decode_entity_field<entity_type, column_type>(entity, row[columns_[offset + i]], resource_);
+            decode_entity_field<entity_type, column_type>(entity, row[columns_[offset + i]]);
         });
     }
 
@@ -535,7 +517,7 @@ private:
                 db_graph_identity identity;
                 if (position == identities_.end()) {
                     identity = {collection_value.size(), next_scope_++};
-                    target_type child_value(resource_);
+                    target_type child_value;
                     decode_columns(child_value, row, node_value.offset_);
                     collection_value.push_back(std::move(child_value));
                     store_identity<target_type>(*key, identity);
@@ -570,27 +552,26 @@ private:
     }
 
     const db_relation_plan& plan_;
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<std::size_t> columns_;
-    std::pmr::unordered_map<db_graph_key, db_graph_identity, db_graph_key_hash> identities_;
-    std::pmr::deque<std::pmr::string> composite_keys_;
-    std::pmr::string key_;
+    std::vector<std::size_t> columns_;
+    std::unordered_map<db_graph_key, db_graph_identity, db_graph_key_hash> identities_;
+    std::deque<std::string> composite_keys_;
+    std::string key_;
     std::size_t next_scope_{1};
 };
 
 template <typename entity_type>
 struct db_map_related_entities final {
     db_relation_plan plan_;
-    entity_rows<entity_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) {
-        return db_relation_decoder(plan_, resource).template decode<entity_type>(rows);
+    entity_rows<entity_type> operator()(db_rows&& rows) {
+        return db_relation_decoder(plan_).template decode<entity_type>(rows);
     }
 };
 
 template <typename entity_type>
 struct db_map_one_related_entity final {
     db_relation_plan plan_;
-    std::optional<entity_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) {
-        auto entities = db_relation_decoder(plan_, resource).template decode<entity_type>(rows);
+    std::optional<entity_type> operator()(db_rows&& rows) {
+        auto entities = db_relation_decoder(plan_).template decode<entity_type>(rows);
         if (entities.empty()) {
             return std::nullopt;
         }
@@ -604,7 +585,7 @@ struct db_map_one_related_entity final {
 // Imports each source into `query` and passes the imported expressions to
 // `consume` in one call; small lists stay on the stack.
 template <typename source_type, typename import_type, typename consume_type>
-void import_db_expressions(db_query& query, std::span<const source_type> sources, import_type&& import_one, consume_type&& consume) {
+void import_db_expressions([[maybe_unused]] db_query& query, std::span<const source_type> sources, import_type&& import_one, consume_type&& consume) {
     static constexpr std::size_t inline_capacity = 16;
     if (sources.size() <= inline_capacity) {
         std::array<db_expression, inline_capacity> imported{};
@@ -614,7 +595,7 @@ void import_db_expressions(db_query& query, std::span<const source_type> sources
         consume(std::span<const db_expression>(imported.data(), sources.size()));
         return;
     }
-    std::pmr::vector<db_expression> imported(query.resource());
+    std::vector<db_expression> imported;
     imported.reserve(sources.size());
     for (const auto& source : sources) {
         imported.push_back(import_one(source));
@@ -624,7 +605,7 @@ void import_db_expressions(db_query& query, std::span<const source_type> sources
 
 // Stages borrowed column names as one db_selection list for `consume`.
 template <std::size_t inline_capacity, typename name_type, typename consume_type>
-decltype(auto) stage_db_selections(std::span<const name_type> columns, std::pmr::memory_resource* resource, consume_type&& consume) {
+decltype(auto) stage_db_selections(std::span<const name_type> columns, consume_type&& consume) {
     if (columns.size() <= inline_capacity) {
         std::array<db_selection, inline_capacity> selections{};
         for (std::size_t i = 0; i < columns.size(); ++i) {
@@ -632,7 +613,7 @@ decltype(auto) stage_db_selections(std::span<const name_type> columns, std::pmr:
         }
         return consume(std::span<const db_selection>(selections.data(), columns.size()));
     }
-    std::pmr::vector<db_selection> selections(resource);
+    std::vector<db_selection> selections;
     selections.reserve(columns.size());
     for (const auto& column : columns) {
         selections.emplace_back(column);
@@ -644,9 +625,7 @@ decltype(auto) stage_db_selections(std::span<const name_type> columns, std::pmr:
 
 class db_values_builder final {
 public:
-    explicit db_values_builder(std::span<const std::string_view> columns, std::pmr::memory_resource* resource = nullptr)
-        : query_(resource),
-          columns_(query_.resource()) {
+    explicit db_values_builder(std::span<const std::string_view> columns) {
         if (columns.empty()) {
             throw std::invalid_argument("db_values_builder requires at least one column");
         }
@@ -655,8 +634,8 @@ public:
             columns_.emplace_back(column);
         }
     }
-    explicit db_values_builder(std::initializer_list<std::string_view> columns, std::pmr::memory_resource* resource = nullptr)
-        : db_values_builder(std::span<const std::string_view>(columns.begin(), columns.size()), resource) {}
+    explicit db_values_builder(std::initializer_list<std::string_view> columns)
+        : db_values_builder(std::span<const std::string_view>(columns.begin(), columns.size())) {}
 
     db_values_builder& row(std::span<const db_expr> values) {
         if (values.size() != columns_.size()) {
@@ -675,14 +654,14 @@ public:
         return query_;
     }
     const db_query& query() const&& = delete;
-    [[nodiscard]] const std::pmr::vector<std::pmr::string>& columns() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const std::vector<std::string>& columns() const& noexcept RUVIA_LIFETIMEBOUND {
         return columns_;
     }
-    const std::pmr::vector<std::pmr::string>& columns() const&& = delete;
+    const std::vector<std::string>& columns() const&& = delete;
 
 private:
     db_query query_;
-    std::pmr::vector<std::pmr::string> columns_;
+    std::vector<std::string> columns_;
 };
 
 namespace detail {
@@ -815,12 +794,12 @@ void apply_find_options(db_query& query, const db_find_options& options, std::st
     }
 }
 struct db_map_count final {
-    std::uint64_t operator()(db_rows&& rows, std::pmr::memory_resource*) const {
+    std::uint64_t operator()(db_rows&& rows) const {
         return db_count_value(rows);
     }
 };
 struct db_map_exists final {
-    bool operator()(db_rows&& rows, std::pmr::memory_resource*) const {
+    bool operator()(db_rows&& rows) const {
         if (rows.size() != 1) {
             throw db_conversion_error(
                 db_conversion_error::code_type::unexpected_row_count, "database exists did not return exactly one row");
@@ -841,7 +820,7 @@ db_expression entity_column_value(db_query& query, const e_type& entity) {
     if (entity.template is_null<c_type::name>()) {
         return query.null_value();
     }
-    return query.value(entity_db_value(entity.template get<c_type::name>(), query.resource()));
+    return query.value(entity_db_value(entity.template get<c_type::name>()));
 }
 
 template <typename e_type>
@@ -861,7 +840,7 @@ void append_entity_insert_rows(db_query& query, std::span<const e_type> entities
             }
         }
     });
-    std::pmr::vector<db_expression> values(query.resource());
+    std::vector<db_expression> values;
     if (column_count != 0 && entities.size() > values.max_size() / column_count) {
         throw std::length_error("repository insert batch is too large");
     }
@@ -881,7 +860,7 @@ void append_entity_insert_rows(db_query& query, std::span<const e_type> entities
 template <typename e_type>
 struct db_map_projection final {
     static_assert(sql_entity<e_type> || sql_projection<e_type>, "SQL results require a SQL entity or a db_projection");
-    explicit db_map_projection(std::span<const std::pmr::string> selected, bool allow_extra_columns = false, bool wildcard = false)
+    explicit db_map_projection(std::span<const std::string> selected, bool allow_extra_columns = false, bool wildcard = false)
         : wildcard_(wildcard) {
         if (!wildcard && selected.empty()) {
             selected_columns_.fill(true);
@@ -896,11 +875,11 @@ struct db_map_projection final {
             selected_columns_[index] = std::ranges::find(selected, c_type::name.view()) != selected.end();
         });
     }
-    entity_rows<e_type> operator()(const db_rows& rows, std::pmr::memory_resource* resource) const {
-        auto result_value = db_result_access::make_entity_rows<e_type>(resource, rows.size());
+    entity_rows<e_type> operator()(const db_rows& rows) const {
+        auto result_value = db_result_access::make_entity_rows<e_type>(rows.size());
         db_entity_row_decoder<e_type> decoder(selected_columns_, wildcard_);
         for (const auto& row : rows) {
-            result_value.push_back(decoder.decode(row, resource));
+            result_value.push_back(decoder.decode(row));
         }
         return result_value;
     }
@@ -911,39 +890,39 @@ struct db_map_projection final {
 template <typename e_type>
 struct db_map_one_projection final {
     db_map_projection<e_type> mapper_;
-    std::optional<e_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
+    std::optional<e_type> operator()(db_rows&& rows) const {
         if (rows.empty()) {
             return std::nullopt;
         }
         db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
-        return decoder.decode(rows.front(), resource);
+        return decoder.decode(rows.front());
     }
 };
 struct db_map_raw_rows final {
-    db_rows operator()(db_rows&& rows, std::pmr::memory_resource*) const noexcept {
+    db_rows operator()(db_rows&& rows) const noexcept {
         return std::move(rows);
     }
 };
 template <db_mapped_value scalar_type>
 struct db_map_scalar final {
-    std::optional<scalar_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
+    std::optional<scalar_type> operator()(db_rows&& rows) const {
         if (rows.empty() || !rows.front()[std::size_t{0}].value()) {
             return std::nullopt;
         }
-        return ::ruvia::decode_db_field<scalar_type>(rows.front()[std::size_t{0}], resource);
+        return ::ruvia::decode_db_field<scalar_type>(rows.front()[std::size_t{0}]);
     }
 };
 template <db_mapped_value scalar_type>
 struct db_map_scalars final {
-    std::pmr::vector<scalar_type> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
-        std::pmr::vector<scalar_type> result(pmr_resource_or_default(resource));
+    std::vector<scalar_type> operator()(db_rows&& rows) const {
+        std::vector<scalar_type> result;
         result.reserve(rows.size());
         for (const auto& row : rows) {
             if (!row[std::size_t{0}].value()) {
                 throw db_conversion_error(
                     db_conversion_error::code_type::unexpected_null, "database scalar column is NULL");
             }
-            result.push_back(::ruvia::decode_db_field<scalar_type>(row[std::size_t{0}], resource));
+            result.push_back(::ruvia::decode_db_field<scalar_type>(row[std::size_t{0}]));
         }
         return result;
     }
@@ -951,37 +930,36 @@ struct db_map_scalars final {
 template <typename e_type>
 struct db_map_raw_and_entities final {
     db_map_projection<e_type> mapper_;
-    std::pair<entity_rows<e_type>, db_rows> operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
-        auto entities = mapper_(rows, resource);
+    std::pair<entity_rows<e_type>, db_rows> operator()(db_rows&& rows) const {
+        auto entities = mapper_(rows);
         return {std::move(entities), std::move(rows)};
     }
 };
 template <typename e_type>
 struct db_map_required_one final {
     db_map_projection<e_type> mapper_;
-    e_type operator()(db_rows&& rows, std::pmr::memory_resource* resource) const {
+    e_type operator()(db_rows&& rows) const {
         if (rows.size() != 1) {
             throw db_conversion_error(
                 db_conversion_error::code_type::unexpected_row_count, "database save did not return the saved row");
         }
         db_entity_row_decoder<e_type> decoder(mapper_.selected_columns_, mapper_.wildcard_);
-        return decoder.decode(rows.front(), resource);
+        return decoder.decode(rows.front());
     }
 };
 struct db_projection final {
-    explicit db_projection(std::pmr::memory_resource* resource)
-        : columns_(resource) {}
+    db_projection() = default;
     [[nodiscard]] bool empty() const noexcept {
         return columns_.empty() && !wildcard_;
     }
-    std::pmr::vector<std::pmr::string> columns_;
+    std::vector<std::string> columns_;
     bool wildcard_{false};
 };
 // Wildcards stay in the AST; only explicit result names are tracked for mapping.
 db_projection apply_projection(db_query& query, std::span<const db_selection> selection,
     std::string_view qualifier, bool returning = false, std::string_view root_table = {},
     const db_projection* previous = nullptr);
-[[nodiscard]] std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource);
+[[nodiscard]] std::string format_truncate_table(std::string_view table, db_driver driver);
 
 void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity_columns,
     std::span<db_assignment> updates, std::span<const std::string_view> inserted_columns,
@@ -997,9 +975,9 @@ void apply_entity_upsert(db_query& query, std::span<const std::string_view> inse
 }
 
 template <typename executor_type>
-using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_handle>, db_handle, executor_type&>;
+using db_repository_executor_type = std::conditional_t<std::same_as<executor_type, db_session>, db_session, executor_type&>;
 template <typename executor_type>
-using db_repository_input_type = std::conditional_t<std::same_as<executor_type, db_handle>, const db_handle&, executor_type&>;
+using db_repository_input_type = std::conditional_t<std::same_as<executor_type, db_session>, const db_session&, executor_type&>;
 
 }  // namespace detail
 
@@ -1025,7 +1003,7 @@ public:
         return select(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_query_builder& select(std::span<const std::string_view> columns) {
-        return detail::stage_db_selections<column_capacity>(columns, query_.resource(),
+        return detail::stage_db_selections<column_capacity>(columns,
             [this](std::span<const db_selection> selections) -> db_query_builder& { return select(selections); });
     }
     db_query_builder& select(const db_expr& expression, borrowed_text alias_name) {
@@ -1041,7 +1019,7 @@ public:
                 detail::require_db_column(detail::db_entity_columns<entity_type>, field.column_);
             }
         }
-        detail::db_projection implicit(query_.resource());
+        detail::db_projection implicit;
         const auto* previous = &selected_;
         if (selected_.empty()) {
             implicit.columns_.reserve(column_capacity);
@@ -1412,19 +1390,19 @@ public:
         return executor_.template query_mapped<std::optional<scalar_type>>(query, detail::db_map_scalar<scalar_type>{});
     }
     template <db_mapped_value scalar_type>
-    [[nodiscard]] task<std::pmr::vector<scalar_type>> get_scalars() const {
+    [[nodiscard]] task<std::vector<scalar_type>> get_scalars() const {
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
-        return executor_.template query_mapped<std::pmr::vector<scalar_type>>(target_query, detail::db_map_scalars<scalar_type>{});
+        return executor_.template query_mapped<std::vector<scalar_type>>(target_query, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] task<db_stream_result> stream() const
-        requires std::same_as<executor_type, db_handle>
+        requires std::same_as<executor_type, db_session>
     {
         executor_.registration_.require_active();
         auto statement = get_query_and_parameters();
         auto& scope = executor_.registration_.scope();
         return make_scoped_operation(scope,
-            db_handle::query_stream_prepared(executor_.client_, std::move(statement.sql_),
+            db_session::query_stream_prepared(executor_.client_, std::move(statement.sql_),
                 std::move(statement.params_), executor_.resource_, scope, executor_.io_metrics_, executor_.options_));
     }
     [[nodiscard]] task<std::uint64_t> get_count() const {
@@ -1433,7 +1411,7 @@ public:
     }
     [[nodiscard]] task<bool> get_exists() const {
         auto source_value = unpaged_source();
-        db_query query(query_.resource());
+        db_query query;
         query.select(query.alias(query.exists(std::move(source_value)), "exists"));
         query.copy_cache(query_, detail::db_cache_shape::exists);
         return executor_.template query_mapped<bool>(query, detail::db_map_exists{});
@@ -1460,7 +1438,7 @@ public:
         std::optional<db_query> active_query;
         const auto& target_query = target(active_query);
         auto prepared = prepare_relation_query(target_query);
-        return (prepared ? *prepared : target_query).compile(executor_.query_driver(), query_.resource());
+        return (prepared ? *prepared : target_query).compile(executor_.query_driver());
     }
 
 private:
@@ -1494,9 +1472,7 @@ private:
     }
     db_query_builder(detail::db_repository_input_type<executor_type> executor, std::string_view alias)
         : executor_(executor),
-          query_(executor.query_resource()),
-          alias_(alias.empty() ? detail::unqualified_db_name(entity_type::table_name()) : alias, query_.resource()),
-          selected_(query_.resource()) {
+          alias_(alias.empty() ? detail::unqualified_db_name(entity_type::table_name()) : alias) {
         detail::select_entity<entity_type>(query_, alias_);
     }
     [[nodiscard]] bool hydrates() const noexcept {
@@ -1508,7 +1484,7 @@ private:
     }
     [[nodiscard]] db_query single_row_query() const {
         std::optional<db_query> scratch;
-        auto query = target(scratch).clone(query_.resource());
+        auto query = target(scratch).clone();
         query.limit(1);
         // An id-keyed cache includes the derived result shape.
         query.copy_cache(query_, detail::db_cache_shape::one);
@@ -1516,7 +1492,7 @@ private:
     }
     [[nodiscard]] db_query unpaged_source() const {
         std::optional<db_query> scratch;
-        auto query = target(scratch).clone(query_.resource());
+        auto query = target(scratch).clone();
         query.clear_order().clear_lock().limit(std::nullopt).offset(std::nullopt);
         return query;
     }
@@ -1524,7 +1500,7 @@ private:
         constexpr auto del_col = detail::delete_date_column<entity_type>();
         if constexpr (!del_col.empty()) {
             if (!with_deleted_) {
-                auto filtered = query_.clone(query_.resource());
+                auto filtered = query_.clone();
                 const auto qualifier = alias_.empty() ? entity_type::table_name() : std::string_view(alias_);
                 filtered.and_where(filtered.unary(db_unary_operator::is_null, filtered.column(del_col, qualifier)));
                 return filtered;
@@ -1541,7 +1517,7 @@ private:
     [[nodiscard]] db_query count_query() const {
         auto source_value = unpaged_source();
         if (hydrates()) {
-            db_query roots(query_.resource());
+            db_query roots;
             constexpr auto keys = detail::db_primary_key_columns<entity_type>();
             for (const auto key : keys) {
                 roots.add_select(roots.column(key, "__ruvia_count_roots"));
@@ -1549,7 +1525,7 @@ private:
             roots.from(std::move(source_value), "__ruvia_count_roots").distinct();
             source_value = std::move(roots);
         }
-        db_query count(query_.resource());
+        db_query count;
         const std::array args{count.star()};
         count.select(count.alias(count.aggregate("count", args), "count")).from(std::move(source_value), "count_source");
         count.copy_cache(query_, detail::db_cache_shape::count);
@@ -1566,14 +1542,14 @@ private:
             throw std::invalid_argument("relation joins require an alias");
         }
         if (!relations_) {
-            relations_.emplace(query_.resource());
+            relations_.emplace();
         }
         relations_->template add<entity_type>(query_, alias_, relation, alias, join, condition);
         return *this;
     }
     detail::db_repository_executor_type<executor_type> executor_;
     db_query query_;
-    std::pmr::string alias_;
+    std::string alias_;
     detail::db_projection selected_;
     std::optional<detail::db_relation_plan> relations_{};
     bool with_deleted_{false};
@@ -1657,7 +1633,7 @@ public:
             throw std::invalid_argument("SET requires at least one writable column");
         }
         std::array<db_assignment, column_capacity> inline_staged{};
-        std::pmr::vector<db_assignment> heap_staged(query_.resource());
+        std::vector<db_assignment> heap_staged;
         std::span<db_assignment> staged;
         if (assignments.size() <= inline_staged.size()) {
             staged = std::span(inline_staged).first(assignments.size());
@@ -1848,7 +1824,7 @@ public:
         return returning(std::span<const db_selection>(fields_value.begin(), fields_value.size()));
     }
     db_write_query_builder& returning(std::span<const std::string_view> columns) {
-        return detail::stage_db_selections<column_capacity>(columns, query_.resource(),
+        return detail::stage_db_selections<column_capacity>(columns,
             [this](std::span<const db_selection> selections) -> db_write_query_builder& { return returning(selections); });
     }
     [[nodiscard]] task<db_exec_result> execute() const {
@@ -1877,13 +1853,13 @@ public:
         return executor_.template query_mapped<std::optional<scalar_type>>(query_, detail::db_map_scalar<scalar_type>{});
     }
     template <db_mapped_value scalar_type>
-    [[nodiscard]] task<std::pmr::vector<scalar_type>> get_scalars() const {
+    [[nodiscard]] task<std::vector<scalar_type>> get_scalars() const {
         require_returning("get_scalars requires RETURNING");
-        return executor_.template query_mapped<std::pmr::vector<scalar_type>>(query_, detail::db_map_scalars<scalar_type>{});
+        return executor_.template query_mapped<std::vector<scalar_type>>(query_, detail::db_map_scalars<scalar_type>{});
     }
     [[nodiscard]] db_statement get_query_and_parameters() const {
         validate();
-        return query_.compile(executor_.query_driver(), query_.resource());
+        return query_.compile(executor_.query_driver());
     }
     // Borrows the complete validated DML AST, including RETURNING and parameters.
     // The builder and its resource must outlive the view; with() clones on import.
@@ -1905,8 +1881,7 @@ private:
         : executor_(executor),
           query_(std::move(query)),
           inserting_(inserting),
-          alias_(alias, query_.resource()),
-          selected_(query_.resource()) {
+          alias_(alias) {
         record_inserted_columns(inserted_columns);
     }
     std::string_view qualifier() const {
@@ -1963,7 +1938,7 @@ private:
     detail::db_repository_executor_type<executor_type> executor_;
     db_query query_;
     bool inserting_;
-    std::pmr::string alias_;
+    std::string alias_;
     detail::db_projection selected_;
     std::array<std::string_view, column_capacity> inserted_columns_{};
     std::size_t inserted_column_count_{0};
@@ -1980,18 +1955,18 @@ public:
     // Update builders start with the lifecycle stamps; set() on update_date_
     // or version_ replaces the stamp.
     [[nodiscard]] db_write_query_builder<entity_type, executor_type> update_builder(std::string_view alias = {}) const {
-        db_query query(executor_.query_resource());
+        db_query query;
         query.update(entity_type::table_name(), alias);
         detail::stamp_lifecycle_columns<entity_type>(query, alias.empty() ? entity_type::table_name() : alias);
         return db_write_query_builder<entity_type, executor_type>(executor_, std::move(query), false, alias);
     }
     [[nodiscard]] db_write_query_builder<entity_type, executor_type> delete_builder(std::string_view alias = {}) const {
-        db_query query(executor_.query_resource());
+        db_query query;
         query.delete_from(entity_type::table_name(), alias);
         return db_write_query_builder<entity_type, executor_type>(executor_, std::move(query), false, alias);
     }
     [[nodiscard]] db_write_query_builder<entity_type, executor_type> insert_builder(std::string_view alias = {}) const {
-        db_query query(executor_.query_resource());
+        db_query query;
         query.insert_into(entity_type::table_name(), {}, alias);
         return db_write_query_builder<entity_type, executor_type>(executor_, std::move(query), true, alias);
     }
@@ -2066,7 +2041,7 @@ public:
         return builder.execute();
     }
     [[nodiscard]] task<db_exec_result> clear() const {
-        auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver(), executor_.query_resource());
+        auto sql = detail::format_truncate_table(entity_type::table_name(), executor_.query_driver());
         return executor_.execute_prepared(std::move(sql));
     }
     [[nodiscard]] task<db_exec_result> insert(const entity_type& entity) const {
@@ -2092,7 +2067,7 @@ public:
         return update_builder().decrement(property_path, value).where(predicate).execute();
     }
     [[nodiscard]] task<db_exec_result> remove(const entity_type& entity) const {
-        db_query query(executor_.query_resource());
+        db_query query;
         query.delete_from(entity_type::table_name());
         detail::for_each_descriptor<typename entity_type::columns_type>([&]<typename c_type, std::size_t> {
             if constexpr (c_type::options.primary_key_) {
@@ -2124,7 +2099,7 @@ public:
 
 private:
     static constexpr std::size_t column_capacity = std::tuple_size_v<typename entity_type::columns_type>;
-    friend class db_handle;
+    friend class db_session;
     friend class db_transaction;
     explicit db_repository(detail::db_repository_input_type<executor_type> executor)
         : executor_(executor) {}
@@ -2165,12 +2140,12 @@ private:
         auto builder = query_builder();
         builder.with_deleted(options.with_deleted_);
         if (!options.select_.empty()) {
-            detail::stage_db_selections<column_capacity>(options.select_.view(), builder.query_.resource(),
+            detail::stage_db_selections<column_capacity>(options.select_.view(),
                 [&builder](std::span<const db_selection> selections) -> auto& { return builder.select(selections); });
         }
         detail::apply_find_options<entity_type>(builder.query_, options, builder.alias_);
         if (!options.relations_.empty()) {
-            builder.relations_.emplace(builder.query_.resource());
+            builder.relations_.emplace();
             for (const auto& path : options.relations_) {
                 builder.relations_->template add<entity_type>(builder.query_, builder.alias_, path);
             }
@@ -2194,7 +2169,7 @@ private:
         }
     };
     insert_query_result insert_query(std::span<const entity_type> entities, std::string_view alias = {}) const {
-        insert_query_result result{db_query(executor_.query_resource())};
+        insert_query_result result{db_query{}};
         result.query_.insert_into(entity_type::table_name(), {}, alias);
         detail::append_entity_insert_rows(result.query_, entities, result.columns_, result.count_);
         return result;
@@ -2203,13 +2178,12 @@ private:
 };
 
 template <typename entity_type>
-db_repository<entity_type, db_handle> db_handle::repository() const {
+db_repository<entity_type, db_session> db_session::repository() const {
     registration_.require_active();
-    return db_repository<entity_type, db_handle>(*this);
+    return db_repository<entity_type, db_session>(*this);
 }
 template <typename entity_type>
 db_repository<entity_type, db_transaction> db_transaction::repository() & {
-    (void)query_resource();
     return db_repository<entity_type, db_transaction>(*this);
 }
 

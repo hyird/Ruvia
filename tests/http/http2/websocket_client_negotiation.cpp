@@ -4,7 +4,6 @@
 
 #include <array>
 #include <cstdint>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -29,7 +28,7 @@ ruvia::http_client_response_head accepted_head(std::string_view fields) {
         ruvia::http_origin_view::https({.host_ = "example.test"}), {.method_ = "GET", .target_ = "/ws"}, request_buffer);
     ruvia::http1_client_response_parser parser(
         std::move(std::get<ruvia::prepared_http1_client_request>(prepared)).take_exchange_state());
-    auto parsed = parser.parse("HTTP/1.1 200 OK\r\n" + std::pmr::string(fields) + "\r\n");
+    auto parsed = parser.parse("HTTP/1.1 200 OK\r\n" + std::string(fields) + "\r\n");
     if (parsed.parsed() == nullptr) {
         throw std::runtime_error("expected parsed response");
     }
@@ -60,9 +59,8 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
              {"sec-websocket-accept", "s3pPLMBiTxaQ9kYGzzhZRbK+xOo="},
              {"sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ=="},
          }}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
-        const auto append_frame = [&](std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+        auto connection = ruvia::http2_connection::client({});
+        const auto append_frame = [&](std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
                                       std::uint32_t stream_id, std::string_view payload) {
             std::array<char, ruvia::http2_frame_header_bytes> header{};
             EXPECT_TRUE(ruvia::encode_http2_frame_header(
@@ -70,7 +68,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
             wire.append(header.data(), header.size());
             wire.append(payload);
         };
-        std::pmr::string settings_wire(&resource);
+        std::string settings_wire;
         constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
         append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0,
             std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
@@ -78,17 +76,17 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         while (connection.next_event()) {
         }
 
-        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        ruvia::websocket_client_negotiation negotiation({});
         const auto submitted =
             ruvia::submit_http2_websocket_client_request(connection, negotiation, "https", "example.test", "/ws");
         EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
         if (!std::holds_alternative<std::uint32_t>(submitted)) {
             return;
         }
-        std::pmr::string block(&resource);
+        std::string block;
         ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
         ruvia::hpack_encoder::encode_header(block, name, value);
-        std::pmr::string wire(&resource);
+        std::string wire;
         append_frame(wire, ruvia::http2_frame_type::headers, 0x4, std::get<std::uint32_t>(submitted), block);
         EXPECT_TRUE(connection.feed(wire) == ruvia::http2_feed_result::accepted);
         auto event = connection.next_event();
@@ -99,9 +97,8 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         }
     }
     {
-        std::pmr::unsynchronized_pool_resource resource;
-        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
-        std::pmr::string settings_wire(&resource);
+        auto connection = ruvia::http2_connection::client({});
+        std::string settings_wire;
         constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
         std::array<char, ruvia::http2_frame_header_bytes> header{};
         EXPECT_TRUE(ruvia::encode_http2_frame_header(
@@ -112,7 +109,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
         EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
         while (connection.next_event()) {
         }
-        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        ruvia::websocket_client_negotiation negotiation({});
         const std::array<ruvia::http_header_view, 1> borrowed_headers{{{"x-trace", "borrowed"}}};
         const auto submitted = ruvia::submit_http2_websocket_client_request(
             connection, negotiation, "https", "example.test", "/ws", borrowed_headers);
@@ -130,7 +127,7 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
              {"transfer-encoding", "chunked"},
              {"te", "trailers"},
          }}) {
-        const auto head = accepted_head(std::pmr::string(name) + ": " + std::pmr::string(value) + "\r\n");
+        const auto head = accepted_head(std::string(name) + ": " + std::string(value) + "\r\n");
         const auto res = open_stream_selection(ws_neg, head);
         EXPECT_TRUE(std::holds_alternative<ruvia::websocket_client_handshake_error>(res) &&
                     std::get<ruvia::websocket_client_handshake_error>(res) ==
@@ -144,9 +141,8 @@ TEST(Ruvia, websocket_h2_client_negotiation_ignores_rfc6455_key_exchange_fields)
 // stream arrives in the same feed().
 TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_headers) {
     for (const bool end_on_headers : {false, true}) {
-        std::pmr::unsynchronized_pool_resource resource;
-        auto connection = ruvia::http2_connection::client({.resource_ = &resource});
-        const auto append_frame = [&](std::pmr::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
+        auto connection = ruvia::http2_connection::client({});
+        const auto append_frame = [&](std::string& wire, ruvia::http2_frame_type type, std::uint8_t flags,
                                       std::uint32_t stream_id, std::string_view payload) {
             std::array<char, ruvia::http2_frame_header_bytes> header{};
             EXPECT_TRUE(ruvia::encode_http2_frame_header(
@@ -154,14 +150,14 @@ TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_heade
             wire.append(header.data(), header.size());
             wire.append(payload);
         };
-        std::pmr::string settings_wire(&resource);
+        std::string settings_wire;
         constexpr std::array<char, 6> enable_connect_protocol{0x00, 0x08, 0x00, 0x00, 0x00, 0x01};
         append_frame(settings_wire, ruvia::http2_frame_type::settings, 0, 0,
             std::string_view(enable_connect_protocol.data(), enable_connect_protocol.size()));
         EXPECT_TRUE(connection.feed(settings_wire) == ruvia::http2_feed_result::accepted);
         while (connection.next_event()) {
         }
-        ruvia::websocket_client_negotiation negotiation({}, &resource);
+        ruvia::websocket_client_negotiation negotiation({});
         const auto submitted =
             ruvia::submit_http2_websocket_client_request(connection, negotiation, "https", "example.test", "/ws");
         EXPECT_TRUE(std::holds_alternative<std::uint32_t>(submitted));
@@ -169,9 +165,9 @@ TEST(Ruvia, websocket_h2_client_response_head_reports_end_stream_only_from_heade
             return;
         }
         const auto stream_id = std::get<std::uint32_t>(submitted);
-        std::pmr::string block(&resource);
+        std::string block;
         ruvia::hpack_encoder::encode_status(block, ruvia::http_status::ok);
-        std::pmr::string wire(&resource);
+        std::string wire;
         append_frame(wire, ruvia::http2_frame_type::headers, end_on_headers ? 0x5 : 0x4, stream_id, block);
         if (!end_on_headers) {
             // The server's Close frame (1000, "bye") with END_STREAM.

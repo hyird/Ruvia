@@ -21,11 +21,11 @@ template <std::size_t n>
     static_assert(n > 1 && response_header_storage_size_fits(0, n - 1));
     if (name.empty() || name.size() > n - 1 || bytes_value[n - 1] != '\0' ||
         !std::string_view(bytes_value, n - 1).starts_with(name)) {
-        throw "invalid static response header storage";
+        throw std::logic_error("invalid static response header storage");
     }
     if (known_bit != 0 && known_bit != response_header_upgrade &&
         response_known_header_slot(known_bit) == response_known_header_count) {
-        throw "static response header requires one known header bit";
+        throw std::logic_error("static response header requires one known header bit");
     }
     return http_response_header_access::make(
         bytes_value, static_cast<std::uint32_t>(name.size()),

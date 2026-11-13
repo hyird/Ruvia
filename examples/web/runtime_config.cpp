@@ -14,12 +14,10 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -28,7 +26,7 @@
 
 namespace {
 
-void assign_if_present(std::pmr::string& target, std::optional<std::string_view> value) {
+void assign_if_present(std::string& target, std::optional<std::string_view> value) {
     if (value) {
         target.assign(value->data(), value->size());
     }
@@ -42,7 +40,7 @@ void assign_if_present(std::pmr::string& target, std::optional<std::string_view>
 // `static constexpr bool ruvia_runs_on_unmatched_requests = true;` wraps those.
 class global_header_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Runtime-Example", "true");
     }
@@ -51,15 +49,15 @@ public:
 class scoped_header_middleware final {
 public:
     explicit scoped_header_middleware(std::string_view value)
-        : value_(value, ruvia::process_resource()) {}
+        : value_(value) {}
 
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Scoped-Example", value_);
     }
 
 private:
-    std::pmr::string value_;
+    std::string value_;
 };
 
 class runtime_controller final {
@@ -111,7 +109,6 @@ int main() {
             .max_requests_per_connection_ = 1000,
             .max_buffered_body_bytes_ = 16 * 1024 * 1024,
             .max_websocket_message_bytes_ = 16 * 1024 * 1024,
-            .request_arena_initial_bytes_ = 4096,
             .compression_ = std::move(compression),
             .cors_ = std::move(cors),
         });
@@ -119,7 +116,7 @@ int main() {
         const auto cert = env_value.path("RUVIA_TLS_CERT");
         const auto key = env_value.path("RUVIA_TLS_KEY");
         if (cert && key) {
-            std::pmr::string password(ruvia::process_resource());
+            std::string password;
             assign_if_present(password, env_value.get("RUVIA_TLS_PASSWORD"));
             ruvia::listen_config listener_value{
                 .address_ = "0.0.0.0",
@@ -147,7 +144,7 @@ int main() {
                 // Each SNI entry has its own certificate/key. The default listener
                 // certificate remains the fallback for other server names.
                 listener_value.tls_.sni_.push_back({
-                    .host_ = std::pmr::string(*host, ruvia::process_resource()),
+                    .host_ = std::string(*host),
                     .identity_ =
                         {
                             .certificate_chain_file_ = env_value.path("RUVIA_SNI_CERT").value_or(std::filesystem::path{}),

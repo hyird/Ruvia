@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,7 +24,7 @@ inline constexpr std::size_t static_root_linear_lookup_limit = 8;
 // each entry): a short vector is scanned, a longer one binary-searched.
 template <typename entry_type, typename projection_type>
 [[nodiscard]] const entry_type* find_static_index_entry(
-    const std::pmr::vector<entry_type>& entries, std::string_view key, projection_type projection) noexcept {
+    const std::vector<entry_type>& entries, std::string_view key, projection_type projection) noexcept {
     if (entries.size() <= static_root_linear_lookup_limit) {
         for (const auto& entry : entries) {
             if (projection(entry) == key) {
@@ -82,23 +81,18 @@ struct static_file_version final {
 
 // URL index keys and extension policy use UTF-8 on every platform rather than
 // the system narrow encoding of filesystem::path::generic_string<char>().
-[[nodiscard]] inline std::pmr::u8string static_file_utf8_path(
-    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
-    return path.generic_string<char8_t, std::char_traits<char8_t>,
-        std::pmr::polymorphic_allocator<char8_t>>(
-        std::pmr::polymorphic_allocator<char8_t>(resource));
+[[nodiscard]] inline std::u8string static_file_utf8_path(
+    const std::filesystem::path& path) {
+    return path.generic_u8string();
 }
 
-[[nodiscard]] inline std::pmr::string static_file_utf8_string(
-    const std::filesystem::path& path, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::string static_file_utf8_string(
+    const std::filesystem::path& path) {
     if constexpr (std::is_same_v<std::filesystem::path::value_type, char>) {
-        return path.generic_string<char, std::char_traits<char>,
-            std::pmr::polymorphic_allocator<char>>(
-            std::pmr::polymorphic_allocator<char>(resource));
+        return path.generic_string();
     } else {
-        const auto utf8 = static_file_utf8_path(path, resource);
-        return std::pmr::string(
-            reinterpret_cast<const char*>(utf8.data()), utf8.size(), resource);
+        const auto utf8 = static_file_utf8_path(path);
+        return std::string(reinterpret_cast<const char*>(utf8.data()), utf8.size());
     }
 }
 template <typename char_value_type>
@@ -116,13 +110,13 @@ template <typename char_value_type>
     return {};
 }
 
-[[nodiscard]] inline std::pmr::string lower_static_file_extension_from_utf8(
-    std::string_view utf8_path, std::pmr::memory_resource* resource) {
+[[nodiscard]] inline std::string lower_static_file_extension_from_utf8(
+    std::string_view utf8_path) {
     const auto source_value = static_file_extension(utf8_path);
     if (source_value.empty()) {
-        return std::pmr::string(resource);
+        return {};
     }
-    std::pmr::string extension(resource);
+    std::string extension;
     extension.reserve(source_value.size());
     for (const char c : source_value) {
         auto out = c;
@@ -282,11 +276,11 @@ inline constexpr std::size_t static_file_etag_size = 2U + 2U * sizeof(std::uint6
     return output;
 }
 
-[[nodiscard]] inline std::pmr::string make_static_file_snapshot_etag(
-    std::pmr::memory_resource* resource, std::uint64_t size, std::uint64_t modified_token,
+[[nodiscard]] inline std::string make_static_file_snapshot_etag(
+    std::uint64_t size, std::uint64_t modified_token,
     http_response_file_identity identity, http_content_coding coding = http_content_coding::identity) {
     const auto formatted = format_static_file_snapshot_etag(size, modified_token, identity, coding);
-    return std::pmr::string(formatted.data(), formatted.size(), resource);
+    return std::string(formatted.data(), formatted.size());
 }
 
 }  // namespace ruvia::detail

@@ -86,10 +86,6 @@ public:
     }
 
 private:
-    struct state_deleter_type final {
-        void operator()(detail::env_state* state) const noexcept;
-    };
-
     [[nodiscard]] static std::optional<bool> parse_bool_value(std::string_view value) noexcept;
 
     template <typename t_type>
@@ -102,7 +98,7 @@ private:
     template <typename>
     static constexpr bool unsupported_typed_env_value = false;
 
-    std::unique_ptr<detail::env_state, state_deleter_type> state_;
+    std::unique_ptr<detail::env_state> state_;
 };
 
 template <typename t_type>

@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -42,8 +41,7 @@ void check_resolved_target(const http_origin_view& origin,
     std::string_view current_target, std::string_view location, std::string_view expected) {
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
-                                                        .location_ = location,
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = location});
     const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
     EXPECT_TRUE(resolved != nullptr);
     if (resolved != nullptr) {
@@ -56,8 +54,7 @@ void check_cross_origin_redirect(const http_origin_view& origin,
     std::string_view current_target, std::string_view location) {
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
-                                                        .location_ = location,
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = location});
     const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
     EXPECT_TRUE(resolved != nullptr);
     if (resolved != nullptr) {
@@ -69,8 +66,7 @@ void check_redirect_target_failure(const http_origin_view& origin, std::string_v
     http_client_redirect_resolution_error expected) {
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
-                                                        .location_ = location,
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = location});
     const auto* failure = std::get_if<http_client_redirect_resolution_error>(&result_value);
     EXPECT_TRUE(failure != nullptr);
     if (failure != nullptr) {
@@ -160,7 +156,7 @@ TEST(Ruvia, http_client_redirect_request_plan_follows_rfc) {
 }
 
 TEST(Ruvia, http_client_redirect_request_plan_owns_preserved_method) {
-    std::pmr::string method = "PROPFIND";
+    std::string method = "PROPFIND";
     http_client_request_view request;
     request.method_ = method;
 
@@ -252,9 +248,9 @@ TEST(Ruvia, http_client_ipv6_origin_compares_addresses_not_spellings) {
             const auto origin = http_origin_view::http({.host_ = source});
             EXPECT_TRUE(classify_http_client_origin_authority(origin, destination) ==
                         http_client_origin_authority_status::same_origin);
-            const auto location = std::pmr::string("http://") + std::pmr::string(destination) + "/next";
+            const auto location = std::string("http://") + std::string(destination) + "/next";
             check_resolved_target(origin, "/previous", location, "/next");
-            EXPECT_TRUE(classify_http_client_origin_authority(origin, std::pmr::string(destination) + ":81") ==
+            EXPECT_TRUE(classify_http_client_origin_authority(origin, std::string(destination) + ":81") ==
                         http_client_origin_authority_status::different_origin);
         }
     }
@@ -320,12 +316,12 @@ TEST(Ruvia, http_client_redirect_validates_path_before_dot_segment_removal) {
 TEST(Ruvia, http_client_redirect_empty_reference_path_preserves_base_path) {
     const auto origin = http_origin_view::http({.host_ = "example.com"});
     for (const std::string_view path : {"/a/./page", "/a/../page", "/a//.", "/a/.."}) {
-        const std::pmr::string current = std::pmr::string(path) + "?old=1";
+        const std::string current = std::string(path) + "?old=1";
         for (const std::string_view location : {"", "#fragment"}) {
             check_resolved_target(origin, current, location, current);
         }
-        check_resolved_target(origin, current, "?new=2", std::pmr::string(path) + "?new=2");
-        check_resolved_target(origin, current, "?", std::pmr::string(path) + "?");
+        check_resolved_target(origin, current, "?new=2", std::string(path) + "?new=2");
+        check_resolved_target(origin, current, "?", std::string(path) + "?");
     }
     check_resolved_target(origin, "/a/../page?old=1", "//example.com", "/");
     check_resolved_target(origin, "/a/../page?old=1", "next", "/next");
@@ -396,8 +392,7 @@ void check_resolved_redirect(const http_origin_view& origin,
     const expected_resolved_redirect& expected) {
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
-                                                        .location_ = location,
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = location});
     const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
     EXPECT_TRUE(resolved != nullptr);
     if (resolved != nullptr) {
@@ -413,8 +408,7 @@ void check_redirect_resolution_failure(const http_origin_view& origin, std::stri
     http_client_redirect_resolution_error expected) {
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = current_target,
-                                                        .location_ = location,
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = location});
     const auto* failure = std::get_if<http_client_redirect_resolution_error>(&result_value);
     EXPECT_TRUE(failure != nullptr);
     if (failure != nullptr) {
@@ -461,8 +455,7 @@ TEST(Ruvia, http_client_redirect_resolution_builds_borrowing_origin) {
     const auto origin = origin_for("example.com", 80);
     const auto result_value =
         resolve_http_client_redirect_target(origin, {.current_target_ = "/a/b",
-                                                        .location_ = "https://other.example:8443/x",
-                                                        .resource_ = std::pmr::get_default_resource()});
+                                                        .location_ = "https://other.example:8443/x"});
     const auto* resolved = std::get_if<http_client_resolved_redirect>(&result_value);
     EXPECT_TRUE(resolved != nullptr);
     if (resolved != nullptr) {
@@ -492,7 +485,7 @@ TEST(Ruvia, http_client_redirect_resolution_reports_typed_failures) {
 TEST(Ruvia, http_client_redirect_target_options_accept_named_owners_and_copy_into_resolved_redirect) {
     const auto origin = origin_for("example.com", 80);
     std::string current_target("/a/b");
-    std::pmr::string location("https://other.example:8443/next");
+    std::string location("https://other.example:8443/next");
     const auto result_value = resolve_http_client_redirect_target(
         origin, {.current_target_ = current_target, .location_ = location});
     current_target.assign("/mutated");

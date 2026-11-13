@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/error.h"
 
@@ -61,7 +60,7 @@ std::exception_ptr response_file_failure::response_error() const {
 char* response_file_source::read_buffer::data() & {
     if (data_ == nullptr) {
         data_.reset(static_cast<char*>(
-            process_resource()->allocate(response_file_read_ahead_bytes, alignof(std::max_align_t))));
+            ::operator new(response_file_read_ahead_bytes, std::align_val_t{alignof(std::max_align_t)})));
     }
     return data_.get();
 }
@@ -71,13 +70,12 @@ void response_file_source::read_buffer::reset() noexcept {
 }
 
 void response_file_source::read_buffer::buffer_deleter::operator()(char* bytes) const noexcept {
-    process_resource()->deallocate(bytes, response_file_read_ahead_bytes, alignof(std::max_align_t));
+    ::operator delete(bytes, std::align_val_t{alignof(std::max_align_t)});
 }
 
 // The path travels with the state to the pool thread, so it lives in the
 // synchronized process resource.
-response_file_source::read_state::read_state()
-    : path_(process_resource()) {}
+response_file_source::read_state::read_state() = default;
 
 response_file_source::response_file_source(const http_response& response, response_file_io io)
     : response_(response),
@@ -95,7 +93,7 @@ void response_file_source::select_file(http_response_file_view file) {
         state_.identity_ = file.identity();
         state_.validated_ = false;
         state_.input_.reset();
-        if (const auto* opened = file.opened_handle()) {
+        if (const auto* opened = file.opened_file()) {
             // An independent handle travels with the read state: a cancelled
             // response may be destroyed before a late read finishes.
             state_.input_ = duplicate_native_file(*opened, state_.error_);

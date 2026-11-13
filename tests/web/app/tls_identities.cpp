@@ -35,7 +35,6 @@
 #include <openssl/x509.h>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http1_client_response_body_decoder.h"
@@ -114,14 +113,14 @@ public:
     }
 };
 
-std::pmr::string read_text(const std::filesystem::path& path) {
+std::string read_text(const std::filesystem::path& path) {
     std::ifstream input(path, std::ios::binary);
     std::ostringstream text;
     text << input.rdbuf();
     if (!input) {
         throw std::runtime_error("cannot read TLS test PEM");
     }
-    return std::pmr::string(text.view());
+    return std::string(text.view());
 }
 
 ruvia::tls_identity_config file_identity(const ruvia::test::tls_identity& identity) {
@@ -251,7 +250,7 @@ bool serves_hello(tls_stream& stream) {
                     continue;
                 }
                 successful = head->head().status() == ruvia::http_status::ok;
-                decoder.emplace(head->plan(), ruvia::process_resource());
+                decoder.emplace(head->plan());
                 response.erase(0, head->consumed_bytes());
             }
         }
@@ -453,7 +452,7 @@ std::exception_ptr queued_preparation(external_runtime& runtime, ruvia::task<voi
         co_return;
     };
     const auto timer = [&]() -> ruvia::task<void> {
-        EXPECT_EQ(co_await ruvia::sleep_for(caller.handle(), 10ms), ruvia::timer_sleep_result::elapsed);
+        EXPECT_EQ(co_await ruvia::sleep_for(caller.worker(), 10ms), ruvia::timer_sleep_result::elapsed);
         timer_ran.release();
     };
     auto task_result = caller.start(task());
@@ -588,7 +587,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
 #endif
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2}).listen(listener).on_start(nullptr).on_start([] { started().release(); });
-    EXPECT_EQ(failure_of([&] { caller.start(app.replace_tls_identities(caller.handle(), https, {.identity_ = file_identity(second)})).get(); }),
+    EXPECT_EQ(failure_of([&] { caller.start(app.replace_tls_identities(caller.worker(), https, {.identity_ = file_identity(second)})).get(); }),
         "logic_error");
 
     auto client = tls_client();
@@ -614,7 +613,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
 
         EXPECT_EQ(plain_body(io, http_endpoint, "/replace"), "none");
         const auto replace = [&](const ruvia::listener_endpoint& endpoint, ruvia::tls_config config) {
-            return failure_of([&] { caller.start(app.replace_tls_identities(caller.handle(), endpoint, std::move(config))).get(); });
+            return failure_of([&] { caller.start(app.replace_tls_identities(caller.worker(), endpoint, std::move(config))).get(); });
         };
         const auto replacement = [&] { return ruvia::tls_config{.identity_ = file_identity(second)}; };
         EXPECT_EQ(replace({.address_ = "127.0.0.2", .port_ = https_endpoint.port()}, replacement()), "invalid_argument");
@@ -673,7 +672,7 @@ TEST(Ruvia, https_identities_are_replaced_at_runtime_for_new_handshakes) {
         app.stop();
         runner.join();
     }
-    EXPECT_EQ(failure_of([&] { caller.start(app.replace_tls_identities(caller.handle(), https, {.identity_ = file_identity(second)})).get(); }),
+    EXPECT_EQ(failure_of([&] { caller.start(app.replace_tls_identities(caller.worker(), https, {.identity_ = file_identity(second)})).get(); }),
         "logic_error");
 
     ruvia::test::app_run runner(app);
@@ -688,23 +687,23 @@ TEST(Ruvia, certificate_library_parses_only_changed_identity_and_failed_updates_
     external_runtime runtime;
     const auto caller = runtime.loops_[0];
     ruvia::tls_certificate_store store;
-    caller.start(store.insert_or_assign(caller.handle(), 1, file_identity(first))).get();
-    caller.start(store.insert_or_assign(caller.handle(), 2, pem_identity(second))).get();
+    caller.start(store.insert_or_assign(caller.worker(), 1, file_identity(first))).get();
+    caller.start(store.insert_or_assign(caller.worker(), 2, pem_identity(second))).get();
     EXPECT_EQ(store.size(), 2u);
     // Existing identities are already parsed, not re-read during any mutation.
     std::filesystem::remove(first.private_key_file());
-    caller.start(store.insert_or_assign(caller.handle(), 2, pem_identity(second))).get();
+    caller.start(store.insert_or_assign(caller.worker(), 2, pem_identity(second))).get();
     EXPECT_TRUE(store.contains(1));
-    EXPECT_THROW(caller.start(store.insert_or_assign(caller.handle(), 1, file_identity(first))).get(), std::system_error);
-    EXPECT_THROW(caller.start(store.insert_or_assign(caller.handle(), 0, pem_identity(second))).get(), std::invalid_argument);
+    EXPECT_THROW(caller.start(store.insert_or_assign(caller.worker(), 1, file_identity(first))).get(), std::system_error);
+    EXPECT_THROW(caller.start(store.insert_or_assign(caller.worker(), 0, pem_identity(second))).get(), std::invalid_argument);
     EXPECT_EQ(store.size(), 2u);
     std::array<std::jthread, 4> writers;
     for (std::size_t i = 0; i < writers.size(); ++i) {
         writers[i] = std::jthread([&, id = i + 10] {
             for (int n = 0; n < 8; ++n) {
-                caller.start(store.insert_or_assign(caller.handle(), id, pem_identity(second))).get();
+                caller.start(store.insert_or_assign(caller.worker(), id, pem_identity(second))).get();
                 EXPECT_TRUE(store.contains(id));
-                EXPECT_TRUE(caller.start(store.erase(caller.handle(), id)).get());
+                EXPECT_TRUE(caller.start(store.erase(caller.worker(), id)).get());
             }
         });
     }
@@ -712,8 +711,8 @@ TEST(Ruvia, certificate_library_parses_only_changed_identity_and_failed_updates_
         writer.join();
     }
     EXPECT_EQ(store.size(), 2u);
-    EXPECT_TRUE(caller.start(store.erase(caller.handle(), 1)).get());
-    EXPECT_FALSE(caller.start(store.erase(caller.handle(), 1)).get());
+    EXPECT_TRUE(caller.start(store.erase(caller.worker(), 1)).get());
+    EXPECT_FALSE(caller.start(store.erase(caller.worker(), 1)).get());
 }
 
 TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves_inflight_snapshots) {
@@ -724,8 +723,8 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
     external_runtime runtime;
     const auto caller = runtime.loops_[0];
     const auto store = std::make_shared<ruvia::tls_certificate_store>();
-    caller.start(store->insert_or_assign(caller.handle(), 1, pem_identity(rsa))).get();
-    caller.start(store->insert_or_assign(caller.handle(), 2, pem_identity(ec))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 1, pem_identity(rsa))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 2, pem_identity(ec))).get();
     asio::io_context io;
     ruvia::test::tcp_port_reservation reservation(io);
     const auto endpoint = reservation.endpoint();
@@ -792,15 +791,15 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
     });
     const bool entered = selecting.try_acquire_for(10s);
     EXPECT_TRUE(entered);
-    caller.start(store->insert_or_assign(caller.handle(), 1, pem_identity(replacement))).get();
-    EXPECT_TRUE(caller.start(store->erase(caller.handle(), 1)).get());
+    caller.start(store->insert_or_assign(caller.worker(), 1, pem_identity(replacement))).get();
+    EXPECT_TRUE(caller.start(store->erase(caller.worker(), 1)).get());
     release.release();
     EXPECT_EQ(held.get(), "rsa");
     EXPECT_TRUE(served_name(io, rsa13, endpoint, "localhost").empty());
     EXPECT_THROW(connect_tls(io, rsa13, endpoint, "localhost", session13.get()), std::system_error);
     EXPECT_TRUE(serves_hello(*established));
     EXPECT_EQ(peer_common_name(established->native_handle()), "rsa");
-    caller.start(store->insert_or_assign(caller.handle(), 1, pem_identity(replacement))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 1, pem_identity(replacement))).get();
     EXPECT_EQ(served_name(io, rsa13, endpoint, "localhost"), "replacement");
     EXPECT_TRUE(resumes(io, rsa12, endpoint, session12));
     EXPECT_TRUE(resumes(io, rsa13, endpoint, session13));
@@ -812,7 +811,7 @@ TEST(Ruvia, certificate_library_selector_uses_capabilities_rejects_and_preserves
         ruvia::test::http3_test_client client(h3_endpoint, ec.ca_file_, "localhost", 5s);
         return client.capture_resumption();
     }();
-    caller.start(store->insert_or_assign(caller.handle(), 2, pem_identity(next_ec))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 2, pem_identity(next_ec))).get();
     EXPECT_TRUE(serves_hello(h3));
     EXPECT_TRUE(http3_serves(udp.endpoint().port(), next_ec.ca_file_, "localhost"));
     {
@@ -836,7 +835,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
     const auto store = std::make_shared<ruvia::tls_certificate_store>();
     external_runtime runtime;
     auto& loops = runtime.loops_;
-    loops[0].start(store->insert_or_assign(loops[0].handle(), 1, file_identity(first))).get();
+    loops[0].start(store->insert_or_assign(loops[0].worker(), 1, file_identity(first))).get();
     asio::io_context client_io;
     // Ensure the external loops are driven before a cross-worker operation.
     const auto ready = []() -> ruvia::task<void> { co_return; };
@@ -864,7 +863,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
             .address_ = "127.0.0.1", .https_ = port, .tls_ = {.certificate_store_ = store, .select_certificate_ = selector}, .dispatch_ = ruvia::listener_dispatch::request_stream};
     };
     ruvia::http_server single(loops[0], {.request_stream_ = answer});
-    ruvia::http_server_group group(loops, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
+    ruvia::http_server_group group(loops, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     auto group_configuration = configuration(group_port.endpoint().port());
 #if defined(RUVIA_ENABLE_HTTP3)
     group_configuration.http3_ = group_udp.endpoint().port();
@@ -888,7 +887,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
         co_await single.start();
     };
     loops[0].start(configure_single()).get();
-    loops[0].start(group.start(loops[0].handle())).get();
+    loops[0].start(group.start(loops[0].worker())).get();
     std::array clients{tls_client(TLS1_2_VERSION), tls_client(TLS1_3_VERSION)};
     std::array authenticated{tls_client(TLS1_2_VERSION), tls_client(TLS1_3_VERSION)};
     std::array<std::shared_ptr<SSL_SESSION>, 2> single_tickets, group_tickets;
@@ -909,7 +908,7 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
     EXPECT_TRUE(http3_serves(single_udp.endpoint().port(), first.ca_file_, "localhost"));
     EXPECT_TRUE(http3_serves(group_udp.endpoint().port(), first.ca_file_, "localhost"));
 #endif
-    loops[0].start(store->insert_or_assign(loops[0].handle(), 1, pem_identity(second))).get();
+    loops[0].start(store->insert_or_assign(loops[0].worker(), 1, pem_identity(second))).get();
     for (std::size_t i = 0; i < clients.size(); ++i) {
         SCOPED_TRACE(i == 0 ? "TLS 1.2" : "TLS 1.3");
         EXPECT_EQ(served_name(client_io, clients[i], single_port.endpoint(), "localhost"), "second");
@@ -923,12 +922,12 @@ TEST(Ruvia, certificate_library_is_shared_by_independent_single_and_multiworker_
     EXPECT_TRUE(http3_serves(single_udp.endpoint().port(), second.ca_file_, "localhost"));
     EXPECT_TRUE(http3_serves(group_udp.endpoint().port(), second.ca_file_, "localhost"));
 #endif
-    EXPECT_TRUE(loops[0].start(store->erase(loops[0].handle(), 1)).get());
+    EXPECT_TRUE(loops[0].start(store->erase(loops[0].worker(), 1)).get());
     for (auto& client : clients) {
         EXPECT_TRUE(served_name(client_io, client, single_port.endpoint(), "localhost").empty());
         EXPECT_TRUE(served_name(client_io, client, group_port.endpoint(), "localhost").empty());
     }
-    loops[0].start(group.shutdown(loops[0].handle())).get();
+    loops[0].start(group.shutdown(loops[0].worker())).get();
     loops[0].start(single.shutdown()).get();
 }
 
@@ -939,9 +938,9 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
     external_runtime runtime;
     const auto caller = runtime.loops_[0];
     const auto store = std::make_shared<ruvia::tls_certificate_store>();
-    caller.start(store->insert_or_assign(caller.handle(), 1, pem_identity(first))).get();
-    caller.start(store->insert_or_assign(caller.handle(), 2, pem_identity(second))).get();
-    caller.start(store->insert_or_assign(caller.handle(), 3, pem_identity(third))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 1, pem_identity(first))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 2, pem_identity(second))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 3, pem_identity(third))).get();
     asio::io_context io;
     ruvia::test::tcp_port_reservation port(io);
     const ruvia::listener_endpoint endpoint{.address_ = "127.0.0.1", .port_ = port.endpoint().port()};
@@ -954,7 +953,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
                                                                                          try {
                                                                                              EXPECT_TRUE(store->contains(1));
                                                                                              retirement.set_value(caller.start(app.replace_tls_identities(
-                                                                                                 caller.handle(), endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
+                                                                                                 caller.worker(), endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
                                                                                          } catch (...) {
                                                                                              retirement.set_exception(std::current_exception());
                                                                                          }
@@ -967,7 +966,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_application_repla
     auto client = tls_client();
     EXPECT_EQ(served_name(io, client, port.endpoint(), "localhost"), "first");
     caller.start(app.replace_tls_identities(
-                     caller.handle(), endpoint, {.certificate_store_ = store, .default_certificate_ = 2}))
+                     caller.worker(), endpoint, {.certificate_store_ = store, .default_certificate_ = 2}))
         .get();
     ASSERT_EQ(retired.wait_for(3s), std::future_status::ready);
     retired.get().get();
@@ -984,9 +983,9 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     external_runtime runtime;
     const auto caller = runtime.loops_[0];
     const auto store = std::make_shared<ruvia::tls_certificate_store>();
-    caller.start(store->insert_or_assign(caller.handle(), 1, pem_identity(first))).get();
-    caller.start(store->insert_or_assign(caller.handle(), 2, pem_identity(second))).get();
-    caller.start(store->insert_or_assign(caller.handle(), 3, pem_identity(third))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 1, pem_identity(first))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 2, pem_identity(second))).get();
+    caller.start(store->insert_or_assign(caller.worker(), 3, pem_identity(third))).get();
     asio::io_context io;
     ruvia::test::tcp_port_reservation single_port(io), group_port(io);
     const ruvia::listener_endpoint single_endpoint{.address_ = "127.0.0.1", .port_ = single_port.endpoint().port()};
@@ -1002,7 +1001,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     auto single_retired = single_retirement.get_future();
     auto group_retired = group_retirement.get_future();
     ruvia::http_server single(caller, {.request_stream_ = answer});
-    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
+    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     const auto start_single = [&]() -> ruvia::task<void> {
         single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.certificate_store_ = store, .select_certificate_ = retiring_selector([&] {
                                                                                                       try {
@@ -1022,14 +1021,14 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
                                                                                                 try {
                                                                                                     EXPECT_TRUE(store->contains(1));
                                                                                                     group_retirement.set_value(caller.start(group.replace_tls_identities(
-                                                                                                        caller.handle(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
+                                                                                                        caller.worker(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 3})));
                                                                                                 } catch (...) {
                                                                                                     group_retirement.set_exception(std::current_exception());
                                                                                                 }
                                                                                             },
                                                                                                                              group_failure)},
         .dispatch_ = ruvia::listener_dispatch::request_stream});
-    caller.start(group.start(caller.handle())).get();
+    caller.start(group.start(caller.worker())).get();
     auto client = tls_client();
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "first");
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "first");
@@ -1039,7 +1038,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     ASSERT_EQ(single_retired.wait_for(3s), std::future_status::ready);
     single_retired.get().get();
     caller.start(group.replace_tls_identities(
-                     caller.handle(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 2}))
+                     caller.worker(), group_endpoint, {.certificate_store_ = store, .default_certificate_ = 2}))
         .get();
     ASSERT_EQ(group_retired.wait_for(3s), std::future_status::ready);
     group_retired.get().get();
@@ -1047,7 +1046,7 @@ TEST(Ruvia, certificate_selector_retirement_can_schedule_async_member_host_contr
     EXPECT_FALSE(static_cast<bool>(group_failure));
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "third");
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "third");
-    caller.start(group.shutdown(caller.handle())).get();
+    caller.start(group.shutdown(caller.worker())).get();
     caller.start(single.shutdown()).get();
 }
 
@@ -1064,7 +1063,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     const auto store = std::make_shared<ruvia::tls_certificate_store>();
     auto initial = [&] {
         auto identity = file_identity(first);
-        return store->insert_or_assign(caller.handle(), 1, std::move(identity));
+        return store->insert_or_assign(caller.worker(), 1, std::move(identity));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(initial)));
     const auto answer = [](ruvia::request_stream& stream) -> ruvia::task<void> {
@@ -1074,14 +1073,14 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
         }
     };
     ruvia::http_server single(caller, {.request_stream_ = answer});
-    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_handle&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
+    ruvia::http_server_group group(runtime.loops_, [&](const ruvia::worker_ref&) { return ruvia::http_server_callbacks{.request_stream_ = answer}; });
     const auto start_single = [&]() -> ruvia::task<void> {
         single.listen({.address_ = "127.0.0.1", .https_ = single_port.endpoint().port(), .tls_ = {.certificate_store_ = store, .default_certificate_ = 1}, .dispatch_ = ruvia::listener_dispatch::request_stream});
         co_await single.start();
     };
     caller.start(start_single()).get();
     group.listen({.address_ = "127.0.0.1", .https_ = group_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}, .dispatch_ = ruvia::listener_dispatch::request_stream});
-    EXPECT_FALSE(queued_preparation(runtime, group.start(caller.handle())));
+    EXPECT_FALSE(queued_preparation(runtime, group.start(caller.worker())));
     auto& app = ruvia::app();
     app.server({.worker_count_ = 2})
         .listen({.address_ = "127.0.0.1", .https_ = app_port.endpoint().port(), .tls_ = {.identity_ = file_identity(first)}})
@@ -1094,7 +1093,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     // Input strings and endpoints retire before these cold tasks are started.
     auto update = [&] {
         auto identity = pem_identity(second);
-        return store->insert_or_assign(caller.handle(), 1, std::move(identity));
+        return store->insert_or_assign(caller.worker(), 1, std::move(identity));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(update)));
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "second");
@@ -1107,7 +1106,7 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
         ASSERT_TRUE(failure);
         EXPECT_THROW(std::rethrow_exception(failure), std::system_error);
     };
-    expect_bad_identity(store->insert_or_assign(caller.handle(), 1, invalid()));
+    expect_bad_identity(store->insert_or_assign(caller.worker(), 1, invalid()));
     EXPECT_EQ(served_name(io, client, single_port.endpoint(), "localhost"), "second");
     auto replace_single = [&] {
         auto endpoint = single_endpoint;
@@ -1121,23 +1120,23 @@ TEST(Ruvia, public_certificate_preparation_leaves_caller_worker_responsive_and_p
     auto replace_group = [&] {
         auto endpoint = group_endpoint;
         ruvia::tls_config config{.identity_ = pem_identity(second)};
-        return group.replace_tls_identities(caller.handle(), endpoint, std::move(config));
+        return group.replace_tls_identities(caller.worker(), endpoint, std::move(config));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(replace_group)));
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "second");
-    expect_bad_identity(group.replace_tls_identities(caller.handle(), group_endpoint, {.identity_ = invalid()}));
+    expect_bad_identity(group.replace_tls_identities(caller.worker(), group_endpoint, {.identity_ = invalid()}));
     EXPECT_EQ(served_name(io, client, group_port.endpoint(), "localhost"), "second");
     auto replace_app = [&] {
         auto endpoint = app_endpoint;
         ruvia::tls_config config{.identity_ = file_identity(second)};
-        return app.replace_tls_identities(caller.handle(), endpoint, std::move(config));
+        return app.replace_tls_identities(caller.worker(), endpoint, std::move(config));
     }();
     EXPECT_FALSE(queued_preparation(runtime, std::move(replace_app)));
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
-    expect_bad_identity(app.replace_tls_identities(caller.handle(), app_endpoint, {.identity_ = invalid()}));
+    expect_bad_identity(app.replace_tls_identities(caller.worker(), app_endpoint, {.identity_ = invalid()}));
     EXPECT_EQ(served_name(io, client, app_port.endpoint(), "localhost"), "second");
     app.stop();
     runner.join();
-    caller.start(group.shutdown(caller.handle())).get();
+    caller.start(group.shutdown(caller.worker())).get();
     caller.start(single.shutdown()).get();
 }

@@ -113,18 +113,6 @@ void apply_entity_upsert(db_query& query, std::span<const db_column_info> entity
     });
 }
 
-db_relation_plan db_relation_plan::clone() const {
-    db_relation_plan result(resource_);
-    result.column_count_ = column_count_;
-    result.next_alias_ = next_alias_;
-    result.next_projection_ = next_projection_;
-    result.nodes_.reserve(nodes_.size());
-    for (const auto& node : nodes_) {
-        result.nodes_.emplace_back(node, resource_);
-    }
-    return result;
-}
-
 std::size_t db_relation_plan::find(std::size_t parent_value, std::size_t relation) const noexcept {
     for (std::size_t i = 0; i < nodes_.size(); ++i) {
         if (nodes_[i].parent_ == parent_value && nodes_[i].relation_ == relation) {
@@ -134,14 +122,14 @@ std::size_t db_relation_plan::find(std::size_t parent_value, std::size_t relatio
     return root;
 }
 
-std::pmr::string db_relation_plan::normalize(std::string_view root_alias, std::string_view path) const {
+std::string db_relation_plan::normalize(std::string_view root_alias, std::string_view path) const {
     if (path.size() > root_alias.size() && path.starts_with(root_alias) && path[root_alias.size()] == '.') {
         path.remove_prefix(root_alias.size() + 1);
     } else if (const auto dot = path.find('.'); dot != std::string_view::npos) {
         for (const auto& node : nodes_) {
             if (path.substr(0, dot) == node.alias_) {
                 const auto suffix = path.substr(dot);
-                std::pmr::string result_value(resource_);
+                std::string result_value;
                 result_value.reserve(node.path_.size() + suffix.size());
                 result_value.append(node.path_);
                 result_value.append(suffix);
@@ -149,7 +137,7 @@ std::pmr::string db_relation_plan::normalize(std::string_view root_alias, std::s
             }
         }
     }
-    return std::pmr::string(path, resource_);
+    return std::string(path);
 }
 
 bool db_relation_plan::uses_source_name(const db_query& query, std::string_view name) {
@@ -185,7 +173,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
             throw std::invalid_argument("paged relation loading cannot combine SKIP LOCKED with collection expansion");
         }
     }
-    auto result_value = query.clone(s.resource_);
+    auto result_value = query.clone();
     if (scope_lock) {
         result_value.storage().lock_->tables_.emplace_back(root_alias);
     }
@@ -196,7 +184,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     // Select a page of root identities before filtering the expanded result.
     // Ranking makes joined ordering deterministic for each root, and avoids
     // applying LIMIT to child rows or truncating a loaded collection.
-    auto ranked = query.clone(s.resource_);
+    auto ranked = query.clone();
     auto& rank_storage = ranked.storage();
     // Refer to the outer WITH bindings. Copying their declarations into the
     // page would evaluate volatile CTEs twice and relocate DML CTEs illegally.
@@ -222,7 +210,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     auto window = ranked.make_node(db_node_kind::window);
     window.left_ = ranked.require_expression(ranked.call("row_number"));
     window.args_.reserve(primary_key.size());
-    std::pmr::vector<std::pmr::string> key_names(s.resource_);
+    std::vector<std::string> key_names;
     key_names.reserve(primary_key.size());
     for (std::size_t i = 0; i < primary_key.size(); ++i) {
         auto& name = key_names.emplace_back();
@@ -243,7 +231,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     for (const auto key : primary_key) {
         result_value.add_order_by(result_value.column(key, root_alias));
     }
-    std::pmr::vector<std::pmr::string> order_names(s.resource_);
+    std::vector<std::string> order_names;
     order_names.reserve(orders.size());
     for (std::size_t i = 0; i < orders.size(); ++i) {
         auto& name = order_names.emplace_back();
@@ -256,7 +244,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     const auto window_expr = ranked.push_node(std::move(window));
     ranked.add_select(ranked.alias(window_expr, "__ruvia_page_rank"));
 
-    db_query page(s.resource_);
+    db_query page;
     for (const auto& key : key_names) {
         page.add_select(page.column(key, "__ruvia_ranked"));
     }
@@ -274,7 +262,7 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     }
     page.limit(s.limit_ ? std::optional<query_row_count>(*s.limit_) : std::nullopt)
         .offset(s.offset_ ? std::optional<query_row_count>(*s.offset_) : std::nullopt);
-    db_query included(s.resource_);
+    db_query included;
     const auto page_alias = root_alias == "__ruvia_page" ? "__ruvia_page_1" : "__ruvia_page";
     included.select(included.value(1)).from(std::move(page), page_alias);
     for (std::size_t i = 0; i < primary_key.size(); ++i) {
@@ -286,9 +274,9 @@ std::optional<db_query> db_relation_plan::prepare_entity_read(const db_query& qu
     return result_value;
 }
 
-std::pmr::string db_relation_plan::unique_alias(const db_query& query, std::string_view reserved) {
+std::string db_relation_plan::unique_alias(const db_query& query, std::string_view reserved) {
     constexpr std::string_view prefix = "__ruvia_relation_";
-    std::pmr::string alias(resource_);
+    std::string alias;
     alias.reserve(32);
     alias.append(prefix);
     for (;;) {
@@ -300,9 +288,9 @@ std::pmr::string db_relation_plan::unique_alias(const db_query& query, std::stri
     }
 }
 
-std::pmr::string db_relation_plan::unique_projection(const db_query& query) {
+std::string db_relation_plan::unique_projection(const db_query& query) {
     constexpr std::string_view prefix = "__ruvia_column_";
-    std::pmr::string name(resource_);
+    std::string name;
     name.reserve(32);
     name.append(prefix);
     for (;;) {
@@ -323,7 +311,7 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
     if (selection.empty()) {
         throw std::invalid_argument("projection requires at least one field");
     }
-    db_projection result(query.resource());
+    db_projection result;
     const auto named_count = static_cast<std::size_t>(std::ranges::count_if(selection, [](const auto& field) { return !field.is_wildcard(); }));
     result.columns_.reserve((previous ? previous->columns_.size() : 0) + named_count);
     if (previous) {
@@ -363,8 +351,8 @@ db_projection apply_projection(db_query& query, std::span<const db_selection> se
     return result;
 }
 
-std::pmr::string format_truncate_table(std::string_view table, db_driver driver, std::pmr::memory_resource* resource) {
-    std::pmr::string sql(pmr_resource_or_default(resource));
+std::string format_truncate_table(std::string_view table, db_driver driver) {
+    std::string sql;
     sql.reserve(17U + table.size());
     sql.append("TRUNCATE TABLE ");
     append_db_qualified_identifier(sql, table, driver);

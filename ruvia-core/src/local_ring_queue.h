@@ -3,12 +3,9 @@
 #include <cstddef>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <type_traits>
 #include <utility>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -24,9 +21,8 @@ namespace ruvia {
 template <typename value_type>
 class local_ring_queue final {
 public:
-    // Null selects Ruvia's process resource. The resource must outlive the queue.
-    explicit local_ring_queue(std::size_t capacity, std::pmr::memory_resource* resource = nullptr)
-        : storage_(allocate_storage(capacity, resource)) {}
+    explicit local_ring_queue(std::size_t capacity)
+        : storage_(allocate_storage(capacity)) {}
 
     local_ring_queue(const local_ring_queue&) = delete;
     local_ring_queue& operator=(const local_ring_queue&) = delete;
@@ -111,30 +107,26 @@ public:
 
 private:
     struct storage_deleter final {
-        std::pmr::memory_resource* resource_{nullptr};
         std::size_t capacity_{0};
         std::size_t constructed_{0};
 
         void operator()(value_type* storage) const noexcept {
             std::destroy_n(storage, constructed_);
-            std::pmr::polymorphic_allocator<value_type>(resource_).deallocate(storage, capacity_);
+            std::allocator<value_type>{}.deallocate(storage, capacity_);
         }
     };
 
     using storage_owner = std::unique_ptr<value_type, storage_deleter>;
 
-    [[nodiscard]] static storage_owner allocate_storage(std::size_t capacity, std::pmr::memory_resource* resource) {
+    [[nodiscard]] static storage_owner allocate_storage(std::size_t capacity) {
         if (capacity == 0) {
             throw std::invalid_argument("ring queue capacity must be nonzero");
         }
-        if (!resource) {
-            resource = process_resource();
-        }
-        std::pmr::polymorphic_allocator<value_type> allocator(resource);
-        storage_owner storage(allocator.allocate(capacity), storage_deleter{resource, capacity, 0});
+        std::allocator<value_type> allocator;
+        storage_owner storage(allocator.allocate(capacity), storage_deleter{capacity, 0});
         auto& constructed = storage.get_deleter().constructed_;
         while (constructed != capacity) {
-            std::uninitialized_construct_using_allocator(storage.get() + constructed, allocator);
+            std::construct_at(storage.get() + constructed);
             ++constructed;
         }
         return storage;

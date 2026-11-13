@@ -9,8 +9,6 @@
 #include <stdexcept>
 #include <string_view>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
-
 namespace ruvia {
 namespace {
 
@@ -128,9 +126,7 @@ constexpr std::uint8_t af_unix = 0x3;
 }  // namespace
 
 proxy_protocol_parser::proxy_protocol_parser(proxy_protocol_parser_options options)
-    : buffer_(detail::http_pmr_resource_or_default(options.resource_)),
-      tlvs_(buffer_.get_allocator()),
-      max_v2_header_bytes_(options.max_v2_header_bytes_) {
+    : max_v2_header_bytes_(options.max_v2_header_bytes_) {
     if (max_v2_header_bytes_ < v2_fixed_bytes + v2_inet6_block_bytes) {
         throw std::invalid_argument("PROXY protocol v2 header limit cannot hold an AF_INET6 address block");
     }

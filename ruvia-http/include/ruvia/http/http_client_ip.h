@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -9,7 +8,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_request_target.h"
@@ -25,40 +23,35 @@ enum class http_forwarded_header_kind : std::uint8_t {
 };
 
 struct http_forwarded_header_spec final {
-    explicit http_forwarded_header_spec(std::pmr::memory_resource* resource = nullptr)
-        : name_(detail::http_pmr_resource_or_default(resource)) {}
+    http_forwarded_header_spec() noexcept = default;
 
     http_forwarded_header_spec(std::string_view name,
-        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect,
-        std::pmr::memory_resource* resource = nullptr)
-        : name_(name, detail::http_pmr_resource_or_default(resource)),
+        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
+        : name_(name),
           kind_(kind) {}
 
     http_forwarded_header_spec(const char* name,
-        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect,
-        std::pmr::memory_resource* resource = nullptr)
-        : http_forwarded_header_spec(std::string_view(name), kind, resource) {}
-
-    http_forwarded_header_spec(const std::pmr::string& name,
         http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
-        : name_(name, name.get_allocator().resource()),
+        : http_forwarded_header_spec(std::string_view(name), kind) {}
+
+    http_forwarded_header_spec(const std::string& name,
+        http_forwarded_header_kind kind = http_forwarded_header_kind::auto_detect)
+        : name_(name),
           kind_(kind) {}
 
-    std::pmr::string name_;
+    std::string name_;
     http_forwarded_header_kind kind_{http_forwarded_header_kind::auto_detect};
 };
 
 struct http_client_ip_config final {
-    explicit http_client_ip_config(std::pmr::memory_resource* resource = nullptr)
-        : trusted_proxies_(detail::http_pmr_resource_or_default(resource)),
-          forwarding_headers_(detail::http_pmr_resource_or_default(resource)) {}
+    http_client_ip_config() noexcept = default;
 
     bool enabled_{true};
     // Trusted proxy IP literals or CIDR ranges (e.g. "127.0.0.1", "10.0.0.0/8", "::1").
-    std::pmr::vector<std::pmr::string> trusted_proxies_;
+    std::vector<std::string> trusted_proxies_;
     // Priority-ordered forwarding headers. When empty, defaults to
     // {"X-Forwarded-For", "Forwarded"}.
-    std::pmr::vector<http_forwarded_header_spec> forwarding_headers_;
+    std::vector<http_forwarded_header_spec> forwarding_headers_;
     // Enable only when every trusted proxy sanitizes and appends matching
     // X-Forwarded-For / X-Forwarded-Proto elements.
     bool trust_x_forwarded_proto_{false};
@@ -85,13 +78,10 @@ struct http_client_ip_result final {
 // Stateless client IP extractor for deployments behind trusted reverse proxies.
 class http_client_ip_extractor final {
 public:
-    explicit http_client_ip_extractor(std::pmr::memory_resource* resource = nullptr)
-        : trusted_cidrs_(detail::http_pmr_resource_or_default(resource)),
-          headers_(detail::http_pmr_resource_or_default(resource)),
-          enabled_(false) {}
+    http_client_ip_extractor() noexcept
+        : enabled_(false) {}
 
-    explicit http_client_ip_extractor(const http_client_ip_config& config,
-        std::pmr::memory_resource* resource = nullptr);
+    explicit http_client_ip_extractor(const http_client_ip_config& config);
 
     [[nodiscard]] constexpr bool enabled() const noexcept {
         return enabled_;
@@ -121,15 +111,12 @@ public:
 
 private:
     struct compiled_header final {
-        explicit compiled_header(std::pmr::memory_resource* resource)
-            : name_(resource) {}
-
-        std::pmr::string name_;
+        std::string name_;
         http_forwarded_header_kind kind_{http_forwarded_header_kind::comma_separated_list};
     };
 
-    std::pmr::vector<ip_cidr> trusted_cidrs_;
-    std::pmr::vector<compiled_header> headers_;
+    std::vector<ip_cidr> trusted_cidrs_;
+    std::vector<compiled_header> headers_;
     bool enabled_{true};
     bool trust_x_forwarded_proto_{false};
 };

@@ -4,7 +4,6 @@
 #include <cstdint>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -39,14 +38,14 @@ public:
     [[nodiscard]] task<websocket> connect();
 
 private:
-    friend class http_client_handle;
-    http_client_websocket_request(const http_client_handle& client, std::string_view path);
+    friend class http_client_ref;
+    http_client_websocket_request(const http_client_ref& client, std::string_view path);
     [[nodiscard]] static task<websocket> connect_owned(http_client_websocket_request request);
     void require_open() const;
-    http_client_handle client_;
-    std::pmr::string path_;
-    std::pmr::vector<http_header> headers_;
-    std::pmr::vector<std::pmr::string> subprotocols_;
+    http_client_ref client_;
+    std::string path_;
+    std::vector<http_header> headers_;
+    std::vector<std::string> subprotocols_;
     websocket_client_deflate_offer deflate_{};
     websocket_lifecycle_options lifecycle_{};
     std::size_t max_message_bytes_{default_max_websocket_message_bytes};

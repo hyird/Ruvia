@@ -26,14 +26,13 @@
 //   bool reusable(state_type&, std::size_t slot) noexcept
 //       Whether a dissolving group's protocol exchange is complete, with no
 //       unread results. The pool checks transaction state before reassigning it.
-// group_data has reset(), called when its group's flights are cleared.
+// group_state has reset(), called when its group's flights are cleared.
 
 #include <algorithm>
 #include <chrono>
 #include <coroutine>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -44,7 +43,7 @@
 #include <asio/error.hpp>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 #include "db/db_pipeline.h"
@@ -65,7 +64,7 @@ namespace ruvia::detail {
 inline void check_db_socket_wait(const db_socket_wait_result& result, db_driver driver, std::string_view name) {
     if (result.error_ && result.error_ != asio::error::operation_aborted) {
         throw db_error(db_error::code_type::io_error, driver,
-            std::pmr::string(name, process_resource()).append(" socket wait failed: ").append(error_code_text(result.error_)),
+            std::string(name).append(" socket wait failed: ").append(error_code_text(result.error_)),
             result.error_.value());
     }
 }
@@ -99,10 +98,9 @@ struct db_driver_socket_wait final {
 
 template <typename io_type>
 db_pipeline_member<io_type>::db_pipeline_member(
-    state_type& state, db_rows* rows, std::pmr::memory_resource* resource, const stop_token& stop_token_value)
+    state_type& state, db_rows* rows, const stop_token& stop_token_value)
     : state_(state),
       rows_(rows),
-      resource_(resource),
       stop_token_(stop_token_value),
       cancellation_(state.cancellation_target(), cancellation_id_) {
     cancellation_.arm(stop_token_);
@@ -124,7 +122,7 @@ db_pipeline_member<io_type>::~db_pipeline_member() {
 }
 
 template <typename io_type>
-db_pipeline_state<io_type>::db_pipeline_state(pool_type& pool, const worker_handle& worker_value)
+db_pipeline_state<io_type>::db_pipeline_state(pool_type& pool, const worker_ref& worker_value)
     : pool_(pool),
       worker_(worker_value),
       cancellation_target_(make_worker_cancellation_target(*this, worker_value)) {}
@@ -871,8 +869,8 @@ private:
 // statement costs no coroutine frame beyond this one unless it connects. The
 // member's destructor gives back whatever it holds on every exit path.
 template <typename io_type, typename result_type>
-task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::pmr::string sql,
-    std::pmr::vector<db_value> params, std::pmr::memory_resource* resource, operation_options options,
+task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& pool, std::string sql,
+    std::vector<db_value> params, operation_options options,
     request_io_metrics* io_metrics) {
     using member_type = db_pipeline_member<io_type>;
     constexpr bool returns_rows = std::is_same_v<result_type, db_rows>;
@@ -880,8 +878,8 @@ task<result_type> run_pipelined(typename db_pipeline_state<io_type>::pool_type& 
     auto statement = io_type::prepare(sql, std::span<const db_value>(params));
     const operation_deadline timeout(options.timeout_);
     auto& pipeline = pool.state();
-    auto output = db_result_access::make_result(resource);
-    member_type member(pipeline, returns_rows ? &output : nullptr, resource, options.stop_token_);
+    auto output = db_result_access::make_result();
+    member_type member(pipeline, returns_rows ? &output : nullptr, options.stop_token_);
 
     // Waiting for admission is bounded like acquiring a lease.
     if (pipeline.admit(member, timeout.constrained_by(pool.config().acquire_timeout_)) == db_pipeline_event::none) {

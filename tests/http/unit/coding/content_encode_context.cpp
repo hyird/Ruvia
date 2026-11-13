@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <string>
@@ -11,11 +10,6 @@
 
 #include "ruvia/http/http_content_codec.h"
 
-#include "failing_memory_resource.h"
-#include "memory_resource_fixture.h"
-
-using ruvia::test::failing_memory_resource;
-
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;
 using ruvia::http_content_coding;
@@ -23,15 +17,13 @@ using ruvia::http_content_encode_context;
 
 namespace {
 
-using ruvia::test::counting_memory_resource;
-
 constexpr std::array compressing_codings{http_content_coding::gzip, http_content_coding::deflate,
     http_content_coding::brotli, http_content_coding::zstd};
 
 // Compressible but not trivially repetitive, so encoders emit several output
 // blocks for the larger sizes.
-[[nodiscard]] std::pmr::string sample_body(std::size_t size, unsigned seed) {
-    std::pmr::string body(size, '\0');
+[[nodiscard]] std::string sample_body(std::size_t size, unsigned seed) {
+    std::string body(size, '\0');
     unsigned state_value = seed * 2654435761U + 1U;
     for (std::size_t i = 0; i < size; ++i) {
         state_value = state_value * 1103515245U + 12345U;
@@ -40,18 +32,18 @@ constexpr std::array compressing_codings{http_content_coding::gzip, http_content
     return body;
 }
 
-[[nodiscard]] std::pmr::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
+[[nodiscard]] std::string one_shot(http_content_coding coding, std::string_view input, std::size_t cap) {
     auto result_value = encode_http_content(coding, input, {.max_encoded_bytes_ = cap});
-    return result_value.has_value() ? std::move(*result_value) : std::pmr::string();
+    return result_value.has_value() ? std::move(*result_value) : std::string();
 }
 
-[[nodiscard]] std::optional<std::pmr::string> encode_with(http_content_encode_context& context,
-    std::string_view input, std::size_t cap, std::pmr::memory_resource* output_resource = nullptr) {
-    auto result_value = context.encode(input, {.max_encoded_bytes_ = cap, .resource_ = output_resource});
+[[nodiscard]] std::optional<std::string> encode_with(http_content_encode_context& context,
+    std::string_view input, std::size_t cap) {
+    auto result_value = context.encode(input, {.max_encoded_bytes_ = cap});
     if (!result_value.has_value()) {
         return std::nullopt;
     }
-    return std::pmr::string(*result_value);
+    return std::string(*result_value);
 }
 
 }  // namespace
@@ -60,8 +52,7 @@ TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
     constexpr std::array sizes{std::size_t{0}, std::size_t{1}, std::size_t{1000}, std::size_t{8192},
         std::size_t{70'000}, std::size_t{300'000}};
     for (const auto coding : compressing_codings) {
-        counting_memory_resource state_resource;
-        http_content_encode_context context(coding, &state_resource);
+        http_content_encode_context context(coding);
         EXPECT_TRUE(context.coding() == coding);
         unsigned seed = 0;
         // Twice through, so every size also follows a larger representation.
@@ -71,174 +62,14 @@ TEST(Ruvia, http_content_encode_context_reuse_matches_one_shot_bytes) {
                 const auto expected = one_shot(coding, input, input.size() + 1024);
                 const auto actual = encode_with(context, input, input.size() + 1024);
                 EXPECT_TRUE(actual.has_value());
-                EXPECT_TRUE(actual.value_or(std::pmr::string()) == expected);
+                EXPECT_TRUE(actual.value_or(std::string()) == expected);
                 const auto decoded = decode_http_content(
-                    std::array{coding}, actual.value_or(std::pmr::string()), {.max_decoded_bytes_ = size});
-                EXPECT_TRUE(std::holds_alternative<std::pmr::string>(decoded));
-                if (const auto* content = std::get_if<std::pmr::string>(&decoded)) {
+                    std::array{coding}, actual.value_or(std::string()), {.max_decoded_bytes_ = size});
+                EXPECT_TRUE(std::holds_alternative<std::string>(decoded));
+                if (const auto* content = std::get_if<std::string>(&decoded)) {
                     EXPECT_TRUE(std::string_view(*content) == input);
                 }
             }
         }
     }
-}
-
-TEST(Ruvia, http_content_encode_context_keeps_state_apart_from_output) {
-    const auto input = sample_body(20'000, 7);
-    for (const auto coding : compressing_codings) {
-        counting_memory_resource state_resource;
-        counting_memory_resource output_resource;
-        {
-            http_content_encode_context context(coding, &state_resource);
-            EXPECT_EQ(state_resource.allocation_count(), 0U);
-
-            std::optional<std::pmr::string> first;
-            {
-                auto result_value =
-                    context.encode(input, {.max_encoded_bytes_ = input.size(), .resource_ = &output_resource});
-                EXPECT_TRUE(result_value.has_value());
-                EXPECT_TRUE(output_resource.live_bytes() != 0);
-                if (result_value.has_value()) {
-                    first.emplace(*result_value);
-                }
-            }
-            EXPECT_EQ(output_resource.live_bytes(), 0U);
-            EXPECT_TRUE(state_resource.allocation_count() != 0);
-
-            const auto warm_allocations = state_resource.allocation_count();
-            EXPECT_TRUE(encode_with(context, input, input.size(), &output_resource) == first);
-            if (coding == http_content_coding::brotli) {
-                // Brotli cannot reset, so its state is per call and released.
-                EXPECT_EQ(state_resource.live_bytes(), 0U);
-            } else {
-                // A reset stream allocates nothing for the next representation.
-                EXPECT_EQ(state_resource.allocation_count(), warm_allocations);
-                EXPECT_TRUE(state_resource.live_bytes() != 0);
-            }
-        }
-        EXPECT_EQ(state_resource.live_bytes(), 0U);
-    }
-}
-
-TEST(Ruvia, http_content_encode_context_resets_after_a_failed_encode) {
-    const auto failed_input = sample_body(100'000, 11);
-    const auto next_input = sample_body(5'000, 12);
-    for (const auto coding : compressing_codings) {
-        http_content_encode_context context(coding, std::pmr::new_delete_resource());
-        const auto expected = one_shot(coding, next_input, next_input.size());
-
-        // Stop mid-stream on the output cap.
-        const auto capped = context.encode(failed_input, {.max_encoded_bytes_ = 64});
-        EXPECT_TRUE(!capped.has_value());
-        EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
-
-        // Stop mid-stream on an output allocation failure.
-        failing_memory_resource output_resource;
-        output_resource.fail_after(0);
-        bool threw = false;
-        try {
-            static_cast<void>(context.encode(
-                failed_input, {.max_encoded_bytes_ = failed_input.size(), .resource_ = &output_resource}));
-        } catch (const std::bad_alloc&) {
-            threw = true;
-        }
-        EXPECT_TRUE(threw);
-        EXPECT_EQ(output_resource.live_allocations(), 0U);
-        EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
-    }
-}
-
-TEST(Ruvia, http_content_encode_context_discards_state_left_by_an_exception) {
-    const auto failed_input = sample_body(100'000, 13);
-    const auto next_input = sample_body(5'000, 14);
-    for (const auto coding : compressing_codings) {
-        counting_memory_resource state_resource;
-        {
-            http_content_encode_context context(coding, &state_resource);
-            const auto expected = one_shot(coding, next_input, next_input.size());
-            EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
-
-            failing_memory_resource output_resource;
-            output_resource.fail_after(0);
-            bool threw = false;
-            try {
-                static_cast<void>(context.encode(
-                    failed_input, {.max_encoded_bytes_ = failed_input.size(), .resource_ = &output_resource}));
-            } catch (const std::bad_alloc&) {
-                threw = true;
-            }
-            EXPECT_TRUE(threw);
-            // Native state that an exception interrupted is freed, not reset
-            // and kept for the next representation.
-            EXPECT_EQ(state_resource.live_bytes(), 0U);
-
-            EXPECT_TRUE(encode_with(context, next_input, next_input.size()) == expected);
-        }
-        EXPECT_EQ(state_resource.live_bytes(), 0U);
-    }
-}
-
-TEST(Ruvia, http_content_encode_context_recovers_from_state_allocation_failure) {
-    const auto input = sample_body(3'000, 21);
-    for (const auto coding : compressing_codings) {
-        failing_memory_resource state_resource;
-        {
-            http_content_encode_context context(coding, &state_resource);
-            state_resource.fail_after(0);
-            bool threw = false;
-            try {
-                static_cast<void>(context.encode(input, {.max_encoded_bytes_ = input.size()}));
-            } catch (const std::bad_alloc&) {
-                threw = true;
-            }
-            EXPECT_TRUE(threw);
-            EXPECT_EQ(state_resource.live_allocations(), 0U);
-
-            state_resource.allow_allocations();
-            EXPECT_TRUE(encode_with(context, input, input.size()) == one_shot(coding, input, input.size()));
-        }
-        EXPECT_EQ(state_resource.live_allocations(), 0U);
-    }
-}
-
-TEST(Ruvia, http_content_encode_context_identity_follows_the_one_shot_contract) {
-    counting_memory_resource state_resource;
-    http_content_encode_context context(http_content_coding::identity, &state_resource);
-    EXPECT_TRUE(encode_with(context, "plain", 5) == std::optional<std::pmr::string>("plain"));
-    const auto oversized = context.encode("plain", {.max_encoded_bytes_ = 4});
-    EXPECT_TRUE(!oversized.has_value());
-    EXPECT_EQ(state_resource.allocation_count(), 0U);
-}
-
-TEST(Ruvia, http_content_encode_context_reuses_after_zero_and_exact_budgets) {
-    const auto input = sample_body(8'000, 31);
-    for (const auto coding : compressing_codings) {
-        http_content_encode_context context(coding, std::pmr::new_delete_resource());
-        const auto expected = encode_http_content(coding, input, {.max_encoded_bytes_ = input.size()});
-        EXPECT_TRUE(expected.has_value());
-        if (!expected.has_value()) {
-            continue;
-        }
-        EXPECT_TRUE(!context.encode({}, {.max_encoded_bytes_ = 0}).has_value());
-        EXPECT_TRUE(!context.encode(input, {.max_encoded_bytes_ = 0}).has_value());
-        const auto exact = context.encode(input, {.max_encoded_bytes_ = expected->size()});
-        EXPECT_TRUE(exact.has_value() && *exact == *expected);
-        EXPECT_TRUE(!context.encode(input, {.max_encoded_bytes_ = expected->size() - 1}).has_value());
-        EXPECT_TRUE(encode_with(context, input, input.size()) == std::pmr::string(*expected));
-    }
-}
-
-TEST(Ruvia, http_content_encode_context_unknown_coding_throws_without_allocating_state) {
-    counting_memory_resource resource;
-    http_content_encode_context context(static_cast<http_content_coding>(255), &resource);
-    for (int attempt = 0; attempt < 2; ++attempt) {
-        bool threw = false;
-        try {
-            static_cast<void>(context.encode("plain", {.max_encoded_bytes_ = 0}));
-        } catch (const ruvia::http_content_codec_error&) {
-            threw = true;
-        }
-        EXPECT_TRUE(threw);
-    }
-    EXPECT_EQ(resource.allocation_count(), 0U);
 }

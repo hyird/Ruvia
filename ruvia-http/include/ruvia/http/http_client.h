@@ -4,13 +4,12 @@
 //
 // OWNERSHIP: these are transport-free HTTP values. http_origin_view and
 // http_client_request_view borrow their string storage; http_client_response_head owns
-// parsed header storage through PMR. Response content remains owned by the
+// parsed header storage. Response content remains owned by the
 // external sans-I/O driver that follows the framing plan. Socket/TLS
 // configuration, pools, redirect limits, and timeouts also belong there.
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -84,9 +83,8 @@ private:
 
 // RFC 3986 authority for this origin: preserves IP-literal brackets and
 // includes the port only when it differs from the scheme's default. The
-// returned string owns its bytes in resource; the origin remains borrowed.
-[[nodiscard]] std::pmr::string make_http_origin_authority(const http_origin_view& origin,
-    std::pmr::memory_resource* resource = std::pmr::get_default_resource());
+// returned string owns its bytes; the origin remains borrowed.
+[[nodiscard]] std::string make_http_origin_authority(const http_origin_view& origin);
 
 class http_client_request_content_view;
 

@@ -37,7 +37,7 @@ class [[nodiscard]] task final {
 public:
     using value_type = t_type;
     using promise_type = detail::task_promise<t_type>;
-    using handle_type = std::coroutine_handle<promise_type>;
+    using coroutine_type = std::coroutine_handle<promise_type>;
 
     task() = delete;
 
@@ -45,8 +45,8 @@ public:
     task& operator=(const task&) = delete;
 
     task(task&& other) noexcept
-        : handle_(std::exchange(other.handle_, {})),
-          registration_(std::move(other.registration_), std::addressof(handle_)) {}
+        : coroutine_(std::exchange(other.coroutine_, {})),
+          registration_(std::move(other.registration_), std::addressof(coroutine_)) {}
     task& operator=(task&&) = delete;
 
     ~task() {
@@ -76,14 +76,14 @@ private:
     template <typename u_type>
     friend task<u_type> make_scoped_operation(operation_scope&, task<u_type>);
 
-    explicit task(handle_type handle) noexcept
-        : handle_(handle) {}
+    explicit task(coroutine_type coroutine) noexcept
+        : coroutine_(coroutine) {}
 
     void prepare_direct_start() const {
         if (registration_.scoped()) {
             registration_.prepare_start();
         }
-        if (handle_ == nullptr) {
+        if (coroutine_ == nullptr) {
             throw std::logic_error("cannot start an empty ruvia::task");
         }
     }
@@ -92,8 +92,8 @@ private:
         if (registration_.scoped()) {
             registration_.start();
         }
-        handle_.promise().control_.mark_started();
-        handle_.resume();
+        coroutine_.promise().control_.mark_started();
+        coroutine_.resume();
     }
 
     void prepare_direct_completion() noexcept {
@@ -109,26 +109,26 @@ private:
         }
     }
 
-    static void retire_cold_handle(void* target) noexcept {
-        auto& handle_ref = *static_cast<handle_type*>(target);
-        if (handle_ref != nullptr) {
-            auto handle = std::exchange(handle_ref, {});
-            if (!handle.done() && handle.promise().control_.started()) {
+    static void retire_cold_frame(void* target) noexcept {
+        auto& coroutine_slot = *static_cast<coroutine_type*>(target);
+        if (coroutine_slot != nullptr) {
+            auto coroutine = std::exchange(coroutine_slot, {});
+            if (!coroutine.done() && coroutine.promise().control_.started()) {
                 std::terminate();
             }
-            handle.destroy();
+            coroutine.destroy();
         }
     }
 
     void reset() noexcept {
-        retire_cold_handle(std::addressof(handle_));
+        retire_cold_frame(std::addressof(coroutine_));
     }
 
     void bind_scope(operation_scope& scope) noexcept {
-        registration_.bind(scope, std::addressof(handle_), &task::retire_cold_handle);
+        registration_.bind(scope, std::addressof(coroutine_), &task::retire_cold_frame);
     }
 
-    handle_type handle_{};
+    coroutine_type coroutine_{};
     detail::scoped_operation_registration registration_{};
 };
 
@@ -166,14 +166,14 @@ public:
     void operator&() const = delete;
 
     [[nodiscard]] bool await_ready() const noexcept {
-        return task_.handle_.done();
+        return task_.coroutine_.done();
     }
 
     [[nodiscard]] std::coroutine_handle<> await_suspend(
         std::coroutine_handle<> continuation) noexcept {
-        task_.handle_.promise().control_.set_continuation(continuation);
-        task_.handle_.promise().control_.mark_started();
-        return task_.handle_;
+        task_.coroutine_.promise().control_.set_continuation(continuation);
+        task_.coroutine_.promise().control_.mark_started();
+        return task_.coroutine_;
     }
 
     t_type await_resume() {
@@ -184,7 +184,7 @@ public:
                 awaiter_.task_.finish_direct_completion();
             }
         } complete_value{*this};
-        return task_.handle_.promise().result();
+        return task_.coroutine_.promise().result();
     }
 
 private:

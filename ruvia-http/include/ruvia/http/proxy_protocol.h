@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -42,9 +41,6 @@ struct proxy_protocol_tlv final {
 };
 
 struct proxy_protocol_parser_options final {
-    // Holds every parser buffer and must outlive the parser. nullptr uses the
-    // default PMR.
-    std::pmr::memory_resource* resource_{nullptr};
     // The whole v2 header: the 16-byte fixed part, the address block and the
     // TLVs. It must leave room for an AF_INET6 address block (16 + 36 bytes).
     // A v1 line is always capped at its spec §2.1 maximum of 107 bytes
@@ -170,8 +166,8 @@ private:
 
     // Every header byte received so far. A vector, not a string: moving it
     // keeps its storage, so the header's views survive a parser move.
-    std::pmr::vector<std::byte> buffer_;
-    std::pmr::vector<proxy_protocol_tlv> tlvs_;
+    std::vector<std::byte> buffer_;
+    std::vector<proxy_protocol_tlv> tlvs_;
     proxy_protocol_header header_{};
     std::size_t max_v2_header_bytes_;
     // The v2 header size (16 + length), known once the fixed part is complete.

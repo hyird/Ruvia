@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -18,7 +17,6 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/server_config.h"
 
 #include "server/http_server_tls_identities.h"
@@ -93,10 +91,10 @@ struct http_server_listener_definition final {
     // default) in server preference, encoded as an RFC 7301 §3.1
     // ProtocolNameList without its length prefix; empty for a cleartext one.
     struct connection_dispatch final {
-        connection_dispatch(std::string_view alpn, std::pmr::memory_resource* resource)
-            : alpn_(alpn, pmr_resource_or_default(resource)) {}
+        connection_dispatch(std::string_view alpn)
+            : alpn_(alpn) {}
 
-        std::pmr::string alpn_;
+        std::string alpn_;
     };
 
     using transport_type = std::variant<plain_http, tls, redirect_http_to_https>;
@@ -108,7 +106,7 @@ struct http_server_listener_definition final {
           transport_(std::move(configured_transport)),
           http3_(std::move(configured_http3)) {}
 
-    [[nodiscard]] http_server_listener_definition clone(std::pmr::memory_resource* resource) const;
+    [[nodiscard]] http_server_listener_definition clone() const;
 
     asio::ip::tcp::endpoint endpoint_;
     std::optional<bool> ipv6_only_;
@@ -139,8 +137,7 @@ struct http_server_listener_definition final {
 
 class http_server_session_config final {
 public:
-    explicit http_server_session_config(const http_server_listener_definition& definition,
-        std::pmr::memory_resource* resource);
+    explicit http_server_session_config(const http_server_listener_definition& definition);
 
     http_server_session_config(const http_server_session_config&) = delete;
     http_server_session_config& operator=(const http_server_session_config&) = delete;
@@ -183,7 +180,7 @@ public:
     bool request_stream_{false};
     // The Alt-Svc field value advertising http3_ (RFC 7838 §3), sent on every
     // response of this TLS listener; empty without an HTTP/3 service.
-    std::pmr::string alternative_service_;
+    std::string alternative_service_;
     // This worker's copy of the listener's ticket keys, refreshed on the
     // worker thread once per key epoch. The TLS contexts below point at it, so
     // it is declared before them and outlives them.

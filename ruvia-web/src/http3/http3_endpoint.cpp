@@ -5,7 +5,6 @@
 #include <array>
 #include <exception>
 #include <limits>
-#include <memory_resource>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -66,9 +65,9 @@ http3_endpoint::http3_endpoint(const http3_worker_services& services, http_serve
       listener_connections_(listener_connections),
 #if !defined(_WIN32)
       socket_(services.io_),
-      receive_buffer_(process_resource()),
+      receive_buffer_(),
 #endif
-      connections_(process_resource()) {
+      connections_() {
     if (!session_.http3_.has_value() || session_.http3_->secret_ == nullptr) {
         throw std::logic_error("HTTP/3 endpoint requires a validated HTTP/3 service");
     }
@@ -164,7 +163,7 @@ std::error_code http3_endpoint::send(const asio::ip::udp::endpoint& remote, std:
 task<std::error_code> http3_endpoint::wait_writable() {
     const auto completion = co_await ruvia::async_asio([this](auto handler) {
         socket_.async_wait(asio::socket_base::wait_write,
-            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
+            std::move(handler));
     });
     co_return completion.error_code();
 }
@@ -185,7 +184,7 @@ task<void> http3_endpoint::run_receive_loop() {
         while (socket_.is_open()) {
             const auto completion = co_await ruvia::async_asio([this](auto handler) {
                 socket_.async_wait(asio::socket_base::wait_read,
-                    asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), std::move(handler)));
+                    std::move(handler));
             });
             if (!socket_.is_open()) {
                 co_return;
@@ -383,14 +382,12 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
     try {
         connection_lifecycle lifecycle(services_.registry_, &session_, std::move(event),
             services_.options_.connection_open_, services_.options_.connection_close_, interface_index);
-        auto session = make_pmr_object<http3_session>(process_resource(), *this,
-            connection_slot(listener_connections_), header, remote, original_dcid, retry_scid, retry_token,
-            std::move(lifecycle));
+        auto session = std::make_unique<http3_session>(*this, connection_slot(listener_connections_), header, remote, original_dcid, retry_scid, retry_token, std::move(lifecycle));
         session->receive(bytes, remote, local, interface_index);
         tasks_.spawn(serve(std::move(session)));
     } catch (...) {
         auto failure = std::current_exception();
-        std::pmr::string address(process_resource());
+        std::string address;
         try {
             assign_peer_address(address, remote.address());
         } catch (...) {

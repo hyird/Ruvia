@@ -4,12 +4,12 @@
 #include <cstdint>
 #include <ctime>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <string>
 #include <string_view>
 #include <utility>
 
+#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_set_cookie.h"
 
@@ -38,7 +38,7 @@ TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
         "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789!#$%&'*+-.^_`|~";
 
     for (std::size_t sample = 0; sample < 4096; ++sample) {
-        std::pmr::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
+        std::string input(static_cast<std::size_t>(next_value() % 1025U), '\0');
         for (auto& byte : input) {
             byte = static_cast<char>(next_value());
         }
@@ -48,7 +48,7 @@ TEST(Ruvia, set_cookie_parser_handles_deterministic_arbitrary_bytes) {
             verify_borrowed_fields(input, *parsed_value);
         }
 
-        std::pmr::string accepted_input("sid=");
+        std::string accepted_input("sid=");
         for (std::size_t index = 0; index < next_value() % 129U; ++index) {
             accepted_input.push_back(cookie_octets[next_value() % cookie_octets.size()]);
         }
@@ -107,7 +107,7 @@ TEST(Ruvia, set_cookie_parser_rejects_invalid_received_cookie) {
     EXPECT_TRUE(!ruvia::parse_set_cookie("=").has_value());
     EXPECT_TRUE(!ruvia::parse_set_cookie("name=bad\x01value").has_value());
 
-    std::pmr::string oversized(4097, 'v');
+    std::string oversized(4097, 'v');
     EXPECT_TRUE(!ruvia::parse_set_cookie(oversized).has_value());
 }
 
@@ -133,7 +133,7 @@ TEST(Ruvia, set_cookie_parser_follows_user_agent_domain_and_path_algorithm) {
 }
 
 TEST(Ruvia, set_cookie_parser_ignores_oversized_attribute_value) {
-    std::pmr::string value = "sid=abc; Path=";
+    std::string value = "sid=abc; Path=";
     value.append(1025, 'p');
     const auto parsed_value = ruvia::parse_set_cookie(value);
     EXPECT_TRUE(parsed_value.has_value());
@@ -182,8 +182,8 @@ TEST(Ruvia, set_cookie_parser_treats_empty_domain_as_host_only) {
     EXPECT_TRUE(parsed_value->domain().empty());
     EXPECT_TRUE(parsed_value->path() == "/api");
 
-    const std::pmr::string overlong_with_nul =
-        std::pmr::string("sid=abc; Custom=") + std::pmr::string(1100, 'a') + std::pmr::string("\0b", 2);
+    const std::string overlong_with_nul =
+        std::string("sid=abc; Custom=") + std::string(1100, 'a') + std::string("\0b", 2);
     EXPECT_TRUE(!ruvia::parse_set_cookie(overlong_with_nul).has_value());
 }
 
@@ -246,7 +246,7 @@ TEST(Ruvia, set_cookie_parser_accepts_date_token_suffixes) {
         "10:18:14clock 09th June123 2021year",
         "2021year June123 09th 10:18:14clock"};
     for (const auto date : dates) {
-        const auto input = std::pmr::string("sid=abc; Expires=") + std::pmr::string(date);
+        const auto input = std::string("sid=abc; Expires=") + std::string(date);
         const auto parsed_value = ruvia::parse_set_cookie(input);
         EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
@@ -261,7 +261,7 @@ TEST(Ruvia, set_cookie_parser_accepts_date_token_suffixes) {
     constexpr year_case years[]{
         {"70year", 1970}, {"69year", 2069}, {"00year", 2000}};
     for (const auto& entry : years) {
-        const auto input = std::pmr::string("sid=abc; Expires=01 January ") + std::pmr::string(entry.value_) + " 0:0:0clock";
+        const auto input = std::string("sid=abc; Expires=01 January ") + std::string(entry.value_) + " 0:0:0clock";
         const auto parsed_value = ruvia::parse_set_cookie(input);
         EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
@@ -294,11 +294,31 @@ TEST(Ruvia, set_cookie_parser_preserves_date_token_widths_and_calendar_bounds) {
         "32nd 09 June 2021year 10:18:14clock",
         "09th June 2021year 24:00:00clock 10:18:14clock"};
     for (const auto date : dates) {
-        const auto input = std::pmr::string("sid=abc; Expires=") + std::pmr::string(date);
+        const auto input = std::string("sid=abc; Expires=") + std::string(date);
         const auto parsed_value = ruvia::parse_set_cookie(input);
         EXPECT_TRUE(parsed_value.has_value());
         if (parsed_value) {
             EXPECT_TRUE(!parsed_value->expires());
         }
     }
+}
+
+TEST(Ruvia, cookie_jar_deduplicates_and_expires_by_partitioned_four_tuple) {
+    const auto now = std::chrono::system_clock::from_time_t(1'700'000'000);
+    ruvia::http_cookie_jar jar(ruvia::http_scheme::https, "example.test");
+    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=part1; Path=/; Secure; Partitioned", now));
+    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart1; Path=/; Secure", now));
+    EXPECT_EQ(jar.size(), std::size_t{2});
+
+    // Updating the unpartitioned cookie leaves the partitioned entry intact.
+    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=unpart2; Path=/; Secure", now));
+    EXPECT_EQ(jar.size(), std::size_t{2});
+    const auto both = jar.cookie_header("/", true, now);
+    EXPECT_NE(both.find("sid=part1"), std::string::npos);
+    EXPECT_NE(both.find("sid=unpart2"), std::string::npos);
+
+    // Expiring the partitioned cookie removes only the partitioned entry.
+    EXPECT_TRUE(jar.absorb_set_cookie("/", "sid=; Path=/; Max-Age=0; Secure; Partitioned", now));
+    EXPECT_EQ(jar.size(), std::size_t{1});
+    EXPECT_EQ(jar.cookie_header("/", true, now), "sid=unpart2");
 }

@@ -8,7 +8,6 @@
 #include <cstdint>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -19,14 +18,12 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_repository.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
-#include "memory_resource_fixture.h"
 #include "test_exceptions.h"
 #include "test_io_context.h"
 
@@ -34,21 +31,21 @@ namespace db_repository_test {
 using namespace ruvia;
 namespace testing = ::ruvia::test;
 RUVIA_DB_ENTITY(entity_type, "items", db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string>)
+    db_column<"name", std::string>)
 RUVIA_DB_ENTITY(nullable_entity_type, "nullable_items",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>)
+    db_column<"name", std::string, db_column_options{.nullable_ = true}>)
 RUVIA_DB_ENTITY(computed_entity_type, "computed_items",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string>,
+    db_column<"name", std::string>,
     db_column<"name_length", std::int64_t, db_column_options{.generated_type_ = db_generated_type::stored}>)
 RUVIA_DB_ENTITY(composite_entity_type, "composite_items",
     db_column<"tenant_id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"item_id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string>,
+    db_column<"name", std::string>,
     db_column<"revision", std::int64_t>)
 RUVIA_DB_ENTITY(numeric_array_entity, "numeric_arrays",
-    db_column<"samples", std::pmr::vector<long double>, db_column_options{.data_type_ = db_data_type::numeric}>)
+    db_column<"samples", std::vector<long double>, db_column_options{.data_type_ = db_data_type::numeric}>)
 
 struct child;
 struct parent;
@@ -72,29 +69,27 @@ db_config database_config() {
 
 RUVIA_DB_PROJECTION(item_summary,
     RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(label, std::string),
     RUVIA_DB_COLUMN(rank, std::int64_t))
 RUVIA_DB_PROJECTION(entity_with_rank,
     RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(name, std::string),
     RUVIA_DB_COLUMN(rank, std::int64_t))
 
 TEST(Ruvia, db_repository_projects_computed_dto_and_owns_expression_sources) {
     repository_runtime runtime;
-    test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         for (int i = 0; i < 8; ++i) {
             {
                 auto builder = repository.query_builder("i");
                 {
-                    db_query expressions(&source);
-                    auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::pmr::string(200, 'x', ruvia::process_resource()))});
+                    db_query expressions;
+                    auto label = expressions.call("concat", {expressions.column("name", "i"), expressions.value(std::string(200, 'x'))});
                     const db_order_term window_order[]{{expressions.column("id", "i")}};
                     auto rank = expressions.over(expressions.call("row_number"), {.order_by_ = window_order});
                     builder.select({{"id"}, {"label", label}, {"rank", rank}});
                 }
-                EXPECT_EQ(source.live_allocations(), std::size_t{0});
                 const auto statement = builder.get_query_and_parameters();
                 EXPECT_TRUE(statement.sql().find(database_config().driver_ == db_driver::postgresql ? "\"row_number\"() OVER (ORDER BY" : "row_number() OVER (ORDER BY") != std::string_view::npos);
                 EXPECT_EQ(statement.params().size(), std::size_t{1});
@@ -149,34 +144,34 @@ TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_
         {
             db_query source;
             source.select(source.star()).from("measurements");
-            std::pmr::string qualifier("samples", ruvia::process_resource());
+            std::string qualifier("samples");
             builder.with("samples", source).from_cte("samples").select({db_selection::star(qualifier), db_expr::value(5).as("rank")});
             qualifier.assign("destroyed");
         }
-        const auto postgres = builder.query().compile(db_driver::postgresql, nullptr);
+        const auto postgres = builder.query().compile(db_driver::postgresql);
         EXPECT_EQ(postgres.sql(), "WITH \"samples\" AS (SELECT * FROM \"measurements\") SELECT \"samples\".*, $1 AS \"rank\" FROM \"samples\" AS \"samples\"");
         EXPECT_EQ(postgres.params().size(), std::size_t{1});
-        const auto maria = builder.query().compile(db_driver::mariadb, nullptr);
+        const auto maria = builder.query().compile(db_driver::mariadb);
         EXPECT_EQ(maria.sql(), "WITH `samples` AS (SELECT * FROM `measurements`) SELECT `samples`.*, ? AS `rank` FROM `samples` AS `samples`");
         EXPECT_EQ(maria.params().size(), std::size_t{1});
         EXPECT_TRUE(testing::throws_on([&] { builder.add_select(db_expr::value(6), "rank"); }));
         EXPECT_TRUE(testing::throws_on([&] { builder.select({db_selection{}}); }));
         EXPECT_TRUE(testing::throws_on([&] { builder.select({db_expr::value(1).as("")}); }));
-        const auto unchanged = builder.query().compile(db_driver::postgresql, nullptr);
+        const auto unchanged = builder.query().compile(db_driver::postgresql);
         EXPECT_EQ(unchanged.sql(), postgres.sql());
 
         auto appended = repository.query_builder("s");
         appended.select({db_selection::star("s")}).add_select(db_expr::value(9), "rank");
-        const auto added = appended.query().compile(db_driver::postgresql, nullptr);
+        const auto added = appended.query().compile(db_driver::postgresql);
         EXPECT_EQ(added.sql(), "SELECT \"s\".*, $1 AS \"rank\" FROM \"items\" AS \"s\"");
         appended.select({db_expr::value(1).as("rank")}).add_select({db_selection::star("s")});
-        const auto appended_wildcard = appended.query().compile(db_driver::postgresql, nullptr);
+        const auto appended_wildcard = appended.query().compile(db_driver::postgresql);
         EXPECT_EQ(appended_wildcard.sql(),
             "SELECT $1 AS \"rank\", \"s\".* FROM \"items\" AS \"s\"");
         auto archive = repository.insert_builder();
         archive.insert_from({"id", "name"}, builder);
         EXPECT_TRUE(testing::throws_on([&] { archive.insert_from({"id", "unknown"}, builder); }));
-        const auto inserted = archive.query().compile(db_driver::postgresql, nullptr);
+        const auto inserted = archive.query().compile(db_driver::postgresql);
         EXPECT_TRUE(inserted.sql().find("INSERT INTO \"items\" (\"id\", \"name\")") != std::string_view::npos);
         EXPECT_TRUE(inserted.sql().find("SELECT \"samples\".*, $1 AS \"rank\"") != std::string_view::npos);
         co_return;
@@ -185,31 +180,30 @@ TEST(Ruvia, db_repository_wildcard_projection_preserves_unknown_cte_columns_and_
 
 #ifdef RUVIA_ENABLE_POSTGRESQL
 TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
-    const std::pmr::string first(192, 'a', ruvia::process_resource());
-    const std::pmr::string second(256, 'b', ruvia::process_resource());
+    const std::string first(192, 'a');
+    const std::string second(256, 'b');
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(first, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(first, ruvia::process_resource()), std::pmr::string(second, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(second, ruvia::process_resource())}, ruvia::process_resource()), .command_ = std::pmr::string("UPDATE 1", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(second, ruvia::process_resource()), std::pmr::string(first, ruvia::process_resource())}, ruvia::process_resource()), .command_ = std::pmr::string("DELETE 2", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("raw", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("name", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>(ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first)})},
+            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(first), std::string(second)})},
+            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second)}), .command_ = std::string("UPDATE 1")},
+            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string(second), std::string(first)}), .command_ = std::string("DELETE 2")},
+            {.column_ = std::string("name"), .rows_ = std::vector<std::string>({std::string("raw")})},
+            {.column_ = std::string("name"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
         auto repository = connected.db().repository<entity_type>();
         auto read = repository.query_builder("i");
         read.select({"name"});
-        const auto one = co_await read.get_scalar<std::pmr::string>();
+        const auto one = co_await read.get_scalar<std::string>();
         const auto many = co_await read.get_scalars<string>();
         auto update = repository.update_builder();
         update.set("name", second).where(entity_type::column<"id">() == 1).returning({"name"});
         const auto returned_one = co_await update.get_scalar<string>();
         auto remove = repository.delete_builder();
         remove.where(entity_type::column<"id">() > 0).returning({"name"});
-        const auto returned_many = co_await remove.get_scalars<std::pmr::string>();
+        const auto returned_many = co_await remove.get_scalars<std::string>();
         {
             const auto raw = co_await read.get_raw_many();
             EXPECT_EQ(raw.size(), std::size_t{1});
@@ -217,7 +211,7 @@ TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
                 EXPECT_EQ(raw.front()["name"].as<std::string_view>().value_or(""), "raw");
             }
         }
-        EXPECT_TRUE(!(co_await read.get_scalar<std::pmr::string>()).has_value());
+        EXPECT_TRUE(!(co_await read.get_scalar<std::string>()).has_value());
         // Each mapped query has released its raw rows, and later queries have
         // reused the connection. All mapped strings must still own their data.
         EXPECT_TRUE(one.has_value());
@@ -241,26 +235,25 @@ TEST(Ruvia, db_repository_scalar_results_own_text_across_reads_and_returning) {
     });
 }
 
-using nullable_text_array = std::pmr::vector<std::optional<std::pmr::string>>;
+using nullable_text_array = std::vector<std::optional<std::string>>;
 RUVIA_DB_ENTITY(array_entity, "array_items",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"values", nullable_text_array>)
 RUVIA_DB_PROJECTION(array_projection,
-    db_column<"values", std::pmr::vector<std::optional<string>>>)
+    db_column<"values", std::vector<std::optional<string>>>)
 
 TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_projections) {
-    const std::pmr::string long_text(256, 'x', ruvia::process_resource());
-    const auto array_text = std::pmr::string("{\"", ruvia::process_resource()) + long_text + "\",NULL,\"NULL\",\"comma,quote\\\"slash\\\\\",\"\"}";
+    const std::string long_text(256, 'x');
+    const auto array_text = std::string("{\"") + long_text + "\",NULL,\"NULL\",\"comma,quote\\\"slash\\\\\",\"\"}";
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource()), std::pmr::string("{}", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource())}, ruvia::process_resource()), .command_ = std::pmr::string("UPDATE 1", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource()), std::pmr::string("{}", ruvia::process_resource())}, ruvia::process_resource()), .command_ = std::pmr::string("DELETE 2", ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("values", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string(array_text, ruvia::process_resource())}, ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")})},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)}), .command_ = std::string("UPDATE 1")},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text), std::string("{}")}), .command_ = std::string("DELETE 2")},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})},
+            {.column_ = std::string("values"), .rows_ = std::vector<std::string>({std::string(array_text)})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -279,7 +272,7 @@ TEST(Ruvia, db_repository_array_results_own_tokens_in_scalars_entities_and_proje
         const auto projection = co_await read.get_one<array_projection>();
         bool rejected_null = false;
         try {
-            (void)co_await read.get_scalar<std::pmr::vector<std::pmr::string>>();
+            (void)co_await read.get_scalar<std::vector<std::string>>();
         } catch (const db_conversion_error& error) {
             rejected_null = error.code() == db_conversion_error::code_type::invalid_format;
         }
@@ -341,13 +334,12 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
     using reply = test::backend_startup_peer::postgres_reply;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<reply>({reply{.columns_ = std::pmr::vector<std::pmr::string>({"name", "rank", "unmapped"}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({"Ada", "7", "extra"}, ruvia::process_resource())}, ruvia::process_resource())},
-                                    reply{.columns_ = std::pmr::vector<std::pmr::string>({"name", "rank", "unmapped"}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({"Grace", "8", "raw"}, ruvia::process_resource())}, ruvia::process_resource())},
-                                    reply{.columns_ = std::pmr::vector<std::pmr::string>({"id", "name", "rank"}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({"9", "Linus", "6"}, ruvia::process_resource())}, ruvia::process_resource())},
-                                    reply{.columns_ = std::pmr::vector<std::pmr::string>({"name"}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({"missing rank"}, ruvia::process_resource())}, ruvia::process_resource())},
-                                    reply{.columns_ = std::pmr::vector<std::pmr::string>({"name", "name", "rank"}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({"first", "second", "7"}, ruvia::process_resource())}, ruvia::process_resource())},
-                                    reply{.columns_ = std::pmr::vector<std::pmr::string>({"name", "rank"}, ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<reply>({reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Ada", "7", "extra"})})},
+            reply{.columns_ = std::vector<std::string>({"name", "rank", "unmapped"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"Grace", "8", "raw"})})},
+            reply{.columns_ = std::vector<std::string>({"id", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"9", "Linus", "6"})})},
+            reply{.columns_ = std::vector<std::string>({"name"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"missing rank"})})},
+            reply{.columns_ = std::vector<std::string>({"name", "name", "rank"}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({"first", "second", "7"})})},
+            reply{.columns_ = std::vector<std::string>({"name", "rank"})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -415,10 +407,9 @@ TEST(Ruvia, db_repository_wildcards_decode_result_names_and_reject_ambiguous_map
 TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) {
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("label", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("Ada", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("label", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("Grace", ruvia::process_resource()), std::pmr::string("Linus", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("label", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>(ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Ada")})},
+            {.column_ = std::string("label"), .rows_ = std::vector<std::string>({std::string("Grace"), std::string("Linus")})},
+            {.column_ = std::string("label"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -463,9 +454,8 @@ TEST(Ruvia, db_repository_consumes_selected_projection_rows_and_owns_selection) 
 TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_duplicate_names) {
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("id", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("7", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("id", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>(ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("7")})},
+            {.column_ = std::string("id"), .rows_ = std::vector<std::string>()}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -498,7 +488,7 @@ TEST(Ruvia, db_repository_add_select_maps_computed_dto_columns_and_rejects_dupli
 TEST(Ruvia, db_repository_relation_query_reports_missing_mapped_columns_as_conversion_error) {
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("id", ruvia::process_resource()), .rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string("id"), .rows_ = std::vector<std::string>({std::string("1")})}}));
     repository_runtime runtime;
     db_client client(runtime.attachment_.loop(), peer.config());
     test::drive_backend_client(runtime.attachment_, client, [&](db_client& connected) -> task<void> {
@@ -551,19 +541,17 @@ TEST(Ruvia, db_repository_relation_path_rejects_alias_and_relation_name_ambiguit
 
 TEST(Ruvia, db_repository_update_builder_owns_complex_conditions_and_cross_table_source) {
     repository_runtime runtime;
-    test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         auto update = repository.update_builder("i");
         {
-            db_query x(&source);
+            db_query x;
             update.update_from<entity_type>("incoming")
                 .set("name", x.column("name", "incoming"))
                 .where(x.binary(x.column("id", "i"), db_binary_operator::equal, x.column("id", "incoming")))
                 .and_where(x.binary(x.column("name", "i"), db_binary_operator::is_distinct_from, x.column("name", "incoming")))
                 .returning({{"id"}, {"label", x.column("name", "i")}});
         }
-        EXPECT_EQ(source.live_allocations(), std::size_t{0});
         const auto statement = update.get_query_and_parameters();
         EXPECT_EQ(statement.sql(), "UPDATE \"items\" AS \"i\" SET \"name\" = \"incoming\".\"name\" FROM \"items\" AS \"incoming\" WHERE ((\"i\".\"id\" = \"incoming\".\"id\") AND (\"i\".\"name\" IS DISTINCT FROM \"incoming\".\"name\")) RETURNING \"i\".\"id\" AS \"id\", \"i\".\"name\" AS \"label\"");
         auto mapped = update.get_many<item_summary>();
@@ -605,11 +593,10 @@ TEST(Ruvia, db_repository_update_builder_owns_complex_conditions_and_cross_table
     });
 }
 
-RUVIA_DB_ENTITY(archive_type, "archive", db_column<"id", std::int64_t>, db_column<"name", std::pmr::string>)
+RUVIA_DB_ENTITY(archive_type, "archive", db_column<"id", std::int64_t>, db_column<"name", std::string>)
 
 TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
     repository_runtime runtime;
-    test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         auto archive = client.db().repository<archive_type>();
@@ -617,12 +604,12 @@ TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
             {
                 auto insert = archive.insert_builder();
                 {
-                    db_query x(&source);
+                    db_query x;
                     auto candidates = repository.query_builder("c");
                     candidates.where(entity_type::column<"name">() == "pending").order_by("id").limit(10).set_lock({.mode_ = db_row_lock::update, .skip_locked_ = true});
                     auto claim = repository.update_builder("t");
                     claim.update_from_cte("candidates", "c")
-                        .set("name", x.value(std::pmr::string(300, 'x', ruvia::process_resource())))
+                        .set("name", x.value(std::string(300, 'x')))
                         .where(x.binary(x.column("id", "t"), db_binary_operator::equal, x.column("id", "c")))
                         .returning();
                     auto claimed = repository.query_builder("claimed");
@@ -638,7 +625,6 @@ TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
                     EXPECT_TRUE(testing::throws_on([&] { invalid.insert_from({"id"}, claimed); }));
                     EXPECT_TRUE(testing::throws_on([&] { invalid.insert_from({"id", "unknown"}, claimed); }));
                 }
-                EXPECT_EQ(source.live_allocations(), std::size_t{0});
                 const auto statement = insert.get_query_and_parameters();
                 EXPECT_TRUE(statement.sql().find("WITH \"candidates\" AS (SELECT") == 0);
                 EXPECT_TRUE(statement.sql().find("FOR UPDATE SKIP LOCKED") != std::string_view::npos);
@@ -654,7 +640,6 @@ TEST(Ruvia, db_repository_write_ctes_claim_and_persist_in_one_statement) {
 
 TEST(Ruvia, db_repository_write_builder_cancelled_operations_release_input_snapshots) {
     repository_runtime runtime;
-    test::counting_memory_resource input;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         stop_source stop;
         stop.request_stop();
@@ -663,16 +648,15 @@ TEST(Ruvia, db_repository_write_builder_cancelled_operations_release_input_snaps
             bool cancelled = false;
             auto exercise = [&]() -> task<void> {
                 auto operation = [&] {
-                    db_query x(&input);
+                    db_query x;
                     auto update = repository.update_builder();
-                    update.set("name", x.value(std::pmr::string(400, 'v', ruvia::process_resource())))
+                    update.set("name", x.value(std::string(400, 'v')))
                         .where(x.binary(x.column("id"), db_binary_operator::is_distinct_from, x.value(1)))
                         .returning();
                     auto outer = repository.query_builder("updated");
                     outer.with("updated", update).from_cte("updated");
                     return outer.get_many();
                 }();
-                EXPECT_EQ(input.live_allocations(), std::size_t{0});
                 try {
                     auto result_value = co_await std::move(operation);
                 } catch (const db_error& error) {
@@ -688,18 +672,17 @@ TEST(Ruvia, db_repository_write_builder_cancelled_operations_release_input_snaps
 
 TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_parameters) {
     repository_runtime runtime;
-    test::counting_memory_resource source_resource;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         auto read = repository.query_builder("i");
         auto write = repository.update_builder("i");
         write.set("name", "changed").update_from_cte("incoming", "n").where(entity_type::column<"id">() > 8);
         {
-            db_query cte(&source_resource);
+            db_query cte;
             cte.values({cte.value(2)});
             const borrowed_text cte_columns[]{"floor"};
             read.with("bounds", cte, {.columns_ = cte_columns});
-            db_query source(&source_resource);
+            db_query source;
             source.select(source.column("id", "s")).from("samples", "s").where(source.binary(source.column("owner_id", "s"), db_binary_operator::equal, source.column("id", "i"))).and_where(source.binary(source.column("score", "s"), db_binary_operator::greater, source.value(3)));
             const db_source_column columns[]{{.name_ = "sample_id"}};
             const auto on = (entity_type::column<"id">() == db_expr::column("sample_id", "matched")) &&
@@ -707,14 +690,13 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
             read.left_join(source, "matched", on, {.lateral_ = true, .columns_ = columns});
             const borrowed_text incoming_columns[]{"id"};
             write.with("incoming", cte, {.columns_ = incoming_columns});
-            db_query writer_source(&source_resource);
+            db_query writer_source;
             writer_source.select(writer_source.column("id", "s")).from("samples", "s").where(writer_source.binary(writer_source.column("owner_id", "s"), db_binary_operator::equal, writer_source.column("id", "n"))).and_where(writer_source.binary(writer_source.column("score", "s"), db_binary_operator::greater, writer_source.value(3)));
             const auto writer_on = (db_expr::column("id", "n") == db_expr::column("sample_id", "matched")) &&
                                    (db_expr::column("sample_id", "matched") > 5);
             write.join(db_join_type::inner, writer_source, "matched", writer_on, {.lateral_ = true, .columns_ = columns});
             source.where(source.value(false));
         }
-        EXPECT_EQ(source_resource.live_allocations(), std::size_t{0});
         const auto statement = read.get_query_and_parameters();
         EXPECT_EQ(statement.sql(),
             "WITH \"bounds\" (\"floor\") AS (VALUES ($1)) SELECT \"i\".\"id\", \"i\".\"name\" FROM \"items\" AS \"i\" LEFT JOIN LATERAL (SELECT \"s\".\"id\" FROM \"samples\" AS \"s\" WHERE ((\"s\".\"owner_id\" = \"i\".\"id\") AND (\"s\".\"score\" > $2))) AS \"matched\" (\"sample_id\") ON ((\"i\".\"id\" = \"matched\".\"sample_id\") AND (\"matched\".\"sample_id\" > $3))");
@@ -725,7 +707,7 @@ TEST(Ruvia, db_repository_imports_raw_correlated_query_joins_and_writer_paramete
         EXPECT_TRUE(update.sql().find("\"matched\".\"sample_id\" > $4") != std::string_view::npos);
         EXPECT_TRUE(update.sql().find("WHERE (\"i\".\"id\" > $5)") != std::string_view::npos);
         EXPECT_EQ(update.params().size(), std::size_t{5});
-        EXPECT_TRUE(testing::throws_on([&] { (void)read.query().compile(db_driver::mariadb, nullptr); }));
+        EXPECT_TRUE(testing::throws_on([&] { (void)read.query().compile(db_driver::mariadb); }));
 
         db_query plain;
         plain.select(plain.value(11));
@@ -776,7 +758,7 @@ TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query
             alternatives.row({db_expr::value(4)});
             db_query membership;
             membership.select(membership.star()).from("items").where((entity_type::column<"id">().in(alternatives) && entity_type::column<"id">().not_in(alternatives)).expression(membership));
-            const auto values_membership = membership.compile(db_driver::postgresql, nullptr);
+            const auto values_membership = membership.compile(db_driver::postgresql);
             EXPECT_EQ(values_membership.sql(),
                 "SELECT * FROM \"items\" WHERE ((\"items\".\"id\" IN (VALUES ($1))) AND (\"items\".\"id\" NOT IN (VALUES ($2))))");
             EXPECT_EQ(values_membership.params().size(), std::size_t{2});
@@ -784,7 +766,7 @@ TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query
             ids.select({"id"}).where(entity_type::column<"id">() > 4);
             outer.select(outer.star("updated")).from("updated").where((entity_type::column<"id">("updated").in(ids) && entity_type::column<"id">("updated").not_in(ids)).expression(outer));
         }
-        const auto statement = outer.compile(db_driver::postgresql, nullptr);
+        const auto statement = outer.compile(db_driver::postgresql);
         EXPECT_EQ(statement.sql(),
             "WITH \"inserted\" AS (INSERT INTO \"items\" (\"id\", \"name\") VALUES ($1, $2) RETURNING \"items\".\"id\" AS \"id\"), "
             "\"updated\" AS (UPDATE \"items\" AS \"u\" SET \"name\" = $3 WHERE (\"u\".\"id\" = $4) RETURNING \"u\".*, $5 AS \"rank\"), "
@@ -792,7 +774,7 @@ TEST(Ruvia, db_repository_public_query_views_compose_all_writes_into_owned_query
             "\"upserted\" AS (INSERT INTO \"items\" (\"id\", \"name\") VALUES ($7, $8) ON CONFLICT (\"id\") DO UPDATE SET \"name\" = excluded.\"name\" RETURNING \"items\".\"id\" AS \"id\") "
             "SELECT \"updated\".* FROM \"updated\" WHERE ((\"updated\".\"id\" IN (SELECT \"ids\".\"id\" AS \"id\" FROM \"items\" AS \"ids\" WHERE (\"ids\".\"id\" > $9))) AND (\"updated\".\"id\" NOT IN (SELECT \"ids\".\"id\" AS \"id\" FROM \"items\" AS \"ids\" WHERE (\"ids\".\"id\" > $10))))");
         EXPECT_EQ(statement.params().size(), std::size_t{10});
-        const auto literal = outer.compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+        const auto literal = outer.compile(db_driver::postgresql, db_parameter_mode::literal);
         EXPECT_TRUE(literal.sql().find("VALUES (1, E'new')") != std::string_view::npos);
         EXPECT_TRUE(literal.sql().find("VALUES (1, E'mutated')") != std::string_view::npos);
         EXPECT_TRUE(literal.sql().find("SET \"name\" = E'updated'") != std::string_view::npos);
@@ -853,7 +835,6 @@ TEST(Ruvia, db_repository_grouped_projection_reuses_imported_parameters) {
 
 TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) {
     repository_runtime runtime;
-    test::counting_memory_resource source;
     test::with_connected_db_client(runtime.attachment_, {.driver_ = db_driver::postgresql}, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         entity_type entity;
@@ -868,14 +849,13 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
         for (int i = 0; i < 12; ++i) {
             {
                 auto update = [&] {
-                    db_query x(&source);
-                    const std::array changes{db_assignment{"name", x.call("concat", {x.column("name"), x.value(std::pmr::string(400, 'z', ruvia::process_resource()))})}};
+                    db_query x;
+                    const std::array changes{db_assignment{"name", x.call("concat", {x.column("name"), x.value(std::string(400, 'z'))})}};
                     const std::array fields_value{db_selection{"id"}, db_selection{"label", x.call("upper", {x.column("name")})}};
                     auto builder = repository.update_builder();
                     builder.set(changes).where(where).returning(fields_value);
                     return builder.get_many<item_summary>();
                 }();
-                EXPECT_EQ(source.live_allocations(), std::size_t{0});
                 auto insert = repository.insert_builder(entity).returning().get_many();
                 auto erase = repository.delete_builder().where(where).returning().get_many();
                 auto plain_update = repository.update_builder().set(entity).where(where).returning().get_many();
@@ -895,7 +875,7 @@ TEST(Ruvia, db_repository_expression_writes_own_sources_and_validate_returning) 
                 auto repeated = repository.update(where, {{"id", x.value(1)}, {"id", x.value(2)}});
                 auto repeated_builder = repository.update_builder();
                 repeated_builder.set({{"id", x.value(1)}, {"id", x.value(2)}}).where(where);
-                const auto repeated_sql = repeated_builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+                const auto repeated_sql = repeated_builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
                 EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 2") != std::string_view::npos);
                 EXPECT_TRUE(repeated_sql.sql().find("SET \"id\" = 1") == std::string_view::npos);
                 options.update_expressions_ = duplicate_updates;
@@ -913,7 +893,7 @@ TEST(Ruvia, db_repository_builder_binds_entity_predicates_to_join_alias) {
     test::with_connected_db_client(runtime.attachment_, config, [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<entity_type>();
         auto builder = repository.query_builder("i");
-        builder.where(entity_type::column<"id">() >= 7).and_where(entity_type::column<"name">() == std::pmr::string("temporary", ruvia::process_resource()));
+        builder.where(entity_type::column<"id">() >= 7).and_where(entity_type::column<"name">() == std::string("temporary"));
         builder.order_by("id").limit(3);
         const auto statement = builder.get_query_and_parameters();
         if (config.driver_ == db_driver::postgresql) {
@@ -991,7 +971,7 @@ TEST(Ruvia, db_repository_conditional_upsert_owns_options_and_releases_cold_stor
             auto repository = client.db().repository<entity_type>();
             entity_type input;
             input.set<"id">(1);
-            input.set<"name">(std::pmr::string(400, 'n', ruvia::process_resource()));
+            input.set<"name">(std::string(400, 'n'));
             const borrowed_text conflict_paths[]{"id"};
             for (int i = 0; i < 12; ++i) {
                 if (config.driver_ == db_driver::postgresql) {
@@ -1149,15 +1129,15 @@ TEST(Ruvia, db_repository_insert_batches_merge_columns_without_reinterpreting_ro
             .values({expected_reversed.value("second"), expected_reversed.default_value()})
             .values({expected_reversed.default_value(), expected_reversed.value(17)});
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-            const auto expected = batch.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto actual = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto expected = batch.query().compile(driver, db_parameter_mode::literal);
+            const auto actual = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(actual.sql(), expected.sql());
-            const auto positioned = expected_rows.compile(driver, nullptr, db_parameter_mode::literal);
+            const auto positioned = expected_rows.compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(actual.sql(), positioned.sql());
-            const auto reverse = reversed.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto positioned_reverse = expected_reversed.compile(driver, nullptr, db_parameter_mode::literal);
+            const auto reverse = reversed.query().compile(driver, db_parameter_mode::literal);
+            const auto positioned_reverse = expected_reversed.compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(reverse.sql(), positioned_reverse.sql());
-            const auto bound = appended.query().compile(driver, nullptr);
+            const auto bound = appended.query().compile(driver);
             EXPECT_EQ(bound.params().size(), std::size_t{2});
         }
         const borrowed_text keys[]{"id"};
@@ -1180,9 +1160,9 @@ TEST(Ruvia, db_repository_numeric_arrays_preserve_floating_precision_and_range) 
         for (const auto input : {std::nextafter(1.0L, 2.0L), std::numeric_limits<long double>::max(),
                  std::numeric_limits<long double>::lowest()}) {
             numeric_array_entity entity;
-            entity.set<"samples">(std::pmr::vector<long double>({input}, ruvia::process_resource()));
+            entity.set<"samples">(std::vector<long double>({input}));
             auto builder = repository.insert_builder(entity);
-            const auto statement = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            const auto statement = builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
             const auto sql = statement.sql();
             const auto opening = sql.find('{');
             const auto closing = sql.find('}', opening);
@@ -1207,14 +1187,14 @@ TEST(Ruvia, db_repository_nonfinite_array_elements_preserve_prior_insert_rows) {
     test::with_connected_db_client(runtime.attachment_, database_config(), [&](db_client& client) -> task<void> {
         auto repository = client.db().repository<numeric_array_entity>();
         numeric_array_entity entity;
-        entity.set<"samples">(std::pmr::vector<long double>({2.0L}, ruvia::process_resource()));
+        entity.set<"samples">(std::vector<long double>({2.0L}));
         auto builder = repository.insert_builder(entity);
-        const auto before = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+        const auto before = builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
         for (const auto invalid : {std::numeric_limits<long double>::infinity(),
                  -std::numeric_limits<long double>::infinity(), std::numeric_limits<long double>::quiet_NaN()}) {
-            entity.set<"samples">(std::pmr::vector<long double>({1.0L, invalid}, ruvia::process_resource()));
+            entity.set<"samples">(std::vector<long double>({1.0L, invalid}));
             EXPECT_THROW(builder.values(entity), std::invalid_argument);
-            const auto after = builder.query().compile(db_driver::postgresql, nullptr, db_parameter_mode::literal);
+            const auto after = builder.query().compile(db_driver::postgresql, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
         }
         co_return;
@@ -1229,13 +1209,13 @@ TEST(Ruvia, db_repository_insert_defaults_and_rejected_batches_preserve_existing
         entities[1].set<"name">("explicit");
         auto appended = repository.insert_builder(entities[0]);
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-            const auto before = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto before = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(before.sql(), driver == db_driver::postgresql
                                         ? "INSERT INTO \"items\" DEFAULT VALUES"
                                         : "INSERT INTO `items` () VALUES ()");
             EXPECT_TRUE(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
             EXPECT_TRUE(testing::throws_on([&] { appended.values(entities[2]); }));
-            const auto after = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto after = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
         }
         appended.values(entities[1]).values(entities[2]);
@@ -1246,15 +1226,15 @@ TEST(Ruvia, db_repository_insert_defaults_and_rejected_batches_preserve_existing
             .values({expected_rows.value("explicit")})
             .values({expected_rows.default_value()});
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-            const auto expected = batch.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto before = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto expected = batch.query().compile(driver, db_parameter_mode::literal);
+            const auto before = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(before.sql(), expected.sql());
-            const auto positioned = expected_rows.compile(driver, nullptr, db_parameter_mode::literal);
+            const auto positioned = expected_rows.compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(before.sql(), positioned.sql());
             EXPECT_TRUE(testing::throws_on([&] { appended.values(std::span<const entity_type>{}); }));
-            const auto after = appended.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto after = appended.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
-            const auto parameterized = appended.query().compile(driver, nullptr);
+            const auto parameterized = appended.query().compile(driver);
             EXPECT_EQ(parameterized.params().size(), std::size_t{1});
         }
         co_return;
@@ -1276,17 +1256,17 @@ TEST(Ruvia, db_repository_insert_sources_cannot_replace_or_append_value_rows) {
         auto selected = repository.insert_builder();
         selected.insert_from({"id"}, source);
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-            const auto before = values.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto default_before = defaults.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto selected_before = selected.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto before = values.query().compile(driver, db_parameter_mode::literal);
+            const auto default_before = defaults.query().compile(driver, db_parameter_mode::literal);
+            const auto selected_before = selected.query().compile(driver, db_parameter_mode::literal);
             EXPECT_TRUE(testing::throws_on([&] { values.insert_from({"id"}, source); }));
             EXPECT_TRUE(testing::throws_on([&] { values.insert_from({"name"}, raw_source); }));
             EXPECT_TRUE(testing::throws_on([&] { defaults.insert_from({"id"}, raw_source); }));
             EXPECT_TRUE(testing::throws_on([&] { selected.values(entity); }));
             EXPECT_TRUE(testing::throws_on([&] { selected.values(entity_type{}); }));
-            const auto after = values.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto default_after = defaults.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto selected_after = selected.query().compile(driver, nullptr, db_parameter_mode::literal);
+            const auto after = values.query().compile(driver, db_parameter_mode::literal);
+            const auto default_after = defaults.query().compile(driver, db_parameter_mode::literal);
+            const auto selected_after = selected.query().compile(driver, db_parameter_mode::literal);
             EXPECT_EQ(after.sql(), before.sql());
             EXPECT_EQ(default_after.sql(), default_before.sql());
             EXPECT_EQ(selected_after.sql(), selected_before.sql());
@@ -1317,16 +1297,16 @@ TEST(Ruvia, db_repository_batch_set_rejects_invalid_suffix_without_publishing_pr
         };
         for (const auto& rejected : invalid) {
             for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-                const auto before = update.query().compile(driver, nullptr, db_parameter_mode::literal);
-                const auto bound_before = update.query().compile(driver, nullptr);
+                const auto before = update.query().compile(driver, db_parameter_mode::literal);
+                const auto bound_before = update.query().compile(driver);
                 const db_assignment assignments[]{
                     {"name", db_expr::value("not committed")},
                     {"id", db_expr::value(99)},
                     rejected,
                 };
                 EXPECT_TRUE(testing::throws_on([&] { update.set(std::span<const db_assignment>(assignments)); }));
-                const auto after = update.query().compile(driver, nullptr, db_parameter_mode::literal);
-                const auto bound_after = update.query().compile(driver, nullptr);
+                const auto after = update.query().compile(driver, db_parameter_mode::literal);
+                const auto bound_after = update.query().compile(driver);
                 EXPECT_EQ(after.sql(), before.sql());
                 EXPECT_EQ(bound_after.sql(), bound_before.sql());
                 EXPECT_EQ(bound_after.params().size(), bound_before.params().size());
@@ -1339,9 +1319,9 @@ TEST(Ruvia, db_repository_batch_set_rejects_invalid_suffix_without_publishing_pr
         changes.set<"id">(10);
         update.set(changes);
         for (const auto driver : {db_driver::postgresql, db_driver::mariadb}) {
-            const auto statement = update.query().compile(driver, nullptr, db_parameter_mode::literal);
-            const auto expected_value = db_query::render_expression(expressions.value("entity"), driver, nullptr);
-            const auto expected_assignment = std::pmr::string(driver == db_driver::postgresql ? "\"name\" = " : "`name` = ", ruvia::process_resource()) + std::pmr::string(expected_value, ruvia::process_resource());
+            const auto statement = update.query().compile(driver, db_parameter_mode::literal);
+            const auto expected_value = db_query::render_expression(expressions.value("entity"), driver);
+            const auto expected_assignment = std::string(driver == db_driver::postgresql ? "\"name\" = " : "`name` = ") + std::string(expected_value);
             EXPECT_TRUE(statement.sql().find(expected_assignment) != std::string_view::npos);
             EXPECT_TRUE(statement.sql().find(driver == db_driver::postgresql ? "\"id\" = 10" : "`id` = 10") != std::string_view::npos);
         }
@@ -1452,16 +1432,16 @@ TEST(Ruvia, db_repository_save_compiles_returning_on_every_driver_but_update_ret
 #ifdef RUVIA_ENABLE_POSTGRESQL
 RUVIA_DB_ENTITY(role_entity, "roles",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string>)
+    db_column<"name", std::string>)
 RUVIA_DB_ENTITY(user_role_entity, "user_roles",
     db_column<"user_id", std::int64_t, db_column_options{.primary_key_ = true}>,
     db_column<"role_id", std::int64_t, db_column_options{.primary_key_ = true}>)
 RUVIA_DB_ENTITY(trigger_populated_entity, "devices",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"name", std::pmr::string, db_column_options{.nullable_ = true}>,
+    db_column<"name", std::string, db_column_options{.nullable_ = true}>,
     db_column<"revision", std::int64_t>,
-    db_column<"protocol_address", std::pmr::string, db_column_options{.read_only_ = true}>,
-    db_column<"updated_at", std::pmr::string>)
+    db_column<"protocol_address", std::string, db_column_options{.read_only_ = true}>,
+    db_column<"updated_at", std::string>)
 
 TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delete_using_and_read_only_columns) {
     repository_runtime runtime;
@@ -1579,11 +1559,11 @@ TEST(Ruvia, db_repository_builders_support_typed_joins_assignments_upserts_delet
 
 RUVIA_DB_ENTITY(soft_entity, "articles",
     db_column<"id", std::int64_t, db_column_options{.primary_key_ = true}>,
-    db_column<"title", std::pmr::string>,
+    db_column<"title", std::string>,
     db_column<"views", std::int64_t>,
     db_column<"revision", std::int64_t, db_column_options{.version_ = true}>,
-    db_column<"updated_at", std::pmr::string, db_column_options{.update_date_ = true}>,
-    db_column<"deleted_at", std::pmr::string, db_column_options{.delete_date_ = true}>)
+    db_column<"updated_at", std::string, db_column_options{.update_date_ = true}>,
+    db_column<"deleted_at", std::string, db_column_options{.delete_date_ = true}>)
 
 TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_joins_and_raw_queries) {
     repository_runtime runtime;
@@ -1606,7 +1586,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
         EXPECT_TRUE(active_sql.sql().find("(\"a\".\"deleted_at\" IS NULL)") != std::string_view::npos);
         EXPECT_TRUE(active_sql.sql().find("HAVING ((\"a\".\"views\" > $4) OR (\"a\".\"id\" = $5))") != std::string_view::npos);
         EXPECT_TRUE(active_sql.sql().find("LIMIT $6 OFFSET $7") != std::string_view::npos);
-        const auto borrowed = active_qb.query().compile(db_driver::postgresql, nullptr);
+        const auto borrowed = active_qb.query().compile(db_driver::postgresql);
         EXPECT_TRUE(borrowed.sql().find("deleted_at") == std::string_view::npos);
 
         active_qb.with_deleted();
@@ -1694,7 +1674,7 @@ TEST(Ruvia, db_repository_typeorm_style_api_covers_soft_delete_save_aggregates_j
 TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameters_untyped) {
     using namespace ruvia;
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
-        test::backend_startup_peer::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("raw", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("compiled", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
+        test::backend_startup_peer::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("raw")})}, {.rows_ = std::vector<std::string>({std::string("compiled")})}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());
@@ -1706,7 +1686,7 @@ TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameter
         // Untyped, json_build_object's variadic "any" arguments cannot be resolved.
         db_query query;
         query.select(query.call("json_build_object", {query.value("k"), query.value(5)})).from("records");
-        const auto compiled = query.compile(db_driver::postgresql, nullptr);
+        const auto compiled = query.compile(db_driver::postgresql);
         (void)co_await handle.query(compiled.sql(), compiled.params());
     });
     const auto statements = peer.postgres_parses();
@@ -1715,13 +1695,13 @@ TEST(Ruvia, db_postgresql_declares_float8_for_doubles_and_leaves_other_parameter
         // The SQL decides every type except a double's, which is declared
         // float8 regardless of its value; compiled SQL casts from the value category.
         EXPECT_TRUE(statements[0].sql_ == "SELECT $1, $2, $3, $4");
-        EXPECT_TRUE((statements[0].parameter_types_ == std::pmr::vector<std::uint32_t>({0, 701, 0, 0}, ruvia::process_resource())));
+        EXPECT_TRUE((statements[0].parameter_types_ == std::vector<std::uint32_t>({0, 701, 0, 0})));
         EXPECT_TRUE(statements[1].sql_ == "SELECT \"json_build_object\"($1::text, $2::int8) FROM \"records\"");
-        EXPECT_TRUE((statements[1].parameter_types_ == std::pmr::vector<std::uint32_t>({0, 0}, ruvia::process_resource())));
+        EXPECT_TRUE((statements[1].parameter_types_ == std::vector<std::uint32_t>({0, 0})));
         EXPECT_TRUE((statements[0].parameter_values_ ==
-                     std::pmr::vector<std::optional<std::pmr::string>>({std::pmr::string("5", ruvia::process_resource()), std::pmr::string("5", ruvia::process_resource()), std::pmr::string("true", ruvia::process_resource()), std::pmr::string("text", ruvia::process_resource())}, ruvia::process_resource())));
+                     std::vector<std::optional<std::string>>({std::string("5"), std::string("5"), std::string("true"), std::string("text")})));
         EXPECT_TRUE((statements[1].parameter_values_ ==
-                     std::pmr::vector<std::optional<std::pmr::string>>({std::pmr::string("k", ruvia::process_resource()), std::pmr::string("5", ruvia::process_resource())}, ruvia::process_resource())));
+                     std::vector<std::optional<std::string>>({std::string("k"), std::string("5")})));
     }
 }
 
@@ -1729,7 +1709,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("first", ruvia::process_resource())}, ruvia::process_resource())}, {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource())}}, ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.rows_ = std::vector<std::string>({std::string("first")})}, {.rows_ = std::vector<std::string>({std::string("second")})}}));
     auto& io = test::new_test_io_context();
     auto attachment = attach_event_loop(io);
     db_client client(attachment.loop(), peer.config());
@@ -1737,7 +1717,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
         auto handle = connected.db();
         auto operation = [&] {
             const std::array<char, 4> unterminated{'a', 'b', 'c', '!'};
-            const std::pmr::string long_value(4096, 'x', ruvia::process_resource());
+            const std::string long_value(4096, 'x');
             const std::array params{db_value{std::string_view(unterminated.data(), 3)}, db_value{long_value},
                 db_value{std::string_view{}}, db_value{nullptr}, db_value{false}, db_value{-7},
                 db_value{std::uint64_t{18446744073709551615ULL}}, db_value{1.5}};
@@ -1745,7 +1725,7 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
         }();
         (void)co_await std::move(operation);
         // A compiled value is checked by the driver before it reaches the wire.
-        const std::pmr::string invalid_text("a\0b", 3, ruvia::process_resource());
+        const std::string invalid_text("a\0b", 3);
         const std::array invalid_params{db_value{std::string_view(invalid_text)}};
         bool rejected = false;
         try {
@@ -1763,33 +1743,32 @@ TEST(Ruvia, db_postgresql_owns_lazy_query_inputs_and_preserves_text_parameter_va
     EXPECT_EQ(statements.size(), std::size_t{2});
     if (statements.size() == 2) {
         EXPECT_TRUE((statements[0].parameter_values_ ==
-                     std::pmr::vector<std::optional<std::pmr::string>>({std::pmr::string("abc", ruvia::process_resource()), std::pmr::string(4096, 'x', ruvia::process_resource()), std::pmr::string("", ruvia::process_resource()), std::nullopt,
-                                                                           std::pmr::string("false", ruvia::process_resource()), std::pmr::string("-7", ruvia::process_resource()), std::pmr::string("18446744073709551615", ruvia::process_resource()), std::pmr::string("1.5", ruvia::process_resource())},
-                         ruvia::process_resource())));
-        EXPECT_TRUE((statements[1].parameter_values_ == std::pmr::vector<std::optional<std::pmr::string>>({std::pmr::string("next", ruvia::process_resource()), std::pmr::string("9", ruvia::process_resource())}, ruvia::process_resource())));
+                     std::vector<std::optional<std::string>>({std::string("abc"), std::string(4096, 'x'), std::string(""), std::nullopt,
+                         std::string("false"), std::string("-7"), std::string("18446744073709551615"), std::string("1.5")})));
+        EXPECT_TRUE((statements[1].parameter_values_ == std::vector<std::optional<std::string>>({std::string("next"), std::string("9")})));
     }
 }
 
 namespace db_repository_array_test {
 
-RUVIA_DB_ENTITY(array_entity, "array_records", ruvia::db_column<"values", std::pmr::vector<int>>)
+RUVIA_DB_ENTITY(array_entity, "array_records", ruvia::db_column<"values", std::vector<int>>)
 
 struct array_case final {
     std::string_view text_;
-    std::pmr::vector<int> values_{ruvia::process_resource()};
+    std::vector<int> values_{};
 };
 
 TEST(Ruvia, db_repository_decodes_postgresql_array_bounds_in_element_order) {
     using namespace ruvia;
     const std::array valid{
-        array_case{"{7,8,9}", std::pmr::vector<int>({7, 8, 9}, ruvia::process_resource())},
-        array_case{"[0:2]={7,8,9}", std::pmr::vector<int>({7, 8, 9}, ruvia::process_resource())},
-        array_case{"[0:0]={7}", std::pmr::vector<int>({7}, ruvia::process_resource())},
-        array_case{"[-3:-1]={9,7,8}", std::pmr::vector<int>({9, 7, 8}, ruvia::process_resource())},
-        array_case{"[2:4]={8,9,7}", std::pmr::vector<int>({8, 9, 7}, ruvia::process_resource())},
-        array_case{"[-2147483648:-2147483647]={7,8}", std::pmr::vector<int>({7, 8}, ruvia::process_resource())},
-        array_case{"[2147483645:2147483646]={8,9}", std::pmr::vector<int>({8, 9}, ruvia::process_resource())},
-        array_case{"{}", std::pmr::vector<int>(ruvia::process_resource())},
+        array_case{"{7,8,9}", std::vector<int>({7, 8, 9})},
+        array_case{"[0:2]={7,8,9}", std::vector<int>({7, 8, 9})},
+        array_case{"[0:0]={7}", std::vector<int>({7})},
+        array_case{"[-3:-1]={9,7,8}", std::vector<int>({9, 7, 8})},
+        array_case{"[2:4]={8,9,7}", std::vector<int>({8, 9, 7})},
+        array_case{"[-2147483648:-2147483647]={7,8}", std::vector<int>({7, 8})},
+        array_case{"[2147483645:2147483646]={8,9}", std::vector<int>({8, 9})},
+        array_case{"{}", std::vector<int>()},
     };
     const std::array invalid{
         "[0:2]={7,8}",
@@ -1810,9 +1789,9 @@ TEST(Ruvia, db_repository_decodes_postgresql_array_bounds_in_element_order) {
         "[1:3]={7}",
         "[0:2147483646]={7}",
     };
-    std::pmr::vector<test::backend_startup_peer::postgres_reply> replies{ruvia::process_resource()};
+    std::vector<test::backend_startup_peer::postgres_reply> replies{};
     for (const auto& value : valid) {
-        replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {std::pmr::string(value.text_, ruvia::process_resource())}});
+        replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {std::string(value.text_)}});
     }
     for (const auto value : invalid) {
         replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {value}});
@@ -1856,53 +1835,26 @@ TEST(Ruvia, db_repository_decodes_postgresql_array_bounds_in_element_order) {
     });
 }
 
-// Rejects any single allocation above the cap, so a reserve sized by an
-// unverified declared array length surfaces as bad_alloc even under overcommit.
-class capped_memory_resource final : public std::pmr::memory_resource {
-public:
-    static constexpr std::size_t max_allocation = std::size_t{64} << 20;
-
-private:
-    void* do_allocate(std::size_t bytes_value, std::size_t alignment) override {
-        if (bytes_value > max_allocation) {
-            throw std::bad_alloc();
-        }
-        return std::pmr::new_delete_resource()->allocate(bytes_value, alignment);
-    }
-
-    void do_deallocate(void* pointer, std::size_t bytes_value, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes_value, alignment);
-    }
-
-    [[nodiscard]] bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
-
 TEST(Ruvia, db_repository_bounds_declared_postgresql_array_length_by_arrived_text) {
     using namespace ruvia;
-    std::pmr::vector<test::backend_startup_peer::postgres_reply> replies{ruvia::process_resource()};
+    std::vector<test::backend_startup_peer::postgres_reply> replies{};
     replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"[0:2147483646]={7}"}});
     replies.push_back({.column_ = "values", .type_ = 1007, .rows_ = {"{21,22}"}});
     test::backend_startup_peer peer(test::backend_startup_peer::protocol::postgresql, false,
         test::backend_startup_peer::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
-    capped_memory_resource capped;
-    // The client captures the default resource at construction, so decoding
-    // allocates from the capped resource.
-    const test::default_resource_guard guard(capped);
     db_client client(attachment.loop(), peer.config());
     test::drive_backend_client(attachment, client, [&](db_client& connected) -> task<void> {
         auto repository = connected.db().repository<array_entity>();
         bool rejected = false;
         try {
-            (void)co_await repository.query_builder().get_scalar<std::pmr::vector<int>>();
+            (void)co_await repository.query_builder().get_scalar<std::vector<int>>();
         } catch (const db_conversion_error& error) {
             rejected = error.code() == db_conversion_error::code_type::invalid_format;
         }
         EXPECT_TRUE(rejected);
-        const auto values = co_await repository.query_builder().get_scalar<std::pmr::vector<int>>();
+        const auto values = co_await repository.query_builder().get_scalar<std::vector<int>>();
         EXPECT_TRUE(values.has_value());
         if (values) {
             EXPECT_TRUE(std::ranges::equal(*values, std::array{21, 22}));
@@ -1918,15 +1870,15 @@ RUVIA_DB_ENTITY(versioned_entity, "articles",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
     ruvia::db_column<"views", std::int64_t>,
     ruvia::db_column<"revision", std::int64_t, ruvia::db_column_options{.version_ = true}>,
-    ruvia::db_column<"updated_at", std::pmr::string, ruvia::db_column_options{.update_date_ = true}>,
-    ruvia::db_column<"deleted_at", std::pmr::string, ruvia::db_column_options{.delete_date_ = true}>)
+    ruvia::db_column<"updated_at", std::string, ruvia::db_column_options{.update_date_ = true}>,
+    ruvia::db_column<"deleted_at", std::string, ruvia::db_column_options{.delete_date_ = true}>)
 
 // Every repository write that changes a row moves the version token and the
 // update date, unless the caller assigns that column itself.
 TEST(Ruvia, db_repository_write_paths_stamp_version_and_update_date) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
-    std::pmr::vector<peer_type::postgres_reply> replies(6, peer_type::postgres_reply{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("UPDATE 1", ruvia::process_resource())}, ruvia::process_resource());
+    std::vector<peer_type::postgres_reply> replies(6, peer_type::postgres_reply{.column_ = std::string(""), .command_ = std::string("UPDATE 1")});
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle, std::move(replies));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
@@ -1958,7 +1910,7 @@ TEST(Ruvia, db_repository_write_paths_stamp_version_and_update_date) {
     }
     if (statements.size() == 6) {
         EXPECT_TRUE(std::string_view(statements[5].sql_).find("\"revision\" = $") != std::string_view::npos);
-        EXPECT_TRUE(std::ranges::find(statements[5].parameter_values_, std::optional<std::pmr::string>{std::in_place, "42", ruvia::process_resource()}) != statements[5].parameter_values_.end());
+        EXPECT_TRUE(std::ranges::find(statements[5].parameter_values_, std::optional<std::string>{std::in_place, "42"}) != statements[5].parameter_values_.end());
     }
 }
 
@@ -1968,7 +1920,7 @@ namespace db_repository_result_column_test {
 
 RUVIA_DB_ENTITY(named_entity, "named_records",
     ruvia::db_column<"id", std::int64_t, ruvia::db_column_options{.primary_key_ = true}>,
-    ruvia::db_column<"name", std::pmr::string>)
+    ruvia::db_column<"name", std::string>)
 
 // A mapped column must resolve to exactly one result column in every
 // projection mode; a repeated name is ambiguous rather than "first wins".
@@ -1976,9 +1928,8 @@ TEST(Ruvia, db_repository_rejects_repeated_mapped_result_columns_without_wildcar
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.columns_ = std::pmr::vector<std::pmr::string>({std::pmr::string("id", ruvia::process_resource()), std::pmr::string("name", ruvia::process_resource()), std::pmr::string("name", ruvia::process_resource())}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({std::pmr::string("1", ruvia::process_resource()), std::pmr::string("first", ruvia::process_resource()), std::pmr::string("second", ruvia::process_resource())}, ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.columns_ = std::pmr::vector<std::pmr::string>({std::pmr::string("name", ruvia::process_resource()), std::pmr::string("id", ruvia::process_resource())}, ruvia::process_resource()), .values_ = std::pmr::vector<std::pmr::vector<std::pmr::string>>({std::pmr::vector<std::pmr::string>({std::pmr::string("third", ruvia::process_resource()), std::pmr::string("3", ruvia::process_resource())}, ruvia::process_resource())}, ruvia::process_resource())}},
-            ruvia::process_resource()));
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.columns_ = std::vector<std::string>({std::string("id"), std::string("name"), std::string("name")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("1"), std::string("first"), std::string("second")})})},
+            {.columns_ = std::vector<std::string>({std::string("name"), std::string("id")}), .values_ = std::vector<std::vector<std::string>>({std::vector<std::string>({std::string("third"), std::string("3")})})}}));
     auto& context = test::new_test_io_context();
     auto attachment = attach_event_loop(context, {.queue_capacity_ = 8});
     db_client client(attachment.loop(), peer.config());

@@ -9,9 +9,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
-
-#include "util/http_c_library_memory.h"
+#include "memory/http_c_library_memory.h"
 
 namespace ruvia {
 namespace {
@@ -22,9 +20,6 @@ namespace {
         throw std::invalid_argument("HTTP/3 QUIC connection owns the received DATA credit sink");
     }
     auto http_options = options.http3_;
-    if (http_options.resource_ == nullptr) {
-        http_options.resource_ = detail::http_pmr_resource_or_default(options.resource_);
-    }
     http_options.own_data_events_ = true;
     http_options.received_data_credit_sink_ = sink;
     http_options.received_data_credit_context_ = context;
@@ -33,9 +28,7 @@ namespace {
 
 }  // namespace
 
-http3_quic_datagram::http3_quic_datagram(
-    std::pmr::memory_resource* resource)
-    : bytes_(detail::http_pmr_resource_or_default(resource)) {
+http3_quic_datagram::http3_quic_datagram() noexcept {
     ngtcp2_path_storage_zero(&path_);
 }
 
@@ -53,15 +46,14 @@ public:
     };
     struct queued_datagram final {
         std::int64_t stream_id_;
-        std::pmr::vector<std::byte> bytes_;
+        std::vector<std::byte> bytes_;
     };
 
     impl(http3_role role, const http3_quic_connection_options& options)
         : role_(role),
-          callback_user_data_(options.callback_user_data_),
+          callback_context_(options.callback_context_),
           max_udp_payload_size_(options.max_udp_payload_size_),
           max_pending_datagram_bytes_(options.max_pending_datagram_bytes_),
-          memory_(detail::http_pmr_resource_or_default(options.resource_)),
           memory_table_(detail::make_c_library_mem_table<ngtcp2_mem>(memory_)),
           http3_options_(resolve_http3_options(options, return_received_data_credit, this)),
           http3_(role == http3_role::client ? http3_connection::client(http3_options_) : http3_connection::server(http3_options_)) {
@@ -116,28 +108,28 @@ public:
             get_new_connection_id_ != nullptr
                 ? +[](ngtcp2_conn* c, ngtcp2_cid* cid, ngtcp2_stateless_reset_token* token, std::size_t cidlen, void* u) noexcept {
                       auto& v = self(u);
-                      return v.get_new_connection_id_(c, cid, token, cidlen, v.callback_user_data_);
+                      return v.get_new_connection_id_(c, cid, token, cidlen, v.callback_context_);
                   }
                 : nullptr;
         callbacks_.remove_connection_id =
             remove_connection_id_ != nullptr
                 ? +[](ngtcp2_conn* c, const ngtcp2_cid* cid, void* u) noexcept {
                       auto& v = self(u);
-                      return v.remove_connection_id_(c, cid, v.callback_user_data_);
+                      return v.remove_connection_id_(c, cid, v.callback_context_);
                   }
                 : nullptr;
         callbacks_.handshake_completed =
             handshake_completed_ != nullptr
                 ? +[](ngtcp2_conn* c, void* u) noexcept {
                       auto& v = self(u);
-                      return v.handshake_completed_(c, v.callback_user_data_);
+                      return v.handshake_completed_(c, v.callback_context_);
                   }
                 : nullptr;
         callbacks_.handshake_confirmed =
             handshake_confirmed_ != nullptr
                 ? +[](ngtcp2_conn* c, void* u) noexcept {
                       auto& v = self(u);
-                      return v.handshake_confirmed_(c, v.callback_user_data_);
+                      return v.handshake_confirmed_(c, v.callback_context_);
                   }
                 : nullptr;
         callbacks_.recv_stateless_reset2 = recv_stateless_reset_callback;
@@ -329,7 +321,7 @@ public:
         value.stateless_reset_received_ = true;
         return value.recv_stateless_reset_ == nullptr
                    ? 0
-                   : value.recv_stateless_reset_(connection, reset, value.callback_user_data_);
+                   : value.recv_stateless_reset_(connection, reset, value.callback_context_);
     }
 
     void discard_early_http3() {
@@ -355,7 +347,7 @@ public:
             // before the same input packet can deliver 1-RTT control streams.
             value.discard_early_http3();
             return value.early_data_rejected_ == nullptr ? 0
-                                                         : value.early_data_rejected_(connection, value.callback_user_data_);
+                                                         : value.early_data_rejected_(connection, value.callback_context_);
         } catch (...) {
             value.callback_error_ = std::current_exception();
             value.fail_application(http3_error_code::internal_error);
@@ -487,7 +479,7 @@ public:
     }
 
     http3_role role_;
-    void* callback_user_data_;
+    void* callback_context_;
     std::size_t max_udp_payload_size_;
     std::size_t max_pending_datagram_bytes_;
     detail::http_c_library_memory memory_;
@@ -503,7 +495,7 @@ public:
     ngtcp2_ccerr close_error_{};
     http3_connection_options http3_options_;
     http3_connection http3_;
-    std::optional<std::pmr::deque<queued_datagram>> datagrams_;
+    std::optional<std::deque<queued_datagram>> datagrams_;
     std::size_t pending_datagram_bytes_{0};
     bool datagram_turn_{true};
     bool early_http3_{false};
@@ -520,7 +512,7 @@ public:
 
 http3_quic_connection::http3_quic_connection(http3_role role,
     const http3_quic_connection_options& options)
-    : impl_(detail::make_http_pmr_object<impl>(options.resource_, role, options)) {}
+    : impl_(std::make_unique<impl>(role, options)) {}
 
 http3_quic_connection http3_quic_connection::client(
     const http3_quic_connection_options& options) {
@@ -550,8 +542,8 @@ const ngtcp2_conn* http3_quic_connection::native_handle() const noexcept {
     return impl_->connection_;
 }
 
-void* http3_quic_connection::callback_user_data() const noexcept {
-    return impl_->callback_user_data_;
+void* http3_quic_connection::callback_context() const noexcept {
+    return impl_->callback_context_;
 }
 
 void http3_quic_connection::set_tls_native_handle(
@@ -744,9 +736,9 @@ http3_quic_status http3_quic_connection::submit_datagram(
         return http3_quic_status::would_block;
     }
     if (!impl_->datagrams_) {
-        impl_->datagrams_.emplace(impl_->http3_options_.resource_);
+        impl_->datagrams_.emplace();
     }
-    std::pmr::vector<std::byte> owned(impl_->http3_options_.resource_);
+    std::vector<std::byte> owned;
     owned.reserve(bytes);
     owned.insert(owned.end(), prefix.bytes().begin(), prefix.bytes().end());
     owned.insert(owned.end(), payload.begin(), payload.end());

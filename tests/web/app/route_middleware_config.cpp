@@ -1,7 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <memory_resource>
-
 // Route and controller middleware lists name types, so an entry there is
 // default constructed. That does NOT mean such a middleware cannot be
 // configured: the configuration travels as template parameters, which keeps it
@@ -13,7 +11,6 @@
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_content_codec.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/web/app.h"
@@ -29,7 +26,7 @@ namespace route_middleware_config_test {
 template <int level>
 class configured_by_type final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Config", level == 2 ? "two" : "other");
     }
@@ -38,7 +35,7 @@ public:
 // Takes no configuration at all, so it is named bare in a route's list.
 class plain_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Plain", "on");
     }
@@ -66,7 +63,7 @@ public:
         ++observation_->destroyed_;
     }
 
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next_value) {
         co_await next_value();
     }
 
@@ -78,7 +75,7 @@ private:
 template <int a, int b>
 class configured_by_two_values final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Config-Pair", a == 10 && b == 1000 ? "ok" : "bad");
     }
@@ -88,7 +85,7 @@ public:
 // response without running the rest of the chain.
 class response_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next&) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next&) {
         c.draft().status(ruvia::http_status::accepted);
         c.respond(c.text("returned by middleware"));
         co_return;
@@ -98,7 +95,7 @@ public:
 struct invalid_app_body_limit_middleware final {
     static constexpr std::size_t ruvia_request_body_limit_bytes = 16;
 
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next_value) {
         co_await next_value();
     }
 };
@@ -240,7 +237,7 @@ TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
 
     // A sibling route without the declaration keeps the app-wide ceiling, so
     // the same body that the limited route would reject is fine here.
-    const auto oversize_for_route = std::pmr::string(64, 'x', ruvia::process_resource());
+    const auto oversize_for_route = std::string(64, 'x');
     const auto unlimited =
         app.request(ruvia::test_request::post("/route-config/default").body(oversize_for_route));
     EXPECT_EQ(unlimited.status(), ruvia::http_status::ok);
@@ -253,7 +250,7 @@ TEST(Ruvia, route_body_limit_is_declared_through_the_type) {
 
 TEST(Ruvia, route_body_limit_bounds_the_decoded_representation) {
     ruvia::test_app app;
-    const std::pmr::string plain(4096, 'x', ruvia::process_resource());
+    const std::string plain(4096, 'x');
     auto encoded = ruvia::encode_http_content(
         ruvia::http_content_coding::gzip, plain, {.max_encoded_bytes_ = 64});
     EXPECT_TRUE(encoded.has_value());
@@ -378,6 +375,6 @@ TEST(Ruvia, app_wide_route_declarations_are_rejected_instead_of_ignored) {
     EXPECT_TRUE(rejects([&app] { app.use<invalid_app_body_limit_middleware>(); }));
     EXPECT_TRUE(rejects([&app] { app.use_at<invalid_app_body_limit_middleware>({.prefix_ = "/route-config"}); }));
 
-    const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::pmr::string(64, 'x', ruvia::process_resource())));
+    const auto response = app.request(ruvia::test_request::post("/route-config/default").body(std::string(64, 'x')));
     EXPECT_EQ(response.status(), ruvia::http_status::ok);
 }

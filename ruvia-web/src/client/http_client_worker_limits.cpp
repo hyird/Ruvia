@@ -76,10 +76,8 @@ void http_client_worker_limits::end_dns_refresh() noexcept {
 }
 
 http_client_worker_services make_http_client_worker_services(const http_client_worker_config& config) {
-    return {.result_budget_ = std::allocate_shared<http_client_result_budget_domain>(
-                std::pmr::polymorphic_allocator<http_client_result_budget_domain>(process_resource()), config.result_budget_),
-        .limits_ = std::allocate_shared<http_client_worker_limits>(
-            std::pmr::polymorphic_allocator<http_client_worker_limits>(process_resource()), config)};
+    return {.result_budget_ = std::make_shared<http_client_result_budget_domain>(config.result_budget_),
+        .limits_ = std::make_shared<http_client_worker_limits>(config)};
 }
 
 }  // namespace ruvia::detail

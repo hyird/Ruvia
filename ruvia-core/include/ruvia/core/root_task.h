@@ -14,7 +14,7 @@
 
 #include "ruvia/core/operation_timeout.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
@@ -31,7 +31,7 @@ void report_root_task_failure(const std::weak_ptr<event_loop_state>& loop, std::
 
 class root_task_completion final {
 public:
-    root_task_completion(worker_handle worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
+    root_task_completion(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
         : worker_(std::move(worker_value)),
           loop_(std::move(loop_value)) {}
 
@@ -40,7 +40,7 @@ public:
 
     [[nodiscard]] bool valid() const noexcept {
         const std::lock_guard lock(mutex_);
-        return handle_alive_;
+        return owner_alive_;
     }
 
     [[nodiscard]] bool ready() const noexcept {
@@ -64,10 +64,10 @@ public:
         std::exception_ptr unobserved;
         {
             const std::lock_guard lock(mutex_);
-            if (!handle_alive_) {
+            if (!owner_alive_) {
                 return;
             }
-            handle_alive_ = false;
+            owner_alive_ = false;
             if (complete_) {
                 unobserved = failure_;
             }
@@ -84,7 +84,7 @@ public:
     }
 
     // Publish only after the delivery owner has destroyed all intermediate
-    // result objects. Their moved-from storage may still borrow a caller PMR.
+    // result objects and reclaimed their moved-from storage.
     void publish_completion() noexcept {
         std::exception_ptr unobserved;
         {
@@ -93,7 +93,7 @@ public:
                 std::terminate();
             }
             complete_ = true;
-            if (!handle_alive_) {
+            if (!owner_alive_) {
                 unobserved = failure_;
             }
         }
@@ -109,10 +109,10 @@ public:
     [[nodiscard]] std::exception_ptr consume_failure() {
         wait();
         std::lock_guard lock(mutex_);
-        if (!handle_alive_) {
+        if (!owner_alive_) {
             throw std::logic_error("root task result was already consumed");
         }
-        handle_alive_ = false;
+        owner_alive_ = false;
         return failure_;
     }
 
@@ -130,13 +130,13 @@ private:
         report_root_task_failure(loop_, std::move(failure));
     }
 
-    worker_handle worker_;
+    worker_ref worker_;
     std::weak_ptr<event_loop_state> loop_;
     mutable std::mutex mutex_;
     mutable std::condition_variable completed_;
     std::exception_ptr failure_;
     bool complete_{false};
-    bool handle_alive_{true};
+    bool owner_alive_{true};
 };
 
 struct root_task_void_result final {};
@@ -144,7 +144,7 @@ struct root_task_void_result final {};
 template <typename t_type>
 class root_task_state final {
 public:
-    root_task_state(worker_handle worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
+    root_task_state(worker_ref worker_value, std::weak_ptr<event_loop_state> loop_value) noexcept
         : completion_(std::move(worker_value), std::move(loop_value)) {}
 
     // The type-independent completion protocol; only the result is typed here.

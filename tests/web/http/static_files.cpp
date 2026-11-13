@@ -4,12 +4,9 @@
 
 #include <filesystem>
 #include <fstream>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
-
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "context_request_fixture.h"
 #include "scoped_temp_directory.h"
@@ -53,7 +50,7 @@ void populate_dotfile_root(const fs::path& dir) {
 struct served_body final {
     ruvia::http_status_code status_{ruvia::http_status::internal_server_error};
     bool file_backed_{false};
-    std::pmr::string bytes_{ruvia::process_resource()};
+    std::string bytes_{};
 };
 
 // Serves `path` and reports whether the response names a file for the
@@ -80,7 +77,7 @@ void populate_resident_root(const fs::path& dir) {
     fs::create_directories(dir / "nested");
     std::ofstream(dir / "small.txt", std::ios::binary) << "small-v1";
     std::ofstream(dir / "nested" / "page.txt", std::ios::binary) << "nested-v1";
-    std::ofstream(dir / "large.txt", std::ios::binary) << std::pmr::string(64, 'L', ruvia::process_resource());
+    std::ofstream(dir / "large.txt", std::ios::binary) << std::string(64, 'L');
 }
 
 }  // namespace static_files_test
@@ -167,12 +164,12 @@ TEST(Ruvia, static_root_resident_opt_in_serves_indexed_bytes_from_memory) {
     const auto small = serve_body(root, "small.txt");
     EXPECT_EQ(small.status_, ruvia::http_status::ok);
     EXPECT_TRUE(!small.file_backed_);
-    EXPECT_EQ(small.bytes_, std::pmr::string("small-v1", ruvia::process_resource()));
+    EXPECT_EQ(small.bytes_, std::string("small-v1"));
 
     const auto nested = serve_body(root, "nested/page.txt");
     EXPECT_EQ(nested.status_, ruvia::http_status::ok);
     EXPECT_TRUE(!nested.file_backed_);
-    EXPECT_EQ(nested.bytes_, std::pmr::string("nested-v1", ruvia::process_resource()));
+    EXPECT_EQ(nested.bytes_, std::string("nested-v1"));
 
     const auto large = serve_body(root, "large.txt");
     EXPECT_EQ(large.status_, ruvia::http_status::ok);

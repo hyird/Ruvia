@@ -10,8 +10,6 @@
 #include <system_error>
 #include <typeinfo>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 #ifdef _WIN32
 #include <array>
 #include <charconv>
@@ -41,7 +39,7 @@ namespace {
 }
 
 // The Win32 system message for `value` in UTF-8, or empty when there is none.
-[[nodiscard]] std::pmr::string windows_system_message(int value) {
+[[nodiscard]] std::string windows_system_message(int value) {
     std::array<wchar_t, 1024> buffer;
     // MAX_WIDTH_MASK folds the message's line breaks into spaces.
     auto length = ::FormatMessageW(
@@ -51,16 +49,16 @@ namespace {
         --length;
     }
     if (length == 0) {
-        return std::pmr::string(process_resource());
+        return {};
     }
     const auto wide_length = static_cast<int>(length);
     const auto size = ::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), wide_length, nullptr, 0, nullptr, nullptr);
     if (size <= 0) {
-        return std::pmr::string(process_resource());
+        return {};
     }
-    std::pmr::string text(static_cast<std::size_t>(size), '\0', process_resource());
+    std::string text(static_cast<std::size_t>(size), '\0');
     if (::WideCharToMultiByte(CP_UTF8, 0, buffer.data(), wide_length, text.data(), size, nullptr, nullptr) != size) {
-        return std::pmr::string(process_resource());
+        return {};
     }
     return text;
 }
@@ -176,7 +174,7 @@ void write_line(std::string_view context_value, std::string_view what, std::size
 
 }  // namespace
 
-std::pmr::string error_code_text(const std::error_code& error) {
+std::string error_code_text(const std::error_code& error) {
 #ifdef _WIN32
     if (is_windows_system_category(error.category())) {
         auto text = windows_system_message(error.value());
@@ -188,10 +186,10 @@ std::pmr::string error_code_text(const std::error_code& error) {
         return text;
     }
 #endif
-    return std::pmr::string(error.message(), process_resource());
+    return error.message();
 }
 
-std::pmr::string system_error_text(const std::system_error& error) {
+std::string system_error_text(const std::system_error& error) {
 #ifdef _WIN32
     if (is_windows_system_category(error.code().category())) {
         const std::string_view what(error.what());
@@ -200,12 +198,12 @@ std::pmr::string system_error_text(const std::system_error& error) {
         if (!what.ends_with(native)) {
             return text;
         }
-        std::pmr::string result(what.substr(0, what.size() - native.size()), process_resource());
+        std::string result(what.substr(0, what.size() - native.size()));
         result.append(text);
         return result;
     }
 #endif
-    return std::pmr::string(error.what(), process_resource());
+    return error.what();
 }
 void report_unhandled_failure(
     std::string_view context_value, std::exception_ptr exception, std::size_t occurrences) noexcept {

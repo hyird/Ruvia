@@ -1,6 +1,5 @@
 #include <array>
 #include <chrono>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -23,9 +22,8 @@
 #include "context/context_access.h"
 #include "context/context_capabilities.h"
 #include "http/inline_http_header_views.h"
-#include "util/operation_interrupt.h"
-#include "util/operation_lane_lease.h"
-#include "util/pmr_owned_storage.h"
+#include "integration/operation_interrupt.h"
+#include "integration/operation_lane_lease.h"
 
 namespace {
 
@@ -36,7 +34,7 @@ struct response_stream_output final {
     void* target_;
     bool& active_;
     ruvia::detail::operation_interrupt_source& interrupts_;
-    const ruvia::worker_handle& worker_;
+    const ruvia::worker_ref& worker_;
     ruvia::context* context_;
 };
 
@@ -138,14 +136,14 @@ task<std::optional<view_type>> read_body(
 }
 
 task<void> write_transferred_chunk(response_stream_output output, task<void> (*write)(void*, std::string_view),
-    std::pmr::string chunk, operation_options operation) {
+    std::string chunk, operation_options operation) {
     co_await run_response_stream_output(output, std::move(operation), "response stream write",
         [&] { return write(output.target_, chunk); });
 }
 
 task<void> end_owned(response_stream_output output, task<void> (*end)(void*, std::span<const http_header_view>),
-    std::pmr::vector<http_header> fields, operation_options operation) {
-    const detail::inline_http_header_views views(fields, fields.get_allocator().resource());
+    std::vector<http_header> fields, operation_options operation) {
+    const detail::inline_http_header_views views(fields);
     co_await run_response_stream_output(output, std::move(operation), "response stream end",
         [&] { return end(output.target_, views.view()); });
 }
@@ -191,20 +189,18 @@ task<void> response_stream_writer::write(std::span<const std::byte> chunk, opera
 
 task<void> response_stream_writer::write(std::string_view chunk, operation_options operation) & {
     require_active();
-    std::pmr::string owned(chunk, resource_);
-    return write_owned(std::move(owned), std::move(operation));
+    return write_owned(std::string(chunk), std::move(operation));
 }
 
-task<void> response_stream_writer::write_owned(std::pmr::string&& chunk, operation_options operation) {
+task<void> response_stream_writer::write_owned(std::string&& chunk, operation_options operation) {
     require_output();
-    auto owned = detail::rebind_owned_storage(chunk, resource_);
     return ::ruvia::make_scoped_operation(operation_scope_,
-        write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(owned), std::move(operation)));
+        write_transferred_chunk({target_, output_active_, *interrupts_, *worker_, context_}, write_, std::move(chunk), std::move(operation)));
 }
 
 task<void> response_stream_writer::writeln(std::string_view chunk, operation_options operation) & {
     require_active();
-    std::pmr::string owned(resource_);
+    std::string owned;
     owned.reserve(chunk.size() + 1U);
     owned.append(chunk);
     owned.push_back('\n');
@@ -222,10 +218,10 @@ task<timer_sleep_result> response_stream_writer::sleep(timeout_duration duration
 
 task<void> response_stream_writer::end(std::span<const http_header_view> trailers, operation_options operation) & {
     require_output();
-    std::pmr::vector<http_header> owned_trailers_value(resource_);
+    std::vector<http_header> owned_trailers_value;
     owned_trailers_value.reserve(trailers.size());
     for (const auto& header : trailers) {
-        owned_trailers_value.emplace_back(header.name(), header.value(), resource_);
+        owned_trailers_value.emplace_back(header.name(), header.value());
     }
     return ::ruvia::make_scoped_operation(
         operation_scope_, end_owned({target_, output_active_, *interrupts_, *worker_, context_}, end_, std::move(owned_trailers_value), std::move(operation)));
@@ -241,7 +237,7 @@ task<void> sse_writer::end(std::span<const http_header_view> trailers, operation
 
 task<void> sse_writer::write(const sse_message& message, operation_options operation) & {
     auto& stream_writer = writer();
-    auto frame = format_sse_message(message, {.resource_ = stream_writer.resource_});
+    auto frame = format_sse_message(message);
     return stream_writer.write(std::move(frame), std::move(operation));
 }
 

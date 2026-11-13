@@ -9,6 +9,7 @@
 #include "ruvia/web/testing.h"
 
 #include <cstdio>
+#include <string>
 #include <string_view>
 
 #include "ruvia/web/app.h"
@@ -24,7 +25,7 @@ struct note_counter final {
 
 class audit_middleware final {
 public:
-    ruvia::task<void> handle(ruvia::context& c, ruvia::next& next_value) {
+    ruvia::task<void> invoke(ruvia::context& c, ruvia::next& next_value) {
         co_await next_value();
         c.edit_response().header("X-Audited", "yes");
     }
@@ -43,7 +44,7 @@ private:
     ruvia::task<ruvia::http_response> note(ruvia::context& c) {
         // url_for builds links from registered patterns; the pattern is the
         // route's identity.
-        std::pmr::string body(c.arena());
+        std::string body;
         body.append("note ");
         body.append(c.req().param("id").value_or("?"));
         body.append(" self=");
@@ -59,7 +60,7 @@ private:
     }
 
     ruvia::task<ruvia::http_response> stats(ruvia::context& c) {
-        std::pmr::string body(c.pool());
+        std::string body;
         body.append("stored=");
         body.append(std::to_string(c.worker_state<note_counter>().stored_));
         co_return c.text(std::move(body));

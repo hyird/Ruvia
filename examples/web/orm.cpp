@@ -19,15 +19,15 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/error.h"
 
 #include "backend_config.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #endif
 
 namespace {
@@ -35,13 +35,13 @@ using namespace ruvia;
 
 RUVIA_DB_ENTITY(device, "orm_demo_device",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(name, std::string),
     RUVIA_DB_COLUMN(revision, std::int64_t, db_column_options{.default_expression_ = fixed_string{"1"}}),
-    RUVIA_DB_COLUMN(labels, std::pmr::vector<std::pmr::string>, db_column_options{.default_expression_ = fixed_string{"ARRAY[]::text[]"}}))
+    RUVIA_DB_COLUMN(labels, std::vector<std::string>, db_column_options{.default_expression_ = fixed_string{"ARRAY[]::text[]"}}))
 
 RUVIA_DB_PROJECTION(device_summary,
     RUVIA_DB_COLUMN(id, std::int64_t),
-    RUVIA_DB_COLUMN(label, std::pmr::string),
+    RUVIA_DB_COLUMN(label, std::string),
     RUVIA_DB_COLUMN(rank, std::int64_t))
 
 auto migrations() {
@@ -69,7 +69,7 @@ task<void> demonstrate(db_client& db) {
     input.set<"id">(1);
     input.set<"name">("Pump station");
     input.set<"revision">(1);
-    std::pmr::vector<std::pmr::string> labels;
+    std::vector<std::string> labels;
     labels.emplace_back("telemetry");
     labels.emplace_back("zone-a");
     input.set<"labels">(std::move(labels));

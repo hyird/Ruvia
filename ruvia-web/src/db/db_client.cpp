@@ -4,8 +4,7 @@
 #include <utility>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/db/db_handle.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "client/client_lifecycle.h"
 #include "db/db_registry.h"
@@ -16,7 +15,7 @@ class db_client_state final : public std::enable_shared_from_this<db_client_stat
 public:
     db_client_state(event_loop loop, const db_config& config);
 #ifdef RUVIA_ENABLE_REDIS
-    db_client_state(event_loop loop, const db_config& config, const redis_handle& cache_store,
+    db_client_state(event_loop loop, const db_config& config, const redis_session& cache_store,
         const db_cache_config& cache_policy);
 #endif
 
@@ -35,9 +34,9 @@ public:
     [[nodiscard]] task<void> shutdown() {
         return lifecycle_.shutdown();
     }
-    [[nodiscard]] db_handle db();
+    [[nodiscard]] db_session db();
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -50,22 +49,22 @@ private:
     }
 
     event_loop loop_;
-    worker_handle worker_;
+    worker_ref worker_;
     db_registry databases_;
     // Retires scopes before backend storage and its allocator are destroyed.
     client_lifecycle<db_client_state> lifecycle_;
 };
 db_client_state::db_client_state(event_loop loop, const db_config& config)
     : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.handle()),
+      worker_(loop_.worker()),
       databases_(loop_.io_context(), worker_, config),
       lifecycle_(*this, loop_, worker_) {}
 
 #ifdef RUVIA_ENABLE_REDIS
 db_client_state::db_client_state(event_loop loop, const db_config& config,
-    const redis_handle& cache_store, const db_cache_config& cache_policy)
+    const redis_session& cache_store, const db_cache_config& cache_policy)
     : loop_(client_lifecycle<db_client_state>::require_loop(std::move(loop))),
-      worker_(loop_.handle()),
+      worker_(loop_.worker()),
       databases_(loop_.io_context(), worker_, config, cache_store, cache_policy),
       lifecycle_(*this, loop_, worker_) {}
 #endif
@@ -74,7 +73,7 @@ void db_client_state::throw_not_ready() {
     throw std::logic_error("database client is not connected");
 }
 
-db_handle db_client_state::db() {
+db_session db_client_state::db() {
     lifecycle_.require_ready();
     return databases_.get(lifecycle_.operation_scope(), nullptr);
 }
@@ -84,18 +83,14 @@ db_handle db_client_state::db() {
 namespace ruvia {
 
 db_client::db_client(event_loop loop, const db_config& config)
-    : state_(std::allocate_shared<detail::db_client_state>(
-          std::pmr::polymorphic_allocator<detail::db_client_state>(process_resource()),
-          std::move(loop), config)) {
+    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config)) {
     state_->bind_stop();
 }
 
 #ifdef RUVIA_ENABLE_REDIS
 db_client::db_client(event_loop loop, const db_config& config,
-    const redis_handle& cache_store, const db_cache_config& cache_policy)
-    : state_(std::allocate_shared<detail::db_client_state>(
-          std::pmr::polymorphic_allocator<detail::db_client_state>(process_resource()),
-          std::move(loop), config, cache_store, cache_policy)) {
+    const redis_session& cache_store, const db_cache_config& cache_policy)
+    : state_(std::make_shared<detail::db_client_state>(std::move(loop), config, cache_store, cache_policy)) {
     state_->bind_stop();
 }
 #endif
@@ -108,7 +103,7 @@ task<void> db_client::connect() & {
     return state_->connect();
 }
 
-db_handle db_client::db() const& {
+db_session db_client::db() const& {
     return state_->db();
 }
 
@@ -120,7 +115,7 @@ task<void> db_client::shutdown() & {
     return state_->shutdown();
 }
 
-const worker_handle& db_client::worker() const& noexcept {
+const worker_ref& db_client::worker() const& noexcept {
     return state_->worker();
 }
 

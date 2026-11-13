@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <memory>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia {
@@ -65,7 +64,7 @@ public:
 
     explicit worker_notification(
         worker_runtime& runtime, worker_notification_options options = {});
-    // Borrows the loop's handle; the loop must remain address-stable and alive.
+    // Borrows the loop's worker; the loop must remain address-stable and alive.
     explicit worker_notification(
         const event_loop& loop, worker_notification_options options = {});
     worker_notification(event_loop&&, worker_notification_options = {}) = delete;
@@ -93,8 +92,7 @@ public:
     void close();
 
 private:
-    using state_pointer = std::unique_ptr<detail::worker_notification_state,
-        pmr_object_deleter<detail::worker_notification_state>>;
+    using state_pointer = std::unique_ptr<detail::worker_notification_state>;
 
     explicit worker_notification(state_pointer state) noexcept;
 

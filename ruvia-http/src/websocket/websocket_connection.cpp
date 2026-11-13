@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
-#include <memory_resource>
+#include <memory>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -14,14 +14,12 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_io_buffer.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_utf8.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_protocol.h"
 
-#include "util/http_address_overlap.h"
+#include "memory/http_address_overlap.h"
 #include "websocket/http_websocket_frame_codec.h"
 #include "websocket/http_websocket_permessage_deflate.h"
 #include "websocket/websocket_close_payload.h"
@@ -442,8 +440,7 @@ private:
 
 class websocket_inbound_assembler final {
 public:
-    explicit websocket_inbound_assembler(std::pmr::memory_resource* resource)
-        : message_(resource) {}
+    websocket_inbound_assembler() = default;
 
     // A delivered view expires at the next poll, while a fragmented message
     // remains pinned until its final continuation or connection teardown. A
@@ -452,7 +449,7 @@ public:
     // pinned to the connection.
     void release_completed() noexcept {
         if (std::holds_alternative<websocket_inbound_idle>(state_)) {
-            http_clear_pmr_string_retaining_small(message_, websocket_retained_buffer_bytes);
+            http_clear_string_retaining_small(message_, websocket_retained_buffer_bytes);
         }
     }
 
@@ -521,7 +518,7 @@ public:
     }
 
 private:
-    std::pmr::string message_;
+    std::string message_;
     std::variant<websocket_inbound_idle, websocket_inbound_fragmented> state_;
 };
 
@@ -648,21 +645,14 @@ public:
         closed,
     };
 
-    // A null `input` gives the connection an input buffer of its own, allocated
-    // from `memory`. Protocol buffers share the input buffer's resource; only
-    // the implementation itself always lives in `memory`.
-    impl_type(std::pmr::memory_resource* memory, http_io_buffer* input, websocket_connection_options options)
-        : resource_(memory),
-          input_(input != nullptr ? input : &owned_input_.emplace(http_io_buffer::allocator_type(memory))),
+    // A null `input` gives the connection an input buffer of its own.
+    impl_type(http_io_buffer* input, websocket_connection_options options)
+        : input_(input != nullptr ? input : &owned_input_.emplace()),
           max_buffered_input_bytes_(options.max_buffered_input_bytes_),
           message_limit_(options.message_limit_),
           receive_message_limit_(options.receive_message_limit_.read_ceiling() < options.message_limit_.read_ceiling()
                                      ? options.receive_message_limit_
                                      : options.message_limit_),
-          out_buffer_(input_->get_allocator()),
-          assembler_(input_->get_allocator().resource()),
-          inbound_inflated_(input_->get_allocator().resource()),
-          outbound_deflated_(input_->get_allocator().resource()),
           role_(options.role_),
           mask_key_generator_(options.mask_key_generator_),
           mask_key_context_(options.mask_key_context_) {
@@ -697,7 +687,7 @@ public:
                 (server ? compression.server_max_window_bits_ : compression.client_max_window_bits_).value_or(15);
             const int receive_window =
                 (server ? compression.client_max_window_bits_ : compression.server_max_window_bits_).value_or(15);
-            deflate_.emplace(input_->get_allocator().resource(), options.shared_deflate_, options.deflater_,
+            deflate_.emplace(options.shared_deflate_, options.deflater_,
                 send_takeover, receive_takeover, send_window, receive_window);
         }
     }
@@ -732,11 +722,11 @@ public:
     void append_frame(websocket_opcode opcode, std::string_view payload_value, bool rsv1 = false,
         websocket_payload_storage storage = websocket_payload_storage::copy,
         websocket_fragment_position position = websocket_fragment_position::whole) {
-        std::optional<std::pmr::string> owned_payload;
+        std::optional<std::string> owned_payload;
         if (detail::http_text_overlaps(payload_value, out_buffer_.view())) {
             // A plan may be its own append source. Snapshot it before prepare()
             // can move storage, and never borrow the temporary snapshot.
-            payload_value = owned_payload.emplace(payload_value, out_buffer_.get_allocator().resource());
+            payload_value = owned_payload.emplace(payload_value);
             storage = websocket_payload_storage::copy;
         }
         detail::websocket_frame_header_type header;
@@ -850,8 +840,9 @@ public:
         }
         const bool first = !outbound_fragments_.has_value();
         const bool final = options.final_;
+        const std::size_t uncompressed_size = payload_value.size();
         const std::size_t sent = first ? 0 : outbound_fragments_->size_;
-        if (message_limit_.addition_exceeds(sent, payload_value.size())) {
+        if (message_limit_.addition_exceeds(sent, uncompressed_size)) {
             return websocket_frame_submit_status::message_too_large;
         }
         auto utf8 = first ? websocket_utf8_fragments{} : outbound_fragments_->utf8_;
@@ -891,7 +882,7 @@ public:
                 compressed ? websocket_payload_storage::copy : storage, position);
         } catch (...) {
             if (compression_attempted) {
-                http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
+                http_clear_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
             }
             if (compressed) {
                 // The peer never received a first frame's trial, so a later
@@ -916,20 +907,19 @@ public:
         }
         if (compression_attempted) {
             // The frame owns a copy now; keep only a bounded scratch.
-            http_clear_pmr_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
+            http_clear_string_retaining_small(outbound_deflated_, websocket_retained_buffer_bytes);
         }
         if (final) {
             outbound_fragments_.reset();
         } else if (first) {
-            outbound_fragments_.emplace(websocket_outbound_fragments{opcode, compressed, payload_value.size(), utf8});
+            outbound_fragments_.emplace(websocket_outbound_fragments{opcode, compressed, uncompressed_size, utf8});
         } else {
-            outbound_fragments_->size_ = sent + payload_value.size();
+            outbound_fragments_->size_ = sent + uncompressed_size;
             outbound_fragments_->utf8_ = utf8;
         }
         return websocket_frame_submit_status::accepted;
     }
 
-    std::pmr::memory_resource* resource_;
     std::optional<http_io_buffer> owned_input_;
     http_io_buffer* input_;
     const std::size_t max_buffered_input_bytes_;
@@ -948,8 +938,8 @@ public:
     detail::websocket_inbound_assembler assembler_;
 
     std::optional<detail::websocket_deflate> deflate_;
-    std::pmr::string inbound_inflated_;
-    std::pmr::string outbound_deflated_;
+    std::string inbound_inflated_;
+    std::string outbound_deflated_;
     std::optional<websocket_outbound_fragments> outbound_fragments_;
 
     websocket_connection_role role_{websocket_connection_role::server};
@@ -962,24 +952,11 @@ public:
     std::uint64_t bytes_sent_{0};
 };
 
-void websocket_connection::impl_deleter_type::operator()(impl_type* value) const noexcept {
-    if (value != nullptr) {
-        auto* resource = value->resource_;
-        detail::destroy_http_pmr_object(value, resource);
-    }
-}
+websocket_connection::websocket_connection(websocket_connection_options options)
+    : impl_(std::make_unique<impl_type>(nullptr, options)) {}
 
-websocket_connection::websocket_connection(websocket_connection_options options) {
-    auto* resource = detail::http_pmr_resource_or_default(options.resource_);
-    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, nullptr, options));
-}
-
-websocket_connection::websocket_connection(http_io_buffer& input, websocket_connection_options options) {
-    auto* resource = options.resource_ != nullptr
-                         ? options.resource_
-                         : detail::http_pmr_resource_or_default(input.get_allocator().resource());
-    impl_.reset(detail::construct_http_pmr_object<impl_type>(resource, resource, &input, options));
-}
+websocket_connection::websocket_connection(http_io_buffer& input, websocket_connection_options options)
+    : impl_(std::make_unique<impl_type>(&input, options)) {}
 
 websocket_connection::~websocket_connection() = default;
 websocket_connection::websocket_connection(websocket_connection&&) noexcept = default;
@@ -1016,7 +993,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
         impl_->assembler_.release_completed();
         // The last delivered message expires now. Its size is peer-controlled up
         // to the message limit, so only a bounded buffer stays for the next one.
-        http_clear_pmr_string_retaining_small(
+        http_clear_string_retaining_small(
             impl_->inbound_inflated_, websocket_retained_buffer_bytes);
         impl_->needed_input_bytes_ = 0;
         if (impl_->close_phase_ == close_phase_type::final_output_queued ||
@@ -1121,7 +1098,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
             }
             if (impl_->close_phase_ != close_phase_type::open) {
                 impl_->assembler_.release_completed();
-                http_clear_pmr_string_retaining_small(
+                http_clear_string_retaining_small(
                     impl_->inbound_inflated_, websocket_retained_buffer_bytes);
                 continue;
             }

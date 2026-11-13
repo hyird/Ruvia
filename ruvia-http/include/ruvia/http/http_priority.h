@@ -15,8 +15,6 @@
 
 namespace ruvia {
 
-class http_response_headers;
-
 // RFC 9218 section 4.1: urgency is 0..7, defaulting to 3. Local numeric
 // inputs are checked before narrowing. Peer fields instead use the tolerant
 // parser below, which ignores out-of-range values as required by section 4.
@@ -86,11 +84,18 @@ struct http_priority_update final {
 // types and out-of-range values are ignored; malformed structured syntax fails.
 // Missing response parameters remain absent for intermediary merging.
 [[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::string_view value) noexcept;
+namespace detail {
+[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority_headers(
+    http_header_range_view headers) noexcept;
+}  // namespace detail
+
 // Reads all Priority field lines in wire order without allocating. A later
 // dictionary member replaces the earlier member, including an invalid value.
-[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(std::span<const http_header_view> headers) noexcept;
-// Combines owning response fields with the same allocation-free parsing rules.
-[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(const http_response_headers& headers) noexcept;
+template <http_header_field_source headers_type>
+[[nodiscard]] std::variant<http_priority_fields, http_priority_error> parse_http_priority(
+    const headers_type& headers) noexcept {
+    return detail::parse_http_priority_headers(headers);
+}
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http_priority(std::span<char> output, http_priority_fields fields_value) noexcept;
 [[nodiscard]] std::variant<http_priority_update, http_priority_error> decode_http2_priority_update(std::span<const char> payload_value) noexcept;
 [[nodiscard]] std::variant<std::size_t, http_priority_error> encode_http2_priority_update(std::span<char> output, std::uint32_t stream_id, http_priority_fields fields_value) noexcept;

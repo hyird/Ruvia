@@ -15,9 +15,9 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -31,11 +31,11 @@
 
 namespace {
 
-void append_bool(std::pmr::string& output, bool value) {
+void append_bool(std::string& output, bool value) {
     output.append(value ? "true" : "false");
 }
 
-void append_ttl(std::pmr::string& output, const ruvia::redis_ttl& ttl) {
+void append_ttl(std::string& output, const ruvia::redis_ttl& ttl) {
     switch (ttl.state()) {
         case ruvia::redis_ttl_state::missing:
             output.append("missing");
@@ -99,7 +99,7 @@ public:
 
     ruvia::task<ruvia::http_response> increment(ruvia::context& c) {
         const auto value = co_await c.redis().incr(c.req().param("key").value_or(""));
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         ruvia::http_append_signed(body, value);
         body.push_back('\n');
         co_return c.text(std::move(body));
@@ -114,7 +114,7 @@ public:
         const auto pttl = co_await c.redis().pttl(key);
         const auto persisted = co_await c.redis().persist(key);
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("exists=");
         append_bool(body, exists);
         body.append("\ntouched=");
@@ -160,7 +160,7 @@ public:
         const auto decremented_by = co_await c.redis().decr_by(counter_key, 2);
         const auto incremented_by = co_await c.redis().incr_by(counter_key, 3);
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("previous=");
         body.append(previous.previous().value_or(""));
         body.append("\ninserted=");
@@ -199,7 +199,7 @@ public:
         const auto length = co_await c.redis().hlen(key);
         const auto removed = co_await c.redis().hdel(key, "kind");
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("changed=");
         ruvia::http_append_signed(body, changed + extra);
         body.append("\ncount=");
@@ -239,7 +239,7 @@ public:
         auto popped_left = co_await c.redis().lpop(key);
         auto popped_right = co_await c.redis().rpop(key);
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("pushed=");
         ruvia::http_append_signed(body, left + right);
         body.append("\nlength=");
@@ -275,7 +275,7 @@ public:
         auto popped = co_await c.redis().spop(key);
         const auto removed = co_await c.redis().srem("ruvia:example:set:other", "one");
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("added=");
         ruvia::http_append_signed(body, added + also_added);
         body.append("\nmembers=");
@@ -311,7 +311,7 @@ public:
         const auto counted = co_await c.redis().zcount(key, 0.0, 10.0);
         const auto removed = co_await c.redis().zrem(key, "two");
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("added=");
         ruvia::http_append_signed(body, added + added_two);
         body.append("\nvalues=");
@@ -341,7 +341,7 @@ public:
         const auto set = co_await c.redis().sscan("ruvia:example:set", member_scan);
         const auto zset = co_await c.redis().zscan("ruvia:example:zset", member_scan);
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("keys=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(keys.values().size()));
         body.append("\nhash=");
@@ -367,7 +367,7 @@ public:
             .command("TYPE", "ruvia:example:pipeline");
         auto results = co_await std::move(pipeline).exec();
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("pipeline results=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
@@ -381,7 +381,7 @@ public:
             .get("ruvia:example:tx");
         auto results = co_await std::move(tx).exec();
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("transaction results=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(results.size()));
         body.push_back('\n');
@@ -396,7 +396,7 @@ public:
         auto exists = co_await c.redis().script_exists(sha);
         auto sha_value = co_await c.redis().eval_sha(sha, {}, args);
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("eval-kind=");
         ruvia::http_append_signed(body, static_cast<std::int64_t>(value.kind()));
         body.append("\nsha-kind=");
@@ -414,7 +414,7 @@ public:
         auto right = co_await c.redis().brpop(
             keys, ruvia::redis_block_wait::for_duration(std::chrono::seconds(1)));
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("left=");
         append_bool(body, left.has_value());
         body.append("\nright=");
@@ -425,7 +425,7 @@ public:
 
     ruvia::task<ruvia::http_response> alias_value(ruvia::context& c) {
         auto value = co_await c.redis("cache").get(c.req().param("key").value_or(""));
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         if (value) {
             body.append(*value);
         }

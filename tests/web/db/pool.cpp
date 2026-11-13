@@ -4,19 +4,18 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <vector>
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
 #include "test_io_context.h"
@@ -84,7 +83,7 @@ TEST(Ruvia, db_pool_opens_the_configured_number_of_connections) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
         peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
-            false, peer_type::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>(ruvia::process_resource()), 3);
+            false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 3);
         auto config = peer.config();
         config.driver_ = driver;
         config.pool_size_per_worker_ = 3;
@@ -111,7 +110,7 @@ TEST(Ruvia, db_pool_failed_startup_retires_already_connected_slots) {
     using peer_type = ruvia::test::backend_startup_peer;
     for (const auto driver : database_drivers) {
         peer_type peer(driver == ruvia::db_driver::postgresql ? peer_type::protocol::postgresql : peer_type::protocol::mariadb,
-            false, peer_type::after_startup::idle, std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>(ruvia::process_resource()), 2);
+            false, peer_type::after_startup::idle, std::vector<ruvia::test::backend_startup_peer::postgres_reply>(), 2);
         auto config = peer.config();
         config.driver_ = driver;
         config.pool_size_per_worker_ = 3;
@@ -145,7 +144,7 @@ TEST(Ruvia, db_pool_transaction_retirement_checks_server_state_before_reuse) {
     // autocommit disabled. Failed statements also retire via ROLLBACK.
     for (const auto status : {std::uint16_t{2}, std::uint16_t{3}, std::uint16_t{0}}) {
         for (int ending = 0; ending < 3; ++ending) {
-            std::pmr::vector<peer_type::maria_reply> replies({{.column_ = std::pmr::string("", ruvia::process_resource()), .status_ = 3}}, ruvia::process_resource());
+            std::vector<peer_type::maria_reply> replies({{.column_ = std::string(""), .status_ = 3}});
             if (ending == 2) {
                 replies.push_back({.error_ = "missing table", .code_ = 1146, .sql_state_ = "42S02"});
             }
@@ -193,12 +192,11 @@ TEST(Ruvia, db_pool_allows_parallel_transactions_and_reuses_released_connections
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("BEGIN", ruvia::process_resource()), .status_ = 'T'},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("BEGIN", ruvia::process_resource()), .status_ = 'T'},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("ROLLBACK", ruvia::process_resource())},
-                                                                                {.rows_ = std::pmr::vector<std::pmr::string>({std::pmr::string("available", ruvia::process_resource())}, ruvia::process_resource())},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("ROLLBACK", ruvia::process_resource())}},
-            ruvia::process_resource()),
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
+            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
+            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")},
+            {.rows_ = std::vector<std::string>({std::string("available")})},
+            {.column_ = std::string(""), .command_ = std::string("ROLLBACK")}}),
         2);
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;
@@ -251,9 +249,8 @@ TEST(Ruvia, db_pool_shutdown_wakes_waiters_while_all_connections_are_leased) {
     using namespace ruvia;
     using peer_type = test::backend_startup_peer;
     peer_type peer(peer_type::protocol::postgresql, false, peer_type::after_startup::idle,
-        std::pmr::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("BEGIN", ruvia::process_resource()), .status_ = 'T'},
-                                                                                {.column_ = std::pmr::string("", ruvia::process_resource()), .command_ = std::pmr::string("BEGIN", ruvia::process_resource()), .status_ = 'T'}},
-            ruvia::process_resource()),
+        std::vector<ruvia::test::backend_startup_peer::postgres_reply>({{.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'},
+            {.column_ = std::string(""), .command_ = std::string("BEGIN"), .status_ = 'T'}}),
         2);
     auto config = peer.config();
     config.pool_size_per_worker_ = 2;

@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 #include <variant>

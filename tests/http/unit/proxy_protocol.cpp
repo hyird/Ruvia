@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -168,23 +167,6 @@ void expect_byte_by_byte(std::string_view input, check_type check) {
     ASSERT_EQ(parser.state(), proxy_protocol_parser_state::finished);
     check(parser.header());
 }
-
-class counting_resource final : public std::pmr::memory_resource {
-public:
-    std::size_t allocations_{0};
-
-private:
-    void* do_allocate(std::size_t bytes, std::size_t alignment) override {
-        ++allocations_;
-        return std::pmr::new_delete_resource()->allocate(bytes, alignment);
-    }
-    void do_deallocate(void* pointer, std::size_t bytes, std::size_t alignment) override {
-        std::pmr::new_delete_resource()->deallocate(pointer, bytes, alignment);
-    }
-    bool do_is_equal(const std::pmr::memory_resource& other) const noexcept override {
-        return this == &other;
-    }
-};
 
 }  // namespace
 
@@ -525,12 +507,4 @@ TEST(Ruvia, proxy_protocol_moved_parser_keeps_header_views) {
     EXPECT_EQ(moved.state(), proxy_protocol_parser_state::finished);
     expect_v2_inet_with_tlvs(moved.header());
     EXPECT_EQ(moved.header().tlvs().data(), tlvs.data());
-}
-
-TEST(Ruvia, proxy_protocol_buffers_in_options_resource) {
-    counting_resource resource;
-    proxy_protocol_parser parser(proxy_protocol_parser_options{.resource_ = &resource});
-    const auto input = v2_inet_with_tlvs();
-    expect_v2_inet_with_tlvs(parse_whole(parser, input));
-    EXPECT_GT(resource.allocations_, 0U);
 }

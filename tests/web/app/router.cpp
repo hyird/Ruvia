@@ -29,7 +29,7 @@
 #include "ruvia/web/rate_limit.h"
 #include "ruvia/web/streaming.h"
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 #include "ruvia/web/session.h"
 
 #include "redis_session_store_peer.h"
@@ -43,7 +43,7 @@ namespace public_router_test {
 using namespace std::chrono_literals;
 
 struct scoped_header final {
-    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
         context.policy().header("X-Router", "scoped");
         co_await next();
     }
@@ -51,14 +51,14 @@ struct scoped_header final {
 
 struct unmatched_header final {
     static constexpr bool ruvia_runs_on_unmatched_requests = true;
-    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
         context.policy().header("X-All-Routes", "present");
         co_await next();
     }
 };
 
 struct double_next final {
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next) {
         co_await next();
         co_await next();
     }
@@ -82,7 +82,7 @@ struct counted_middleware final {
         --state_->live_;
         ++state_->destroyed_;
     }
-    ruvia::task<void> handle(ruvia::context&, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context&, ruvia::next& next) {
         co_await next();
     }
     std::shared_ptr<lifetime> state_;
@@ -94,7 +94,7 @@ ruvia::task<ruvia::http_response> parameter(ruvia::context& context) {
 
 struct upgrade_marker final {
     static inline unsigned calls_{};
-    ruvia::task<void> handle(ruvia::context& context, ruvia::next& next) {
+    ruvia::task<void> invoke(ruvia::context& context, ruvia::next& next) {
         ++calls_;
         context.draft().header("X-Upgrade-Middleware", "ran");
         co_await next();
@@ -108,7 +108,7 @@ struct visit_counter final {
 ruvia::task<void> echo_websocket(ruvia::context& context) {
     const auto room = context.req().param("room").value_or("missing");
     while (auto message = co_await context.websocket().read()) {
-        std::pmr::string echoed(room, context.pool());
+        std::string echoed(room);
         echoed.append(":");
         echoed.append(message->payload());
         co_await context.websocket().text(std::move(echoed));
@@ -148,7 +148,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::router routes(attachment.loop().handle());
+        ruvia::router routes(attachment.loop().worker());
         unsigned errors = 0;
         unsigned single_shot_calls = 0;
         unsigned connection_failures = 0;
@@ -178,7 +178,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
             }
         });
         routes.stream<ruvia::stream_body, ruvia::body_limit<4>>("POST", "/api/upload", [](ruvia::context& context) -> ruvia::task<void> {
-            std::pmr::string content(context.pool());
+            std::string content;
             while (auto chunk = co_await context.req().body_reader().text()) {
                 content.append(*chunk);
             }
@@ -290,7 +290,7 @@ TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lif
     asio::io_context io;
     auto attachment = ruvia::attach_event_loop(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         for (const auto other : {"/items/:second", "/%69tems/:first"}) {
             ruvia::router conflict(worker);
             conflict.add("GET", "/items/:first", &parameter);
@@ -343,7 +343,7 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
     auto state = std::make_shared<lifetime>();
     bool cancelled = false;
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         ruvia::worker_signal entered(worker);
         auto routes = std::make_unique<ruvia::router>(worker);
         routes->use<counted_middleware>(state);
@@ -382,7 +382,7 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         {
             ruvia::router invalid(worker);
             EXPECT_THROW(invalid.rate_limit({.rule_ = {.max_requests_ = 0, .window_ = 1s}}), std::invalid_argument);
@@ -464,7 +464,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        ruvia::router routes(attachment.loop().handle());
+        ruvia::router routes(attachment.loop().worker());
         unsigned errors = 0;
         routes.on_error([&](ruvia::context& context, ruvia::http_error_info error) -> ruvia::task<ruvia::http_response> {
             ++errors;
@@ -576,7 +576,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
     auto attachment = ruvia::attach_event_loop(io);
     ruvia::test::tcp_port_reservation port(io);
     const auto run = [&]() -> ruvia::task<void> {
-        const auto& worker = attachment.loop().handle();
+        const auto& worker = attachment.loop().worker();
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::redis_client redis(attachment.loop(), {.host_ = "127.0.0.1", .port_ = peer.port(), .tls_ = {.mode_ = ruvia::client_tls_mode::disabled}, .pool_size_per_worker_ = 1, .connect_timeout_ = 2s, .command_timeout_ = 2s});
         ruvia::http_client client(attachment.loop(), {.base_url_ = origin, .versions_ = ruvia::http_client_versions{.http2_ = false}});
@@ -693,7 +693,7 @@ TEST(Ruvia, public_router_buffered_body_reads_honour_their_operation) {
             }
             co_return std::error_code{};
         };
-        ruvia::router routes(attachment.loop().handle());
+        ruvia::router routes(attachment.loop().worker());
         routes.add("POST", "/buffered", [&](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
             const auto request = context.req();
             for (const auto attempt : {0, 1, 2}) {
@@ -805,7 +805,7 @@ TEST(Ruvia, public_router_binds_http_clients_by_its_own_unique_aliases) {
         const std::string origin = "http://127.0.0.1:" + std::to_string(port.endpoint().port());
         ruvia::http_client first(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
         ruvia::http_client second(attachment.loop(), {.base_url_ = origin, .versions_ = {.http2_ = false}});
-        ruvia::router routes(attachment.loop().handle());
+        ruvia::router routes(attachment.loop().worker());
         routes.bind_http_client("one", first).bind_http_client("two", second).bind_http_client("default", first);
         EXPECT_THROW(routes.bind_http_client("one", second), std::invalid_argument);
         EXPECT_THROW(routes.bind_http_client("", first), std::invalid_argument);

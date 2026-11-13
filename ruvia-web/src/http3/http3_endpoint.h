@@ -7,7 +7,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <span>
 #include <system_error>
 #include <unordered_map>
@@ -15,11 +14,10 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 
 #include "http3/http3_connection_id.h"
@@ -42,7 +40,7 @@ class worker_capabilities;
 // join.
 struct http3_worker_services final {
     asio::io_context& io_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     const route_table& routes_;
     worker_capabilities& capabilities_;
     http_server_options& options_;
@@ -138,7 +136,7 @@ public:
     void unregister_connection_id(const http3_cid_key& key) noexcept;
 
 private:
-    using session_pointer = std::unique_ptr<http3_session, pmr_object_deleter<http3_session>>;
+    using session_pointer = std::unique_ptr<http3_session>;
 
 #if !defined(_WIN32)
     task<void> run_receive_loop();
@@ -171,9 +169,9 @@ private:
 #if !defined(_WIN32)
     asio::ip::udp::socket socket_;
     // One received datagram at a time; a UDP payload never exceeds it.
-    std::pmr::vector<std::byte> receive_buffer_;
+    std::vector<std::byte> receive_buffer_;
 #endif
-    std::pmr::unordered_map<http3_cid_key, http3_session*, http3_cid_key_hash> connections_;
+    std::unordered_map<http3_cid_key, http3_session*, http3_cid_key_hash> connections_;
     std::chrono::steady_clock::time_point stateless_reset_refill_at_{};
     std::size_t stateless_reset_tokens_{32};
     // Sessions serve() is running.

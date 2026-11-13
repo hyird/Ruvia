@@ -10,10 +10,10 @@
 #include <exception>
 #include <future>
 #include <iostream>
+#include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/error.h"
@@ -65,7 +65,7 @@ private:
     }
     ruvia::task<ruvia::http_response> create(ruvia::context& c) {
         const auto& request = c.req().validated<create_cached_user>();
-        cached_user user_value(ruvia::process_resource());
+        cached_user user_value;
         user_value.set<"id">(request.get<"id">().view());
         user_value.set<"name">(request.get<"name">().view());
         user_value.set<"age">(static_cast<std::uint32_t>(request.get<"age">()));
@@ -74,7 +74,7 @@ private:
         if (result_value.affected_entities() == 0) {
             co_return c.error({.status_ = ruvia::http_status::conflict, .message_ = "user already exists"});
         }
-        cached_user_response response({.resource_ = c.arena()});
+        cached_user_response response;
         fill(response, user_value);
         c.draft().status(ruvia::http_status::created);
         co_return c.json(response);
@@ -84,7 +84,7 @@ private:
         if (!user_value) {
             co_return c.error({.status_ = ruvia::http_status::not_found, .message_ = "user not found"});
         }
-        cached_user_response response({.resource_ = c.arena()});
+        cached_user_response response;
         fill(response, *user_value);
         co_return c.json(response);
     }
@@ -94,10 +94,10 @@ private:
             .order_ = {{.column_ = "name", .direction_ = ruvia::redis_order_direction::asc}},
             .take_ = 20};
         auto users = co_await c.redis().repository<cached_user>(user_redis_config).find(find_options);
-        cached_users_response response({.resource_ = c.arena()});
+        cached_users_response response;
         auto& output = response.ensure<"users">();
         for (const auto& user : users) {
-            auto& item = output.emplace_back(ruvia::model_options{.resource_ = c.arena()});
+            auto& item = output.emplace_back();
             fill(item, user);
         }
         co_return c.json(response);

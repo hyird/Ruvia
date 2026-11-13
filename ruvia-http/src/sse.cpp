@@ -7,9 +7,8 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
+#include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_utf8.h"
 
 namespace ruvia {
@@ -41,7 +40,7 @@ constexpr std::string_view sse_default_event_type = "message";
 // maximal subpart of an ill-formed sequence with one U+FFFD. The decoder never
 // consumes an ASCII byte, so repairing each field value after the line split
 // matches decoding the stream first.
-void replace_ill_formed_utf8(std::pmr::string& value) {
+void replace_ill_formed_utf8(std::string& value) {
     const std::string_view bytes(value);
     std::size_t index = 0;
     while (index < bytes.size()) {
@@ -58,7 +57,7 @@ void replace_ill_formed_utf8(std::pmr::string& value) {
     if (index == bytes.size()) {
         return;
     }
-    std::pmr::string repaired(value.get_allocator());
+    std::string repaired;
     repaired.reserve(bytes.size());
     repaired.append(bytes.substr(0, index));
     while (index < bytes.size()) {
@@ -77,12 +76,7 @@ void replace_ill_formed_utf8(std::pmr::string& value) {
 }  // namespace
 
 sse_parser::sse_parser(sse_parser_options options)
-    : data_(detail::http_pmr_resource_or_default(options.resource_)),
-      event_type_(data_.get_allocator()),
-      value_(data_.get_allocator()),
-      last_event_id_buffer_(data_.get_allocator()),
-      last_event_id_(data_.get_allocator()),
-      event_limit_(options.event_limit_) {}
+    : event_limit_(options.event_limit_) {}
 
 sse_parse_result sse_parser::parse(std::string_view input) & {
     if (state_ != sse_parser_state::active) {
@@ -176,20 +170,20 @@ void sse_parser::finish() noexcept {
     }
     release_event_buffers();
     reset_line();
-    http_clear_pmr_string_retaining_small(data_);
-    http_clear_pmr_string_retaining_small(event_type_);
-    http_clear_pmr_string_retaining_small(value_);
+    http_clear_string_retaining_small(data_);
+    http_clear_string_retaining_small(event_type_);
+    http_clear_string_retaining_small(value_);
     state_ = sse_parser_state::finished;
 }
 
 void sse_parser::reset() noexcept {
     event_published_ = false;
     reset_line();
-    http_clear_pmr_string_retaining_small(data_);
-    http_clear_pmr_string_retaining_small(event_type_);
-    http_clear_pmr_string_retaining_small(value_);
-    http_clear_pmr_string_retaining_small(last_event_id_buffer_);
-    http_clear_pmr_string_retaining_small(last_event_id_);
+    http_clear_string_retaining_small(data_);
+    http_clear_string_retaining_small(event_type_);
+    http_clear_string_retaining_small(value_);
+    http_clear_string_retaining_small(last_event_id_buffer_);
+    http_clear_string_retaining_small(last_event_id_);
     reconnection_time_.reset();
     skip_line_feed_ = false;
     bom_matched_ = 0;
@@ -259,7 +253,7 @@ bool sse_parser::end_line() {
             break;
         case field_kind::id:
             // An id containing NUL is ignored.
-            if (value_.find('\0') == std::pmr::string::npos) {
+            if (value_.find('\0') == std::string::npos) {
                 replace_ill_formed_utf8(value_);
                 last_event_id_buffer_.swap(value_);
             }
@@ -279,7 +273,7 @@ bool sse_parser::end_line() {
 bool sse_parser::dispatch() {
     last_event_id_ = last_event_id_buffer_;
     if (data_.empty()) {
-        http_clear_pmr_string_retaining_small(event_type_);
+        http_clear_string_retaining_small(event_type_);
         return false;
     }
     data_.pop_back();
@@ -301,20 +295,20 @@ void sse_parser::reset_line() noexcept {
 
 void sse_parser::release_event_buffers() noexcept {
     if (std::exchange(event_published_, false)) {
-        http_clear_pmr_string_retaining_small(data_);
-        http_clear_pmr_string_retaining_small(event_type_);
+        http_clear_string_retaining_small(data_);
+        http_clear_string_retaining_small(event_type_);
     }
 }
 
 void sse_parser::fail() noexcept {
     reset_line();
-    http_clear_pmr_string_retaining_small(data_);
-    http_clear_pmr_string_retaining_small(event_type_);
-    http_clear_pmr_string_retaining_small(value_);
+    http_clear_string_retaining_small(data_);
+    http_clear_string_retaining_small(event_type_);
+    http_clear_string_retaining_small(value_);
     state_ = sse_parser_state::failed;
 }
 
-std::pmr::string format_sse_message(const sse_message& message, sse_format_options options) {
+std::string format_sse_message(const sse_message& message) {
     if (message.event_.view().find_first_of("\r\n") != std::string_view::npos ||
         (message.id_.has_value() &&
             message.id_->view().find_first_of("\r\n") != std::string_view::npos)) {
@@ -333,7 +327,7 @@ std::pmr::string format_sse_message(const sse_message& message, sse_format_optio
         throw std::invalid_argument("SSE fields must be valid UTF-8");
     }
 
-    std::pmr::string frame(detail::http_pmr_resource_or_default(options.resource_));
+    std::string frame;
     std::array<char, http_max_unsigned_decimal_size> retry_buffer{};
     std::string_view retry_digits{};
     std::size_t total_size = 1U;

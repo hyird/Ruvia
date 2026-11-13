@@ -22,9 +22,9 @@ inline constexpr std::size_t http2_data_output_credit_slots = 4;
 // protocol output storage and are deliberately not included in this bound.
 class http2_data_output_budget final {
 public:
-    explicit http2_data_output_budget(const worker_handle& worker_value)
+    explicit http2_data_output_budget(const worker_ref& worker_value)
         : changed_(worker_value) {}
-    http2_data_output_budget(worker_handle&&) = delete;
+    http2_data_output_budget(worker_ref&&) = delete;
     http2_data_output_budget(const http2_data_output_budget&) = delete;
     http2_data_output_budget& operator=(const http2_data_output_budget&) = delete;
 

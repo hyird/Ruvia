@@ -9,8 +9,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 #include "query_storage.h"
 
 namespace ruvia::detail {
@@ -337,17 +335,14 @@ constexpr std::size_t max_postgresql_parameters = 65535;
 
 class query_sql_writer final {
 public:
-    query_sql_writer(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
-        : sql_(resource),
-          params_(resource),
-          driver_(driver),
-          mode_(mode),
-          parameter_positions_(resource) {
+    query_sql_writer(db_driver driver, db_parameter_mode mode)
+        : driver_(driver),
+          mode_(mode) {
         require_db_dialect(driver);
     }
 
-    std::pmr::string sql_;
-    std::pmr::vector<db_value> params_;
+    std::string sql_;
+    std::vector<db_value> params_;
     [[nodiscard]] db_driver driver() const noexcept {
         return driver_;
     }
@@ -396,7 +391,14 @@ public:
     }
 
     void number(std::uint64_t value) {
-        bound(db_value(static_cast<std::int64_t>(value)));
+        if (pg()) {
+            if (!std::in_range<std::int64_t>(value)) {
+                throw std::invalid_argument("PostgreSQL row count or offset exceeds bigint range");
+            }
+            bound(db_value(static_cast<std::int64_t>(value)));
+        } else {
+            bound(db_value(value));
+        }
     }
 
     void type(const db_stored_type& value) {
@@ -429,7 +431,7 @@ private:
         if (pg() && params_.size() == max_postgresql_parameters) {
             throw std::length_error("PostgreSQL statement exceeds 65535 bound parameters");
         }
-        params_.push_back(clone_db_value_for_resource(value, params_.get_allocator().resource()));
+        params_.push_back(db_value(value));
         if (position != nullptr) {
             *position = static_cast<std::uint32_t>(params_.size());
         }
@@ -503,19 +505,19 @@ private:
     // One dense table per compiled storage, indexed by node and holding the
     // node's 1-based parameter number (0: not yet bound); positions_ caches
     // the table of positions_owner_.
-    std::pmr::unordered_map<const db_query_storage*, std::pmr::vector<std::uint32_t>> parameter_positions_;
+    std::unordered_map<const db_query_storage*, std::vector<std::uint32_t>> parameter_positions_;
     const db_query_storage* positions_owner_{nullptr};
-    std::pmr::vector<std::uint32_t>* positions_{nullptr};
+    std::vector<std::uint32_t>* positions_{nullptr};
 };
 
 }  // namespace
 
 class db_query_compiler final {
 public:
-    db_query_compiler(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode)
-        : output_(driver, resource, mode),
+    db_query_compiler(db_driver driver, db_parameter_mode mode)
+        : output_(driver, mode),
           mode_(mode),
-          grouped_{nullptr, std::pmr::vector<std::pair<std::size_t, std::size_t>>(resource)} {}
+          grouped_{nullptr, std::vector<std::pair<std::size_t, std::size_t>>{}} {}
 
     query_sql_writer output_;
     db_parameter_mode mode_;
@@ -674,7 +676,7 @@ private:
     struct grouped_bound_values final {
         const db_query_storage* storage_{nullptr};
         // (GROUP BY node, node emitted for every equal expression)
-        std::pmr::vector<std::pair<std::size_t, std::size_t>> groups_;
+        std::vector<std::pair<std::size_t, std::size_t>> groups_;
     };
 
     static void require_depth(std::size_t depth) {
@@ -686,7 +688,7 @@ private:
         return s.queries_.at(index).storage();
     }
     [[nodiscard]] grouped_bound_values bound_groups(const db_query_storage& s) const {
-        grouped_bound_values result{&s, std::pmr::vector<std::pair<std::size_t, std::size_t>>(output_.sql_.get_allocator().resource())};
+        grouped_bound_values result{&s, std::vector<std::pair<std::size_t, std::size_t>>{}};
         if (!output_.pg() || mode_ != db_parameter_mode::bound) {
             return result;
         }
@@ -741,7 +743,7 @@ private:
     void expressions(const db_query_storage& s, const range_type& range, std::size_t depth, bool aliases = false) {
         separated(range, [&](std::size_t index) { expr(s, index, depth, aliases); });
     }
-    void orders(const db_query_storage& s, const std::pmr::vector<db_stored_order>& terms, std::size_t depth) {
+    void orders(const db_query_storage& s, const std::vector<db_stored_order>& terms, std::size_t depth) {
         separated(terms, [&](const auto& term) {
             if (!output_.pg() && term.nulls_ != db_nulls_order::default_value) {
                 output_.sql_ += '(';
@@ -1225,7 +1227,7 @@ private:
     // Emits a left-deep AND/OR chain flat, `(a AND b AND c)`, at one nesting
     // level. A link that repeats a grouped expression goes through expr().
     void logical_chain(const db_query_storage& s, const db_query_node& n, std::size_t depth) {
-        std::pmr::vector<const db_query_node*> spine(output_.sql_.get_allocator().resource());
+        std::vector<const db_query_node*> spine;
         spine.push_back(&n);
         while (continues_logical_chain(s.nodes_, *spine.back(), spine.back()->left_) &&
                grouped_node(s, spine.back()->left_) == spine.back()->left_) {
@@ -1397,7 +1399,7 @@ private:
             }
         }
     }
-    void assignments(const db_query_storage& s, const std::pmr::vector<db_stored_assignment>& values, std::size_t depth) {
+    void assignments(const db_query_storage& s, const std::vector<db_stored_assignment>& values, std::size_t depth) {
         if (values.empty()) {
             throw std::invalid_argument("UPDATE requires assignments");
         }
@@ -1567,11 +1569,11 @@ private:
 
     grouped_bound_values grouped_;
 };
-void append_db_expression(std::pmr::string& output, db_expression expression, db_driver driver) {
+void append_db_expression(std::string& output, db_expression expression, db_driver driver) {
     if (expression.empty()) {
         throw std::invalid_argument("empty database expression");
     }
-    db_query_compiler compiler(driver, output.get_allocator().resource(), db_parameter_mode::literal);
+    db_query_compiler compiler(driver, db_parameter_mode::literal);
     const auto initial_size = output.size();
     compiler.output_.sql_ = std::move(output);
     try {
@@ -1591,15 +1593,14 @@ void append_db_expression(std::pmr::string& output, db_expression expression, db
 
 namespace ruvia {
 
-db_statement db_query::compile(db_driver driver, std::pmr::memory_resource* resource, db_parameter_mode mode) const {
-    detail::db_query_compiler compiler(driver, pmr_resource_or_default(resource), mode);
+db_statement db_query::compile(db_driver driver, db_parameter_mode mode) const {
+    detail::db_query_compiler compiler(driver, mode);
     compiler.query(storage());
     return db_statement(std::move(compiler.output_.sql_), std::move(compiler.output_.params_), returns_rows());
 }
 
-std::pmr::string db_query::render_expression(db_expression expression, db_driver driver,
-    std::pmr::memory_resource* resource) {
-    std::pmr::string output(pmr_resource_or_default(resource));
+std::string db_query::render_expression(db_expression expression, db_driver driver) {
+    std::string output;
     detail::append_db_expression(output, expression, driver);
     return output;
 }

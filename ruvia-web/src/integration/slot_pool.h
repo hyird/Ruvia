@@ -6,17 +6,14 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/pool_lease_scheduler.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/worker_cancellation.h"
-#include "ruvia/core/worker_handle.h"
-#include "ruvia/core/worker_timer.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_wait_result.h"
 
 // The connection-slot bookkeeping every pooled client shares: lease scheduling,
@@ -50,14 +47,14 @@ public:
     using deadline_kind_type = typename policy_type::deadline_kind_type;
     using cancellation_target_type = worker_cancellation_target<slot_pool>;
 
-    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_handle& worker_value)
+    slot_pool(owner_type& owner_value, std::size_t slot_count, const worker_ref& worker_value)
         : owner_(owner_value),
           worker_(worker_value),
           slots_(slot_count),
-          scheduler_(slot_count, worker_, process_resource()),
+          scheduler_(slot_count, worker_),
           cancellation_target_(make_worker_cancellation_target(*this, worker_)) {}
 
-    slot_pool(owner_type&, std::size_t, worker_handle&&) = delete;
+    slot_pool(owner_type&, std::size_t, worker_ref&&) = delete;
 
     ~slot_pool() {
         cancellation_target_->detach(*this);
@@ -68,7 +65,7 @@ public:
     slot_pool(slot_pool&&) = delete;
     slot_pool& operator=(slot_pool&&) = delete;
 
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
 
@@ -305,18 +302,10 @@ private:
     class slot_array final {
     public:
         explicit slot_array(std::size_t slot_count)
-            : data_(std::pmr::polymorphic_allocator<slot_state>(process_resource()).allocate(slot_count)),
-              size_(slot_count) {
-            for (std::size_t index = 0; index < size_; ++index) {
-                std::construct_at(data_ + index);
-            }
-        }
+            : data_(std::make_unique<slot_state[]>(slot_count)),
+              size_(slot_count) {}
         slot_array(const slot_array&) = delete;
         slot_array& operator=(const slot_array&) = delete;
-        ~slot_array() {
-            std::destroy(data_, data_ + size_);
-            std::pmr::polymorphic_allocator<slot_state>(process_resource()).deallocate(data_, size_);
-        }
 
         [[nodiscard]] std::size_t size() const noexcept {
             return size_;
@@ -328,19 +317,19 @@ private:
             return data_[index];
         }
         [[nodiscard]] slot_state* begin() noexcept {
-            return data_;
+            return data_.get();
         }
         [[nodiscard]] slot_state* end() noexcept {
-            return data_ + size_;
+            return data_.get() + size_;
         }
 
     private:
-        slot_state* data_;
+        std::unique_ptr<slot_state[]> data_;
         std::size_t size_;
     };
 
     owner_type& owner_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     slot_array slots_;
     pool_lease_scheduler scheduler_;
     std::shared_ptr<cancellation_target_type> cancellation_target_;

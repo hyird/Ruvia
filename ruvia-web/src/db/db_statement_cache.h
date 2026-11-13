@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,14 +14,13 @@
 #include <vector>
 
 #include "ruvia/core/fnv1a.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia::detail {
 
 // Names one entry of a db_statement_cache by position and generation, so
 // forgetting or replacing an entry never redirects another statement's handle
 // to a different statement; a stale handle finds nothing.
-struct db_statement_handle final {
+struct db_statement_entry final {
     std::size_t index_;
     std::uint64_t generation_;
 };
@@ -40,11 +38,11 @@ class db_statement_cache final {
 public:
     static constexpr std::size_t capacity = 128;
 
-    using handle = db_statement_handle;
+    using entry_ref = db_statement_entry;
 
     struct lookup final {
         // Absent: run the statement unprepared.
-        std::optional<handle> statement_{};
+        std::optional<entry_ref> statement_{};
         // The statement is new to the connection: prepare it first.
         bool inserted_{false};
         // The payload of an entry evicted to make room.
@@ -57,7 +55,7 @@ public:
     };
 
     db_statement_cache()
-        : entries_(process_resource()) {}
+        : entries_() {}
 
     // Counts a use of the statement. A cached one is returned. One used
     // before is inserted when the caller `may_insert` it now, with the payload
@@ -77,7 +75,7 @@ public:
         if (cached.has_value()) {
             auto& existing = entries_[*cached];
             existing.last_use_ = clock_;
-            return {handle{*cached, existing.generation_}, false, std::nullopt, hash};
+            return {entry_ref{*cached, existing.generation_}, false, std::nullopt, hash};
         }
         const auto first_use_index = find_first_use(hash);
         if (!first_use_index.has_value()) {
@@ -87,14 +85,13 @@ public:
         if (!may_insert) {
             return {std::nullopt, false, std::nullopt, hash, true};
         }
-        auto* resource = entries_.get_allocator().resource();
         const auto free_entry = std::ranges::find(entries_, std::uint64_t{0}, &entry::generation_);
         const bool has_free_entry = free_entry != entries_.end();
         if (!has_free_entry && entries_.size() < capacity && entries_.size() == entries_.capacity()) {
             entries_.reserve(std::min(capacity, std::max<std::size_t>(entries_.size() * 2, 8)));
         }
-        std::pmr::string key_sql(sql, resource);
-        std::pmr::vector<unsigned int> key_types(types.begin(), types.end(), resource);
+        std::string key_sql(sql);
+        std::vector<unsigned int> key_types(types.begin(), types.end());
         std::optional<payload_type> created_payload;
         if constexpr (std::is_invocable_v<factory_type, std::string_view, std::span<const unsigned int>,
                           std::size_t>) {
@@ -136,17 +133,17 @@ public:
         entry_index_.insert(index, hash);
         clear_first_use(*first_use_index, hash);
         ++generation_;
-        return {handle{index, next_generation}, true, std::move(evicted), hash};
+        return {entry_ref{index, next_generation}, true, std::move(evicted), hash};
     }
 
-    [[nodiscard]] payload_type* payload(handle statement) noexcept {
+    [[nodiscard]] payload_type* payload(entry_ref statement) noexcept {
         auto* found = live(statement);
         return found == nullptr ? nullptr : &found->payload_;
     }
 
     // The SQL of a live entry, owned by the cache. It stays in place until the
     // next find() or clear().
-    [[nodiscard]] std::string_view sql(handle statement) const noexcept {
+    [[nodiscard]] std::string_view sql(entry_ref statement) const noexcept {
         if (statement.index_ >= entries_.size() || entries_[statement.index_].generation_ != statement.generation_) {
             return {};
         }
@@ -157,7 +154,7 @@ public:
     // holds as cached (a stale statement), unless it was replaced since, and
     // hands its payload back. With `use_again` its next use prepares it
     // straight away, as for a statement used before.
-    std::optional<payload_type> forget(handle statement, bool use_again) noexcept {
+    std::optional<payload_type> forget(entry_ref statement, bool use_again) noexcept {
         auto* found = live(statement);
         if (found == nullptr) {
             return std::nullopt;
@@ -200,8 +197,8 @@ public:
 
 private:
     struct entry final {
-        std::pmr::string sql_;
-        std::pmr::vector<unsigned int> types_;
+        std::string sql_;
+        std::vector<unsigned int> types_;
         std::size_t hash_;
         std::uint64_t last_use_;
         // Zero marks a forgotten entry, free for reuse. Never reused across
@@ -210,7 +207,7 @@ private:
         payload_type payload_;
     };
 
-    [[nodiscard]] entry* live(handle statement) noexcept {
+    [[nodiscard]] entry* live(entry_ref statement) noexcept {
         if (statement.index_ >= entries_.size() || entries_[statement.index_].generation_ != statement.generation_) {
             return nullptr;
         }
@@ -302,7 +299,7 @@ private:
         next_first_use_ = (next_first_use_ + 1) % first_uses_.size();
     }
 
-    std::pmr::vector<entry> entries_;
+    std::vector<entry> entries_;
     probe_index entry_index_;
     // Key hashes of recent first uses; zero marks a free position. A hash
     // collision only prepares a statement on its first use.

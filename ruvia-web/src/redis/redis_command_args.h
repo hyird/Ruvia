@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <initializer_list>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -13,8 +12,7 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 
 #include "redis/redis_protocol.h"
 
@@ -52,7 +50,7 @@ inline constexpr std::size_t redis_score_scratch_size = 64;
 // to append it, so the argument layout is written in exactly one place.
 template <typename enumerate_type>
 [[nodiscard]] redis_owned_command encode_redis_command(
-    std::pmr::memory_resource* resource, const enumerate_type& enumerate_arguments) {
+    const enumerate_type& enumerate_arguments) {
     std::size_t arg_count = 0;
     std::size_t bulk_bytes = 0;
     enumerate_arguments([&](std::string_view arg) {
@@ -61,7 +59,7 @@ template <typename enumerate_type>
     });
     std::size_t size = resp_header_serialized_size(arg_count);
     add_resp_serialized_size(size, bulk_bytes);
-    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    redis_owned_command command{std::string()};
     command.wire_.reserve(size);
     append_resp_header(command.wire_, arg_count);
     enumerate_arguments([&](std::string_view arg) { append_resp_bulk(command.wire_, arg); });
@@ -69,31 +67,27 @@ template <typename enumerate_type>
 }
 
 [[nodiscard]] redis_owned_command make_owned_redis_command(
-    std::pmr::memory_resource* resource, std::initializer_list<std::string_view> args);
+    std::initializer_list<std::string_view> args);
 
 [[nodiscard]] bool redis_set_returns_previous(redis_set_previous_value_policy policy);
 
 [[nodiscard]] redis_owned_command redis_command_with_keys(std::string_view command,
-    std::span<const std::string_view> keys, std::pmr::memory_resource* resource);
+    std::span<const std::string_view> keys);
 [[nodiscard]] redis_owned_command redis_mset_args(
-    std::span<const std::pair<std::string_view, std::string_view>> items,
-    std::pmr::memory_resource* resource);
+    std::span<const std::pair<std::string_view, std::string_view>> items);
 [[nodiscard]] redis_owned_command redis_set_args(std::string_view key,
-    std::string_view value, const redis_set_options& options, std::pmr::memory_resource* resource);
+    std::string_view value, const redis_set_options& options);
 [[nodiscard]] redis_owned_command redis_hset_fields_args(std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields_value,
-    std::pmr::memory_resource* resource);
+    std::span<const std::pair<std::string_view, std::string_view>> fields_value);
 [[nodiscard]] redis_owned_command redis_command_with_key_fields(std::string_view command,
-    std::string_view key, std::span<const std::string_view> fields_value,
-    std::pmr::memory_resource* resource);
+    std::string_view key, std::span<const std::string_view> fields_value);
 [[nodiscard]] redis_owned_command redis_eval_args(std::string_view command,
     std::string_view script, std::span<const std::string_view> keys,
-    std::span<const std::string_view> argv, std::pmr::memory_resource* resource);
+    std::span<const std::string_view> argv);
 [[nodiscard]] redis_owned_command redis_blocking_pop_args(std::string_view command,
-    std::span<const std::string_view> keys, redis_block_wait wait,
-    std::pmr::memory_resource* resource);
+    std::span<const std::string_view> keys, redis_block_wait wait);
 [[nodiscard]] redis_owned_command redis_x_read_group_args(std::string_view group,
     std::string_view consumer, std::span<const redis_stream_read_view> streams,
-    const redis_x_read_group_options& options, std::pmr::memory_resource* resource);
+    const redis_x_read_group_options& options);
 
 }  // namespace ruvia::detail

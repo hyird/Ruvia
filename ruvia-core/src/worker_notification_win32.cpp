@@ -21,13 +21,13 @@ namespace {
 
 using clock_type = std::chrono::steady_clock;
 
-[[nodiscard]] bool valid_handle(HANDLE handle) noexcept {
-    return handle != nullptr && handle != INVALID_HANDLE_VALUE;
+[[nodiscard]] bool valid_descriptor(HANDLE descriptor) noexcept {
+    return descriptor != nullptr && descriptor != INVALID_HANDLE_VALUE;
 }
 
-void close_handle(HANDLE& handle) noexcept {
-    const HANDLE owned = std::exchange(handle, nullptr);
-    if (valid_handle(owned)) {
+void close_descriptor(HANDLE& descriptor) noexcept {
+    const HANDLE owned = std::exchange(descriptor, nullptr);
+    if (valid_descriptor(owned)) {
         static_cast<void>(CloseHandle(owned));
     }
 }
@@ -45,7 +45,7 @@ public:
 
     ~pipe_connect_operation() {
         cancel_and_drain();
-        close_handle(event_);
+        close_descriptor(event_);
     }
 
     pipe_connect_operation(const pipe_connect_operation&) = delete;
@@ -177,7 +177,7 @@ native_wake_pair& native_wake_pair::operator=(native_wake_pair&& other) noexcept
 }
 
 native_wake_pair::~native_wake_pair() {
-    close_handle(sender_);
+    close_descriptor(sender_);
     close_receiver();
 }
 
@@ -201,14 +201,14 @@ native_wake_signal native_wake_pair::signal() const noexcept {
 }
 
 void native_wake_pair::close_receiver() noexcept {
-    if (valid_handle(receiver_)) {
+    if (valid_descriptor(receiver_)) {
         disconnect_native_receiver(receiver_);
-        close_handle(receiver_);
+        close_descriptor(receiver_);
     }
 }
 
-void disconnect_native_receiver(native_wake_handle receiver) noexcept {
-    if (!valid_handle(receiver) || DisconnectNamedPipe(receiver)) {
+void disconnect_native_receiver(native_wake_descriptor receiver) noexcept {
+    if (!valid_descriptor(receiver) || DisconnectNamedPipe(receiver)) {
         return;
     }
     if (GetLastError() != ERROR_PIPE_NOT_CONNECTED) {
@@ -237,7 +237,7 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout
         PIPE_ACCESS_INBOUND | FILE_FLAG_OVERLAPPED,
         PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
         1, 4096, 4096, 0, &security_attributes);
-    if (!valid_handle(pair.receiver_)) {
+    if (!valid_descriptor(pair.receiver_)) {
         const DWORD error = GetLastError();
         pair.receiver_ = nullptr;
         throw_native_wake_error("CreateNamedPipeW", static_cast<int>(error));
@@ -265,7 +265,7 @@ native_wake_pair make_native_wake_pair(std::chrono::milliseconds startup_timeout
 
         pair.sender_ = CreateFileW(pipe_name.data(), GENERIC_WRITE, 0, nullptr, OPEN_EXISTING,
             FILE_ATTRIBUTE_NORMAL, nullptr);
-        if (valid_handle(pair.sender_)) {
+        if (valid_descriptor(pair.sender_)) {
             break;
         }
         const DWORD error = GetLastError();

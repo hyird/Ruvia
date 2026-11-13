@@ -4,7 +4,6 @@
 #include <functional>
 #include <map>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -12,12 +11,11 @@
 
 #include <asio/io_context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/http_client.h"
 
 #include "client/http_client_config_storage.h"
@@ -35,16 +33,16 @@ class http_client_pool;
 // backs the pools and their retained responses.
 class http_client_registry final {
 public:
-    http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
         std::span<const http_client_definition_type> definitions,
         const http_client_worker_services& services);
-    http_client_registry(asio::io_context& io_context, const worker_handle& worker_value,
+    http_client_registry(asio::io_context& io_context, const worker_ref& worker_value,
         std::span<const http_client_config> configs,
         const http_client_worker_services& services);
-    http_client_registry(asio::io_context&, worker_handle&&,
+    http_client_registry(asio::io_context&, worker_ref&&,
         std::span<const http_client_definition_type>,
         const http_client_worker_services&) = delete;
-    http_client_registry(asio::io_context&, worker_handle&&,
+    http_client_registry(asio::io_context&, worker_ref&&,
         std::span<const http_client_config>,
         const http_client_worker_services&) = delete;
     ~http_client_registry();
@@ -59,9 +57,9 @@ public:
 
     void close_now() noexcept;
     [[nodiscard]] task<void> join();
-    [[nodiscard]] http_client_handle get(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
-    [[nodiscard]] http_client_handle get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
-    [[nodiscard]] http_client_handle get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get(std::string_view alias, ::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
+    [[nodiscard]] http_client_ref get_single_or_default(::ruvia::operation_scope& scope, stop_token host_stop = {}) const;
     [[nodiscard]] std::shared_ptr<http_client_pool> find_origin(http_scheme scheme, std::string_view authority) const;
 
 private:
@@ -70,16 +68,16 @@ private:
         pool_owner_type pool_;
         std::size_t order_;
     };
-    using alias_map_type = std::pmr::map<std::pmr::string, alias_binding, std::less<>>;
+    using alias_map_type = std::map<std::string, alias_binding, std::less<>>;
     struct origin_preparation;
     // Startup aliases without a ca_file_ share system_trust_.
     [[nodiscard]] http_client_config_storage startup_config(const http_client_definition_type& definition);
     [[nodiscard]] http_client_config_storage startup_config(const http_client_config& config);
-    using preparation_owner_type = std::unique_ptr<origin_preparation, pmr_object_deleter<origin_preparation>>;
+    using preparation_owner_type = std::unique_ptr<origin_preparation>;
 
     [[nodiscard]] task<void> prepare_origin(preparation_owner_type input, operation_options options);
     void require_prepared(stop_token stop, const operation_deadline& timeout) const;
-    void publish(std::pmr::string alias, pool_owner_type replacement);
+    void publish(std::string alias, pool_owner_type replacement);
 
     void require_mutable() const;
     [[nodiscard]] task<void> retire_origin(alias_map_type::iterator position,
@@ -88,7 +86,7 @@ private:
     template <typename config_type>
     void initialize(std::span<const config_type> configs);
     asio::io_context& io_context_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     http_client_worker_services services_;
     alias_map_type aliases_;
     task_scope retirements_;

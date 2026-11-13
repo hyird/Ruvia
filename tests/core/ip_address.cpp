@@ -1,14 +1,10 @@
 #include <gtest/gtest.h>
 
 #include <cstddef>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/socket.h"
-
-#include "memory_resource_fixture.h"
 
 TEST(Ruvia, ip_address_parsing_handles_ipv4_ipv6_and_view_bounds) {
     const auto v4 = ruvia::parse_ip_address("192.0.2.1");
@@ -40,20 +36,10 @@ TEST(Ruvia, ip_address_parsing_rejects_ports_brackets_and_partial_or_padded_ipv4
     EXPECT_TRUE(mapped.has_value() && mapped->is_v6());
 }
 
-TEST(Ruvia, ip_address_parsing_returns_long_input_pmr_storage) {
-    ruvia::test::counting_memory_resource resource;
-    const auto result_value = [&] {
-        ruvia::test::default_resource_guard scope(resource);
-        // Only a lexically plausible literal reaches the platform parser;
-        // temporary storage uses process_resource() rather than the global default.
-        return ruvia::parse_ip_address("fe80::1%" + std::pmr::string(1024, 'x', ruvia::process_resource()));
-    }();
-
+TEST(Ruvia, ip_address_parsing_handles_long_input_storage) {
+    const auto result_value = ruvia::parse_ip_address("fe80::1%" + std::string(1024, 'x'));
     // An unknown zone name is a platform decision; the storage must round-trip either way.
     EXPECT_TRUE(!result_value.has_value() || result_value->is_v6());
-    EXPECT_EQ(resource.allocation_count(), std::size_t{0});
-    EXPECT_EQ(resource.live_allocations(), std::size_t{0});
-    EXPECT_EQ(resource.allocation_count(), resource.deallocation_count());
 }
 
 TEST(Ruvia, ip_address_parsing_rejects_invalid_ipv6_zone_identifiers) {

@@ -1,14 +1,12 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_header.h"
@@ -101,11 +99,9 @@ public:
 private:
     friend struct detail::request_name_value_list_access;
 
-    explicit request_name_value_list(std::pmr::memory_resource* resource, bool case_insensitive = false)
-        : owned_(pmr_resource_or_default(resource)),
-          items_(owned_),
+    explicit request_name_value_list(bool case_insensitive = false) noexcept
+        : items_(owned_),
           case_insensitive_(case_insensitive) {}
-
     explicit request_name_value_list(std::span<const http_header_view> headers) noexcept
         : items_(headers),
           case_insensitive_(true) {}
@@ -128,7 +124,7 @@ private:
         items_ = owned_;
     }
 
-    std::pmr::vector<http_header_view> owned_{process_resource()};
+    std::vector<http_header_view> owned_{};
     std::span<const http_header_view> items_{};
     bool case_insensitive_{false};
 };
@@ -137,10 +133,9 @@ private:
 
 namespace ruvia::detail {
 struct request_name_value_list_access final {
-    [[nodiscard]] static request_name_value_list make(std::pmr::memory_resource* resource) {
-        return request_name_value_list(resource);
+    [[nodiscard]] static request_name_value_list make() noexcept {
+        return request_name_value_list();
     }
-
     [[nodiscard]] static request_name_value_list borrow_headers(
         std::span<const http_header_view> headers) noexcept {
         return request_name_value_list(headers);

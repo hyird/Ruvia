@@ -9,7 +9,7 @@
 #include <string_view>
 #include <variant>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http1_client_request_writer.h"
 #include "ruvia/http/http_header.h"
 

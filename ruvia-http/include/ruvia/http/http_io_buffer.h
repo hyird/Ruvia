@@ -1,18 +1,46 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <span>
+#include <string>
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http_pmr_string.h"
 
 namespace ruvia {
 
-// PMR byte buffer for transport input: a readable window followed by writable
+// Retention table: the most storage a reusable ruvia-http buffer keeps once it
+// is drained. Anything larger goes back to the allocator, so one large message
+// or head never stays pinned to an idle connection or worker, while buffers
+// within the bound are reused without reallocating.
+
+// Worker-local temporary strings and buffers (heads, client write buffers).
+inline constexpr std::size_t http_retained_string_bytes = 4096;
+
+// Each WebSocket connection buffer: transport input, pending output,
+// compressed outbound payload and decompressed inbound message.
+inline constexpr std::size_t websocket_retained_buffer_bytes = std::size_t{16} * 1024;
+
+// Transport read that waits for the next frame on a server WebSocket
+// connection whose recent frames were small. It bounds the read storage an
+// idle connection holds; a larger frame grows the buffer on demand.
+inline constexpr std::size_t websocket_idle_read_bytes = 512;
+
+// Clear a temporary buffer, returning unusually large storage to the allocator
+// while retaining small allocations for repeated worker-local operations.
+inline void http_clear_string_retaining_small(
+    std::string& target, std::size_t retained_bytes = http_retained_string_bytes) noexcept {
+    target.clear();
+    if (target.capacity() <= retained_bytes) {
+        return;
+    }
+    std::string empty;
+    target.swap(empty);
+}
+
+// Byte buffer for transport input: a readable window followed by writable
 // space. A read fills the span prepare() or prepare_spare() returns; commit()
-// publishes the bytes it wrote. Unlike std::pmr::string, growing for a read never
+// publishes the bytes it wrote. Unlike std::string, growing for a read never
 // initializes the bytes the read is about to overwrite, and uninitialized
 // bytes are never part of the readable window.
 // Every storage borrow requires an lvalue owner. Keep the storage alive until
@@ -24,20 +52,12 @@ namespace ruvia {
 // consumed prefix covers them; existing writable tail space is used first.
 class http_io_buffer final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<char>;
-
     http_io_buffer() noexcept = default;
-    explicit http_io_buffer(allocator_type allocator) noexcept
-        : allocator_(allocator) {}
     http_io_buffer(const http_io_buffer&) = delete;
     http_io_buffer& operator=(const http_io_buffer&) = delete;
     http_io_buffer(http_io_buffer&& other) noexcept;
     http_io_buffer& operator=(http_io_buffer&&) = delete;
     ~http_io_buffer();
-
-    [[nodiscard]] allocator_type get_allocator() const noexcept {
-        return allocator_;
-    }
 
     // Readable bytes.
     [[nodiscard]] char* data() & noexcept RUVIA_LIFETIMEBOUND {
@@ -94,7 +114,7 @@ public:
     }
     // Drops every readable byte and returns storage larger than
     // `retained_bytes` to the allocator.
-    void clear_retaining_small(std::size_t retained_bytes = http_retained_pmr_string_bytes) noexcept;
+    void clear_retaining_small(std::size_t retained_bytes = http_retained_string_bytes) noexcept;
 
 private:
     [[nodiscard]] std::size_t room_capacity(std::size_t bytes) const;
@@ -103,7 +123,6 @@ private:
     void reallocate(std::size_t capacity, std::string_view tail = {});
     void release() noexcept;
 
-    allocator_type allocator_{};
     char* storage_{nullptr};
     std::size_t capacity_{0};
     std::size_t begin_{0};

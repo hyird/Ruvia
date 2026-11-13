@@ -1,7 +1,6 @@
 #pragma once
 
 #include <filesystem>
-#include <memory_resource>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -18,7 +17,7 @@ public:
         std::filesystem::create_directories(root);
         std::random_device random;
         for (int attempt = 0; attempt != 100; ++attempt) {
-            auto candidate = root / (std::pmr::string(prefix) + std::pmr::string("-") + std::to_string(random()).c_str() + std::pmr::string("-") + std::to_string(random()).c_str());
+            auto candidate = root / (std::string(prefix) + "-" + std::to_string(random()) + "-" + std::to_string(random()));
             if (std::filesystem::create_directory(candidate)) {
                 path_ = std::move(candidate);
                 return;

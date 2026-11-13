@@ -9,8 +9,8 @@
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_field_values.h"
+#include "ruvia/http/http_hop_by_hop.h"
 #include "ruvia/http/http_number_format.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 
 #include "field/http_structured_fields.h"
@@ -226,66 +226,18 @@ cache_control parse_cache_control(std::string_view value) noexcept {
     return parser.finish();
 }
 
-cache_control parse_cache_control(std::span<const http_header> headers) noexcept {
+cache_control detail::parse_cache_control_headers(detail::http_header_range_view headers) noexcept {
     cache_control_field_parser parser;
-    for (const auto& field : headers) {
+    for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
             parser.update(field.value());
         }
     }
     return parser.finish();
-}
-
-cache_control parse_cache_control(std::span<const http_header_view> headers) noexcept {
-    cache_control_field_parser parser;
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
-            parser.update(field.value());
-        }
-    }
-    return parser.finish();
-}
-
-cache_control parse_cache_control(const http_request& request) noexcept {
-    return parse_cache_control(request.headers());
-}
-
-cache_control parse_cache_control(const http_response_headers& headers) noexcept {
-    cache_control_field_parser parser;
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
-            parser.update(field.value());
-        }
-    }
-    return parser.finish();
-}
-
-cache_control parse_cache_control(const http_response& response) noexcept {
-    return parse_cache_control(response.headers());
 }
 
 bool http_cache_control_has_no_transform(std::string_view field_value) noexcept {
     return parse_cache_control(field_value).no_transform();
-}
-
-bool http_cache_control_has_no_transform(std::span<const http_header> headers) noexcept {
-    return parse_cache_control(headers).no_transform();
-}
-
-bool http_cache_control_has_no_transform(std::span<const http_header_view> headers) noexcept {
-    return parse_cache_control(headers).no_transform();
-}
-
-bool http_cache_control_has_no_transform(const http_request& request) noexcept {
-    return parse_cache_control(request).no_transform();
-}
-
-bool http_cache_control_has_no_transform(const http_response_headers& headers) noexcept {
-    return parse_cache_control(headers).no_transform();
-}
-
-bool http_cache_control_has_no_transform(const http_response& response) noexcept {
-    return parse_cache_control(response).no_transform();
 }
 
 bool cache_control::nominated_field_set::contains(std::string_view field_name) const noexcept {
@@ -497,8 +449,8 @@ std::optional<cache_control> parse_targeted_cache_control(std::string_view value
     return parse_targeted_cache_control_from_input(detail::http_structured_text_input{value});
 }
 
-std::optional<cache_control> parse_targeted_cache_control(
-    std::span<const http_header> headers, std::string_view header_name) noexcept {
+std::optional<cache_control> detail::parse_targeted_cache_control_headers(
+    detail::http_header_range_view headers, std::string_view header_name) noexcept {
     if (header_name.empty()) {
         return std::nullopt;
     }
@@ -506,52 +458,32 @@ std::optional<cache_control> parse_targeted_cache_control(
         detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
 }
 
-std::optional<cache_control> parse_targeted_cache_control(
-    std::span<const http_header_view> headers, std::string_view header_name) noexcept {
-    if (header_name.empty()) {
-        return std::nullopt;
-    }
-    return parse_targeted_cache_control_from_input(
-        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
-}
-
-std::optional<cache_control> parse_targeted_cache_control(
-    const http_response_headers& headers, std::string_view header_name) noexcept {
-    if (header_name.empty()) {
-        return std::nullopt;
-    }
-    return parse_targeted_cache_control_from_input(
-        detail::http_structured_header_input{headers.begin(), headers.end(), header_name});
-}
-
-std::optional<cache_control> parse_targeted_cache_control(
-    const http_response& response, std::string_view header_name) noexcept {
-    return parse_targeted_cache_control(response.headers(), header_name);
-}
-
-namespace {
-
-template <typename headers_type>
-targeted_cache_control_selection resolve_targeted_cache_control_impl(
-    const headers_type& headers, std::span<const std::string_view> target_headers) noexcept {
+targeted_cache_control_selection detail::resolve_targeted_cache_control_headers(
+    detail::http_header_range_view headers,
+    std::span<const std::string_view> target_headers) noexcept {
+    const auto has_cache_control = [&headers]() noexcept {
+        for (const auto field : headers) {
+            if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
+                return true;
+            }
+        }
+        return false;
+    };
     for (const auto target_name : target_headers) {
         if (target_name.empty()) {
             continue;
         }
         if (http_ascii_equals_ignore_case(target_name, "Cache-Control")) {
-            const bool has_cc = std::ranges::any_of(headers, [](const auto& field) noexcept {
-                return http_ascii_equals_ignore_case(field.name(), "Cache-Control");
-            });
-            if (has_cc) {
+            if (has_cache_control()) {
                 return {
-                    .control_ = parse_cache_control(headers),
+                    .control_ = parse_cache_control_headers(headers),
                     .selected_header_ = target_name,
                     .targeted_ = false,
                 };
             }
             continue;
         }
-        if (const auto targeted = parse_targeted_cache_control(headers, target_name)) {
+        if (const auto targeted = parse_targeted_cache_control_headers(headers, target_name)) {
             return {
                 .control_ = *targeted,
                 .selected_header_ = target_name,
@@ -559,44 +491,16 @@ targeted_cache_control_selection resolve_targeted_cache_control_impl(
             };
         }
     }
-    const bool has_cc = std::ranges::any_of(headers, [](const auto& field) noexcept {
-        return http_ascii_equals_ignore_case(field.name(), "Cache-Control");
-    });
     return {
-        .control_ = parse_cache_control(headers),
-        .selected_header_ = has_cc ? std::string_view("Cache-Control") : std::string_view{},
+        .control_ = parse_cache_control_headers(headers),
+        .selected_header_ = has_cache_control() ? std::string_view("Cache-Control")
+                                                : std::string_view{},
         .targeted_ = false,
     };
 }
 
-}  // namespace
-
-targeted_cache_control_selection resolve_targeted_cache_control(
-    std::span<const http_header> headers,
-    std::span<const std::string_view> target_headers) noexcept {
-    return resolve_targeted_cache_control_impl(headers, target_headers);
-}
-
-targeted_cache_control_selection resolve_targeted_cache_control(
-    std::span<const http_header_view> headers,
-    std::span<const std::string_view> target_headers) noexcept {
-    return resolve_targeted_cache_control_impl(headers, target_headers);
-}
-
-targeted_cache_control_selection resolve_targeted_cache_control(
-    const http_response_headers& headers,
-    std::span<const std::string_view> target_headers) noexcept {
-    return resolve_targeted_cache_control_impl(headers, target_headers);
-}
-
-targeted_cache_control_selection resolve_targeted_cache_control(
-    const http_response& response,
-    std::span<const std::string_view> target_headers) noexcept {
-    return resolve_targeted_cache_control(response.headers(), target_headers);
-}
-
 bool strip_http_cache_private_headers(
-    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept {
+    std::vector<http_header>& headers, const cache_control& control) noexcept {
     if (control.no_store() || control.is_unqualified_private()) {
         return false;
     }
@@ -634,7 +538,7 @@ bool strip_http_cache_private_headers(
     return true;
 }
 
-bool strip_http_cache_private_headers(std::pmr::vector<http_header>& headers) noexcept {
+bool strip_http_cache_private_headers(std::vector<http_header>& headers) noexcept {
     return strip_http_cache_private_headers(headers, parse_cache_control(headers));
 }
 
@@ -647,7 +551,7 @@ bool strip_http_cache_private_headers(http_response& response) {
 }
 
 bool strip_http_cache_no_cache_headers(
-    std::pmr::vector<http_header>& headers, const cache_control& control) noexcept {
+    std::vector<http_header>& headers, const cache_control& control) noexcept {
     if (control.no_store() || control.is_unqualified_no_cache()) {
         return false;
     }
@@ -688,7 +592,7 @@ bool strip_http_cache_no_cache_headers(
 namespace {
 
 void append_preserved_cache_control_directives(
-    std::string_view field_value, std::pmr::string& output) {
+    std::string_view field_value, std::string& output) {
     detail::http_visit_comma_separated_quoted(field_value, [&](std::string_view token) {
         const auto eq = token.find('=');
         const auto name =
@@ -706,7 +610,7 @@ void append_preserved_cache_control_directives(
 }
 
 void finish_rewritten_cache_control_max_age(
-    std::pmr::string& output, std::uint64_t client_max_age) {
+    std::string& output, std::uint64_t client_max_age) {
     if (!output.empty()) {
         output.append(", ");
     }
@@ -714,10 +618,9 @@ void finish_rewritten_cache_control_max_age(
     http_append_unsigned(output, client_max_age);
 }
 
-[[nodiscard]] std::pmr::string normalize_vary_field_value(
-    std::string_view raw, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string normalize_vary_field_value(std::string_view raw) {
     const auto trimmed = http_trim_ows(raw);
-    std::pmr::string normalized(resource);
+    std::string normalized;
     normalized.reserve(trimmed.size());
     bool in_ows = false;
     for (const char ch : trimmed) {
@@ -734,90 +637,16 @@ void finish_rewritten_cache_control_max_age(
     return normalized;
 }
 
-template <typename header_span_type>
-[[nodiscard]] std::optional<std::pmr::string> format_vary_cache_key_impl(
-    const http_vary_spec& vary, header_span_type request_headers,
-    std::pmr::memory_resource* resource) {
-    if (vary.is_wildcard()) {
-        return std::nullopt;
-    }
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
-    std::pmr::string key(target_resource);
-    for (const auto& field_name : vary.field_names()) {
-        key.append(field_name);
-        key.push_back(':');
-        bool first_line = true;
-        for (const auto& header : request_headers) {
-            if (!http_ascii_equals_ignore_case(header.name(), field_name)) {
-                continue;
-            }
-            if (!first_line) {
-                key.append(", ");
-            }
-            first_line = false;
-            const auto normalized = normalize_vary_field_value(header.value(), target_resource);
-            key.append(normalized);
-        }
-        key.push_back('\n');
-    }
-    return key;
-}
-
-[[nodiscard]] bool is_hop_by_hop_for_cache_merge(std::string_view name) noexcept {
-    switch (name.size()) {
-        case 2U:
-            return http_ascii_equals_ignore_case(name, "TE");
-        case 7U:
-            return http_ascii_equals_ignore_case(name, "Trailer") ||
-                   http_ascii_equals_ignore_case(name, "Upgrade");
-        case 10U:
-            return http_ascii_equals_ignore_case(name, "Connection") ||
-                   http_ascii_equals_ignore_case(name, "Keep-Alive");
-        case 16U:
-            return http_ascii_equals_ignore_case(name, "Proxy-Connection");
-        case 17U:
-            return http_ascii_equals_ignore_case(name, "Transfer-Encoding");
-        case 18U:
-            return http_ascii_equals_ignore_case(name, "Proxy-Authenticate");
-        case 19U:
-            return http_ascii_equals_ignore_case(name, "Proxy-Authorization");
-        default:
-            return false;
-    }
-}
-
-template <typename header_span_type>
-[[nodiscard]] bool is_nominated_by_connection(
-    std::string_view field_name, header_span_type headers) noexcept {
-    for (const auto& header : headers) {
-        if (!http_ascii_equals_ignore_case(header.name(), "Connection")) {
-            continue;
-        }
-        bool matched = false;
-        detail::http_visit_comma_separated_quoted(header.value(), [&](std::string_view item) noexcept {
-            if (http_ascii_equals_ignore_case(http_trim_ows(item), field_name)) {
-                matched = true;
-                return false;
-            }
-            return true;
-        });
-        if (matched) {
-            return true;
-        }
-    }
-    return false;
-}
-
-template <typename header_span_type>
+template <typename target_headers_type>
 void merge_304_headers_impl(
-    std::pmr::vector<http_header>& cached_headers, header_span_type not_modified_headers) {
-    auto* const resource = cached_headers.get_allocator().resource();
-    std::pmr::vector<std::string_view> updated_names(resource);
-    for (const auto& field : not_modified_headers) {
+    target_headers_type& cached_headers, detail::http_header_range_view not_modified_headers) {
+    const auto nominated = parse_http_connection_nominated_fields(not_modified_headers);
+    std::vector<std::string_view> updated_names;
+    for (const auto field : not_modified_headers) {
         const auto name = field.name();
         if (!is_valid_http_header_name(name) || !is_valid_http_header_value(field.value()) ||
-            is_hop_by_hop_for_cache_merge(name) || is_http_304_forbidden_header(name) ||
-            is_nominated_by_connection(name, not_modified_headers)) {
+            is_http_hop_by_hop_or_nominated_field(name, nominated) ||
+            is_http_304_forbidden_header(name)) {
             continue;
         }
         const bool already_recorded =
@@ -831,49 +660,57 @@ void merge_304_headers_impl(
     if (updated_names.empty()) {
         return;
     }
-    std::erase_if(cached_headers, [&](const http_header& existing) noexcept {
-        return std::ranges::any_of(updated_names, [&](std::string_view updated) noexcept {
-            return http_ascii_equals_ignore_case(existing.name(), updated);
+    if constexpr (std::same_as<target_headers_type, http_response_headers>) {
+        for (const auto name : updated_names) {
+            cached_headers.remove_header(name);
+        }
+    } else {
+        std::erase_if(cached_headers, [&](const http_header& existing) noexcept {
+            return std::ranges::any_of(updated_names, [&](std::string_view updated) noexcept {
+                return http_ascii_equals_ignore_case(existing.name(), updated);
+            });
         });
-    });
-    for (const auto& field : not_modified_headers) {
+    }
+    for (const auto field : not_modified_headers) {
         const auto name = field.name();
         const bool should_copy =
             std::ranges::any_of(updated_names, [name](std::string_view updated) noexcept {
                 return http_ascii_equals_ignore_case(name, updated);
             });
-        if (should_copy) {
-            cached_headers.emplace_back(name, field.value(), resource);
+        if (!should_copy) {
+            continue;
+        }
+        if constexpr (std::same_as<target_headers_type, http_response_headers>) {
+            if (cached_headers.header(name).has_value() &&
+                !http_ascii_equals_ignore_case(name, "Date") &&
+                !http_ascii_equals_ignore_case(name, "ETag") &&
+                !http_ascii_equals_ignore_case(name, "Expires") &&
+                !http_ascii_equals_ignore_case(name, "Content-Location") &&
+                !http_ascii_equals_ignore_case(name, "Last-Modified")) {
+                cached_headers.header(
+                    name, field.value(), {.mode_ = http_response_header_mode::append});
+            } else {
+                cached_headers.header(name, field.value());
+            }
+        } else {
+            cached_headers.emplace_back(name, field.value());
         }
     }
 }
-
 }  // namespace
 
-std::pmr::string rewrite_http_cache_control_max_age(std::string_view field_value,
-    std::uint64_t client_max_age, std::pmr::memory_resource* resource) {
-    std::pmr::string output(detail::http_pmr_resource_or_default(resource));
+std::string rewrite_http_cache_control_max_age(
+    std::string_view field_value, std::uint64_t client_max_age) {
+    std::string output;
     append_preserved_cache_control_directives(field_value, output);
     finish_rewritten_cache_control_max_age(output, client_max_age);
     return output;
 }
 
-std::pmr::string rewrite_http_cache_control_max_age(std::span<const http_header> headers,
-    std::uint64_t client_max_age, std::pmr::memory_resource* resource) {
-    std::pmr::string output(detail::http_pmr_resource_or_default(resource));
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
-            append_preserved_cache_control_directives(field.value(), output);
-        }
-    }
-    finish_rewritten_cache_control_max_age(output, client_max_age);
-    return output;
-}
-
-std::pmr::string rewrite_http_cache_control_max_age(std::span<const http_header_view> headers,
-    std::uint64_t client_max_age, std::pmr::memory_resource* resource) {
-    std::pmr::string output(detail::http_pmr_resource_or_default(resource));
-    for (const auto& field : headers) {
+std::string detail::rewrite_http_cache_control_max_age_headers(
+    detail::http_header_range_view headers, std::uint64_t client_max_age) {
+    std::string output;
+    for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
             append_preserved_cache_control_directives(field.value(), output);
         }
@@ -883,19 +720,18 @@ std::pmr::string rewrite_http_cache_control_max_age(std::span<const http_header_
 }
 
 void rewrite_http_response_cache_max_age(
-    std::pmr::vector<http_header>& response_headers, std::uint64_t client_max_age) {
-    auto* const resource = response_headers.get_allocator().resource();
-    auto rewritten = rewrite_http_cache_control_max_age(response_headers, client_max_age, resource);
+    std::vector<http_header>& response_headers, std::uint64_t client_max_age) {
+    auto rewritten = rewrite_http_cache_control_max_age(response_headers, client_max_age);
     std::erase_if(response_headers, [](const http_header& field) noexcept {
         return http_ascii_equals_ignore_case(field.name(), "Cache-Control") ||
                http_ascii_equals_ignore_case(field.name(), "Expires");
     });
-    response_headers.emplace_back("Cache-Control", rewritten, resource);
+    response_headers.emplace_back("Cache-Control", rewritten);
 }
 
 void rewrite_http_response_cache_max_age(
     http_response_headers& response_headers, std::uint64_t client_max_age) {
-    std::pmr::string output(detail::http_pmr_resource_or_default(nullptr));
+    std::string output;
     for (const auto& field : response_headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Cache-Control")) {
             append_preserved_cache_control_directives(field.value(), output);
@@ -917,12 +753,7 @@ void http_vary_spec::update(std::string_view field_value) {
     if (wildcard_) {
         return;
     }
-    auto* const resource = field_names_.get_allocator().resource();
-    detail::http_visit_comma_separated_quoted(field_value, [&](std::string_view item) {
-        const auto token = http_trim_ows(item);
-        if (token.empty()) {
-            return true;
-        }
+    detail::http_visit_comma_separated_tokens(field_value, [&](std::string_view token) {
         if (token == "*") {
             wildcard_ = true;
             field_names_.clear();
@@ -931,7 +762,7 @@ void http_vary_spec::update(std::string_view field_value) {
         if (!is_valid_http_header_name(token)) {
             return true;
         }
-        std::pmr::string lower(token, resource);
+        std::string lower(token);
         for (auto& ch : lower) {
             ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
         }
@@ -943,98 +774,47 @@ void http_vary_spec::update(std::string_view field_value) {
     });
 }
 
-void http_vary_spec::update_headers(std::span<const http_header> headers) {
-    for (const auto& field : headers) {
+void http_vary_spec::update_header_range(detail::http_header_range_view headers) {
+    for (const auto field : headers) {
         if (http_ascii_equals_ignore_case(field.name(), "Vary")) {
             update(field.value());
         }
     }
 }
 
-void http_vary_spec::update_headers(std::span<const http_header_view> headers) {
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Vary")) {
-            update(field.value());
-        }
-    }
-}
-
-void http_vary_spec::update_headers(const http_response_headers& headers) {
-    for (const auto& field : headers) {
-        if (http_ascii_equals_ignore_case(field.name(), "Vary")) {
-            update(field.value());
-        }
-    }
-}
-
-http_vary_spec parse_http_vary(
-    std::string_view field_value, std::pmr::memory_resource* resource) {
-    http_vary_spec spec(resource);
+http_vary_spec parse_http_vary(std::string_view field_value) {
+    http_vary_spec spec;
     spec.update(field_value);
     return spec;
 }
 
-http_vary_spec parse_http_vary(
-    std::span<const http_header> headers, std::pmr::memory_resource* resource) {
-    http_vary_spec spec(resource);
-    spec.update_headers(headers);
-    return spec;
-}
-
-http_vary_spec parse_http_vary(
-    std::span<const http_header_view> headers, std::pmr::memory_resource* resource) {
-    http_vary_spec spec(resource);
-    spec.update_headers(headers);
-    return spec;
-}
-
-http_vary_spec parse_http_vary(
-    const http_response_headers& headers, std::pmr::memory_resource* resource) {
-    http_vary_spec spec(resource);
-    spec.update_headers(headers);
-    return spec;
-}
-
-http_vary_spec parse_http_vary(
-    const http_response& response, std::pmr::memory_resource* resource) {
-    return parse_http_vary(response.headers(), resource);
-}
-
-std::optional<std::pmr::string> format_http_vary_cache_key(const http_vary_spec& vary,
-    std::span<const http_header> request_headers, std::pmr::memory_resource* resource) {
-    return format_vary_cache_key_impl(vary, request_headers, resource);
-}
-
-std::optional<std::pmr::string> format_http_vary_cache_key(const http_vary_spec& vary,
-    std::span<const http_header_view> request_headers, std::pmr::memory_resource* resource) {
-    return format_vary_cache_key_impl(vary, request_headers, resource);
-}
-
-std::optional<std::pmr::string> format_http_vary_cache_key(const http_vary_spec& vary,
-    const http_request& request, std::pmr::memory_resource* resource) {
-    return format_vary_cache_key_impl(vary, request.headers(), resource);
-}
-
-bool http_vary_requests_match(const http_vary_spec& vary,
-    std::span<const http_header> first_request, std::span<const http_header> second_request,
-    std::pmr::memory_resource* resource) {
-    const auto first_key = format_http_vary_cache_key(vary, first_request, resource);
-    const auto second_key = format_http_vary_cache_key(vary, second_request, resource);
-    return first_key.has_value() && second_key.has_value() && *first_key == *second_key;
-}
-
-bool http_vary_requests_match(const http_vary_spec& vary,
-    std::span<const http_header_view> first_request,
-    std::span<const http_header_view> second_request, std::pmr::memory_resource* resource) {
-    const auto first_key = format_http_vary_cache_key(vary, first_request, resource);
-    const auto second_key = format_http_vary_cache_key(vary, second_request, resource);
-    return first_key.has_value() && second_key.has_value() && *first_key == *second_key;
-}
-
-bool http_vary_requests_match(const http_vary_spec& vary, const http_request& first_request,
-    const http_request& second_request, std::pmr::memory_resource* resource) {
-    return http_vary_requests_match(
-        vary, first_request.headers(), second_request.headers(), resource);
+std::optional<std::string> detail::format_http_vary_cache_key_headers(
+    const http_vary_spec& vary, detail::http_header_range_view request_headers) {
+    if (vary.is_wildcard()) {
+        return std::nullopt;
+    }
+    std::string key;
+    for (const auto& field_name : vary.field_names()) {
+        key.append(field_name);
+        bool present = false;
+        for (const auto header : request_headers) {
+            if (!http_ascii_equals_ignore_case(header.name(), field_name)) {
+                continue;
+            }
+            if (!present) {
+                key.append(":1:");
+                present = true;
+            } else {
+                key.append(", ");
+            }
+            key.append(normalize_vary_field_value(header.value()));
+        }
+        if (!present) {
+            key.append(":0");
+        }
+        key.push_back('\n');
+    }
+    return key;
 }
 
 std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexcept {
@@ -1045,11 +825,12 @@ std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexce
     return parse_delta_seconds(trimmed);
 }
 
-std::uint64_t compute_http_cache_age(std::span<const http_header> response_headers,
-    std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {
+std::uint64_t detail::compute_http_cache_age_headers(
+    detail::http_header_range_view response_headers, std::time_t request_time,
+    std::time_t response_time, std::time_t now) noexcept {
     std::optional<std::time_t> date_value;
     std::optional<std::uint64_t> age_value;
-    for (const auto& field : response_headers) {
+    for (const auto field : response_headers) {
         if (!date_value.has_value() && http_ascii_equals_ignore_case(field.name(), "Date")) {
             date_value = parse_http_date(field.value());
         } else if (!age_value.has_value() && http_ascii_equals_ignore_case(field.name(), "Age")) {
@@ -1087,14 +868,14 @@ bool is_http_304_forbidden_header(std::string_view field_name) noexcept {
     }
 }
 
-void sanitize_http_304_response_headers(std::pmr::vector<http_header>& headers) {
+void sanitize_http_304_response_headers(std::vector<http_header>& headers) {
     std::erase_if(headers, [](const http_header& field) noexcept {
         return is_http_304_forbidden_header(field.name());
     });
 }
 
 void sanitize_http_304_response_headers(http_response_headers& headers) {
-    std::pmr::vector<std::pmr::string> to_remove(detail::http_pmr_resource_or_default(nullptr));
+    std::vector<std::string> to_remove;
     for (const auto& field : headers) {
         if (is_http_304_forbidden_header(field.name())) {
             to_remove.emplace_back(field.name());
@@ -1111,66 +892,15 @@ void sanitize_http_304_response_headers(http_response& response) {
     response.commit_headers(std::move(staged));
 }
 
-void merge_http_304_response_headers(std::pmr::vector<http_header>& cached_headers,
-    std::span<const http_header> not_modified_headers) {
+void detail::merge_http_304_response_headers_into(
+    std::vector<http_header>& cached_headers, detail::http_header_range_view not_modified_headers) {
     merge_304_headers_impl(cached_headers, not_modified_headers);
 }
 
-void merge_http_304_response_headers(std::pmr::vector<http_header>& cached_headers,
-    std::span<const http_header_view> not_modified_headers) {
+void detail::merge_http_304_response_headers_into(
+    http_response_headers& cached_headers, detail::http_header_range_view not_modified_headers) {
     merge_304_headers_impl(cached_headers, not_modified_headers);
 }
-
-void merge_http_304_response_headers(
-    http_response_headers& cached_headers, const http_response_headers& not_modified_headers) {
-    auto* const resource = detail::http_pmr_resource_or_default(nullptr);
-    std::pmr::vector<http_header_view> views(resource);
-    views.reserve(not_modified_headers.size());
-    for (const auto& field : not_modified_headers) {
-        views.emplace_back(field.name(), field.value());
-    }
-    std::pmr::vector<std::string_view> updated_names(resource);
-    for (const auto& field : views) {
-        const auto name = field.name();
-        if (!is_valid_http_header_name(name) || !is_valid_http_header_value(field.value()) ||
-            is_hop_by_hop_for_cache_merge(name) || is_http_304_forbidden_header(name) ||
-            is_nominated_by_connection(name, std::span<const http_header_view>(views))) {
-            continue;
-        }
-        const bool already_recorded =
-            std::ranges::any_of(updated_names, [name](std::string_view existing) noexcept {
-                return http_ascii_equals_ignore_case(existing, name);
-            });
-        if (!already_recorded) {
-            updated_names.push_back(name);
-        }
-    }
-    for (const auto name : updated_names) {
-        cached_headers.remove_header(name);
-    }
-    for (const auto& field : views) {
-        const auto name = field.name();
-        const bool should_copy =
-            std::ranges::any_of(updated_names, [name](std::string_view updated) noexcept {
-                return http_ascii_equals_ignore_case(name, updated);
-            });
-        if (!should_copy) {
-            continue;
-        }
-        if (cached_headers.header(name).has_value() &&
-            !http_ascii_equals_ignore_case(name, "Date") &&
-            !http_ascii_equals_ignore_case(name, "ETag") &&
-            !http_ascii_equals_ignore_case(name, "Expires") &&
-            !http_ascii_equals_ignore_case(name, "Content-Location") &&
-            !http_ascii_equals_ignore_case(name, "Last-Modified")) {
-            cached_headers.header(
-                name, field.value(), {.mode_ = http_response_header_mode::append});
-        } else {
-            cached_headers.header(name, field.value());
-        }
-    }
-}
-
 void merge_http_304_response_headers(
     http_response& cached_response, const http_response& not_modified_response) {
     auto staged = cached_response.headers().clone(not_modified_response.headers().size());

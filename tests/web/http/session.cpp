@@ -9,7 +9,6 @@
 #include <exception>
 #include <map>
 #include <memory>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -30,7 +29,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/integer.h"
@@ -42,7 +40,7 @@
 
 #ifdef RUVIA_ENABLE_REDIS
 
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 
 TEST(Ruvia, session_middleware_rejects_invalid_config_before_use) {
     const auto rejected = [](const ruvia::session_config& config) {
@@ -133,7 +131,7 @@ public:
         // Revoke after middleware loaded the session but before response commit.
         const auto id = c.req().cookie("sid_b");
         if (id) {
-            const std::pmr::string key = "sess:a" + std::pmr::string(*id, ruvia::process_resource());
+            const std::string key = "sess:a" + std::string(*id);
             (void)co_await c.redis().del(key);
         }
         c.session().regenerate();
@@ -142,7 +140,7 @@ public:
 
     ruvia::task<ruvia::http_response> stored(ruvia::context& c) {
         const auto id = c.req().query("id");
-        const std::pmr::string key = "sess:" + std::pmr::string(id.value_or(""), ruvia::process_resource());
+        const std::string key = "sess:" + std::string(id.value_or(""));
         const auto value = co_await c.redis().get(key);
         co_return c.text(value ? std::string_view(*value) : "empty");
     }
@@ -150,18 +148,18 @@ public:
 
 struct session_response final {
     unsigned status_;
-    std::pmr::string body_{ruvia::process_resource()};
-    std::pmr::string cookie_{ruvia::process_resource()};
+    std::string body_{};
+    std::string cookie_{};
 };
 
 [[nodiscard]] session_response request(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint,
     std::string_view target, std::string_view cookie = {}) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
-    const std::pmr::string wire = "GET " + std::pmr::string(target, ruvia::process_resource()) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::pmr::string(cookie, ruvia::process_resource()) + "\r\n\r\n";
+    const std::string wire = "GET " + std::string(target) + " HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nCookie: " + std::string(cookie) + "\r\n\r\n";
     asio::write(socket, asio::buffer(wire));
     socket.non_blocking(true);
-    std::pmr::string response{ruvia::process_resource()};
+    std::string response{};
     std::array<char, 4096> buffer;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     for (;;) {
@@ -182,12 +180,12 @@ struct session_response final {
         }
     }
     const auto head_end = response.find("\r\n\r\n");
-    if (!response.starts_with("HTTP/1.1 ") || head_end == std::pmr::string::npos) {
+    if (!response.starts_with("HTTP/1.1 ") || head_end == std::string::npos) {
         throw std::runtime_error("invalid session HTTP response");
     }
-    session_response result{static_cast<unsigned>(std::get<0>(ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)))), std::pmr::string(std::string_view(response).substr(head_end + 4), ruvia::process_resource()), std::pmr::string{ruvia::process_resource()}};
+    session_response result{static_cast<unsigned>(std::get<0>(ruvia::parse_integer<unsigned>(std::string_view(response).substr(9, 3)))), std::string(std::string_view(response).substr(head_end + 4)), std::string{}};
     const auto cookie_start = response.find("\r\nSet-Cookie: ");
-    if (cookie_start != std::pmr::string::npos && cookie_start < head_end) {
+    if (cookie_start != std::string::npos && cookie_start < head_end) {
         const auto start = cookie_start + std::string_view("\r\nSet-Cookie: ").size();
         result.cookie_.assign(std::string_view(response).substr(start, response.find(';', start) - start));
     }
@@ -225,12 +223,12 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // Construct before the shared HTTP runtime so the server retires its Redis
     // client before this peer is destroyed at process exit.
     static ruvia::test::redis_session_store_peer peer([] {
-        std::pmr::map<std::pmr::string, std::pmr::string> store(ruvia::process_resource());
+        std::map<std::string, std::string> store;
         for (const auto size : {47, 48, 49, 128}) {
-            store.emplace("sess:" + std::pmr::string(size, 'b', ruvia::process_resource()), "existing");
+            store.emplace("sess:" + std::string(size, 'b'), "existing");
         }
-        store.emplace("sess:" + std::pmr::string(48, 'B', ruvia::process_resource()), "existing");
-        store.emplace("sess:" + std::pmr::string(48, 'g', ruvia::process_resource()), "existing");
+        store.emplace("sess:" + std::string(48, 'B'), "existing");
+        store.emplace("sess:" + std::string(48, 'g'), "existing");
         return store;
     }());
     ruvia::app()
@@ -254,14 +252,14 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     // These IDs have actual stored values. Rejection must hide the data and
     // leave it unchanged across both clear and regenerate, not merely avoid a
     // backend error. Uppercase and non-hex IDs still remain invalid at length 48.
-    for (const auto& id : {std::pmr::string(47, 'b', ruvia::process_resource()), std::pmr::string(49, 'b', ruvia::process_resource()), std::pmr::string(128, 'b', ruvia::process_resource()),
-             std::pmr::string(48, 'B', ruvia::process_resource()), std::pmr::string(48, 'g', ruvia::process_resource())}) {
-        const auto cookie = std::pmr::string("sid_a=", ruvia::process_resource()) + id;
+    for (const auto& id : {std::string(47, 'b'), std::string(49, 'b'), std::string(128, 'b'),
+             std::string(48, 'B'), std::string(48, 'g')}) {
+        const auto cookie = std::string("sid_a=") + id;
         expect("/session-ids/a/read", cookie, "empty");
         expect("/session-ids/a/clear", cookie, "clear");
         const auto rotated = expect("/session-ids/a/rotate", cookie, "rotate");
         EXPECT_TRUE(rotated.cookie_.empty());
-        expect(std::pmr::string("/session-store?id=", ruvia::process_resource()) + id, {}, "existing");
+        expect(std::string("/session-store?id=") + id, {}, "existing");
     }
 
     // A freshly minted B session must not be loadable or mutable through A's
@@ -270,8 +268,8 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
         const auto created = expect("/session-ids/b/set", {}, "set");
         EXPECT_TRUE(created.cookie_.starts_with("sid_b="));
         EXPECT_EQ(created.cookie_.size(), std::size_t{6 + 48});
-        const auto alias = "sid_a=a" + std::pmr::string(std::string_view(created.cookie_).substr(6), ruvia::process_resource());
-        const auto response = expect(std::pmr::string("/session-ids/a/", ruvia::process_resource()) + action, alias,
+        const auto alias = "sid_a=a" + std::string(std::string_view(created.cookie_).substr(6));
+        const auto response = expect(std::string("/session-ids/a/") + action, alias,
             std::string_view(action) == "read" ? "empty" : action);
         if (std::string_view(action) != "clear") {
             EXPECT_TRUE(response.cookie_.empty());
@@ -282,7 +280,7 @@ TEST(Ruvia, session_ids_isolate_prefixes_and_preserve_fixed_length_lifecycle) {
     }
 
     // An already-stored 48-character ID retains the same raw key format.
-    const auto existing = "sid_a=" + std::pmr::string(48, 'b', ruvia::process_resource());
+    const auto existing = "sid_a=" + std::string(48, 'b');
     const auto loaded = expect("/session-ids/a/read", existing, "existing");
     EXPECT_TRUE(loaded.cookie_.empty());
     const auto rotated = expect("/session-ids/a/rotate", existing, "rotate");

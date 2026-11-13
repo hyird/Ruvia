@@ -72,9 +72,8 @@ http_request_rejection http_request_rejection::rate_limited(rate_limit_rejection
     return http_request_rejection(rate_limit_rejection_error(), rejection);
 }
 
-task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request,
-    request_memory& memory, http_request_rejection rejection, const context_services& services) {
-    auto response = co_await routes.handle_error(request, memory, rejection.error(), services);
+task<http_response> respond_http_request_rejection(const route_table& routes, const http_request& request, http_request_rejection rejection, const context_services& services) {
+    auto response = co_await routes.handle_error(request, rejection.error(), services);
     if (const auto* rate_limit = rejection.rate_limit()) {
         apply_rate_limit_rejection_headers(response, *rate_limit);
     }
@@ -169,7 +168,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     if (input.expectation_ != nullptr &&
         *input.expectation_ == http_server_expectation_plan::reject_unsupported) {
         return reject(http_request_rejection::error(
-            copy_http_protocol_error_info(input.resource_, http_unsupported_expectation_error())));
+            [&] { const auto err = http_unsupported_expectation_error(); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
     }
     if (policy.apply_rate_limit_ && !request_stream) {
         if (const auto rejection = decide_request_rate_limit(
@@ -181,7 +180,7 @@ http_request_admission admit_http_request(const http_request_admission_input& in
     // to the same ceiling a streaming protocol enforces while reading.
     if (admission.body_limit_.exceeds(request.body_bytes().size())) {
         return reject(http_request_rejection::error(
-            copy_http_protocol_error_info(input.resource_, http_request_body_protocol_error(http_request_body_failure::too_large))));
+            [&] { const auto err = http_request_body_protocol_error(http_request_body_failure::too_large); return http_error_info({.status_ = err.status(), .code_ = err.code(), .message_ = std::string_view(err.what())}); }()));
     }
     if (endpoint == nullptr) {
         admission.endpoint_ = http_request_endpoint::buffered;
@@ -215,15 +214,15 @@ http_request_admission admit_http_request(const http_request_admission_input& in
 
 task<http_request_admission> admit_and_dispatch_buffered_request(const route_table& routes,
     const http_request_admission_input& input, const http_request_admission_policy& policy,
-    const context_services& services, request_memory& memory, http_response& response) {
+    const context_services& services, http_response& response) {
     auto admission = admit_http_request(input, policy, services);
     if (const auto* rejection = admission.rejection()) {
         // As in the server: a rejection does not inherit the coding promise.
         admission.tail().disable_response_coding();
         response = co_await respond_http_request_rejection(
-            routes, input.request_, memory, *rejection, admission.services());
+            routes, input.request_, *rejection, admission.services());
     } else {
-        co_await routes.dispatch_buffered_response(input.request_, input.resolution_, memory,
+        co_await routes.dispatch_buffered_response(input.request_, input.resolution_,
             document_root_binding::none(), admission.services(), admission.static_file_mode(), response);
     }
     co_return admission;

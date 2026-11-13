@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstddef>
-#include <memory_resource>
 #include <span>
 #include <vector>
 
@@ -18,16 +17,15 @@ class inline_http_header_views final {
 public:
     template <typename fields_type>
         requires requires(const fields_type& fields) { fields.size(); }
-    inline_http_header_views(const fields_type& fields, std::pmr::memory_resource* resource)
-        : inline_http_header_views(fields.size(), resource) {
+    explicit inline_http_header_views(const fields_type& fields)
+        : inline_http_header_views(fields.size()) {
         for (const auto& field : fields) {
             push_back(http_header_view{field.name(), field.value()});
         }
     }
 
     // Reserves room for `count` views; at most `count` push_back calls follow.
-    inline_http_header_views(std::size_t count, std::pmr::memory_resource* resource)
-        : overflow_(resource) {
+    explicit inline_http_header_views(std::size_t count) {
         if (count > inline_.size()) {
             overflow_.reserve(count);
         }
@@ -61,7 +59,7 @@ public:
 
 private:
     std::array<http_header_view, inline_capacity> inline_;
-    std::pmr::vector<http_header_view> overflow_;
+    std::vector<http_header_view> overflow_;
     std::size_t size_{0};
 };
 

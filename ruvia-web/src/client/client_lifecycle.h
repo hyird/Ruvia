@@ -33,7 +33,7 @@ enum class client_phase : unsigned char { fresh,
 template <typename owner_type>
 class client_lifecycle final {
 public:
-    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_handle& worker_value,
+    client_lifecycle(owner_type& owner_value, const event_loop& loop, const worker_ref& worker_value,
         client_phase initial = client_phase::fresh)
         : owner_(owner_value),
           loop_(loop),
@@ -54,7 +54,7 @@ public:
     client_lifecycle& operator=(const client_lifecycle&) = delete;
 
     [[nodiscard]] static event_loop require_loop(event_loop loop) {
-        if (!loop.handle().valid()) {
+        if (!loop.worker().valid()) {
             throw std::invalid_argument(message(" requires a valid event loop"));
         }
         return loop;
@@ -198,7 +198,7 @@ private:
     [[nodiscard]] static task<void> shutdown_owned(std::shared_ptr<owner_type> state_value,
         shutdown_mode mode) {
         auto& lifecycle = state_value->lifecycle_;
-        if (!lifecycle.loop_.handle().is_current()) {
+        if (!lifecycle.loop_.worker().is_current()) {
             throw std::logic_error("client shutdown must run on its bound event loop");
         }
         // The coroutine frame retains the client until its cleanup completes.
@@ -270,7 +270,7 @@ private:
 
     owner_type& owner_;
     const event_loop& loop_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     stop_source stop_;
     event_loop_stop_registration stop_registration_;
     worker_signal close_signal_;

@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <stdexcept>
 #include <system_error>
@@ -20,7 +19,6 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
 
 #include "event_loop_state.h"
@@ -116,9 +114,8 @@ public:
         reached,
         aborted };
 
-    // 上下文跨越启动、运行和析构线程，使用可跨线程释放的进程级资源。
     explicit impl_type(worker_runtime_options options)
-        : io_context_(std::allocator_arg, std::pmr::polymorphic_allocator<std::byte>(process_resource()),
+        : io_context_(
               asio::config_from_concurrency_hint(options.io_policy_ == worker_io_policy::single_owner
                                                      ? ASIO_CONCURRENCY_HINT_UNSAFE_IO
                                                      : ASIO_CONCURRENCY_HINT_DEFAULT)),
@@ -275,8 +272,7 @@ public:
                 return loop_;
             }
         }
-        auto created = std::allocate_shared<detail::event_loop_state>(
-            std::pmr::polymorphic_allocator<detail::event_loop_state>(process_resource()), owner);
+        auto created = std::make_shared<detail::event_loop_state>(owner);
         created->failure_sink_ = [&owner](std::exception_ptr failure) { (void)owner.fail(std::move(failure)); };
         {
             const std::lock_guard lock(mutex_);
@@ -287,7 +283,7 @@ public:
         }
         // A worker that already stops never notifies the loop; retire its
         // admission directly.
-        if (context_.handle().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) !=
+        if (context_.worker().register_shutdown(created, &detail::event_loop_state::shutdown_registration_) !=
             worker_registration_status::registered) {
             created->stop();
         }
@@ -478,7 +474,7 @@ public:
 
 #if defined(_WIN32)
     std::uintptr_t prepare_thread_join() {
-        if (context_.handle().is_current()) {
+        if (context_.worker().is_current()) {
             throw std::logic_error("cannot join a worker runtime from its owner");
         }
         request_stop();
@@ -507,7 +503,7 @@ public:
 #endif
 
     void join() {
-        if (context_.handle().is_current()) {
+        if (context_.worker().is_current()) {
             throw std::logic_error("cannot join a worker runtime from its owner");
         }
         request_stop();
@@ -581,12 +577,8 @@ public:
     bool stop_admission_delegated_{false};
 };
 
-void worker_runtime::impl_deleter_type::operator()(impl_type* value) const noexcept {
-    destroy_pmr_object(value, process_resource());
-}
-
 worker_runtime::worker_runtime(worker_runtime_options options)
-    : impl_(construct_pmr_object<impl_type>(process_resource(), options)) {}
+    : impl_(std::make_unique<impl_type>(options)) {}
 
 worker_runtime::~worker_runtime() {
     impl_->request_stop();
@@ -653,7 +645,7 @@ void worker_runtime::join() {
     impl_->join();
 }
 #if defined(_WIN32)
-worker_runtime::thread_join_operation::thread_join_operation(worker_runtime& owner, worker_handle caller) noexcept
+worker_runtime::thread_join_operation::thread_join_operation(worker_runtime& owner, worker_ref caller) noexcept
     : owner_(&owner),
       caller_(std::move(caller)) {}
 
@@ -667,7 +659,7 @@ bool worker_runtime::thread_join_operation::await_ready() {
     if (!caller_.is_current()) {
         throw std::logic_error("worker thread join preparation must run on its caller worker");
     }
-    if (owner_->handle().is_current()) {
+    if (owner_->worker().is_current()) {
         throw std::logic_error("cannot join a worker runtime from its owner");
     }
     owner_->request_stop();
@@ -696,7 +688,7 @@ std::uintptr_t worker_runtime::thread_join_operation::await_resume() {
     return owner_->impl_->prepare_thread_join();
 }
 
-worker_runtime::thread_join_operation worker_runtime::prepare_thread_join(worker_handle caller) & {
+worker_runtime::thread_join_operation worker_runtime::prepare_thread_join(worker_ref caller) & {
     return thread_join_operation(*this, std::move(caller));
 }
 #endif
@@ -719,8 +711,8 @@ asio::io_context& worker_runtime::io_context() & noexcept {
     return impl_->io_context_;
 }
 
-const worker_handle& worker_runtime::handle() const& noexcept {
-    return impl_->context_.handle();
+const worker_ref& worker_runtime::worker() const& noexcept {
+    return impl_->context_.worker();
 }
 
 event_loop worker_runtime::loop() & {
@@ -738,10 +730,8 @@ worker_runtime_context& worker_runtime::context() & noexcept {
 worker_runtime_context::worker_runtime_context(
     asio::io_context& io_context, std::size_t queue_capacity, blocking_pool* pool)
     : io_context_(&io_context),
-      dispatcher_(std::allocate_shared<detail::worker_dispatcher>(
-          std::pmr::polymorphic_allocator<detail::worker_dispatcher>(process_resource()),
-          io_context, queue_capacity, pool)),
-      handle_(detail::worker_handle_access::make(dispatcher_)) {}
+      dispatcher_(std::make_shared<detail::worker_dispatcher>(io_context, queue_capacity, pool)),
+      worker_(detail::worker_ref_access::make(dispatcher_)) {}
 
 worker_runtime_context::~worker_runtime_context() {
     detach();
@@ -751,8 +741,8 @@ asio::io_context& worker_runtime_context::io_context() const& noexcept {
     return *io_context_;
 }
 
-const worker_handle& worker_runtime_context::handle() const& noexcept {
-    return handle_;
+const worker_ref& worker_runtime_context::worker() const& noexcept {
+    return worker_;
 }
 
 void worker_runtime_context::run() {

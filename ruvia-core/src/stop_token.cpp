@@ -1,22 +1,15 @@
 #include "ruvia/core/stop_token.h"
 
-#include <memory_resource>
-#include <new>
-
-#include "ruvia/core/memory/pmr_object.h"
-
 namespace ruvia {
 
 namespace detail {
 
 stop_state_ref stop_state::create() {
-    void* storage = process_resource()->allocate(sizeof(stop_state), alignof(stop_state));
-    return stop_state_ref(::new (storage) stop_state());
+    return stop_state_ref(new stop_state());
 }
 
 void stop_state::destroy() noexcept {
-    this->~stop_state();
-    process_resource()->deallocate(this, sizeof(stop_state), alignof(stop_state));
+    delete this;
 }
 
 void stop_state::request_stop() noexcept {
@@ -143,7 +136,7 @@ namespace {
 }  // namespace
 
 stop_group::stop_group(std::span<const stop_token> parents)
-    : extra_parents_(extra_parent_count(parents), process_resource()) {
+    : extra_parents_(extra_parent_count(parents)) {
     // Capture the state, never this: downstream callbacks may destroy the
     // group, including the parent registration currently invoking us.
     const auto register_parent = [this](const stop_token& parent, stop_registration& registration) {

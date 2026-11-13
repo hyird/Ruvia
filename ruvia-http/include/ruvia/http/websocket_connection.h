@@ -3,12 +3,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <string_view>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/http/protocol_byte_limit.h"
@@ -45,12 +44,6 @@ private:
 };
 
 struct websocket_connection_options final {
-    // The resource must outlive the connection, including its address-stable
-    // implementation and all protocol buffers. nullptr uses the default PMR.
-    // With a borrowed input buffer it holds only the implementation (the
-    // protocol buffers use the input buffer's resource); nullptr then uses the
-    // input buffer's resource.
-    std::pmr::memory_resource* resource_{nullptr};
     protocol_byte_limit message_limit_{protocol_byte_limit::limited(default_max_websocket_message_bytes)};
     // Additional receive-only ceiling, including message aggregation and inflation.
     // The smaller of this limit and message_limit_ applies to input; output is unchanged.
@@ -65,7 +58,7 @@ struct websocket_connection_options final {
     // context takeover; they must outlive the connection and are used only
     // synchronously inside its calls. nullptr gives such a direction a private
     // codec too. Private codecs are created on the direction's first
-    // compressed message from the input buffer's resource.
+    // compressed message.
     websocket_deflate_codecs* shared_deflate_{nullptr};
     // Independent bound for feed() bytes awaiting next_event(). A rejected feed
     // consumes nothing; drain events or provide smaller chunks before retrying.
@@ -76,7 +69,7 @@ struct websocket_connection_options final {
 // through feed(), into a buffer the connection owns unless it was constructed
 // with the caller's input buffer; with a borrowed buffer the caller may also
 // append received bytes directly before calling next_event(). A borrowed
-// buffer and its resource, which holds every protocol buffer, must outlive the
+// buffer must outlive the
 // connection. The role fixes inbound mask validation and outbound masking,
 // including automatic Pong/Close. After the close handshake a server plans
 // end_transport once its output is flushed; a client keeps the transport open
@@ -97,8 +90,8 @@ public:
     websocket_connection(websocket_connection&&) noexcept;
     websocket_connection& operator=(websocket_connection&&) noexcept;
 
-    // Input may borrow the previous event payload; any required snapshot uses
-    // the connection resource before reclaiming consumed input storage.
+    // Input may borrow the previous event payload; any required snapshot is
+    // taken before reclaiming consumed input storage.
     [[nodiscard]] websocket_feed_status feed(std::string_view input);
     template <detail::http_temporary_owning_char_string input_type>
     websocket_feed_status feed(input_type&&) = delete;
@@ -156,10 +149,7 @@ public:
 
 private:
     class impl_type;
-    struct impl_deleter_type {
-        void operator()(impl_type* value) const noexcept;
-    };
-    std::unique_ptr<impl_type, impl_deleter_type> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 
 }  // namespace ruvia

@@ -8,7 +8,6 @@
 #include <future>
 #include <istream>
 #include <limits>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -35,12 +34,10 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/event_loop_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/timer.h"
-#include "ruvia/web/redis/redis_handle.h"
 #include "ruvia/web/redis/redis_repository.h"
+#include "ruvia/web/redis/redis_session.h"
 
-#include "poisoned_retirement_resource.h"
 #include "test_tls_identity.h"
 
 namespace {
@@ -111,11 +108,11 @@ public:
         blocked.get();
     }
 
-    std::pmr::vector<std::pmr::string> expiration_command() {
+    std::vector<std::string> expiration_command() {
         return expiration_.get_future().get();
     }
 
-    std::pmr::vector<std::pmr::vector<std::pmr::string>> batch_commands() {
+    std::vector<std::vector<std::string>> batch_commands() {
         return batch_commands_.get_future().get();
     }
 
@@ -126,8 +123,8 @@ public:
         }
     }
 
-    std::pmr::vector<std::pmr::string> authentication_command() const {
-        return std::pmr::vector<std::pmr::string>(authentication_, ruvia::process_resource());
+    std::vector<std::string> authentication_command() const {
+        return std::vector<std::string>(authentication_);
     }
 
 private:
@@ -136,10 +133,10 @@ private:
     static constexpr auto slow_select_delay = std::chrono::milliseconds(1500);
 
     template <typename stream_type>
-    asio::awaitable<std::pmr::string> line(stream_type& stream, asio::streambuf& buffer) {
+    asio::awaitable<std::string> line(stream_type& stream, asio::streambuf& buffer) {
         co_await asio::async_read_until(stream, buffer, "\r\n", asio::use_awaitable);
         std::istream input(&buffer);
-        std::pmr::string value{ruvia::process_resource()};
+        std::string value{};
         std::getline(input, value);
         value.pop_back();
         co_return value;
@@ -196,12 +193,12 @@ private:
     asio::awaitable<void> serve_connection(stream_type& stream, asio::streambuf& buffer, bool slow_select) {
         bool in_transaction = false;
         bool write_seen = false;
-        std::pmr::vector<std::pmr::vector<std::pmr::string>> transaction_commands{ruvia::process_resource()};
-        std::pmr::vector<std::pmr::string> queued_replies{ruvia::process_resource()};
+        std::vector<std::vector<std::string>> transaction_commands{};
+        std::vector<std::string> queued_replies{};
         for (;;) {
             const auto header_value = co_await line(stream, buffer);
             const auto count = std::stoi(std::string(std::string_view(header_value).substr(1)));
-            std::pmr::vector<std::pmr::string> args{ruvia::process_resource()};
+            std::vector<std::string> args{};
             for (int index = 0; index < count; ++index) {
                 const auto bulk = co_await line(stream, buffer);
                 const auto size = static_cast<std::size_t>(std::stoul(std::string(std::string_view(bulk).substr(1))));
@@ -209,7 +206,7 @@ private:
                     co_await asio::async_read(stream, buffer,
                         asio::transfer_exactly(size + 2 - buffer.size()), asio::use_awaitable);
                 }
-                std::pmr::string arg(size, '\0', ruvia::process_resource());
+                std::string arg(size, '\0');
                 std::istream input(&buffer);
                 input.read(arg.data(), static_cast<std::streamsize>(size));
                 input.ignore(2);
@@ -223,7 +220,7 @@ private:
                 // Read again without replying; client cancellation closes this socket.
                 continue;
             }
-            std::pmr::string reply{ruvia::process_resource()};
+            std::string reply{};
             const bool transaction_mode = mode_ == mode_type::transaction_success ||
                                           mode_ == mode_type::transaction_exec_error ||
                                           mode_ == mode_type::transaction_wrong_exec ||
@@ -263,17 +260,17 @@ private:
                     } else if (mode_ == mode_type::transaction_wrong_exec) {
                         reply = "+OK\r\n";
                     } else {
-                        reply = "*" + std::pmr::string(std::to_string(queued_replies.size()), ruvia::process_resource()) + "\r\n";
+                        reply = "*" + std::string(std::to_string(queued_replies.size())) + "\r\n";
                         for (const auto& queued : queued_replies) {
                             reply += queued;
                         }
                     }
                 } else {
-                    queued_replies.push_back("$" + std::pmr::string(std::to_string(args.back().size()), ruvia::process_resource()) + std::pmr::string("\r\n", ruvia::process_resource()) + args.back() + "\r\n");
+                    queued_replies.push_back("$" + std::string(std::to_string(args.back().size())) + std::string("\r\n") + args.back() + "\r\n");
                     reply = mode_ == mode_type::transaction_queue_error ? "-ERR queue failed\r\n" : "+QUEUED\r\n";
                 }
             } else if (mode_ == mode_type::batch_echo && args.front() != "PING") {
-                reply = "$" + std::pmr::string(std::to_string(args.back().size()), ruvia::process_resource()) + std::pmr::string("\r\n", ruvia::process_resource()) + args.back() + "\r\n";
+                reply = "$" + std::string(std::to_string(args.back().size())) + std::string("\r\n") + args.back() + "\r\n";
             } else if ((mode_ == mode_type::coalesced_pings || mode_ == mode_type::coalesced_arrays ||
                            mode_ == mode_type::coalesced_large) &&
                        args.front() == "PING") {
@@ -282,7 +279,7 @@ private:
                     throw std::runtime_error("expected second pipelined PING");
                 }
                 if (mode_ == mode_type::coalesced_large) {
-                    reply = "$65537\r\n" + std::pmr::string(65537, 'x', ruvia::process_resource()) + "\r\n+PONG\r\n";
+                    reply = "$65537\r\n" + std::string(65537, 'x') + "\r\n+PONG\r\n";
                 } else {
                     reply = mode_ == mode_type::coalesced_arrays
                                 ? "*3\r\n+\r\n+\r\n+\r\n*3\r\n+\r\n+\r\n+\r\n"
@@ -306,17 +303,17 @@ private:
                 }
                 reply.append("+PONG\r\n");
             } else if (args.front() == "PING") {
-                reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::pmr::string(std::to_string(args[1].size()), ruvia::process_resource()) + std::pmr::string("\r\n", ruvia::process_resource()) + args[1] + "\r\n";
+                reply = args.size() == 1 ? "+PONG\r\n" : "$" + std::string(std::to_string(args[1].size())) + std::string("\r\n") + args[1] + "\r\n";
             } else if (args.front() == "NESTED") {
-                reply = "*2\r\n*2\r\n$20\r\n" + std::pmr::string(20, 'a', ruvia::process_resource()) + "\r\n$20\r\n" + std::pmr::string(20, 'b', ruvia::process_resource()) +
+                reply = "*2\r\n*2\r\n$20\r\n" + std::string(20, 'a') + "\r\n$20\r\n" + std::string(20, 'b') +
                         "\r\n$1\r\nc\r\n";
             } else if (args.front() == "GET") {
-                reply = "$128\r\n" + std::pmr::string(128, 'v', ruvia::process_resource()) + "\r\n";
+                reply = "$128\r\n" + std::string(128, 'v') + "\r\n";
             } else if (args.front() == "EXPIREAT" || args.front() == "PEXPIREAT") {
                 expiration_.set_value(args);
                 reply = ":1\r\n";
             } else if (args.front() == "HGETALL") {
-                reply = "*6\r\n$14\r\n__ruvia_entity\r\n$1\r\n1\r\n$2\r\nid\r\n$1\r\n1\r\n$4\r\nname\r\n$128\r\n" + std::pmr::string(128, 'n', ruvia::process_resource()) + "\r\n";
+                reply = "*6\r\n$14\r\n__ruvia_entity\r\n$1\r\n1\r\n$2\r\nid\r\n$1\r\n1\r\n$4\r\nname\r\n$128\r\n" + std::string(128, 'n') + "\r\n";
             } else if (args.front() == "SELECT") {
                 if (slow_select) {
                     asio::steady_timer delay(io_, slow_select_delay);
@@ -325,7 +322,7 @@ private:
                 reply = "+OK\r\n";
             } else if (args.front() == "BLPOP") {
                 reply = args[1] == "filled"
-                            ? "*2\r\n$6\r\nfilled\r\n$3\r\n" + std::pmr::string("a\0b", 3, ruvia::process_resource()) + "\r\n"
+                            ? "*2\r\n$6\r\nfilled\r\n$3\r\n" + std::string("a\0b", 3) + "\r\n"
                             : "*-1\r\n";
             } else {
                 reply = "-ERR test error\r\n";
@@ -350,9 +347,9 @@ private:
     std::promise<void> blocked_;
     std::promise<void> closed_;
     // Written before blocked_ is satisfied; read after wait_for_blocked_command().
-    std::pmr::vector<std::pmr::string> authentication_{ruvia::process_resource()};
-    std::promise<std::pmr::vector<std::pmr::string>> expiration_;
-    std::promise<std::pmr::vector<std::pmr::vector<std::pmr::string>>> batch_commands_;
+    std::vector<std::string> authentication_{};
+    std::promise<std::vector<std::string>> expiration_;
+    std::promise<std::vector<std::vector<std::string>>> batch_commands_;
     asio::executor_work_guard<asio::io_context::executor_type> work_;
     std::future<void> done_;
     std::thread thread_;
@@ -375,18 +372,18 @@ ruvia::task<void> check_commands(ruvia::redis_client& client) {
     auto users = redis.repository<client_user>();
     auto user_value = co_await users.find_one({.where_ = client_user::column<"id">() == "1"});
     EXPECT_TRUE(user_value.has_value());
-    std::pmr::string mutable_ping(128, 'm', ruvia::process_resource());
+    std::string mutable_ping(128, 'm');
     auto cold_ping = redis.ping(mutable_ping);
     mutable_ping.assign(128, 'n');
     const auto owned_echo = co_await std::move(cold_ping);
-    EXPECT_TRUE(owned_echo == std::string_view(std::pmr::string(128, 'm', ruvia::process_resource())));
+    EXPECT_TRUE(owned_echo == std::string_view(std::string(128, 'm')));
     for (int index = 0; index < 32; ++index) {
-        auto cold = redis.get(std::pmr::string(128, 'k', ruvia::process_resource()));
+        auto cold = redis.get(std::string(128, 'k'));
         (void)cold;
-        auto echo = co_await redis.ping(std::pmr::string(128, 'x', ruvia::process_resource()));
-        EXPECT_TRUE(echo == std::string_view(std::pmr::string(128, 'x', ruvia::process_resource())));
-        EXPECT_TRUE(*retained == std::string_view(std::pmr::string(128, 'v', ruvia::process_resource())));
-        EXPECT_TRUE(user_value->get<"name">().view() == std::string_view(std::pmr::string(128, 'n', ruvia::process_resource())));
+        auto echo = co_await redis.ping(std::string(128, 'x'));
+        EXPECT_TRUE(echo == std::string_view(std::string(128, 'x')));
+        EXPECT_TRUE(*retained == std::string_view(std::string(128, 'v')));
+        EXPECT_TRUE(user_value->get<"name">().view() == std::string_view(std::string(128, 'n')));
     }
     bool failed = false;
     try {
@@ -406,7 +403,7 @@ ruvia::task<void> check_commands(ruvia::redis_client& client) {
         expired = true;
     }
     EXPECT_TRUE(expired);
-    EXPECT_TRUE(*retained == std::string_view(std::pmr::string(128, 'v', ruvia::process_resource())));
+    EXPECT_TRUE(*retained == std::string_view(std::string(128, 'v')));
 }
 
 ruvia::task<void> check_blocking_wait_starts_at_write(ruvia::redis_client& client) {
@@ -450,13 +447,13 @@ ruvia::task<void> check_coalesced_replies(ruvia::redis_client& client,
 
 ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client) {
     co_await client.connect();
-    const std::pmr::string binary_key("key\0binary", 10, ruvia::process_resource());
-    std::pmr::string binary_value(64 * 1024, 'v', ruvia::process_resource());
+    const std::string binary_key("key\0binary", 10);
+    std::string binary_value(64 * 1024, 'v');
     binary_value[5] = '\0';
     auto cold = [&] {
         auto pipeline = client.redis().pipeline();
-        auto key = decltype(binary_key)(binary_key, ruvia::process_resource());
-        auto value = decltype(binary_value)(binary_value, ruvia::process_resource());
+        auto key = decltype(binary_key)(binary_key);
+        auto value = decltype(binary_value)(binary_value);
         pipeline.get(key).set(key, value).incr_by(key, std::numeric_limits<std::int64_t>::min()).zadd(key, 1.5, "member");
         key.assign(128, 'x');
         value.assign(128, 'y');
@@ -469,7 +466,7 @@ ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client) {
     EXPECT_TRUE(retained[2].string() == "-9223372036854775808");
     EXPECT_TRUE(retained[3].string() == "member");
     auto next_value = client.redis().pipeline();
-    next_value.get(std::pmr::string(256, 'n', ruvia::process_resource()));
+    next_value.get(std::string(256, 'n'));
     const auto replies = co_await std::move(next_value).exec();
     EXPECT_EQ(replies.size(), std::size_t{1});
     EXPECT_TRUE(retained[1].string() == std::string_view(binary_value));
@@ -479,13 +476,13 @@ ruvia::task<void> check_owned_pipeline(ruvia::redis_client& client) {
 
 ruvia::task<void> check_owned_transaction(ruvia::redis_client& client, redis_peer::mode_type mode) {
     co_await client.connect();
-    const std::pmr::string binary_key("key\0binary", 10, ruvia::process_resource());
-    std::pmr::string binary_value(64 * 1024, 'v', ruvia::process_resource());
+    const std::string binary_key("key\0binary", 10);
+    std::string binary_value(64 * 1024, 'v');
     binary_value[5] = '\0';
     auto cold = [&] {
         auto transaction = client.redis().transaction();
-        auto key = decltype(binary_key)(binary_key, ruvia::process_resource());
-        auto value = decltype(binary_value)(binary_value, ruvia::process_resource());
+        auto key = decltype(binary_key)(binary_key);
+        auto value = decltype(binary_value)(binary_value);
         transaction.set(key, value).get(key);
         key.assign(128, 'x');
         value.assign(128, 'y');
@@ -598,7 +595,7 @@ ruvia::task<void> check_expiration(ruvia::redis_client& client,
 
 ruvia::task<void> check_runtime_handle_timeout(ruvia::event_loop loop, ruvia::redis_config config) {
     config.command_timeout_.reset();
-    auto worker_value = loop.handle();
+    auto worker_value = loop.worker();
     ruvia::redis_client client(loop, config);
     co_await client.connect();
     auto handle = client.redis().with_options({.timeout_ = std::chrono::seconds(5)});
@@ -783,16 +780,15 @@ ruvia::task<void> check_self_nested_copy(ruvia::redis_client& client) {
     co_await client.connect();
     auto redis = client.redis();
     const auto reply = co_await redis.command("NESTED");
-    ruvia::test::poisoned_retirement_resource memory;
     {
-        ruvia::redis_value value(reply, ruvia::redis_value::allocator_type(&memory));
+        ruvia::redis_value value(reply);
         // The source is a subtree of the destination; assigning must not read
         // storage the assignment already released.
         value = value.array()[0];
         EXPECT_TRUE(value.kind() == ruvia::redis_value::kind_type::array);
         EXPECT_TRUE(value.array().size() == 2);
-        EXPECT_TRUE(value.array()[0].string() == std::pmr::string(20, 'a', ruvia::process_resource()));
-        EXPECT_TRUE(value.array()[1].string() == std::pmr::string(20, 'b', ruvia::process_resource()));
+        EXPECT_TRUE(value.array()[0].string() == std::string(20, 'a'));
+        EXPECT_TRUE(value.array()[1].string() == std::string(20, 'b'));
     }
     co_await client.shutdown();
 }
@@ -879,7 +875,7 @@ TEST(Ruvia, redis_pipeline_barriers_follow_writes_on_the_same_connection_and_dra
         pool.start();
         pool.loop(0).start(exercise()).get();
         pool.join();
-        const std::pmr::vector<std::pmr::vector<std::pmr::string>> expected({std::pmr::vector<std::pmr::string>({std::pmr::string("SET", ruvia::process_resource()), std::pmr::string("barrier-key", ruvia::process_resource()), std::pmr::string("value", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string("WAIT", ruvia::process_resource()), std::pmr::string("1", ruvia::process_resource()), std::pmr::string("100", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string("WAITAOF", ruvia::process_resource()), std::pmr::string("1", ruvia::process_resource()), std::pmr::string("1", ruvia::process_resource()), std::pmr::string("100", ruvia::process_resource())}, ruvia::process_resource())}, ruvia::process_resource());
+        const std::vector<std::vector<std::string>> expected({std::vector<std::string>({std::string("SET"), std::string("barrier-key"), std::string("value")}), std::vector<std::string>({std::string("WAIT"), std::string("1"), std::string("100")}), std::vector<std::string>({std::string("WAITAOF"), std::string("1"), std::string("1"), std::string("100")})});
         EXPECT_TRUE(peer.batch_commands() == expected);
     }
 }
@@ -893,16 +889,15 @@ TEST(Ruvia, redis_transaction_owns_framing_and_handles_exec_outcomes) {
         pool.start();
         pool.loop(0).start(check_owned_transaction(client, mode)).get();
         pool.join();
-        const std::pmr::string key("key\0binary", 10, ruvia::process_resource());
-        std::pmr::string value(64 * 1024, 'v', ruvia::process_resource());
+        const std::string key("key\0binary", 10);
+        std::string value(64 * 1024, 'v');
         value[5] = '\0';
-        const std::pmr::vector<std::pmr::vector<std::pmr::string>> expected({
-                                                                                std::pmr::vector<std::pmr::string>({std::pmr::string("MULTI", ruvia::process_resource())}, ruvia::process_resource()),
-                                                                                std::pmr::vector<std::pmr::string>({std::pmr::string("SET", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource()), std::pmr::string(value, ruvia::process_resource())}, ruvia::process_resource()),
-                                                                                std::pmr::vector<std::pmr::string>({std::pmr::string("GET", ruvia::process_resource()), std::pmr::string(key, ruvia::process_resource())}, ruvia::process_resource()),
-                                                                                std::pmr::vector<std::pmr::string>({std::pmr::string("EXEC", ruvia::process_resource())}, ruvia::process_resource()),
-                                                                            },
-            ruvia::process_resource());
+        const std::vector<std::vector<std::string>> expected({
+            std::vector<std::string>({std::string("MULTI")}),
+            std::vector<std::string>({std::string("SET"), std::string(key), std::string(value)}),
+            std::vector<std::string>({std::string("GET"), std::string(key)}),
+            std::vector<std::string>({std::string("EXEC")}),
+        });
         EXPECT_TRUE(peer.batch_commands() == expected);
     }
 }
@@ -929,7 +924,7 @@ TEST(Ruvia, redis_pipeline_preserves_large_and_following_coalesced_replies) {
         const auto replies = co_await std::move(pipeline).exec();
         EXPECT_EQ(replies.size(), std::size_t{2});
         if (replies.size() == 2) {
-            EXPECT_TRUE(replies[0].string() == std::pmr::string(65537, 'x', ruvia::process_resource()));
+            EXPECT_TRUE(replies[0].string() == std::string(65537, 'x'));
             EXPECT_TRUE(replies[1].string() == "PONG");
         }
         co_await client.shutdown();
@@ -1027,7 +1022,7 @@ TEST(Ruvia, redis_client_expire_at_preserves_the_requested_deadline) {
     pool.loop(0).start(check_expiration(client, expires_at)).get();
     const auto command = peer.expiration_command();
     pool.join();
-    EXPECT_EQ(command, (std::pmr::vector<std::pmr::string>({std::pmr::string("PEXPIREAT", ruvia::process_resource()), std::pmr::string("session", ruvia::process_resource()), std::pmr::string("2000000000002", ruvia::process_resource())}, ruvia::process_resource())));
+    EXPECT_EQ(command, (std::vector<std::string>({std::string("PEXPIREAT"), std::string("session"), std::string("2000000000002")})));
 }
 
 ruvia::task<void> check_pipeline_abort_and_reconnect(ruvia::redis_client& client,
@@ -1117,7 +1112,7 @@ TEST(Ruvia, redis_pipeline_barrier_timeout_cancellation_and_protocol_failure_ret
             }
             std::move(pending).get();
             pool.join();
-            std::pmr::vector<std::pmr::vector<std::pmr::string>> commands({std::pmr::vector<std::pmr::string>({std::pmr::string("SET", ruvia::process_resource()), std::pmr::string("barrier-key", ruvia::process_resource()), std::pmr::string("value", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string(barrier, ruvia::process_resource()), std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())}, ruvia::process_resource());
+            std::vector<std::vector<std::string>> commands({std::vector<std::string>({std::string("SET"), std::string("barrier-key"), std::string("value")}), std::vector<std::string>({std::string(barrier), std::string("1")})});
             if (std::string_view(barrier) == "WAITAOF") {
                 commands.back().push_back("1");
             }
@@ -1238,7 +1233,7 @@ TEST(Ruvia, redis_client_authenticates_a_username_without_password) {
     pool.start();
     auto connecting = pool.loop(0).start(client.connect());
     peer.wait_for_blocked_command();
-    const std::pmr::vector<std::pmr::string> expected({std::pmr::string("AUTH", ruvia::process_resource()), std::pmr::string("app", ruvia::process_resource()), std::pmr::string("", ruvia::process_resource())}, ruvia::process_resource());
+    const std::vector<std::string> expected({std::string("AUTH"), std::string("app"), std::string("")});
     EXPECT_TRUE(peer.authentication_command() == expected);
     auto closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
@@ -1288,13 +1283,13 @@ TEST(Ruvia, redis_client_rejects_invalid_hosts_at_configuration) {
              std::string_view("b\xc3\xbc"
                               "cher.example"),
              std::string_view("host:6379")}) {
-        std::pmr::string message{ruvia::process_resource()};
+        std::string message{};
         try {
-            ruvia::redis_client client(pool.loop(0), {.host_ = std::pmr::string(host, ruvia::process_resource())});
+            ruvia::redis_client client(pool.loop(0), {.host_ = std::string(host)});
         } catch (const std::invalid_argument& error) {
             message = error.what();
         }
-        EXPECT_EQ(message, std::pmr::string("redis host is invalid", ruvia::process_resource()));
+        EXPECT_EQ(message, std::string("redis host is invalid"));
     }
     pool.join();
 }

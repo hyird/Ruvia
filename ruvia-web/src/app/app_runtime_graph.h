@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <utility>
 #include <vector>
@@ -11,7 +10,6 @@
 #include <asio/ip/tcp.hpp>
 
 #include "ruvia/core/blocking_pool.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_group.h"
 #include "ruvia/web/detail/controller/controller_descriptors.h"
 
@@ -30,8 +28,8 @@ namespace ruvia::detail {
 
 struct app_worker_slot final {
     app_worker_slot(controller_store configured_controllers,
-        std::unique_ptr<route_table, pmr_object_deleter<route_table>> configured_routes,
-        std::unique_ptr<web_worker_runtime, pmr_object_deleter<web_worker_runtime>> configured_runtime)
+        std::unique_ptr<route_table> configured_routes,
+        std::unique_ptr<web_worker_runtime> configured_runtime)
         : controllers_(std::move(configured_controllers)),
           routes_(std::move(configured_routes)),
           runtime_(std::move(configured_runtime)) {}
@@ -43,32 +41,18 @@ struct app_worker_slot final {
 
     // Destruction is intentionally reversed: runtime, routes, controllers.
     controller_store controllers_;
-    std::unique_ptr<route_table, pmr_object_deleter<route_table>> routes_;
-    std::unique_ptr<web_worker_runtime, pmr_object_deleter<web_worker_runtime>> runtime_;
+    std::unique_ptr<route_table> routes_;
+    std::unique_ptr<web_worker_runtime> runtime_;
 };
 
 struct app_runtime_graph final {
-    app_runtime_graph()
-        : blocking_pool_(nullptr, pmr_object_deleter<blocking_pool>{process_resource()}),
-          document_root_(nullptr, pmr_object_deleter<document_root_publisher>{process_resource()}),
-          route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{process_resource()}),
-          empty_route_plan_(nullptr, pmr_object_deleter<compiled_route_plan>{process_resource()}),
-#if defined(RUVIA_ENABLE_HTTP3)
-          http3_directory_(nullptr, pmr_object_deleter<http3_worker_directory>{process_resource()}),
-#endif
-#if defined(_WIN32)
-          acceptor_(nullptr, pmr_object_deleter<windows_acceptor>{process_resource()}),
-#endif
-          workers_(process_resource()),
-          group_(process_resource()),
-          listener_slots_(process_resource()) {
-    }
+    app_runtime_graph() = default;
 
     // Declared before workers so it is destroyed after suspended worker tasks.
-    std::unique_ptr<blocking_pool, pmr_object_deleter<blocking_pool>> blocking_pool_;
+    std::unique_ptr<blocking_pool> blocking_pool_;
     // The one document-root refresher; null without a document root. Workers
     // borrow it and adopt its snapshots, so it is declared before them.
-    std::unique_ptr<document_root_publisher, pmr_object_deleter<document_root_publisher>> document_root_;
+    std::unique_ptr<document_root_publisher> document_root_;
     // Every worker's route_table binds its instances to this one immutable plan.
     compiled_route_plan_ptr_type route_plan_;
     // A non-routed run keeps its original empty plan alive if its first routed
@@ -79,15 +63,15 @@ struct app_runtime_graph final {
     // Hands QUIC datagrams to the worker that owns their connection; null
     // without an HTTP/3 listener. Declared before the workers and the
     // acceptor, whose queued hand-overs reference it.
-    std::unique_ptr<http3_worker_directory, pmr_object_deleter<http3_worker_directory>> http3_directory_;
+    std::unique_ptr<http3_worker_directory> http3_directory_;
 #endif
 #if defined(_WIN32)
     // The one thread that owns every listener and hands sockets and datagrams
     // to the workers. Declared before them: they send their datagrams
     // through it until they joined, so it is destroyed after them.
-    std::unique_ptr<windows_acceptor, pmr_object_deleter<windows_acceptor>> acceptor_;
+    std::unique_ptr<windows_acceptor> acceptor_;
 #endif
-    std::pmr::vector<app_worker_slot> workers_;
+    std::vector<app_worker_slot> workers_;
     // The one lifecycle over every independently listening worker. It borrows
     // their core runtimes, so it is declared after them.
     worker_group group_;
@@ -98,7 +82,7 @@ struct app_runtime_graph final {
     // serves: slot i is listener i on every worker (and in the Windows
     // acceptor), nullopt once removed or while being added. Slots are never
     // reused, so a queued hand-over cannot reach another listener.
-    std::pmr::vector<std::optional<asio::ip::tcp::endpoint>> listener_slots_;
+    std::vector<std::optional<asio::ip::tcp::endpoint>> listener_slots_;
     // HTTP/3 services are numbered alike, apart from the TCP listeners.
     std::size_t http3_slot_count_{0};
     // Where every TLS listener's ticket key epochs start, so a listener

@@ -7,11 +7,8 @@
 #include <ranges>
 #include <stdexcept>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 #include "db/db_sql_format.h"
 #include "query_storage.h"
-#include "util/pmr_owned_storage.h"
 
 namespace ruvia::detail {
 
@@ -47,13 +44,13 @@ void require_statement_kind_change(const db_query_storage& s, db_query_kind next
         throw std::invalid_argument("statement kind change requires a query without FROM/JOIN/SELECT/VALUES clauses");
     }
 }
-void set_source_options(db_query_source& source_value, const db_source_options& options, std::pmr::memory_resource* resource) {
+void set_source_options(db_query_source& source_value, const db_source_options& options) {
     source_value.lateral_ = options.lateral_;
     source_value.ordinality_ = options.with_ordinality_;
     source_value.columns_.reserve(options.columns_.size());
     for (const auto& column : options.columns_) {
         require_name(column.name_);
-        source_value.columns_.emplace_back(column, resource);
+        source_value.columns_.emplace_back(column);
     }
 }
 void validate_db_sql_parts(std::span<const std::string_view> parts, std::size_t argument_count) {
@@ -97,7 +94,7 @@ void validate_cte(const db_query_storage& s, std::string_view name, const column
 template <class column_range>
 db_stored_cte prepare_cte(db_query_storage& s, std::string_view name, bool recursive,
     db_materialization materialization, const column_range& columns) {
-    db_stored_cte prepared(name, s.queries_.size(), recursive, materialization, columns, s.resource_);
+    db_stored_cte prepared(name, s.queries_.size(), recursive, materialization, columns);
     reserve_append(s.queries_, 1);
     reserve_append(s.ctes_, 1);
     return prepared;
@@ -107,10 +104,9 @@ db_stored_cte prepare_cte(db_query_storage& s, std::string_view name, bool recur
 struct node_index_map final {
     static constexpr std::size_t inline_capacity = 16;
     std::array<std::size_t, inline_capacity> inline_{};
-    std::pmr::vector<std::size_t> heap_;
+    std::vector<std::size_t> heap_;
 
-    node_index_map(std::size_t count, std::pmr::memory_resource* resource)
-        : heap_(resource) {
+    node_index_map(std::size_t count) {
         if (count <= inline_capacity) {
             std::fill_n(inline_.data(), count, no_db_node);
         } else {
@@ -129,10 +125,9 @@ struct node_index_map final {
 struct node_visit_set final {
     static constexpr std::size_t inline_capacity = 64;
     std::uint64_t inline_{0};
-    std::pmr::vector<bool> heap_;
+    std::vector<bool> heap_;
 
-    node_visit_set(std::size_t count, std::pmr::memory_resource* resource)
-        : heap_(resource) {
+    node_visit_set(std::size_t count) {
         if (count > inline_capacity) {
             heap_.assign(count, false);
         }
@@ -161,10 +156,9 @@ struct node_visit_set final {
 // it accepts any depth the builder accepted.
 class reachable_query_graph final {
 public:
-    reachable_query_graph(const db_query_storage& s, std::pmr::memory_resource* resource)
-        : nodes_(s.nodes_.size(), resource),
-          queries_(s.queries_.size(), resource),
-          pending_(resource) {
+    reachable_query_graph(const db_query_storage& s)
+        : nodes_(s.nodes_.size()),
+          queries_(s.queries_.size()) {
         mark_nodes(s.projections_);
         mark_nodes(s.distinct_on_);
         mark_nodes(s.groups_);
@@ -269,48 +263,45 @@ private:
 
     node_index_map nodes_;
     node_index_map queries_;
-    std::pmr::vector<std::size_t> pending_;
+    std::vector<std::size_t> pending_;
     std::size_t node_count_{0};
     std::size_t query_count_{0};
 };
 
 struct qualified_expression_importer final {
-    const std::pmr::vector<db_query_node>& source_nodes_;
-    const std::pmr::vector<db_query>& source_queries_;
-    std::pmr::memory_resource* target_resource_;
-    std::pmr::vector<db_query_node>& target_nodes_;
-    std::pmr::vector<db_query>& target_queries_;
+    const std::vector<db_query_node>& source_nodes_;
+    const std::vector<db_query>& source_queries_;
+    std::vector<db_query_node>& target_nodes_;
+    std::vector<db_query>& target_queries_;
     std::string_view source_qualifier_{};
     std::string_view target_qualifier_{};
     bool mark_aliased_{false};
     node_index_map mapped_;
 
-    qualified_expression_importer(const std::pmr::vector<db_query_node>& source_nodes,
-        const std::pmr::vector<db_query>& source_queries, db_query_storage& target,
+    qualified_expression_importer(const std::vector<db_query_node>& source_nodes,
+        const std::vector<db_query>& source_queries, db_query_storage& target,
         std::string_view source_qualifier, std::string_view target_qualifier)
         : source_nodes_(source_nodes),
           source_queries_(source_queries),
-          target_resource_(target.resource_),
           target_nodes_(target.nodes_),
           target_queries_(target.queries_),
           source_qualifier_(source_qualifier),
           target_qualifier_(target_qualifier),
-          mapped_(source_nodes.size(), target.resource_) {}
+          mapped_(source_nodes.size()) {}
 
     qualified_expression_importer(const db_query_storage& source_value, db_query_storage& target,
         std::string_view source_qualifier, std::string_view target_qualifier)
         : qualified_expression_importer(
               source_value.nodes_, source_value.queries_, target, source_qualifier, target_qualifier) {}
 
-    qualified_expression_importer(const db_query_storage& source_value, std::pmr::memory_resource* target_resource,
-        std::pmr::vector<db_query_node>& target_nodes, std::pmr::vector<db_query>& target_queries, bool mark_aliased)
+    qualified_expression_importer(const db_query_storage& source_value,
+        std::vector<db_query_node>& target_nodes, std::vector<db_query>& target_queries, bool mark_aliased)
         : source_nodes_(source_value.nodes_),
           source_queries_(source_value.queries_),
-          target_resource_(target_resource),
           target_nodes_(target_nodes),
           target_queries_(target_queries),
           mark_aliased_(mark_aliased),
-          mapped_(source_value.nodes_.size(), target_resource) {}
+          mapped_(source_value.nodes_.size()) {}
     static void require_depth(std::size_t depth) {
         if (depth > max_db_query_depth) {
             throw std::length_error("database expression nesting exceeds 256 levels");
@@ -318,8 +309,8 @@ struct qualified_expression_importer final {
     }
 
     // Collects the not yet imported left spine of an AND/OR chain, root first.
-    static void collect_logical_spine(const std::pmr::vector<db_query_node>& nodes, std::size_t id,
-        node_index_map& mapped, std::pmr::vector<std::size_t>& spine) {
+    static void collect_logical_spine(const std::vector<db_query_node>& nodes, std::size_t id,
+        node_index_map& mapped, std::vector<std::size_t>& spine) {
         spine.push_back(id);
         for (auto left = nodes[id].left_;
             continues_logical_chain(nodes, nodes[spine.back()], left) && mapped[left] == no_db_node;
@@ -396,7 +387,7 @@ struct qualified_expression_importer final {
         }
         // Only reachable expressions participate: abandoned builder nodes cannot
         // introduce a capture or an otherwise invisible nested query.
-        node_visit_set visited(query_storage.nodes_.size(), target_resource_);
+        node_visit_set visited(query_storage.nodes_.size());
         for (const auto node : query_storage.projections_) {
             rewrite_subquery_node(query_storage, visited, source_bound, target_bound, node, subquery_depth + 1);
         }
@@ -448,7 +439,7 @@ struct qualified_expression_importer final {
         if (!continues_logical_chain(source_nodes_, source_nodes_[id], source_nodes_[id].left_)) {
             return import_one(id, no_db_node, depth);
         }
-        std::pmr::vector<std::size_t> spine(target_resource_);
+        std::vector<std::size_t> spine;
         collect_logical_spine(source_nodes_, id, mapped_, spine);
         auto imported = import_node(source_nodes_[spine.back()].left_, depth + 1);
         for (auto link = spine.rbegin(); link != spine.rend(); ++link) {
@@ -460,7 +451,7 @@ struct qualified_expression_importer final {
 private:
     // Copies one node; `imported_left` is its already imported chain operand.
     [[nodiscard]] std::size_t import_one(std::size_t id, std::size_t imported_left, std::size_t depth) {
-        db_query_node node_value(source_nodes_[id], target_resource_);
+        db_query_node node_value(source_nodes_[id]);
         if (mark_aliased_ && (node_value.kind_ == db_node_kind::column || node_value.kind_ == db_node_kind::star)) {
             node_value.explicit_alias_ = true;
         }
@@ -487,7 +478,7 @@ private:
             order.expression_ = import_node(order.expression_, depth + 1);
         }
         if (node_value.query_ != no_db_node) {
-            auto snapshot = source_queries_[node_value.query_].clone(target_resource_);
+            auto snapshot = source_queries_[node_value.query_].clone();
             if (!source_qualifier_.empty()) {
                 rewrite_subquery(snapshot.storage(), false, false, depth + 1);
             }
@@ -513,32 +504,24 @@ using detail::no_db_node;
 namespace detail {
 
 struct db_expr_tree final {
-    explicit db_expr_tree(std::pmr::memory_resource* resource)
-        : resource_(pmr_resource_or_default(resource)),
-          nodes_(resource_),
-          queries_(resource_),
-          table_(resource_) {}
+    db_expr_tree() = default;
 
-    db_expr_tree(const db_expr_tree& other, std::pmr::memory_resource* resource)
-        : resource_(pmr_resource_or_default(resource)),
-          nodes_(resource_),
-          queries_(resource_),
-          table_(other.table_, resource_),
+    db_expr_tree(const db_expr_tree& other)
+        : table_(other.table_),
           root_(other.root_) {
         nodes_.reserve(other.nodes_.size());
         for (const auto& node : other.nodes_) {
-            nodes_.emplace_back(node, resource_);
+            nodes_.emplace_back(node);
         }
         queries_.reserve(other.queries_.size());
         for (const auto& query : other.queries_) {
-            queries_.push_back(query.clone(resource_));
+            queries_.push_back(query.clone());
         }
     }
 
-    std::pmr::memory_resource* resource_;
-    std::pmr::vector<db_query_node> nodes_;
-    std::pmr::vector<db_query> queries_;
-    std::pmr::string table_;
+    std::vector<db_query_node> nodes_;
+    std::vector<db_query> queries_;
+    std::string table_;
     std::size_t root_{no_db_node};
 };
 
@@ -554,21 +537,19 @@ namespace {
 // Borrows either an owned expression's compact tree or a query's node arena.
 // Import callbacks keep each route's ownership rules without temporary arrays.
 struct expression_nodes final {
-    std::pmr::memory_resource* resource_;
-    const std::pmr::vector<db_query_node>& nodes_;
+    const std::vector<db_query_node>& nodes_;
 
     template <class arena_type>
     explicit expression_nodes(arena_type& arena)
-        : resource_(arena.resource_),
-          nodes_(arena.nodes_) {}
+        : nodes_(arena.nodes_) {}
 
-    [[nodiscard]] static std::size_t push(std::pmr::vector<db_query_node>& nodes, db_query_node&& node) {
+    [[nodiscard]] static std::size_t push(std::vector<db_query_node>& nodes, db_query_node&& node) {
         nodes.push_back(std::move(node));
         return nodes.size() - 1;
     }
 
     [[nodiscard]] db_query_node value(const db_value& value) const {
-        return db_query_node(db_node_kind::value, clone_db_value_for_resource(value, resource_), resource_);
+        return db_query_node(db_node_kind::value, clone_db_value_for_resource(value));
     }
 
     [[nodiscard]] db_query_node named(db_node_kind kind, std::string_view text = {},
@@ -579,7 +560,7 @@ struct expression_nodes final {
         if (!qualifier.empty()) {
             require_name(qualifier, true);
         }
-        db_query_node node(kind, resource_);
+        db_query_node node(kind);
         node.text_ = text;
         node.qualifier_ = qualifier;
         node.explicit_alias_ = explicit_alias;
@@ -588,7 +569,7 @@ struct expression_nodes final {
 
     template <class range_type, class import_type>
     [[nodiscard]] db_query_node arguments(db_node_kind kind, const range_type& args, import_type import_argument) const {
-        db_query_node node(kind, resource_);
+        db_query_node node(kind);
         node.args_.reserve(args.size());
         for (const auto& arg : args) {
             node.args_.push_back(import_argument(arg));
@@ -607,10 +588,10 @@ struct expression_nodes final {
     [[nodiscard]] db_query_node sql(std::span<const std::string_view> parts,
         const range_type& args, import_type import_argument) const {
         validate_db_sql_parts(parts, args.size());
-        db_query_node node(db_node_kind::sql, resource_);
+        db_query_node node(db_node_kind::sql);
         node.named_.reserve(args.size());
         for (std::size_t i = 0; i < args.size(); ++i) {
-            node.named_.emplace_back(parts[i], import_argument(args[i]), resource_);
+            node.named_.emplace_back(parts[i], import_argument(args[i]));
         }
         node.text_ = parts.back();
         return node;
@@ -644,7 +625,7 @@ struct expression_nodes final {
 
     [[nodiscard]] db_query_node operands(db_node_kind kind, std::size_t left,
         std::size_t right = no_db_node) const {
-        db_query_node node(kind, resource_);
+        db_query_node node(kind);
         node.left_ = left;
         node.right_ = right;
         return node;
@@ -675,7 +656,7 @@ struct expression_nodes final {
 
     [[nodiscard]] db_query_node cast(std::size_t operand, const db_type_definition& type) const {
         auto node = operands(db_node_kind::cast, operand);
-        node.type_ = db_stored_type(type, resource_);
+        node.type_ = db_stored_type(type);
         return node;
     }
 
@@ -705,7 +686,7 @@ struct expression_nodes final {
         if (branches.empty()) {
             throw std::invalid_argument("CASE requires a branch");
         }
-        db_query_node node(db_node_kind::case_value, resource_);
+        db_query_node node(db_node_kind::case_value);
         node.args_.reserve(branches.size() * 2U);
         for (const auto& branch : branches) {
             if (branch.when_.empty()) {
@@ -739,7 +720,7 @@ struct expression_nodes final {
     }
 
     [[nodiscard]] db_query_node subquery(db_node_kind kind, std::size_t query) const {
-        db_query_node node(kind, resource_);
+        db_query_node node(kind);
         node.query_ = query;
         return node;
     }
@@ -773,8 +754,7 @@ db_owned_expression::db_owned_expression(const db_owned_expression& other)
       table_(other.table_),
       scalar_(other.scalar_) {
     if (other.tree_) {
-        auto* resource = other.tree_->resource_;
-        tree_ = make_pmr_object<db_expr_tree>(resource, *other.tree_, resource);
+        tree_ = std::make_unique<db_expr_tree>(*other.tree_);
     }
 }
 
@@ -873,9 +853,8 @@ db_owned_expression db_owned_expression::from_borrowed(
     return result;
 }
 
-db_owned_expression::tree_owner_type db_owned_expression::allocate_tree(std::pmr::memory_resource* resource) {
-    auto* resolved = pmr_resource_or_default(resource);
-    return make_pmr_object<db_expr_tree>(resolved, resolved);
+db_owned_expression::tree_owner_type db_owned_expression::allocate_tree() {
+    return std::make_unique<db_expr_tree>();
 }
 
 db_owned_expression db_owned_expression::from_tree(tree_owner_type tree) noexcept {
@@ -897,15 +876,15 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
                 target.table_ = table_;
             }
             qualified_expression_importer importer(
-                *borrowed_.owner_, target.resource_, target.nodes_, target.queries_, aliased_);
+                *borrowed_.owner_, target.nodes_, target.queries_, aliased_);
             return importer.import_node(borrowed_.node_, 0);
         }
         case leaf_kind::null_value:
             return push_tree_value(target, db_value(nullptr));
         case leaf_kind::default_value:
-            return push_tree_node(target, db_query_node(db_node_kind::default_value, target.resource_));
+            return push_tree_node(target, db_query_node(db_node_kind::default_value));
         case leaf_kind::star:
-            return push_tree_node(target, db_query_node(db_node_kind::star, target.resource_));
+            return push_tree_node(target, db_query_node(db_node_kind::star));
         case leaf_kind::column: {
             return push_tree_node(target, expression_nodes(target).named(db_node_kind::column, text_, table_, aliased_));
         }
@@ -928,11 +907,11 @@ std::size_t db_owned_expression::append_to_tree(db_expr_tree& target) const {
             const auto query_offset = target.queries_.size();
             reserve_append(target.queries_, tree_->queries_.size());
             for (const auto& query : tree_->queries_) {
-                target.queries_.push_back(query.clone(target.resource_));
+                target.queries_.push_back(query.clone());
             }
             reserve_append(target.nodes_, tree_->nodes_.size());
             for (const auto& node : tree_->nodes_) {
-                db_query_node copy(node, target.resource_);
+                db_query_node copy(node);
                 if (copy.left_ != no_db_node) {
                     copy.left_ += node_offset;
                 }
@@ -972,7 +951,7 @@ db_owned_expression db_owned_expression::from_expression(
         tree->table_ = table;
     }
     qualified_expression_importer importer(
-        *expression.owner_, tree->resource_, tree->nodes_, tree->queries_, aliased);
+        *expression.owner_, tree->nodes_, tree->queries_, aliased);
     tree->root_ = importer.import_node(expression.node_, 0);
     auto result = from_tree(std::move(tree));
     result.aliased_ = aliased;
@@ -1171,7 +1150,7 @@ db_owned_expression db_owned_expression::make_aggregate(std::string_view functio
 db_owned_expression db_owned_expression::make_count_star() {
     auto tree = allocate_tree();
     tree->nodes_.reserve(2U);
-    const auto star_idx = push_tree_node(*tree, db_query_node(db_node_kind::star, tree->resource_));
+    const auto star_idx = push_tree_node(*tree, db_query_node(db_node_kind::star));
     const std::array args{star_idx};
     tree->root_ = push_tree_node(*tree, expression_nodes(*tree).call(db_node_kind::aggregate, "count", args,
                                             [](auto index) { return index; }));
@@ -1341,7 +1320,7 @@ db_owned_expression db_owned_expression::make_in_subquery(
     tree->nodes_.reserve(3U);
     const auto left_idx = lhs.append_to_tree(*tree);
     const auto query_idx = tree->queries_.size();
-    tree->queries_.push_back(subquery.clone(tree->resource_));
+    tree->queries_.push_back(subquery.clone());
     const auto sub_idx = push_tree_node(*tree, expression_nodes(*tree).subquery(db_node_kind::subquery, query_idx));
     tree->root_ = push_tree_node(*tree, expression_nodes(*tree).binary(left_idx, op, sub_idx));
     return from_tree(std::move(tree));
@@ -1351,7 +1330,7 @@ db_owned_expression db_owned_expression::make_exists(const db_query& subquery) {
     subquery.require_select_query();
     auto tree = allocate_tree();
     const auto query_idx = tree->queries_.size();
-    tree->queries_.push_back(subquery.clone(tree->resource_));
+    tree->queries_.push_back(subquery.clone());
     tree->root_ = push_tree_node(*tree, expression_nodes(*tree).subquery(db_node_kind::exists, query_idx));
     return from_tree(std::move(tree));
 }
@@ -1374,23 +1353,11 @@ db_owned_expression db_owned_expression::make_array_op(const db_owned_expression
 }  // namespace detail
 
 void db_query::storage_deleter_type::operator()(detail::db_query_storage* storage) const noexcept {
-    if (storage != nullptr) {
-        std::destroy_at(storage);
-        resource_->deallocate(storage, sizeof(detail::db_query_storage), alignof(detail::db_query_storage));
-    }
+    delete storage;
 }
 
-db_query::db_query(std::pmr::memory_resource* resource)
-    : storage_(nullptr, storage_deleter_type{pmr_resource_or_default(resource)}) {
-    auto* resolved = storage_.get_deleter().resource_;
-    void* block = resolved->allocate(sizeof(detail::db_query_storage), alignof(detail::db_query_storage));
-    try {
-        storage_.reset(std::construct_at(static_cast<detail::db_query_storage*>(block), resolved));
-    } catch (...) {
-        resolved->deallocate(block, sizeof(detail::db_query_storage), alignof(detail::db_query_storage));
-        throw;
-    }
-}
+db_query::db_query()
+    : storage_(new detail::db_query_storage(), storage_deleter_type{}) {}
 db_query::db_query(storage_owner_type storage) noexcept
     : storage_(std::move(storage)) {}
 db_query::db_query(db_query&&) noexcept = default;
@@ -1408,9 +1375,6 @@ const detail::db_query_storage& db_query::storage() const {
         throw std::logic_error("database query was moved from");
     }
     return *storage_;
-}
-std::pmr::memory_resource* db_query::resource() const {
-    return storage().resource_;
 }
 bool db_query::returns_rows() const {
     return storage().returns_rows();
@@ -1442,109 +1406,46 @@ std::size_t db_query::require_expression(db_expression expression) const {
     return expression.node_;
 }
 
-db_query::storage_owner_type db_query::copy_storage(const detail::db_query_storage& source_value, std::pmr::memory_resource* resource) {
-    db_query copy(resource);
-    auto& target = copy.storage();
-    detail::reachable_query_graph graph(source_value, target.resource_);
-    const auto node = [&](std::size_t& index) { index = graph.node(index); };
-    const auto nodes = [&](auto& indices) {
-        for (auto& index : indices) {
-            node(index);
-        }
-    };
-    target.cache_enabled_ = source_value.cache_enabled_;
-    target.cache_duration_ = source_value.cache_duration_;
-    target.cache_id_ = source_value.cache_id_;
-    target.cache_shape_ = source_value.cache_shape_;
-    target.kind_ = source_value.kind_;
-    target.target_ = source_value.target_;
-    target.target_alias_ = source_value.target_alias_;
-    target.columns_ = source_value.columns_;
-    target.projections_ = source_value.projections_;
-    nodes(target.projections_);
-    target.groups_ = source_value.groups_;
-    nodes(target.groups_);
-    target.orders_ = source_value.orders_;
-    for (auto& order : target.orders_) {
-        node(order.expression_);
+detail::db_query_storage::db_query_storage(const db_query_storage& source)
+    : nodes_(source.nodes_),
+      kind_(source.kind_),
+      target_(source.target_),
+      target_alias_(source.target_alias_),
+      columns_(source.columns_),
+      projections_(source.projections_),
+      groups_(source.groups_),
+      orders_(source.orders_),
+      distinct_(source.distinct_),
+      distinct_on_(source.distinct_on_),
+      returning_(source.returning_),
+      source_(source.source_),
+      joins_(source.joins_),
+      rows_(source.rows_),
+      assignments_(source.assignments_),
+      insert_query_(source.insert_query_),
+      predicate_(source.predicate_),
+      having_(source.having_),
+      limit_(source.limit_),
+      offset_(source.offset_),
+      conflict_(source.conflict_),
+      lock_(source.lock_),
+      ctes_(source.ctes_),
+      set_operations_(source.set_operations_),
+      cache_enabled_(source.cache_enabled_),
+      cache_duration_(source.cache_duration_),
+      cache_id_(source.cache_id_),
+      cache_shape_(source.cache_shape_) {
+    queries_.reserve(source.queries_.size());
+    for (const auto& query_value : source.queries_) {
+        queries_.push_back(query_value.clone());
     }
-    target.distinct_ = source_value.distinct_;
-    target.distinct_on_ = source_value.distinct_on_;
-    nodes(target.distinct_on_);
-    target.returning_ = source_value.returning_;
-    nodes(target.returning_);
-    target.rows_ = source_value.rows_;
-    for (auto& row : target.rows_) {
-        nodes(row);
-    }
-    target.insert_query_ = graph.query(source_value.insert_query_);
-    target.predicate_ = graph.node(source_value.predicate_);
-    target.having_ = graph.node(source_value.having_);
-    target.limit_ = source_value.limit_;
-    target.offset_ = source_value.offset_;
-    target.set_operations_ = source_value.set_operations_;
-    for (auto& operation : target.set_operations_) {
-        operation.query_ = graph.query(operation.query_);
-    }
-    target.nodes_.reserve(graph.node_count());
-    for (std::size_t index = 0; index < source_value.nodes_.size(); ++index) {
-        if (graph.node(index) == no_db_node) {
-            continue;
-        }
-        auto& copied = target.nodes_.emplace_back(source_value.nodes_[index], target.resource_);
-        node(copied.left_);
-        node(copied.right_);
-        nodes(copied.args_);
-        for (auto& argument : copied.named_) {
-            node(argument.expression_);
-        }
-        for (auto& order : copied.orders_) {
-            node(order.expression_);
-        }
-        copied.query_ = graph.query(copied.query_);
-    }
-    target.queries_.reserve(graph.query_count());
-    for (std::size_t index = 0; index < source_value.queries_.size(); ++index) {
-        if (graph.query(index) != no_db_node) {
-            target.queries_.push_back(source_value.queries_[index].clone(target.resource_));
-        }
-    }
-    const auto copy_source = [&](detail::db_query_source& copied) {
-        node(copied.expression_);
-        copied.query_ = graph.query(copied.query_);
-    };
-    if (source_value.source_) {
-        copy_source(target.source_.emplace(*source_value.source_, target.resource_));
-    }
-    target.joins_.reserve(source_value.joins_.size());
-    for (const auto& join : source_value.joins_) {
-        auto& copied = target.joins_.emplace_back(join, target.resource_);
-        copy_source(copied.source_);
-        node(copied.on_);
-    }
-    target.assignments_.reserve(source_value.assignments_.size());
-    for (const auto& assignment : source_value.assignments_) {
-        target.assignments_.emplace_back(assignment.column_, graph.node(assignment.expression_), target.resource_);
-    }
-    target.ctes_.reserve(source_value.ctes_.size());
-    for (const auto& cte : source_value.ctes_) {
-        target.ctes_.emplace_back(cte, target.resource_).query_ = graph.query(cte.query_);
-    }
-    if (source_value.conflict_) {
-        auto& conflict = target.conflict_.emplace(*source_value.conflict_, target.resource_);
-        node(conflict.target_where_);
-        node(conflict.update_where_);
-        for (auto& assignment : conflict.assignments_) {
-            node(assignment.expression_);
-        }
-    }
-    if (source_value.lock_) {
-        target.lock_.emplace(*source_value.lock_, target.resource_);
-    }
-    return std::move(copy.storage_);
 }
-db_query db_query::clone(std::pmr::memory_resource* resource) const {
-    return db_query(copy_storage(storage(), pmr_resource_or_default(resource)));
+
+db_query::storage_owner_type db_query::copy_storage(const detail::db_query_storage& source) {
+    return storage_owner_type(new detail::db_query_storage(source), storage_deleter_type{});
+}
+db_query db_query::clone() const {
+    return db_query(copy_storage(storage()));
 }
 
 bool db_query::cacheable() const {
@@ -1552,7 +1453,7 @@ bool db_query::cacheable() const {
     if ((s.kind_ != db_query_kind::select && s.kind_ != db_query_kind::values) || s.lock_) {
         return false;
     }
-    const detail::reachable_query_graph graph(s, s.resource_);
+    const detail::reachable_query_graph graph(s);
     for (std::size_t index = 0; index < s.queries_.size(); ++index) {
         if (graph.query(index) != no_db_node && !s.queries_[index].cacheable()) {
             return false;
@@ -1650,7 +1551,7 @@ db_expression db_query::call(std::string_view function, std::span<const db_expre
         if (std::ranges::any_of(node_value.named_, [&](const auto& existing) { return std::string_view(existing.name_) == arg.name_; })) {
             throw std::invalid_argument("duplicate named database function argument");
         }
-        node_value.named_.emplace_back(arg.name_, require_expression(arg.value_), resource());
+        node_value.named_.emplace_back(arg.name_, require_expression(arg.value_));
     }
     return push_node(std::move(node_value));
 }
@@ -1712,14 +1613,9 @@ db_expression db_query::case_when(std::span<const db_case_branch> branches, db_e
 }
 db_query db_query::adopt(db_query&& query) const {
     if (&query == this) {
-        return query.clone(resource());
+        return query.clone();
     }
-    if (query.resource() == resource()) {
-        return std::move(query);
-    }
-    auto snapshot = query.clone(resource());
-    query.storage_.reset();
-    return snapshot;
+    return std::move(query);
 }
 db_expression db_query::add_subquery(db_node_kind kind, db_query&& query) {
     query.require_select_query();
@@ -1731,13 +1627,13 @@ db_expression db_query::add_subquery(db_node_kind kind, db_query&& query) {
     return push_node(std::move(node_value));
 }
 db_expression db_query::subquery(const db_query& query) {
-    return subquery(query.clone(resource()));
+    return subquery(query.clone());
 }
 db_expression db_query::subquery(db_query&& query) {
     return add_subquery(db_node_kind::subquery, std::move(query));
 }
 db_expression db_query::exists(const db_query& query) {
-    return exists(query.clone(resource()));
+    return exists(query.clone());
 }
 db_expression db_query::exists(db_query&& query) {
     return add_subquery(db_node_kind::exists, std::move(query));
@@ -1801,7 +1697,7 @@ db_expression db_query::import_expression(db_expression expression, std::string_
 }
 
 db_query& db_query::replace_expressions(
-    std::pmr::vector<std::size_t>& target, std::span<const db_expression> expressions) {
+    std::vector<std::size_t>& target, std::span<const db_expression> expressions) {
     for (const auto expression : expressions) {
         (void)require_expression(expression);
     }
@@ -1832,24 +1728,24 @@ db_query& db_query::from(std::string_view table_value, std::string_view alias) {
         detail::require_unqualified_name(alias);
     }
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.name_ = table_value;
     source_value.alias_ = alias;
     s.source_ = std::move(source_value);
     return *this;
 }
 db_query& db_query::from(const db_query& query, std::string_view alias, const db_source_options& options) {
-    return from(query.clone(resource()), alias, options);
+    return from(query.clone(), alias, options);
 }
 db_query& db_query::from(db_query&& query, std::string_view alias, const db_source_options& options) {
     detail::require_unqualified_name(alias);
     query.require_select_query();
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.kind_ = db_source_kind::query;
     source_value.alias_ = alias;
     source_value.query_ = s.queries_.size();
-    detail::set_source_options(source_value, options, s.resource_);
+    detail::set_source_options(source_value, options);
     detail::reserve_append(s.queries_, 1);
     s.queries_.push_back(adopt(std::move(query)));
     s.source_.emplace(std::move(source_value));
@@ -1859,11 +1755,11 @@ db_query& db_query::from_function(db_expression function, std::string_view alias
     detail::require_unqualified_name(alias);
     const auto index = require_expression(function);
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.kind_ = db_source_kind::function;
     source_value.expression_ = index;
     source_value.alias_ = alias;
-    detail::set_source_options(source_value, options, s.resource_);
+    detail::set_source_options(source_value, options);
     s.source_ = std::move(source_value);
     return *this;
 }
@@ -1877,10 +1773,10 @@ db_query& db_query::join(db_join_type type, std::string_view table_value, db_exp
         detail::require_unqualified_name(alias);
     }
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.name_ = table_value;
     source_value.alias_ = alias;
-    detail::db_stored_join join(type, std::move(source_value), on.empty() ? no_db_node : require_expression(on), s.resource_);
+    detail::db_stored_join join(type, std::move(source_value), on.empty() ? no_db_node : require_expression(on));
     join.using_columns_.reserve(using_columns.size());
     for (const auto name : using_columns) {
         detail::require_name(name);
@@ -1890,19 +1786,19 @@ db_query& db_query::join(db_join_type type, std::string_view table_value, db_exp
     return *this;
 }
 db_query& db_query::join(db_join_type type, const db_query& query, db_expression on, std::string_view alias, const db_source_options& options) {
-    return join(type, query.clone(resource()), on, alias, options);
+    return join(type, query.clone(), on, alias, options);
 }
 db_query& db_query::join(db_join_type type, db_query&& query, db_expression on, std::string_view alias, const db_source_options& options) {
     detail::require_unqualified_name(alias);
     const auto predicate = on.empty() ? no_db_node : require_expression(on);
     query.require_select_query();
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.kind_ = db_source_kind::query;
     source_value.query_ = s.queries_.size();
     source_value.alias_ = alias;
-    detail::set_source_options(source_value, options, s.resource_);
-    detail::db_stored_join join_value(type, std::move(source_value), predicate, s.resource_);
+    detail::set_source_options(source_value, options);
+    detail::db_stored_join join_value(type, std::move(source_value), predicate);
     detail::reserve_append(s.queries_, 1);
     detail::reserve_append(s.joins_, 1);
     s.queries_.push_back(adopt(std::move(query)));
@@ -1914,12 +1810,12 @@ db_query& db_query::join_function(db_join_type type, db_expression function, db_
     const auto function_id = require_expression(function);
     const auto predicate = on.empty() ? no_db_node : require_expression(on);
     auto& s = storage();
-    detail::db_query_source source_value(s.resource_);
+    detail::db_query_source source_value;
     source_value.kind_ = db_source_kind::function;
     source_value.expression_ = function_id;
     source_value.alias_ = alias;
-    detail::set_source_options(source_value, options, s.resource_);
-    s.joins_.emplace_back(type, std::move(source_value), predicate, s.resource_);
+    detail::set_source_options(source_value, options);
+    s.joins_.emplace_back(type, std::move(source_value), predicate);
     return *this;
 }
 db_query& db_query::where(db_expression predicate) {
@@ -1977,8 +1873,16 @@ db_query& db_query::limit(std::optional<query_row_count> count) {
     storage().limit_ = count ? std::optional<std::uint64_t>(count->value()) : std::nullopt;
     return *this;
 }
+db_query& db_query::set_limit_value(std::uint64_t count) {
+    storage().limit_ = count;
+    return *this;
+}
 db_query& db_query::offset(std::optional<query_row_count> count) {
     storage().offset_ = count ? std::optional<std::uint64_t>(count->value()) : std::nullopt;
+    return *this;
+}
+db_query& db_query::set_offset_value(std::uint64_t count) {
+    storage().offset_ = count;
     return *this;
 }
 db_query& db_query::distinct(bool enabled) {
@@ -2017,9 +1921,9 @@ db_query& db_query::insert_into(std::string_view table_value, std::span<const st
     if (s.kind_ == db_query_kind::insert && !s.rows_.empty() && !std::ranges::equal(s.columns_, columns)) {
         throw std::invalid_argument("INSERT rows already use a different column list");
     }
-    std::pmr::string target(table_value, s.resource_);
-    std::pmr::string target_alias(alias, s.resource_);
-    std::pmr::vector<std::pmr::string> staged_columns(s.resource_);
+    std::string target(table_value);
+    std::string target_alias(alias);
+    std::vector<std::string> staged_columns;
     staged_columns.reserve(columns.size());
     for (const auto column : columns) {
         staged_columns.emplace_back(column);
@@ -2035,7 +1939,7 @@ db_query& db_query::values(std::span<const db_expression> row) {
     if (s.kind_ != db_query_kind::select && s.kind_ != db_query_kind::values && s.kind_ != db_query_kind::insert) {
         throw std::invalid_argument("VALUES requires an INSERT or a values query");
     }
-    std::pmr::vector<std::size_t> values(s.resource_);
+    std::vector<std::size_t> values;
     values.reserve(row.size());
     for (const auto expression : row) {
         values.push_back(require_expression(expression));
@@ -2068,8 +1972,8 @@ db_query& db_query::insert_rows(std::span<const std::string_view> columns,
     for (const auto expression : values) {
         (void)require_expression(expression);
     }
-    detail::node_index_map positions(columns.size(), s.resource_);
-    std::pmr::vector<std::pmr::string> new_columns(s.resource_);
+    detail::node_index_map positions(columns.size());
+    std::vector<std::string> new_columns;
     for (std::size_t index = 0; index < columns.size(); ++index) {
         detail::require_name(columns[index]);
         for (std::size_t earlier = 0; earlier < index; ++earlier) {
@@ -2094,7 +1998,7 @@ db_query& db_query::insert_rows(std::span<const std::string_view> columns,
     }
     const bool needs_default = width > columns.size() || (!s.rows_.empty() && width > s.columns_.size());
     const auto default_node = needs_default ? default_value().node_ : no_db_node;
-    std::pmr::vector<std::pmr::vector<std::size_t>> rows(s.resource_);
+    std::vector<std::vector<std::size_t>> rows;
     rows.reserve(row_count);
     for (std::size_t row_index = 0; row_index < row_count; ++row_index) {
         auto& row = rows.emplace_back();
@@ -2121,7 +2025,7 @@ db_query& db_query::insert_rows(std::span<const std::string_view> columns,
     return *this;
 }
 db_query& db_query::insert_from(const db_query& query) {
-    return insert_from(query.clone(resource()));
+    return insert_from(query.clone());
 }
 db_query& db_query::insert_from(db_query&& query) {
     if (storage().kind_ != db_query_kind::insert || !storage().rows_.empty()) {
@@ -2140,7 +2044,7 @@ db_query& db_query::on_conflict(const db_conflict_options& conflict) {
     if (s.kind_ != db_query_kind::insert) {
         throw std::invalid_argument("ON CONFLICT requires an INSERT");
     }
-    detail::db_stored_conflict owned(s.resource_);
+    detail::db_stored_conflict owned;
     owned.columns_.reserve(conflict.columns_.size());
     for (const auto& name : conflict.columns_) {
         detail::require_name(name);
@@ -2164,7 +2068,7 @@ db_query& db_query::on_conflict(const db_conflict_options& conflict) {
         if (std::ranges::any_of(owned.assignments_, [&](const auto& existing) { return std::string_view(existing.column_) == assignment.column_; })) {
             throw std::invalid_argument("duplicate conflict update column");
         }
-        owned.assignments_.emplace_back(assignment.column_, require_expression(assignment.expression(*this)), s.resource_);
+        owned.assignments_.emplace_back(assignment.column_, require_expression(assignment.expression(*this)));
     }
     s.conflict_ = std::move(owned);
     return *this;
@@ -2194,7 +2098,7 @@ db_query& db_query::set(std::string_view column, db_expression value) {
             return *this;
         }
     }
-    s.assignments_.emplace_back(column, expression, s.resource_);
+    s.assignments_.emplace_back(column, expression);
     return *this;
 }
 db_query& db_query::set(const db_assignment& assignment) {
@@ -2208,9 +2112,9 @@ db_query& db_query::set(std::span<const db_assignment> assignments) {
     if (s.kind_ != db_query_kind::update) {
         throw std::invalid_argument("SET requires an UPDATE");
     }
-    std::pmr::vector<detail::db_stored_assignment> prepared(s.resource_);
+    std::vector<detail::db_stored_assignment> prepared;
     prepared.reserve(assignments.size());
-    detail::node_index_map positions(assignments.size(), s.resource_);
+    detail::node_index_map positions(assignments.size());
     const auto previous_count = s.assignments_.size();
     std::size_t added = 0;
     for (const auto& assignment : assignments) {
@@ -2231,7 +2135,7 @@ db_query& db_query::set(std::span<const db_assignment> assignments) {
             }
             positions[prepared.size()] = previous_count + added++;
         }
-        prepared.emplace_back(column, expression, s.resource_);
+        prepared.emplace_back(column, expression);
     }
     s.assignments_.reserve(previous_count + added);
     for (std::size_t index = 0; index < prepared.size(); ++index) {
@@ -2286,7 +2190,7 @@ db_query& db_query::lock(const db_lock_options& options) {
     for (const auto& table : options.tables_) {
         detail::require_unqualified_name(table);
     }
-    detail::db_stored_lock lock_value(options, resource());
+    detail::db_stored_lock lock_value(options);
     storage().lock_.emplace(std::move(lock_value));
     return *this;
 }
@@ -2295,7 +2199,7 @@ db_query& db_query::clear_lock() {
     return *this;
 }
 db_query& db_query::with(std::string_view name, const db_query& query, const db_cte_options& options) {
-    return with(name, query.clone(resource()), options);
+    return with(name, query.clone(), options);
 }
 db_query& db_query::with(std::string_view name, db_query&& query, const db_cte_options& options) {
     auto& s = storage();
@@ -2306,15 +2210,15 @@ db_query& db_query::with(std::string_view name, db_query&& query, const db_cte_o
     return *this;
 }
 void db_query::with_columns(std::string_view name, const db_query& query, db_materialization materialization,
-    std::span<const std::pmr::string> columns) {
+    std::span<const std::string> columns) {
     auto& s = storage();
     detail::validate_cte(s, name, columns);
     auto cte = detail::prepare_cte(s, name, false, materialization, columns);
-    s.queries_.push_back(query.clone(resource()));
+    s.queries_.push_back(query.clone());
     s.ctes_.push_back(std::move(cte));
 }
 db_query& db_query::combine(db_set_operation operation, const db_query& query) {
-    return combine(operation, query.clone(resource()));
+    return combine(operation, query.clone());
 }
 db_query& db_query::combine(db_set_operation operation, db_query&& query) {
     auto& s = storage();
@@ -2331,13 +2235,8 @@ db_query& db_query::combine(db_set_operation operation, db_query&& query) {
 }
 db_statement& db_statement::operator=(db_statement&& other) {
     if (this != &other) {
-        auto* target = resource();
-        auto sql_value = detail::rebind_owned_storage(other.sql_, target);
-        auto params_value = other.params_.get_allocator().resource() == target
-                                ? std::move(other.params_)
-                                : detail::clone_db_values(other.params_, target);
-        sql_.swap(sql_value);
-        params_.swap(params_value);
+        sql_ = std::move(other.sql_);
+        params_ = std::move(other.params_);
         returns_rows_ = std::exchange(other.returns_rows_, false);
         other.sql_.clear();
         other.params_.clear();

@@ -24,12 +24,12 @@
 
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 
 #include "client/client_host_resolver.h"
 #include "client/client_tls.h"
-#include "util/tcp_socket_policies.h"
+#include "server/tcp_socket_policies.h"
 
 namespace ruvia::detail {
 
@@ -359,9 +359,9 @@ struct client_tcp_endpoint final {
 // for a DNS host on a worker without a blocking pool.
 class client_tcp_transport final {
 public:
-    client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_handle& worker_value,
+    client_tcp_transport(asio::io_context& io, asio::ssl::context& tls, const worker_ref& worker_value,
         client_tcp_endpoint endpoint, client_wire_counters& counters);
-    client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_handle&&, client_tcp_endpoint,
+    client_tcp_transport(asio::io_context&, asio::ssl::context&, worker_ref&&, client_tcp_endpoint,
         client_wire_counters&) = delete;
     ~client_tcp_transport();
     client_tcp_transport(const client_tcp_transport&) = delete;
@@ -465,7 +465,7 @@ private:
         const std::error_code& error, std::size_t bytes, client_transport_status failure) noexcept;
     [[nodiscard]] client_transport_result aborted() const noexcept;
 
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     asio::ssl::context& tls_;
     client_tcp_endpoint endpoint_;
     std::optional<asio::ip::tcp::endpoint> literal_endpoint_{};

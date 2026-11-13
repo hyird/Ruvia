@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -22,7 +21,6 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -64,7 +62,7 @@ class connection_close_routes final {
 
     // Answers without reading the request content, which closes the connection.
     ruvia::task<ruvia::http_response> large(ruvia::context& c) {
-        co_return c.text(std::pmr::string(large_response_bytes, 'L', ruvia::process_resource()));
+        co_return c.text(std::string(large_response_bytes, 'L'));
     }
 
     ruvia::task<void> ws_close(ruvia::context& c) {
@@ -101,7 +99,7 @@ void final_response_survives_unread_request_content(
     socket.open(endpoint.protocol());
     socket.set_option(asio::socket_base::receive_buffer_size(64 * 1024));
     socket.connect(endpoint);
-    std::pmr::string request("POST /close/large HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n", ruvia::process_resource());
+    std::string request("POST /close/large HTTP/1.1\r\nHost: localhost\r\nContent-Length: 1048576\r\n\r\n");
     request.append(std::size_t{64} * 1024, 'u');
     asio::write(socket, asio::buffer(request));
     std::this_thread::sleep_for(200ms);
@@ -109,8 +107,8 @@ void final_response_survives_unread_request_content(
     const auto response = read_to_end(socket, end);
     const auto head_end = response.find("\r\n\r\n");
     EXPECT_TRUE(response.starts_with("HTTP/1.1 200 "));
-    EXPECT_TRUE(head_end != std::pmr::string::npos);
-    if (head_end != std::pmr::string::npos) {
+    EXPECT_TRUE(head_end != std::string::npos);
+    if (head_end != std::string::npos) {
         EXPECT_EQ(response.size() - head_end - 4, large_response_bytes);
     }
     EXPECT_TRUE(end == asio::error::eof);
@@ -144,11 +142,11 @@ void idle_http2_connection_sends_goaway_then_close_notify(
     static constexpr unsigned char alpn[] = {2, 'h', '2'};
     EXPECT_EQ(SSL_CTX_set_alpn_protos(client.native_handle(), alpn, sizeof(alpn)), 0);
     const auto stream = connect_tls(io, client, endpoint);
-    std::pmr::string opening(ruvia::http2_client_preface, ruvia::process_resource());
+    std::string opening(ruvia::http2_client_preface);
     ruvia::test::append_frame(opening, ruvia::http2_frame_type::settings, 0, 0, {});
     asio::write(*stream, asio::buffer(opening));
 
-    std::pmr::string received{ruvia::process_resource()};
+    std::string received{};
     std::size_t parsed = 0;
     bool goaway = false;
     std::array<char, 16 * 1024> buffer;
@@ -169,7 +167,7 @@ void idle_http2_connection_sends_goaway_then_close_notify(
                 constexpr std::array<char, 9> settings_ack{0, 0, 0, 4, 1, 0, 0, 0, 0};
                 asio::write(*stream, asio::buffer(settings_ack), ignored);
             } else if (type == 6 && (flags & 1) == 0 && length == 8) {
-                std::pmr::string ack(received, parsed, 9 + length, ruvia::process_resource());
+                std::string ack(received, parsed, 9 + length);
                 ack[4] = 1;
                 asio::write(*stream, asio::buffer(ack), ignored);
             } else if (type == 7) {
@@ -208,10 +206,10 @@ void wss_clean_close_handshake_sends_close_notify(
         "Sec-WebSocket-Version: 13\r\n\r\n";
     asio::write(*stream, asio::buffer(upgrade));
 
-    std::pmr::string received{ruvia::process_resource()};
+    std::string received{};
     std::array<char, 1024> buffer{};
     std::error_code error;
-    while (received.find("\x88") == std::pmr::string::npos && !error) {
+    while (received.find("\x88") == std::string::npos && !error) {
         const auto count = stream->read_some(asio::buffer(buffer), error);
         received.append(buffer.data(), count);
     }
@@ -244,10 +242,10 @@ void wss_truncated_peer_eof_omits_close_notify(
         "Sec-WebSocket-Version: 13\r\n\r\n";
     asio::write(*stream, asio::buffer(upgrade));
 
-    std::pmr::string head{ruvia::process_resource()};
+    std::string head{};
     std::array<char, 1024> buffer{};
     std::error_code error;
-    while (head.find("\r\n\r\n") == std::pmr::string::npos && !error) {
+    while (head.find("\r\n\r\n") == std::string::npos && !error) {
         const auto count = stream->read_some(asio::buffer(buffer), error);
         head.append(buffer.data(), count);
     }
@@ -258,7 +256,7 @@ void wss_truncated_peer_eof_omits_close_notify(
     stream->next_layer().shutdown(asio::ip::tcp::socket::shutdown_send, error);
     EXPECT_TRUE(!error);
 
-    std::pmr::string rest{ruvia::process_resource()};
+    std::string rest{};
     while (!error) {
         const auto count = stream->read_some(asio::buffer(buffer), error);
         rest.append(buffer.data(), count);

@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -46,12 +45,12 @@ inline constexpr std::size_t http_max_signed_decimal_size = 20;
     return {output.data(), static_cast<std::size_t>(end - output.data())};
 }
 
-inline void http_append_unsigned(std::pmr::string& output, std::uint64_t value) {
+inline void http_append_unsigned(std::string& output, std::uint64_t value) {
     std::array<char, http_max_unsigned_decimal_size> digits;
     output.append(http_format_unsigned(digits, value));
 }
 
-inline void http_append_signed(std::pmr::string& output, std::int64_t value) {
+inline void http_append_signed(std::string& output, std::int64_t value) {
     std::array<char, http_max_signed_decimal_size> digits;
     output.append(http_format_signed(digits, value));
 }
@@ -61,7 +60,7 @@ inline void http_append_signed(std::pmr::string& output, std::int64_t value) {
 // http_append_signed() / http_append_unsigned(), which cannot fail.
 template <typename number_type>
 void http_append_formatted_number(
-    std::pmr::string& output, number_type value, [[maybe_unused]] const char* error_message) {
+    std::string& output, number_type value, [[maybe_unused]] const char* error_message) {
     if constexpr (std::is_integral_v<number_type> && std::is_signed_v<number_type>) {
         http_append_signed(output, value);
     } else if constexpr (std::is_integral_v<number_type>) {
@@ -79,7 +78,7 @@ void http_append_formatted_number(
 // Floating-point variant that rejects NaN and infinities with
 // std::invalid_argument before touching `output`.
 template <typename number_type>
-void http_append_formatted_finite_number(std::pmr::string& output, number_type value,
+void http_append_formatted_finite_number(std::string& output, number_type value,
     const char* finite_error_message, const char* format_error_message) {
     if (!std::isfinite(value)) {
         throw std::invalid_argument(finite_error_message);

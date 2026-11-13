@@ -39,23 +39,23 @@ struct request_binding_node final {
     request_binding_kind kind_;
 };
 
-// The RAII handle a binder holds for as long as the value must stay visible.
+// The RAII guard a binder holds for as long as the value must stay visible.
 // Neither copyable nor movable: the node it owns is linked into an intrusive
 // stack by address, so it must not be relocated, and its scope IS the binding's
 // lifetime. Held in the binding coroutine's frame across co_await next().
 template <typename t_type>
-class request_binding_handle final {
+class request_binding_guard final {
 public:
-    request_binding_handle(const request_binding_handle&) = delete;
-    request_binding_handle& operator=(const request_binding_handle&) = delete;
-    request_binding_handle(request_binding_handle&&) = delete;
-    request_binding_handle& operator=(request_binding_handle&&) = delete;
-    ~request_binding_handle() noexcept;
+    request_binding_guard(const request_binding_guard&) = delete;
+    request_binding_guard& operator=(const request_binding_guard&) = delete;
+    request_binding_guard(request_binding_guard&&) = delete;
+    request_binding_guard& operator=(request_binding_guard&&) = delete;
+    ~request_binding_guard() noexcept;
 
 private:
     friend class request_bindings;
 
-    request_binding_handle(request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept;
+    request_binding_guard(request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept;
 
     request_bindings* bindings_;
     request_binding_node node_;
@@ -100,25 +100,24 @@ public:
     }
 
     template <typename t_type>
-    [[nodiscard]] request_binding_handle<t_type> bind_validated(const t_type& value) {
-        return request_binding_handle<t_type>(*this, value, request_binding_kind::validated_model);
+    [[nodiscard]] request_binding_guard<t_type> bind_validated(const t_type& value) {
+        return request_binding_guard<t_type>(*this, value, request_binding_kind::validated_model);
     }
     template <typename t_type>
         requires(!std::is_lvalue_reference_v<t_type>)
-    request_binding_handle<std::remove_cvref_t<t_type>> bind_validated(t_type&&) = delete;
+    request_binding_guard<std::remove_cvref_t<t_type>> bind_validated(t_type&&) = delete;
 
     template <typename t_type>
-    [[nodiscard]] request_binding_handle<t_type> bind_state(const t_type& value) {
-        return request_binding_handle<t_type>(*this, value, request_binding_kind::request_state);
+    [[nodiscard]] request_binding_guard<t_type> bind_state(const t_type& value) {
+        return request_binding_guard<t_type>(*this, value, request_binding_kind::request_state);
     }
     template <typename t_type>
         requires(!std::is_lvalue_reference_v<t_type>)
-    request_binding_handle<std::remove_cvref_t<t_type>> bind_state(t_type&&) = delete;
+    request_binding_guard<std::remove_cvref_t<t_type>> bind_state(t_type&&) = delete;
 
 private:
     template <typename t_type>
-    friend class request_binding_handle;
-
+    friend class request_binding_guard;
     void push(request_binding_node& node_value) noexcept {
         node_value.previous_ = head_;
         head_ = &node_value;
@@ -156,7 +155,7 @@ private:
 };
 
 template <typename t_type>
-request_binding_handle<t_type>::request_binding_handle(
+request_binding_guard<t_type>::request_binding_guard(
     request_bindings& bindings, const t_type& value, request_binding_kind kind) noexcept
     : bindings_(&bindings),
       node_{type_key<t_type>(), &value, nullptr, kind} {
@@ -164,8 +163,7 @@ request_binding_handle<t_type>::request_binding_handle(
 }
 
 template <typename t_type>
-request_binding_handle<t_type>::~request_binding_handle() noexcept {
+request_binding_guard<t_type>::~request_binding_guard() noexcept {
     bindings_->pop(node_);
 }
-
 }  // namespace ruvia::detail

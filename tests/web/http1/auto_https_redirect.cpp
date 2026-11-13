@@ -5,7 +5,6 @@
 #include <chrono>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -18,7 +17,6 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/error.h"
@@ -79,25 +77,25 @@ TEST(Ruvia, auto_https_redirect_points_cleartext_requests_at_the_https_service) 
     const bool ready = started.try_acquire_for(10s);
     EXPECT_TRUE(ready);
     if (ready) {
-        const auto https_port = std::pmr::string(std::to_string(https_endpoint.port()), ruvia::process_resource());
+        const auto https_port = std::string(std::to_string(https_endpoint.port()));
 
         const auto redirected = exchange(io, http_endpoint,
             "GET /docs/page?lang=en HTTP/1.1\r\nHost: example.test:8080\r\n\r\n");
         EXPECT_TRUE(redirected.starts_with("HTTP/1.1 308 "));
-        EXPECT_TRUE(redirected.find(std::pmr::string("\r\nLocation: https://example.test:", ruvia::process_resource()) + https_port + "/docs/page?lang=en\r\n") !=
-                    std::pmr::string::npos);
+        EXPECT_TRUE(redirected.find(std::string("\r\nLocation: https://example.test:") + https_port + "/docs/page?lang=en\r\n") !=
+                    std::string::npos);
 
         // RFC 9112 §3.2.2: an absolute-form target names the host, so an
         // HTTP/1.0 request needs no Host field to be redirected.
         const auto absolute = exchange(io, http_endpoint, "GET http://example.com/x?y HTTP/1.0\r\n\r\n");
         EXPECT_TRUE(absolute.starts_with("HTTP/1.1 308 "));
-        EXPECT_TRUE(absolute.find(std::pmr::string("\r\nLocation: https://example.com:", ruvia::process_resource()) + https_port + "/x?y\r\n") != std::pmr::string::npos);
+        EXPECT_TRUE(absolute.find(std::string("\r\nLocation: https://example.com:") + https_port + "/x?y\r\n") != std::string::npos);
 
         error_handler_calls = 0;
         const auto refused = exchange(io, http_endpoint,
             "GET /docs/page HTTP/1.1\r\nHost: example.test\r\nAccept-Encoding: identity;q=0, *;q=0\r\n\r\n");
         EXPECT_TRUE(refused.starts_with("HTTP/1.1 406 "));
-        EXPECT_TRUE(refused.find("Location:") == std::pmr::string::npos);
+        EXPECT_TRUE(refused.find("Location:") == std::string::npos);
         EXPECT_TRUE(refused.ends_with("rejected"));
         EXPECT_EQ(error_handler_calls.load(), 1);
     }

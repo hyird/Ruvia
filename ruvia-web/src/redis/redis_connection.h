@@ -4,7 +4,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -13,10 +12,9 @@
 #include <asio/io_context.hpp>
 #include <asio/ssl/context.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/redis/redis_types.h"
 
 #include "client/client_tcp_transport.h"
@@ -55,9 +53,9 @@ enum class redis_request_content : bool { ordinary,
 // an aborted result without an owner reason is an expired deadline.
 class redis_connection final {
 public:
-    redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_handle& worker_value,
+    redis_connection(asio::io_context& io_context, asio::ssl::context& tls_context, const worker_ref& worker_value,
         const redis_config_storage& config, client_wire_counters& counters);
-    redis_connection(asio::io_context&, asio::ssl::context&, worker_handle&&, const redis_config_storage&,
+    redis_connection(asio::io_context&, asio::ssl::context&, worker_ref&&, const redis_config_storage&,
         client_wire_counters&) = delete;
     ~redis_connection();
 
@@ -75,7 +73,7 @@ public:
     task<void> connect(const operation_deadline* operation_timeout_value,
         std::optional<timeout_duration> command_timeout);
     // Serialized request storage: append RESP commands, then write_request().
-    [[nodiscard]] std::pmr::string& write_buffer() noexcept {
+    [[nodiscard]] std::string& write_buffer() noexcept {
         return write_buffer_;
     }
     // Sends and then releases the serialized request, wiping it first when it
@@ -87,7 +85,7 @@ public:
     // non-null `input_time` receives the time of every socket read that
     // delivered bytes, so a subscription's idle clock restarts on partial
     // replies too.
-    task<redis_value> read_reply(const operation_deadline& timeout, std::pmr::memory_resource* resource,
+    task<redis_value> read_reply(const operation_deadline& timeout,
         std::chrono::steady_clock::time_point* input_time = nullptr);
 
     void close() noexcept;
@@ -107,11 +105,11 @@ private:
 
     const redis_config_storage& config_;
     client_tcp_transport transport_;
-    std::pmr::string write_buffer_;
+    std::string write_buffer_;
     std::array<char, redis_read_buffer_bytes> read_buffer_;
     // Created on first connect; the reader's object functions address the
     // builder, so it outlives every reader.
-    std::unique_ptr<redis_reply_builder, pmr_object_deleter<redis_reply_builder>> reply_builder_;
+    std::unique_ptr<redis_reply_builder> reply_builder_;
     std::unique_ptr<redisReader, redis_reader_deleter> reader_;
     std::size_t reply_bytes_{0};
     bool connected_{false};

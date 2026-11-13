@@ -3,7 +3,6 @@
 #include <chrono>
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 
@@ -11,7 +10,7 @@
 
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http_limits.h"
 #include "ruvia/web/detail/integration/worker_state.h"
@@ -19,10 +18,14 @@
 #include "client/http_client_registry.h"
 #include "client/http_client_worker_limits.h"
 #include "context/context_services.h"
+#ifdef RUVIA_ENABLE_DATABASE
 #include "db/db_registry.h"
+#endif
 #include "integration/worker_client_registry_view.h"
 #include "ratelimit/rate_limiter.h"
+#ifdef RUVIA_ENABLE_REDIS
 #include "redis/redis_registry.h"
+#endif
 namespace ruvia {
 class env;
 }  // namespace ruvia
@@ -33,8 +36,12 @@ class context_services;
 struct connection_failure_sink;
 
 struct worker_capability_definitions final {
+#ifdef RUVIA_ENABLE_DATABASE
     std::span<const db_definition> databases_{};
+#endif
+#ifdef RUVIA_ENABLE_REDIS
     std::span<const redis_definition_type> redis_{};
+#endif
     std::span<const worker_state_definition> worker_states_{};
     std::span<const http_client_definition_type> http_clients_{};
 };
@@ -61,10 +68,10 @@ struct worker_capability_options final {
 // the server worker and test_app. Both run on the owning worker.
 class worker_capabilities final {
 public:
-    worker_capabilities(asio::io_context& io_context, const worker_handle& worker_value,
+    worker_capabilities(asio::io_context& io_context, const worker_ref& worker_value,
         worker_capability_definitions definitions,
         worker_capability_options options);
-    worker_capabilities(asio::io_context&, worker_handle&&,
+    worker_capabilities(asio::io_context&, worker_ref&&,
         worker_capability_definitions, worker_capability_options) = delete;
 
     worker_capabilities(const worker_capabilities&) = delete;
@@ -90,9 +97,13 @@ public:
     }
 
 private:
-    const worker_handle& worker_;
+    const worker_ref& worker_;
+#ifdef RUVIA_ENABLE_REDIS
     redis_registry redis_;
+#endif
+#ifdef RUVIA_ENABLE_DATABASE
     db_registry databases_;
+#endif
     http_client_worker_services http_client_services_;
     http_client_registry http_clients_;
     worker_state_registry worker_states_;

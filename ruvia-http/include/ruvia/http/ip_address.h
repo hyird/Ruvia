@@ -4,7 +4,6 @@
 #include <compare>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -81,8 +80,8 @@ public:
 
     // RFC 5952 text: dotted decimal for IPv4; for IPv6 lowercase hex with the
     // longest zero run compressed, IPv4-mapped as "::ffff:a.b.c.d", and a zone
-    // as "%<scope>". nullptr selects the default memory resource.
-    [[nodiscard]] std::pmr::string to_string(std::pmr::memory_resource* resource = nullptr) const;
+    // as "%<scope>".
+    [[nodiscard]] std::string to_string() const;
 
     friend constexpr bool operator==(const ip_address&, const ip_address&) noexcept = default;
     friend constexpr auto operator<=>(const ip_address&, const ip_address&) noexcept = default;

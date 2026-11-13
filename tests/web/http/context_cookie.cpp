@@ -1,16 +1,12 @@
 #include <gtest/gtest.h>
 
 #include <chrono>
-#include <memory_resource>
 #include <new>
 #include <optional>
 #include <string>
 #include <string_view>
 
-#include "ruvia/core/memory/pmr_object.h"
-
 #include "context_request_fixture.h"
-#include "memory_resource_fixture.h"
 
 // Setting response cookies, including prefixes and signatures.
 
@@ -60,15 +56,12 @@ TEST(Ruvia, context_set_cookie_serializes_all_attributes) {
 }
 
 TEST(Ruvia, context_signed_cookie_handles_large_values_in_request_storage) {
-    const std::pmr::string value(2048, 'v', ruvia::process_resource());
-    std::pmr::string cookie{ruvia::process_resource()};
+    const std::string value(2048, 'v');
+    std::string cookie{};
     const auto request = ruvia::test_request::get("/");
     (void)ruvia::test::with_context(request, [&](ruvia::context& context) -> ruvia::task<void> {
-        ruvia::test::rejecting_memory_resource unrelated;
-        unrelated.reject_allocations();
         bool signed_value = false;
         try {
-            const ruvia::test::default_resource_guard guard(unrelated);
             context.draft().set_signed_cookie({.name_ = "session", .value_ = value, .secret_ = "secret"});
             signed_value = true;
         } catch (const std::bad_alloc&) {
@@ -87,11 +80,8 @@ TEST(Ruvia, context_signed_cookie_handles_large_values_in_request_storage) {
     }
     const auto read = ruvia::test_request::get("/").header("Cookie", cookie);
     (void)ruvia::test::with_context(read, [&](ruvia::context& context) -> ruvia::task<void> {
-        ruvia::test::rejecting_memory_resource unrelated;
-        unrelated.reject_allocations();
         std::optional<std::string_view> verified;
         try {
-            const ruvia::test::default_resource_guard guard(unrelated);
             verified = context.req().signed_cookie({.name_ = "session", .secret_ = "secret"});
         } catch (const std::bad_alloc&) {
         }
@@ -137,8 +127,8 @@ TEST(Ruvia, context_set_cookie_preserves_same_name_different_path) {
 }
 
 TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
-    std::pmr::string set_cookie{ruvia::process_resource()};
-    std::pmr::string bare{ruvia::process_resource()};
+    std::string set_cookie{};
+    std::string bare{};
     auto write_request = ruvia::test_request::get("/");
     (void)ruvia::test::with_context(write_request, [&](ruvia::context& write_context) -> ruvia::task<void> {
         const ruvia::cookie_options options{
@@ -157,7 +147,7 @@ TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
     EXPECT_TRUE(pair.starts_with("__Host-session="));
 
     // Present the cookie exactly as a browser sends it back.
-    const std::pmr::string cookie_field(pair, ruvia::process_resource());
+    const std::string cookie_field(pair);
     auto read_request = ruvia::test_request::get("/").header("Cookie", cookie_field);
 
     (void)ruvia::test::with_context(read_request, [&](ruvia::context& read_context) -> ruvia::task<void> {
@@ -178,7 +168,7 @@ TEST(Ruvia, context_signed_cookie_with_prefix_verifies_round_trip) {
         co_return;
     });
     const std::string_view bare_line(bare);
-    const std::pmr::string bare_field(bare_line.substr(0, bare_line.find(';')), ruvia::process_resource());
+    const std::string bare_field(bare_line.substr(0, bare_line.find(';')));
     auto bare_request = ruvia::test_request::get("/").header("Cookie", bare_field);
 
     (void)ruvia::test::with_context(bare_request, [&](ruvia::context& bare_context) -> ruvia::task<void> {

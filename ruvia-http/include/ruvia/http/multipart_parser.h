@@ -4,7 +4,6 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -14,7 +13,7 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http_io_buffer.h"
 #include "ruvia/http/http_protocol_error.h"
 
@@ -27,19 +26,19 @@ struct multipart_stream_part_access;
 
 // Buffered multipart parsing borrows unmodified Content-Disposition names,
 // filenames, Content-Type values, and part bodies from the caller-owned
-// request body; unfolded header blocks and escaped names own PMR storage.
+// request body; unfolded header blocks and escaped names own string storage.
 class multipart_part final {
 public:
-    multipart_part(const multipart_part& other);
+    multipart_part(const multipart_part&) = default;
     multipart_part(multipart_part&&) noexcept = default;
-    multipart_part& operator=(const multipart_part& other);
-    multipart_part& operator=(multipart_part&& other);
+    multipart_part& operator=(const multipart_part&) = default;
+    multipart_part& operator=(multipart_part&&) noexcept = default;
 
     [[nodiscard]] std::string_view name() const& noexcept RUVIA_LIFETIMEBOUND {
         if (const auto* borrowed = std::get_if<std::string_view>(&name_)) {
             return *borrowed;
         }
-        return std::get<std::pmr::string>(name_);
+        return std::get<std::string>(name_);
     }
     [[nodiscard]] std::string_view name() const&& = delete;
 
@@ -47,7 +46,7 @@ public:
         if (const auto* borrowed = std::get_if<std::string_view>(&filename_)) {
             return *borrowed;
         }
-        return std::get<std::pmr::string>(filename_);
+        return std::get<std::string>(filename_);
     }
     [[nodiscard]] std::string_view filename() const&& = delete;
 
@@ -58,7 +57,7 @@ public:
         if (const auto* borrowed = std::get_if<std::string_view>(&content_type_)) {
             return *borrowed;
         }
-        return std::get<std::pmr::string>(content_type_);
+        return std::get<std::string>(content_type_);
     }
     std::string_view content_type() const&& = delete;
 
@@ -70,25 +69,17 @@ private:
     friend struct detail::multipart_part_access;
     friend class multipart_parser;
 
-    using text_storage_type = std::variant<std::string_view, std::pmr::string>;
+    using text_storage_type = std::variant<std::string_view, std::string>;
     using content_type_storage_type = text_storage_type;
 
     multipart_part(text_storage_type name, text_storage_type filename,
         content_type_storage_type content_type_value, std::string_view body,
-        bool filename_present, std::pmr::memory_resource* resource) noexcept
-        : resource_(resource),
-          name_(std::move(name)),
+        bool filename_present) noexcept
+        : name_(std::move(name)),
           filename_(std::move(filename)),
           content_type_(std::move(content_type_value)),
           body_(body),
           filename_present_(filename_present) {}
-
-    multipart_part(const multipart_part& other, std::pmr::memory_resource* resource);
-    [[nodiscard]] static text_storage_type copy_text(
-        const text_storage_type& text, std::pmr::memory_resource* resource);
-    void swap(multipart_part& other) noexcept;
-
-    std::pmr::memory_resource* resource_;
     text_storage_type name_;
     text_storage_type filename_;
     content_type_storage_type content_type_;
@@ -158,7 +149,6 @@ private:
 
 struct multipart_parse_options final {
     multipart_boundary boundary_;
-    std::pmr::memory_resource* resource_{nullptr};
     std::size_t max_parts_{1024};
     // Cumulative wire header bytes bound decoded names, filenames and metadata.
     std::size_t max_metadata_bytes_{1024 * 1024};
@@ -402,7 +392,7 @@ public:
     multipart_parser(multipart_parser&&) = delete;
     multipart_parser& operator=(multipart_parser&&) = delete;
 
-    // Copies input into parser-owned PMR storage, including chunks borrowed from
+    // Copies input into parser-owned buffer storage, including chunks borrowed from
     // the latest part body. Allocation failure leaves that body valid for retry.
     // finish_input() marks the enclosing HTTP body's end so a close delimiter
     // ending exactly at EOF can be distinguished from a line split across chunks.
@@ -418,7 +408,7 @@ public:
 private:
     struct complete_input_tag_type final {};
 
-    friend std::pmr::vector<multipart_part> parse_multipart_body(std::string_view, multipart_parse_options);
+    friend std::vector<multipart_part> parse_multipart_body(std::string_view, multipart_parse_options);
 
     multipart_parser(std::string_view complete_body, multipart_parse_options options, complete_input_tag_type);
 
@@ -447,13 +437,12 @@ private:
     [[nodiscard]] multipart_stream_part make_part(std::string_view body, bool part_end);
     [[nodiscard]] multipart_poll_result read_body_chunk();
 
-    std::pmr::memory_resource* resource_;
     multipart_boundary boundary_;
     std::variant<std::string_view, http_io_buffer> input_;
     multipart_part::text_storage_type current_name_;
     multipart_part::text_storage_type current_filename_;
     multipart_part::text_storage_type current_content_type_;
-    std::pmr::string current_headers_;
+    std::string current_headers_;
     state_type state_{progress_state_type::boundary};
     std::size_t pending_erase_bytes_{0};
     std::size_t remaining_parts_;
@@ -469,11 +458,11 @@ private:
 
 // Parses a complete multipart/form-data body without I/O. Returned part bodies
 // borrow `body`. Names, filenames, and Content-Type values from unfolded header
-// blocks own PMR storage; unmodified header blocks keep borrowing `body`.
-[[nodiscard]] std::pmr::vector<multipart_part> parse_multipart_body(
+// blocks own string storage; unmodified header blocks keep borrowing `body`.
+[[nodiscard]] std::vector<multipart_part> parse_multipart_body(
     std::string_view body, multipart_parse_options options);
 
 template <detail::http_temporary_owning_char_string body_type>
-std::pmr::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
+std::vector<multipart_part> parse_multipart_body(body_type&&, multipart_parse_options) = delete;
 
 }  // namespace ruvia

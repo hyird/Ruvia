@@ -21,13 +21,12 @@ namespace {
     }
 }
 
-[[nodiscard]] redis_owned_command encode_redis_pair_command(std::pmr::memory_resource* resource,
-    std::string_view command, std::optional<std::string_view> key,
+[[nodiscard]] redis_owned_command encode_redis_pair_command(std::string_view command, std::optional<std::string_view> key,
     std::span<const std::pair<std::string_view, std::string_view>> pairs, const char* empty_message) {
     if (pairs.empty()) {
         throw std::invalid_argument(empty_message);
     }
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit(command);
         if (key.has_value()) {
             emit(*key);
@@ -41,32 +40,31 @@ namespace {
 }  // namespace
 
 redis_owned_command make_owned_redis_command(
-    std::pmr::memory_resource* resource, std::span<const std::string_view> args) {
-    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+    std::span<const std::string_view> args) {
+    redis_owned_command command{std::string()};
     append_resp_command(command.wire_, args);
     return command;
 }
 
-redis_owned_command make_owned_redis_command(std::pmr::memory_resource* resource,
-    std::string_view first, std::span<const std::string_view> rest) {
-    redis_owned_command command{std::pmr::string(pmr_resource_or_default(resource))};
+redis_owned_command make_owned_redis_command(std::string_view first, std::span<const std::string_view> rest) {
+    redis_owned_command command{std::string()};
     append_resp_command(command.wire_, first, rest);
     return command;
 }
 
 redis_owned_command make_owned_redis_command(
-    std::pmr::memory_resource* resource, std::initializer_list<std::string_view> args) {
-    return make_owned_redis_command(resource, std::span<const std::string_view>(args.begin(), args.size()));
+    std::initializer_list<std::string_view> args) {
+    return make_owned_redis_command(std::span<const std::string_view>(args.begin(), args.size()));
 }
 
 redis_owned_command make_redis_integer_command(std::string_view command,
-    std::string_view key, std::int64_t value, std::pmr::memory_resource* resource) {
+    std::string_view key, std::int64_t value) {
     std::array<char, redis_int_scratch_size> value_scratch{};
-    return make_owned_redis_command(resource, {command, key, format_redis_int(value_scratch, value)});
+    return make_owned_redis_command({command, key, format_redis_int(value_scratch, value)});
 }
 
 redis_owned_command make_redis_range_command(std::string_view command,
-    std::string_view key, std::int64_t start, std::int64_t stop, std::pmr::memory_resource* resource,
+    std::string_view key, std::int64_t start, std::int64_t stop,
     bool with_scores) {
     std::array<char, redis_int_scratch_size> start_scratch{};
     std::array<char, redis_int_scratch_size> stop_scratch{};
@@ -77,14 +75,13 @@ redis_owned_command make_redis_range_command(std::string_view command,
         format_redis_int(stop_scratch, stop),
         "WITHSCORES",
     };
-    return make_owned_redis_command(
-        resource, std::span<const std::string_view>(args, with_scores ? 5U : 4U));
+    return make_owned_redis_command(std::span<const std::string_view>(args, with_scores ? 5U : 4U));
 }
 
 redis_owned_command make_redis_zadd_command(std::string_view key, double score,
-    std::string_view member, std::pmr::memory_resource* resource) {
+    std::string_view member) {
     std::array<char, redis_score_scratch_size> score_scratch{};
-    return make_owned_redis_command(resource, {"ZADD", key, format_redis_score(score_scratch, score), member});
+    return make_owned_redis_command({"ZADD", key, format_redis_score(score_scratch, score), member});
 }
 
 bool redis_set_returns_previous(redis_set_previous_value_policy policy) {
@@ -99,21 +96,20 @@ bool redis_set_returns_previous(redis_set_previous_value_policy policy) {
 }
 
 redis_owned_command redis_command_with_keys(std::string_view command,
-    std::span<const std::string_view> keys, std::pmr::memory_resource* resource) {
+    std::span<const std::string_view> keys) {
     if (keys.empty()) {
         throw std::invalid_argument("redis command requires at least one key");
     }
-    return make_owned_redis_command(resource, command, keys);
+    return make_owned_redis_command(command, keys);
 }
 
 redis_owned_command redis_mset_args(
-    std::span<const std::pair<std::string_view, std::string_view>> items,
-    std::pmr::memory_resource* resource) {
-    return encode_redis_pair_command(resource, "MSET", std::nullopt, items, "redis mset requires at least one item");
+    std::span<const std::pair<std::string_view, std::string_view>> items) {
+    return encode_redis_pair_command("MSET", std::nullopt, items, "redis mset requires at least one item");
 }
 
 redis_owned_command redis_set_args(std::string_view key, std::string_view value,
-    const redis_set_options& options, std::pmr::memory_resource* resource) {
+    const redis_set_options& options) {
     std::string_view condition_token;
     if (options.condition_) {
         switch (*options.condition_) {
@@ -134,7 +130,7 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
     const std::string_view duration_text =
         duration != nullptr ? format_redis_int(duration_scratch, static_cast<std::int64_t>(duration->count()))
                             : std::string_view();
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit("SET");
         emit(key);
         emit(value);
@@ -155,19 +151,16 @@ redis_owned_command redis_set_args(std::string_view key, std::string_view value,
 }
 
 redis_owned_command redis_hset_fields_args(std::string_view key,
-    std::span<const std::pair<std::string_view, std::string_view>> fields_value,
-    std::pmr::memory_resource* resource) {
-    return encode_redis_pair_command(
-        resource, "HSET", key, fields_value, "redis hset requires at least one field");
+    std::span<const std::pair<std::string_view, std::string_view>> fields_value) {
+    return encode_redis_pair_command("HSET", key, fields_value, "redis hset requires at least one field");
 }
 
 redis_owned_command redis_command_with_key_fields(std::string_view command,
-    std::string_view key, std::span<const std::string_view> fields_value,
-    std::pmr::memory_resource* resource) {
+    std::string_view key, std::span<const std::string_view> fields_value) {
     if (fields_value.empty()) {
         throw std::invalid_argument("redis command requires at least one field");
     }
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit(command);
         emit(key);
         for (const auto field : fields_value) {
@@ -177,11 +170,10 @@ redis_owned_command redis_command_with_key_fields(std::string_view command,
 }
 
 redis_owned_command redis_eval_args(std::string_view command, std::string_view script,
-    std::span<const std::string_view> keys, std::span<const std::string_view> argv,
-    std::pmr::memory_resource* resource) {
+    std::span<const std::string_view> keys, std::span<const std::string_view> argv) {
     std::array<char, http_max_unsigned_decimal_size> key_count_scratch{};
     const auto key_count = http_format_unsigned(key_count_scratch, keys.size());
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit(command);
         emit(script);
         emit(key_count);
@@ -195,8 +187,7 @@ redis_owned_command redis_eval_args(std::string_view command, std::string_view s
 }
 
 redis_owned_command redis_blocking_pop_args(std::string_view command,
-    std::span<const std::string_view> keys, redis_block_wait wait,
-    std::pmr::memory_resource* resource) {
+    std::span<const std::string_view> keys, redis_block_wait wait) {
     if (keys.empty()) {
         throw std::invalid_argument("redis blocking pop requires at least one key");
     }
@@ -218,7 +209,7 @@ redis_owned_command redis_blocking_pop_args(std::string_view command,
         }
         timeout_text = std::string_view(timeout_scratch.data(), len);
     }
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit(command);
         for (const auto key : keys) {
             emit(key);
@@ -229,7 +220,7 @@ redis_owned_command redis_blocking_pop_args(std::string_view command,
 
 redis_owned_command redis_x_read_group_args(std::string_view group,
     std::string_view consumer, std::span<const redis_stream_read_view> streams,
-    const redis_x_read_group_options& options, std::pmr::memory_resource* resource) {
+    const redis_x_read_group_options& options) {
     if (group.empty() || consumer.empty()) {
         throw std::invalid_argument("redis xreadgroup requires a group and consumer");
     }
@@ -254,7 +245,7 @@ redis_owned_command redis_x_read_group_args(std::string_view group,
             block_text = format_redis_int(block_scratch, static_cast<std::int64_t>(duration->count()));
         }
     }
-    return encode_redis_command(resource, [&](const auto& emit) {
+    return encode_redis_command([&](const auto& emit) {
         emit("XREADGROUP");
         emit("GROUP");
         emit(group);

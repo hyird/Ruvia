@@ -1,7 +1,7 @@
 #include <gtest/gtest.h>
 
 #include <array>
-#include <memory_resource>
+#include <string>
 
 #include "ruvia/http/http1_server_request_parser.h"
 
@@ -98,74 +98,74 @@ TEST(Ruvia, http1_request_body_plan_has_one_framing_truth) {
 }
 
 TEST(Ruvia, request_body_gzip_round_trip) {
-    const std::pmr::string plain = "The quick brown fox jumps over the lazy dog";
-    const std::pmr::string gz = gzip_compress(plain);
+    const std::string plain = "The quick brown fox jumps over the lazy dog";
+    const std::string gz = gzip_compress(plain);
     EXPECT_TRUE(!gz.empty());
     EXPECT_EQ(decoded(http_content_coding::gzip, gz, decoded_body_limit), plain);
 }
 
 TEST(Ruvia, request_body_gzip_bomb_rejected) {
-    const std::pmr::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny gzip
-    const std::pmr::string gz = gzip_compress(big);
+    const std::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny gzip
+    const std::string gz = gzip_compress(big);
     // A small cap must stop the expansion, not decode the whole megabyte.
     EXPECT_TRUE(decode_error(http_content_coding::gzip, gz, 1024) ==
                 http_content_decode_error::decoded_size_exceeded);
 }
 
 TEST(Ruvia, request_body_gzip_truncated_rejected) {
-    const std::pmr::string plain(4096, 'q');
-    std::pmr::string gz = gzip_compress(plain);
+    const std::string plain(4096, 'q');
+    std::string gz = gzip_compress(plain);
     EXPECT_TRUE(gz.size() > 6);
     gz.resize(gz.size() - 6);  // cut into the gzip trailer -> incomplete stream
     EXPECT_TRUE(decode_error(http_content_coding::gzip, gz) == http_content_decode_error::invalid_content);
 }
 
 TEST(Ruvia, request_body_gzip_decodes_every_rfc1952_member) {
-    const std::pmr::string first = gzip_compress("first-");
-    const std::pmr::string second = gzip_compress("second");
+    const std::string first = gzip_compress("first-");
+    const std::string second = gzip_compress("second");
     EXPECT_TRUE(!first.empty());
     EXPECT_TRUE(!second.empty());
-    EXPECT_EQ(decoded(http_content_coding::gzip, first + second, decoded_body_limit), std::pmr::string("first-second"));
+    EXPECT_EQ(decoded(http_content_coding::gzip, first + second, decoded_body_limit), std::string("first-second"));
 }
 
 TEST(Ruvia, request_body_gzip_rejects_bytes_after_the_last_member) {
-    std::pmr::string encoded = gzip_compress("complete");
+    std::string encoded = gzip_compress("complete");
     encoded.append("not-a-gzip-member");
     EXPECT_TRUE(decode_error(http_content_coding::gzip, encoded) == http_content_decode_error::invalid_content);
 }
 
 TEST(Ruvia, request_body_brotli_round_trip) {
-    const std::pmr::string plain = "permessage brotli body content, repeated repeated repeated";
-    const std::pmr::string br = brotli_compress(plain);
+    const std::string plain = "permessage brotli body content, repeated repeated repeated";
+    const std::string br = brotli_compress(plain);
     EXPECT_TRUE(!br.empty());
     EXPECT_EQ(decoded(http_content_coding::brotli, br, decoded_body_limit), plain);
 }
 
 TEST(Ruvia, request_body_brotli_bomb_rejected) {
-    const std::pmr::string big(1u << 20, 'a');
-    const std::pmr::string br = brotli_compress(big);
+    const std::string big(1u << 20, 'a');
+    const std::string br = brotli_compress(big);
     EXPECT_TRUE(!br.empty());
     EXPECT_TRUE(decode_error(http_content_coding::brotli, br, 1024) ==
                 http_content_decode_error::decoded_size_exceeded);
 }
 
 TEST(Ruvia, request_body_brotli_rejects_trailing_bytes) {
-    std::pmr::string encoded = brotli_compress("complete");
+    std::string encoded = brotli_compress("complete");
     encoded.append("trailing");
     EXPECT_TRUE(decode_error(http_content_coding::brotli, encoded) ==
                 http_content_decode_error::invalid_content);
 }
 
 TEST(Ruvia, request_body_zstd_round_trip) {
-    const std::pmr::string plain = "zstd request body content, repeated repeated repeated repeated";
-    const std::pmr::string zz = zstd_compress(plain);
+    const std::string plain = "zstd request body content, repeated repeated repeated repeated";
+    const std::string zz = zstd_compress(plain);
     EXPECT_TRUE(!zz.empty());
     EXPECT_EQ(decoded(http_content_coding::zstd, zz, decoded_body_limit), plain);
 }
 
 TEST(Ruvia, request_body_zstd_bomb_rejected) {
-    const std::pmr::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny zstd frame
-    const std::pmr::string zz = zstd_compress(big);
+    const std::string big(1u << 20, 'a');  // 1 MiB, compresses to a tiny zstd frame
+    const std::string zz = zstd_compress(big);
     EXPECT_TRUE(!zz.empty());
     // A small cap must stop the expansion mid-stream, not decode the whole megabyte.
     EXPECT_TRUE(decode_error(http_content_coding::zstd, zz, 1024) ==
@@ -173,22 +173,20 @@ TEST(Ruvia, request_body_zstd_bomb_rejected) {
 }
 
 TEST(Ruvia, request_body_zstd_decodes_every_rfc8878_frame) {
-    const std::pmr::string first = zstd_compress("first-");
-    const std::pmr::string second = zstd_compress("second");
+    const std::string first = zstd_compress("first-");
+    const std::string second = zstd_compress("second");
     EXPECT_TRUE(!first.empty());
     EXPECT_TRUE(!second.empty());
-    EXPECT_EQ(decoded(http_content_coding::zstd, first + second, decoded_body_limit), std::pmr::string("first-second"));
+    EXPECT_EQ(decoded(http_content_coding::zstd, first + second, decoded_body_limit), std::string("first-second"));
 }
 
 TEST(Ruvia, request_body_zstd_rejects_bytes_after_the_last_frame) {
-    std::pmr::string encoded = zstd_compress("complete");
+    std::string encoded = zstd_compress("complete");
     encoded.append("not-a-zstd-frame");
     EXPECT_TRUE(decode_error(http_content_coding::zstd, encoded) == http_content_decode_error::invalid_content);
 }
 
 TEST(Ruvia, http_request_content_decode_errors_own_protocol_failure_status) {
-    auto* resource = std::pmr::get_default_resource();
-
     constexpr std::array gzip{http_content_coding::gzip};
     constexpr std::array identity{http_content_coding::identity};
     constexpr std::array invalid_coding{static_cast<http_content_coding>(255)};
@@ -196,7 +194,7 @@ TEST(Ruvia, http_request_content_decode_errors_own_protocol_failure_status) {
                                           std::string_view body, std::size_t max_bytes,
                                           ruvia::http_status_code expected_status) {
         const auto result_value = decode_http_content(
-            codings, body, {.max_decoded_bytes_ = max_bytes, .resource_ = resource});
+            codings, body, {.max_decoded_bytes_ = max_bytes});
         const auto* failure = std::get_if<http_content_decode_error>(&result_value);
         EXPECT_TRUE(failure != nullptr);
         if (failure != nullptr) {

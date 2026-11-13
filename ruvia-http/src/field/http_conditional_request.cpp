@@ -2,7 +2,6 @@
 
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_date.h"
 #include "ruvia/http/http_field_syntax.h"
 
@@ -126,16 +125,15 @@ bool http_weak_etag_equals(std::string_view left, std::string_view right) noexce
            detail::http_weak_etag_equals(left, right);
 }
 
-std::pmr::string weaken_http_etag(std::string_view etag, std::pmr::memory_resource* resource) {
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
+std::string weaken_http_etag(std::string_view etag) {
     etag = http_trim_ows(etag);
     if (is_strong_http_entity_tag(etag)) {
-        std::pmr::string weakened(target_resource);
+        std::string weakened;
         weakened.reserve(2U + etag.size());
         weakened.append("W/");
         weakened.append(etag);
         return weakened;
     }
-    return std::pmr::string(etag, target_resource);
+    return std::string(etag);
 }
 }  // namespace ruvia

@@ -1,7 +1,6 @@
 #include "ruvia/http/http_request_trailers.h"
 
 #include "ruvia/http/detail/field/http_trailer_fields.h"
-#include "ruvia/http/detail/util/pmr_resource.h"
 
 #include "field/http_header_lookup.h"
 #include "field/http_request_field_validation.h"
@@ -11,7 +10,7 @@ namespace {
 
 template <typename field_type>
 [[nodiscard]] std::optional<http_request_trailer_error> append_trailer_fields(
-    std::pmr::vector<http_header>& retained, http_field_section_budget& retained_budget,
+    std::vector<http_header>& retained, http_field_section_budget& retained_budget,
     std::span<const field_type> fields) {
     auto budget = retained_budget;
     for (const auto& field : fields) {
@@ -23,11 +22,10 @@ template <typename field_type>
         return std::nullopt;
     }
     const auto field_count = retained.size();
-    auto* const resource = retained.get_allocator().resource();
-    std::pmr::vector<http_header> staged(resource);
+    std::vector<http_header> staged;
     staged.reserve(fields.size());
     for (const auto& field : fields) {
-        staged.push_back(http_header::copy_with_lowercase_name(field.name(), field.value(), resource));
+        staged.push_back(http_header::copy_with_lowercase_name(field.name(), field.value()));
     }
     retained.reserve(field_count + staged.size());
     for (auto& field : staged) {
@@ -38,9 +36,6 @@ template <typename field_type>
 }
 
 }  // namespace
-
-http_request_trailers::http_request_trailers(std::pmr::memory_resource* resource)
-    : fields_(detail::http_pmr_resource_or_default(resource)) {}
 
 std::optional<http_request_trailer_error> http_request_trailers::append(std::string_view name, std::string_view value) {
     const http_header_view field{name, value};
@@ -76,12 +71,11 @@ std::optional<http_request_trailer_error> http_request_trailers::append_received
         budget_ = budget;
         return std::nullopt;
     }
-    auto* const resource = fields_.get_allocator().resource();
-    std::pmr::vector<http_header> staged(resource);
+    std::vector<http_header> staged;
     staged.reserve(retained_count);
     for (const auto& field : fields) {
         if (!detail::is_forbidden_http_request_trailer_name(field.name())) {
-            staged.emplace_back(field.name(), field.value(), resource);
+            staged.emplace_back(field.name(), field.value());
         }
     }
     fields_.reserve(fields_.size() + staged.size());

@@ -14,9 +14,9 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/error.h"
 
 #include "backend_config.h"
@@ -46,8 +46,8 @@ auto migrations() {
 }
 
 task<void> demonstrate(db_client& db, db_client& concurrent) {
-    auto handle = db.db();
-    auto items = handle.repository<line_item>();
+    auto session = db.db();
+    auto items = session.repository<line_item>();
     line_item input;
     input.set<"id">(1);
     input.set<"quantity">(3);
@@ -71,7 +71,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     const auto retained = co_await items.find_one({.where_ = line_item::column<"id">() == 1});
     require(retained && retained->get<"total">() == 35, "computed UPSERT value differs");
 
-    auto snapshot = co_await handle.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
+    auto snapshot = co_await session.begin_transaction({.isolation_ = db_transaction_isolation::repeatable_read,
         .access_mode_ = db_transaction_access_mode::read_only});
     auto snapshot_items = snapshot.repository<line_item>();
     const auto before = co_await snapshot_items.find_one({.where_ = line_item::column<"id">() == 1});
@@ -90,7 +90,7 @@ task<void> demonstrate(db_client& db, db_client& concurrent) {
     require(rejected, "read-only transaction accepted a write");
     // Failed transactions are retired by the backend. A new transaction must
     // retain the server defaults, without inheriting read-only access.
-    auto writable = co_await handle.begin_transaction();
+    auto writable = co_await session.begin_transaction();
     co_await writable.repository<line_item>().update(line_item::column<"id">() == 1, changes);
     co_await writable.commit();
     const auto current = co_await items.find_one({.where_ = line_item::column<"id">() == 1});

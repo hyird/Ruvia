@@ -2,18 +2,15 @@
 
 #include <algorithm>
 #include <cstddef>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_content_encoder.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_response_stream.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/server_config.h"
@@ -37,13 +34,12 @@ public:
 
     // `compression` is the server's compression policy, or nullptr when the
     // server compresses nothing.
-    http_streaming_response_compression(std::pmr::memory_resource* resource, worker_codecs& codecs,
+    http_streaming_response_compression(worker_codecs& codecs,
         http_response_coding_selection selection, const compression_config* compression) noexcept
         : codecs_(codecs),
           selection_(selection),
-          compression_(compression),
-          encoded_chunk_(pmr_resource_or_default(resource)) {}
-    http_streaming_response_compression(std::pmr::memory_resource*, worker_codecs&&,
+          compression_(compression) {}
+    http_streaming_response_compression(worker_codecs&&,
         http_response_coding_selection, const compression_config*) = delete;
 
     http_streaming_response_compression(const http_streaming_response_compression&) = delete;
@@ -156,7 +152,7 @@ public:
     // of a long-running handler.
     void release_output() {
         constexpr std::size_t retained_bytes = 64 * 1024;
-        http_clear_pmr_string_retaining_small(encoded_chunk_, retained_bytes);
+        http_clear_string_retaining_small(encoded_chunk_, retained_bytes);
     }
 
 private:
@@ -207,7 +203,7 @@ private:
     worker_codecs& codecs_;
     http_response_coding_selection selection_;
     const compression_config* compression_;
-    std::pmr::string encoded_chunk_;
+    std::string encoded_chunk_;
     state_type state_;
 };
 

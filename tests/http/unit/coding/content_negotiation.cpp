@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <initializer_list>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -17,8 +16,8 @@ TEST(Ruvia, response_coding_sets_and_selection_snapshots_distinguish_every_suppo
         auto candidates = ruvia::http_response_coding_candidates::empty();
         candidates.include(coding);
         ruvia::http_response_coding_qualities qualities;
-        const std::pmr::string field = std::pmr::string(ruvia::http_content_coding_token(coding)) +
-                                       ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
+        const std::string field = std::string(ruvia::http_content_coding_token(coding)) +
+                                  ";q=1,*;q=0" + (coding == ruvia::http_content_coding::identity ? "" : ",identity;q=0");
         qualities.update(field);
         const auto selected = ruvia::http_response_coding_selection::select(qualities, candidates);
         EXPECT_TRUE(selected.acceptable());

@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -12,8 +11,8 @@ TEST(Ruvia, hpack_encoder_uses_canonical_wire_indices_for_every_static_entry) {
     // RFC 7541 Appendix A defines the 61 one-based static table indices.
     for (std::uint32_t index = 1; index <= 61; ++index) {
         const char indexed_field = static_cast<char>(0x80U | index);
-        std::pmr::string encoded(std::pmr::get_default_resource());
-        std::pmr::string name;
+        std::string encoded;
+        std::string name;
         std::size_t fields_value = 0;
         const auto decoded = decoder.decode(std::string_view(&indexed_field, 1),
             [&](std::string_view field_name, std::string_view value) {

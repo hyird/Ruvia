@@ -5,13 +5,11 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/core/worker_wait_result.h"
 
@@ -24,8 +22,7 @@ class pool_lease_acquire;
 // outlive them.
 class pool_lease_scheduler final {
 public:
-    pool_lease_scheduler(std::size_t pool_size, const worker_handle& worker_value,
-        std::pmr::memory_resource* resource = nullptr);
+    pool_lease_scheduler(std::size_t pool_size, const worker_ref& worker_value);
 
     pool_lease_scheduler(const pool_lease_scheduler&) = delete;
     pool_lease_scheduler& operator=(const pool_lease_scheduler&) = delete;
@@ -63,7 +60,7 @@ private:
     friend class pool_lease_acquire;
 
     class impl_type;
-    std::unique_ptr<impl_type, pmr_object_deleter<impl_type>> impl_;
+    std::unique_ptr<impl_type> impl_;
 };
 
 // One acquire: single-use, movable only before it is awaited. The scheduler

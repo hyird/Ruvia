@@ -2,6 +2,7 @@
 
 #include <limits>
 #include <memory>
+#include <string>
 #include <string_view>
 
 #include <openssl/evp.h>

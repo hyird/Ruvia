@@ -4,8 +4,6 @@
 
 #include "ruvia/web/model.h"
 
-#include "memory_resource_fixture.h"
-
 namespace {
 
 RUVIA_MODEL(comparable_model,
@@ -45,10 +43,8 @@ TEST(Ruvia, model_equality_distinguishes_missing_and_null) {
 }
 
 TEST(Ruvia, model_equality_ignores_resources_for_normalized_values) {
-    ruvia::test::counting_memory_resource left_resource;
-    ruvia::test::counting_memory_resource right_resource;
-    comparable_model left({.resource_ = &left_resource});
-    comparable_model right({.resource_ = &right_resource});
+    comparable_model left;
+    comparable_model right;
     left.set<"text">(std::string_view("same value"));
     right.set<"text">(std::string_view("same value"));
     EXPECT_TRUE(left == right);
@@ -58,12 +54,10 @@ TEST(Ruvia, model_equality_ignores_resources_for_normalized_values) {
 }
 
 TEST(Ruvia, model_equality_compares_nested_arrays_and_recursive_boxed_values) {
-    ruvia::test::counting_memory_resource first_resource;
-    ruvia::test::counting_memory_resource second_resource;
     constexpr auto input = R"({"value":1,"items":[{"text":"a"},{"text":"b"}],"children":[{"value":2,"children":[{"value":3}]}]})";
     {
-        auto first = ruvia::from_json<comparable_tree>(input, {.resource_ = &first_resource});
-        auto second = ruvia::from_json<comparable_tree>(input, {.resource_ = &second_resource});
+        auto first = ruvia::from_json<comparable_tree>(input);
+        auto second = ruvia::from_json<comparable_tree>(input);
         EXPECT_TRUE(first == second);
         second.ensure<"items">()[0].set<"text">("b");
         EXPECT_TRUE(first != second);
@@ -72,6 +66,4 @@ TEST(Ruvia, model_equality_compares_nested_arrays_and_recursive_boxed_values) {
         second.ensure<"children">().front().ensure<"children">().front().set<"value">(4);
         EXPECT_TRUE(first != second);
     }
-    EXPECT_EQ(first_resource.live_allocations(), std::size_t{0});
-    EXPECT_EQ(second_resource.live_allocations(), std::size_t{0});
 }

@@ -5,7 +5,6 @@
 #include <chrono>
 #include <cstddef>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,7 +20,6 @@
 #include <asio/read.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"
@@ -103,16 +101,16 @@ class admission_routes final {
 
 // Sends one GET on a fresh connection that the server closes after its
 // response; returns everything the server wrote.
-std::pmr::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target,
+std::string exchange(asio::io_context& io, const asio::ip::tcp::endpoint& server_endpoint, std::string_view target,
     std::string_view headers) {
-    std::pmr::string request{"GET ", ruvia::process_resource()};
+    std::string request{"GET "};
     request.append(target).append(" HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n");
     request.append(headers).append("\r\n");
     return ruvia::test::exchange(io, server_endpoint, request);
 }
 
-std::pmr::string lowercase(std::string_view text) {
-    std::pmr::string lowered(text, ruvia::process_resource());
+std::string lowercase(std::string_view text) {
+    std::string lowered(text);
     for (auto& character : lowered) {
         if (character >= 'A' && character <= 'Z') {
             character = static_cast<char>(character - 'A' + 'a');
@@ -124,7 +122,7 @@ std::pmr::string lowercase(std::string_view text) {
 // Sends `prefix` on a fresh HTTP/1.1 connection, then stalls. Returns the
 // bytes the server wrote before closing, or nullopt when it is still open
 // after 5 s.
-std::optional<std::pmr::string> stalled_connection_output(const asio::ip::tcp::endpoint& server_endpoint,
+std::optional<std::string> stalled_connection_output(const asio::ip::tcp::endpoint& server_endpoint,
     const asio::ip::address_v4& local_address, std::string_view prefix) {
     auto& io = ruvia::test::new_test_io_context();
     asio::ip::tcp::socket socket(io);
@@ -134,7 +132,7 @@ std::optional<std::pmr::string> stalled_connection_output(const asio::ip::tcp::e
     if (!prefix.empty()) {
         asio::write(socket, asio::buffer(prefix));
     }
-    std::pmr::string output{ruvia::process_resource()};
+    std::string output{};
     std::error_code result;
     bool closed = false;
     asio::async_read(socket, asio::dynamic_buffer(output), [&](const std::error_code& error, std::size_t) {
@@ -149,9 +147,9 @@ std::optional<std::pmr::string> stalled_connection_output(const asio::ip::tcp::e
 }
 
 // The status codes of the HTTP/1.1 responses in `output`, concatenated.
-std::pmr::string status_codes(std::string_view output) {
+std::string status_codes(std::string_view output) {
     constexpr std::string_view status_line = "HTTP/1.1 ";
-    std::pmr::string codes{ruvia::process_resource()};
+    std::string codes{};
     for (auto position = output.find(status_line); position != std::string_view::npos;
         position = output.find(status_line, position + status_line.size())) {
         codes.append(output.substr(position + status_line.size(), 3));
@@ -184,15 +182,15 @@ TEST(Ruvia, http1_clients_share_406_admission_and_rate_limit_budget) {
     }
     // Every connection drew on the same client-address budget; it is spent. A
     // client that accepts no coding still learns why.
-    const auto admitted_limit = std::move(std::pmr::string("x-ratelimit-limit: ", ruvia::process_resource()).append(std::to_string(admitted_requests))) + "\r\n";
+    const auto admitted_limit = std::move(std::string("x-ratelimit-limit: ").append(std::to_string(admitted_requests))) + "\r\n";
     for (int connection = 0; connection != 2; ++connection) {
         for (const auto headers : {std::string_view{}, refuse_every_coding}) {
             error_handler_calls = 0;
             const auto response = exchange(io, server.endpoint(), "/plain", headers);
             const auto head = lowercase(response);
             EXPECT_TRUE(response.starts_with("HTTP/1.1 429 "));
-            EXPECT_TRUE(head.find("\r\nretry-after: ") != std::pmr::string::npos);
-            EXPECT_TRUE(head.find(std::pmr::string("\r\n", ruvia::process_resource()) + admitted_limit) != std::pmr::string::npos);
+            EXPECT_TRUE(head.find("\r\nretry-after: ") != std::string::npos);
+            EXPECT_TRUE(head.find(std::string("\r\n") + admitted_limit) != std::string::npos);
             EXPECT_TRUE(response.ends_with("rejected"));
             EXPECT_EQ(error_handler_calls.load(), 1);
         }
@@ -235,7 +233,7 @@ TEST(Ruvia, http1_failed_handler_error_response_is_not_renegotiated_into_406) {
     }};
     for (const auto& [source, refused] : cases) {
         error_handler_calls = 0;
-        std::pmr::string request("GET /boom HTTP/1.1\r\nHost: a\r\nConnection: close\r\nAccept-Encoding: ", ruvia::process_resource());
+        std::string request("GET /boom HTTP/1.1\r\nHost: a\r\nConnection: close\r\nAccept-Encoding: ");
         request.append(refused);
         request.append("\r\n\r\n");
         const auto output =
@@ -263,20 +261,20 @@ TEST(Ruvia, http1_rate_limits_canonicalize_forwarded_client_addresses) {
         {"::ffff:192.0.2.11", "192.0.2.11"},
     }};
     auto send = [&](std::string_view target, std::string_view address) {
-        std::pmr::string request("GET ", ruvia::process_resource());
+        std::string request("GET ");
         request.append(target);
         request.append(" HTTP/1.1\r\nHost: a\r\nConnection: close\r\nX-Forwarded-For: ");
         request.append(address);
         request.append("\r\n\r\n");
         auto output = stalled_connection_output(server.endpoint(), loopback, request);
         EXPECT_TRUE(output.has_value());
-        return std::move(output).value_or(std::pmr::string{ruvia::process_resource()});
+        return std::move(output).value_or(std::string{});
     };
     for (const auto& [first, alternate] : equivalent) {
         EXPECT_TRUE(send("/limited", first).starts_with("HTTP/1.1 200 "));
         const auto route_rejection = send("/limited", alternate);
         EXPECT_TRUE(route_rejection.starts_with("HTTP/1.1 429 "));
-        EXPECT_TRUE(route_rejection.find("X-RateLimit-Limit: 1\r\n") != std::pmr::string::npos);
+        EXPECT_TRUE(route_rejection.find("X-RateLimit-Limit: 1\r\n") != std::string::npos);
         // The two requests above also consumed two of the four app-wide
         // admissions. Spend the rest without the route-specific middleware.
         for (std::size_t i = 2; i < admitted_requests; ++i) {
@@ -284,7 +282,7 @@ TEST(Ruvia, http1_rate_limits_canonicalize_forwarded_client_addresses) {
         }
         const auto app_rejection = send("/plain", alternate);
         EXPECT_TRUE(app_rejection.starts_with("HTTP/1.1 429 "));
-        EXPECT_TRUE(app_rejection.find("X-RateLimit-Limit: 4\r\n") != std::pmr::string::npos);
+        EXPECT_TRUE(app_rejection.find("X-RateLimit-Limit: 4\r\n") != std::string::npos);
     }
     // Scoped identities preserve all 128 address bits and the numeric scope,
     // and cannot collide with the separate unscoped /64 namespace.
@@ -311,46 +309,45 @@ TEST(Ruvia, http1_unread_buffered_body_keeps_the_connection) {
         auto output =
             stalled_connection_output(server.endpoint(), asio::ip::make_address_v4(source), requests);
         EXPECT_TRUE(output.has_value());
-        return std::move(output).value_or(std::pmr::string{ruvia::process_resource()});
+        return std::move(output).value_or(std::string{});
     };
-    const std::pmr::string next("GET /plain HTTP/1.1\r\nHost: a\r\n\r\n", ruvia::process_resource());
-    const std::pmr::string length_body("Content-Length: 5\r\n\r\nhello", ruvia::process_resource());
+    const std::string next("GET /plain HTTP/1.1\r\nHost: a\r\n\r\n");
+    const std::string length_body("Content-Length: 5\r\n\r\nhello");
 
     EXPECT_EQ(
-        status_codes(output_from("127.0.0.10", std::pmr::string("POST /missing HTTP/1.1\r\nHost: a\r\n", ruvia::process_resource()) + length_body + next)),
-        std::pmr::string("404200", ruvia::process_resource()));
+        status_codes(output_from("127.0.0.10", std::string("POST /missing HTTP/1.1\r\nHost: a\r\n") + length_body + next)),
+        std::string("404200"));
     EXPECT_EQ(status_codes(output_from("127.0.0.11",
-                  std::pmr::string("POST /plain HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
-                                   "5\r\nhello\r\n0\r\n\r\n",
-                      ruvia::process_resource()) +
+                  std::string("POST /plain HTTP/1.1\r\nHost: a\r\nTransfer-Encoding: chunked\r\n\r\n"
+                              "5\r\nhello\r\n0\r\n\r\n") +
                       next)),
-        std::pmr::string("405200", ruvia::process_resource()));
+        std::string("405200"));
     EXPECT_EQ(
-        status_codes(output_from("127.0.0.12", std::pmr::string("POST /ignore HTTP/1.1\r\nHost: a\r\n", ruvia::process_resource()) + length_body + next)),
-        std::pmr::string("200200", ruvia::process_resource()));
+        status_codes(output_from("127.0.0.12", std::string("POST /ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next)),
+        std::string("200200"));
     const auto streamed =
-        output_from("127.0.0.13", std::pmr::string("POST /stream-ignore HTTP/1.1\r\nHost: a\r\n", ruvia::process_resource()) + length_body + next);
-    EXPECT_EQ(status_codes(streamed), std::pmr::string("200200", ruvia::process_resource()));
-    EXPECT_TRUE(streamed.find("event") != std::pmr::string::npos);
+        output_from("127.0.0.13", std::string("POST /stream-ignore HTTP/1.1\r\nHost: a\r\n") + length_body + next);
+    EXPECT_EQ(status_codes(streamed), std::string("200200"));
+    EXPECT_TRUE(streamed.find("event") != std::string::npos);
 
     // Body bytes still to come: the response closes the connection.
     const auto partial =
         output_from("127.0.0.14", "POST /missing HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
-    EXPECT_EQ(status_codes(partial), std::pmr::string("404", ruvia::process_resource()));
-    EXPECT_TRUE(partial.find("Connection: close\r\n") != std::pmr::string::npos);
+    EXPECT_EQ(status_codes(partial), std::string("404"));
+    EXPECT_TRUE(partial.find("Connection: close\r\n") != std::string::npos);
 
     // The app-wide limit admits four requests; the 429s that follow keep the
     // connection while the body is in hand, and close it when it is not.
-    std::pmr::string spent{ruvia::process_resource()};
+    std::string spent{};
     for (std::size_t i = 0; i < admitted_requests; ++i) {
         spent.append(next);
     }
     EXPECT_EQ(
-        status_codes(output_from("127.0.0.15", std::pmr::string(spent, ruvia::process_resource()) + "POST /upload HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
-        std::pmr::string("200200200200429429", ruvia::process_resource()));
+        status_codes(output_from("127.0.0.15", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\n" + length_body + next)),
+        std::string("200200200200429429"));
     const auto limited_partial =
-        output_from("127.0.0.16", std::pmr::string(spent, ruvia::process_resource()) + "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
-    EXPECT_EQ(status_codes(limited_partial), std::pmr::string("200200200200429", ruvia::process_resource()));
-    EXPECT_TRUE(limited_partial.find("Connection: close\r\n") != std::pmr::string::npos);
+        output_from("127.0.0.16", std::string(spent) + "POST /upload HTTP/1.1\r\nHost: a\r\nContent-Length: 100\r\n\r\nab");
+    EXPECT_EQ(status_codes(limited_partial), std::string("200200200200429"));
+    EXPECT_TRUE(limited_partial.find("Connection: close\r\n") != std::string::npos);
     server.finish();
 }

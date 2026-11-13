@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -13,8 +12,7 @@
 
 #include <asio/ip/udp.hpp>
 
-#include "ruvia/core/memory/pmr_object.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 #include "http3/http3_connection_id.h"
 #include "server/inherited_listener_sockets.h"
@@ -30,7 +28,7 @@ class windows_acceptor;
 // One datagram handed to a worker that did not receive it. It owns its bytes
 // because it crosses threads.
 struct http3_handoff_datagram final {
-    std::pmr::vector<std::byte> bytes_;
+    std::vector<std::byte> bytes_;
     asio::ip::udp::endpoint remote_;
     std::uint32_t ecn_{0};
     asio::ip::udp::endpoint local_;
@@ -109,7 +107,7 @@ public:
 
     // Construction thread, before any worker serves -- for a directory
     // application::add_listener() creates, before any worker uses it.
-    void bind_worker(std::size_t index, const worker_handle& worker_value);
+    void bind_worker(std::size_t index, const worker_ref& worker_value);
     // The owning worker's thread: opens and closes its receiving side.
     void attach(std::size_t index, void* target, receive_type receive) noexcept;
     void detach(std::size_t index) noexcept;
@@ -145,17 +143,17 @@ public:
 
 private:
     struct slot final {
-        worker_handle worker_;
+        worker_ref worker_;
         // Read and written only on the owning worker's thread.
         void* target_{nullptr};
         receive_type receive_{nullptr};
         std::atomic<std::size_t> in_flight_{0};
-        std::pmr::vector<http3_endpoint_registration> endpoints_{process_resource()};
+        std::vector<http3_endpoint_registration> endpoints_{};
     };
 
-    std::pmr::vector<std::unique_ptr<slot, pmr_object_deleter<slot>>> slots_;
+    std::vector<std::unique_ptr<slot>> slots_;
     std::mutex bind_mutex_;
-    std::pmr::vector<std::pmr::vector<int>> listener_sockets_;
+    std::vector<std::vector<int>> listener_sockets_;
 };
 
 // Where one worker's HTTP/3 endpoints sit among the application's workers:

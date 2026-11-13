@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -21,12 +20,10 @@
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/bytes.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/http/http_accept_encoding.h"
 #include "ruvia/http/http_ascii.h"
 #include "ruvia/http/http_connect_udp.h"
-#include "ruvia/http/http_pmr_string.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_response_server.h"
@@ -36,9 +33,8 @@
 
 #include "body/http_request_body_facade.h"
 #include "context/context_access.h"
-#include "context/http_connection_advertisement_output.h"
+#include "context/context_services.h"
 #include "context/http_interim_response_output.h"
-#include "context/http_push_output.h"
 #include "http/http_protocol_error_info.h"
 #include "http/http_stream_end.h"
 #include "http/http_tunnel_session.h"
@@ -58,7 +54,6 @@
 namespace ruvia::detail {
 namespace {
 
-constexpr std::size_t http2_request_arena_stack_bytes = request_arena_initial_bytes;
 // Product limit on a drain's wait for the PING round trip before the final
 // GOAWAY (a request cap or a connection timeout; a stop closes at once).
 constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
@@ -125,12 +120,12 @@ public:
     http2_sans_io_response_stream_sink(ruvia::http2_connection& connection, std::uint32_t stream_id,
         http2_sans_io_stream_runtime& stream_runtime,
         worker_signal& write_signal, multiplexed_stream_signal& stream_signal,
-        http2_data_output_budget& output_budget, std::pmr::memory_resource* resource,
+        http2_data_output_budget& output_budget,
         http_known_method request_method, worker_codecs& codecs,
         http_response_coding_selection response_coding,
         const compression_config* compression, const http_cors_policy* cors) noexcept
         : multiplexed_response_stream_sink_base(
-              stream_runtime, stream_signal, resource, request_method, codecs, response_coding, compression, cors),
+              stream_runtime, stream_signal, request_method, codecs, response_coding, compression, cors),
           connection_(connection),
           stream_id_(stream_id),
           write_signal_(write_signal),
@@ -362,16 +357,15 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       session_(std::move(session_value)),
       inbound_buffers_(*session_.options().inbound_budget_,
           session_.options().server_.max_inbound_buffer_bytes_per_connection_),
-      base_services_(session_.services().with_inbound_buffer_pool(inbound_buffers_)),
+      base_services_(session_.services().with_inbound_buffers(inbound_buffers_)),
       remote_address_(session_.services().remote_address()),
-      connection_(ruvia::http2_connection::server({.resource_ = process_resource(),
-          .frame_observer_ = session_.options().http2_frame_
-                                 ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
-                                       auto& self = *static_cast<http2_sans_io_session_engine*>(target);
-                                       self.session_.options().http2_frame_(server_observation_access::http2_frame(
-                                           self.base_services_.get_conn_info().connection_id(), metadata));
-                                   }
-                                 : nullptr,
+      connection_(ruvia::http2_connection::server({.frame_observer_ = session_.options().http2_frame_
+                                                                          ? +[](void* target, const http2_frame_metadata& metadata) noexcept {
+                                                                                auto& self = *static_cast<http2_sans_io_session_engine*>(target);
+                                                                                self.session_.options().http2_frame_(server_observation_access::http2_frame(
+                                                                                    self.base_services_.get_conn_info().connection_id(), metadata));
+                                                                            }
+                                                                          : nullptr,
           .header_observer_ = session_.options().http2_headers_ ? +[](void* target, const http2_header_metadata& metadata) noexcept {
               auto& self = *static_cast<http2_sans_io_session_engine*>(target);
               self.session_.options().http2_headers_(server_observation_access::http2_headers(
@@ -384,7 +378,7 @@ http2_sans_io_session_engine::http2_sans_io_session_engine(asio::any_io_executor
       handler_finished_(session_.services().worker()),
       writer_finished_(session_.services().worker()),
       admission_policy_(http_request_admission_policy::server(session_.options())),
-      stream_runtimes_(process_resource(), termination_, &inbound_buffers_),
+      stream_runtimes_(termination_, &inbound_buffers_),
       buffered_response_writer_(*this, connection_, stream_runtimes_, write_signal_, output_budget_, response_file_io{.worker_ = session_.services().worker(), .stop_ = session_.services().get_stop_token(), .timeout_ = session_.options().server_.write_timeout_}) {
     // A plaintext handoff reuses the HTTP/1 scanner entry. It now tracks a
     // multiplexed session, not an unadmitted HTTP/1 request-head read.
@@ -403,7 +397,7 @@ bool http2_sans_io_session_engine::wants_write() const noexcept {
     return connection_.wants_write();
 }
 
-void http2_sans_io_session_engine::take_output(std::pmr::string& output) {
+void http2_sans_io_session_engine::take_output(std::string& output) {
     // Preserve assign() semantics when the caller reuses its scratch string. The
     // core batch operation only consumes output and invokes its observer after the
     // copy succeeds, so allocation failure leaves protocol bytes and budget intact.
@@ -708,11 +702,6 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
         const auto request_start = options.access_log_.callback_
                                        ? std::chrono::steady_clock::now()
                                        : std::chrono::steady_clock::time_point{};
-
-        std::array<std::byte, http2_request_arena_stack_bytes> arena_block;
-        std::optional<request_memory> request_memory_storage;
-        request_memory& request_memory_value =
-            emplace_multiplexed_request_memory(request_memory_storage, session_.options().server_.request_arena_initial_bytes_, std::span<std::byte>(arena_block));
         auto* stream_runtime = stream_runtimes_.find(stream_id);
         auto* request_head = stream_runtime != nullptr ? stream_runtime->request_head() : nullptr;
         if (request_head == nullptr) {
@@ -728,11 +717,10 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             reset_stream_no_throw(stream_id, http2_error_code::internal_error);
             co_return;
         }
-        http_request request = request_head->build_request(request_memory_value.resource(),
-            streaming_body ? std::string_view{} : stream_runtime->buffered_body());
-        http_response response(request_memory_value.resource());
+        http_request request = request_head->build_request(streaming_body ? std::string_view{} : stream_runtime->buffered_body());
+        http_response response;
         response_output_target output_target{connection_, write_signal_, stream_id};
-        http_interim_response_output interim_output(process_resource(), &output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
+        http_interim_response_output interim_output(&output_target, [](void* raw, const http_interim_response_head& head) -> task<void> {
             auto& target = *static_cast<response_output_target*>(raw);
             const auto status = target.connection_.submit_interim_response_head(target.stream_id_, head);
             if (status != http2_submit_status::accepted) {
@@ -784,7 +772,6 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                 .request_ = request,
                 .resolution_ = resolution,
                 .coding_ = http_response_coding_selection_for(request),
-                .resource_ = request_memory_value.resource(),
                 .expectation_ = &expectation_plan,
                 .start_ = request_start,
             },
@@ -827,13 +814,13 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
             admission.endpoint() != http_request_endpoint::rejection) {
             body_failure_handled = true;
             response = co_await respond_http_request_body_failure(
-                routes_, request, request_memory_value, *body_failure, request_services, admission.tail());
+                routes_, request, *body_failure, request_services, admission.tail());
         } else {
             switch (admission.endpoint()) {
                 case http_request_endpoint::rejection:
                     admission.tail().disable_response_coding();
                     response = co_await respond_http_request_rejection(
-                        routes_, request, request_memory_value, *admission.rejection(), request_services);
+                        routes_, request, *admission.rejection(), request_services);
                     break;
                 case http_request_endpoint::tunnel: {
                     if (!streaming_body || !request_head->snapshot().connect_pending_) {
@@ -866,19 +853,18 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         }
                         co_return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
                             finish_upgrade_commit(http_status::ok, context_value), handshake->compression(),
-                            handshake->subprotocol(), *ruvia::process_resource());
+                            handshake->subprotocol());
                     };
                     http2_sans_io_response_stream_sink refusal_sink(connection_, stream_id,
-                        *stream_runtime, write_signal_, *stream_signal, output_budget_,
-                        process_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                        *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto refusal_writer = make_response_stream_writer(refusal_sink, *process_resource());
+                    auto refusal_writer = make_response_stream_writer(refusal_sink);
                     auto upgrade_services = dispatch_services;
                     if (is_request_stream_tunnel_route(resolved->route())) {
                         upgrade_services.bind_response_stream(refusal_writer);
                     }
                     auto buffered = co_await execute_tunnel_upgrade_session<http2_sans_io_tunnel_transport>(
-                        routes_, request, *resolved, request_memory_value, upgrade_services, options,
+                        routes_, request, *resolved, upgrade_services, options,
                         session_.scanner_entry(), inbound_buffers_, admission.udp_tunnel(),
                         std::string_view{}, commit, commit_websocket);
                     if (refusal_sink.committed()) {
@@ -900,8 +886,8 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         if (failure == nullptr) {
                             throw std::logic_error("HTTP/2 WebSocket validation returned no outcome");
                         }
-                        response = co_await routes_.handle_error(request, request_memory_value,
-                            copy_http_protocol_error_info(request_memory_value.resource(), failure->protocol_error()),
+                        response = co_await routes_.handle_error(request,
+                            http_error_info({.status_ = failure->protocol_error().status(), .code_ = failure->protocol_error().code(), .message_ = std::string_view(failure->protocol_error().what())}),
                             request_services);
                         failure->apply_required_response_headers(response);
                         break;
@@ -927,11 +913,10 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                         }
                         return websocket_upgrade_commit<http2_sans_io_tunnel_transport>(
                             finish_upgrade_commit(http_status::ok, context_value),
-                            submitted_handshake->compression(), submitted_handshake->subprotocol(),
-                            *ruvia::process_resource());
+                            submitted_handshake->compression(), submitted_handshake->subprotocol());
                     };
                     auto buffered = co_await execute_websocket_upgrade_session<http2_sans_io_tunnel_transport>(
-                        routes_, request, *resolved, request_memory_value, dispatch_services, options,
+                        routes_, request, *resolved, dispatch_services, options,
                         session_.scanner_entry(), inbound_buffers_, std::string_view{}, commit);
                     if (!buffered) {
                         co_return;
@@ -951,11 +936,9 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                     auto stream_services = dispatch_services;
                     stream_services.bind_stop_token(request_stop_token);
                     http2_sans_io_response_stream_sink sink_value(connection_, stream_id,
-                        *stream_runtime, write_signal_, *stream_signal, output_budget_,
-                        process_resource(), request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
+                        *stream_runtime, write_signal_, *stream_signal, output_budget_, request.known_method(), *options.codecs_, *admission.tail().coding_policy().selection(),
                         options.compression_ ? &*options.compression_ : nullptr, admission.tail().cors(options));
-                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved,
-                        request_memory_value, stream_services,
+                    auto result_value = co_await dispatch_response_stream_with(sink_value, routes_, request, *resolved, stream_services,
                         [this, stream_id]() noexcept { return connection_.stream_aborted(stream_id); });
                     if (complete_multiplexed_response_stream_dispatch(result_value,
                             stream_runtime->body_failure().has_value(), options, remote_address_,
@@ -966,20 +949,20 @@ task<void> http2_sans_io_session_engine::dispatch_one(std::uint32_t stream_id) {
                 }
                 case http_request_endpoint::buffered:
                     if (resolved == nullptr) {
-                        co_await routes_.dispatch_buffered_response(request, resolution, request_memory_value,
+                        co_await routes_.dispatch_buffered_response(request, resolution,
                             options.document_root_.binding(), dispatch_services, admission.static_file_mode(), response);
                         break;
                     }
                     [[fallthrough]];
                 case http_request_endpoint::stream_body:
-                    body_failure_handled = co_await routes_.dispatch_resolved_route(request, request_memory_value,
+                    body_failure_handled = co_await routes_.dispatch_resolved_route(request,
                         *resolved, dispatch_services, &stream_runtime->body_failure(), response);
                     break;
             }
         }
 
         co_await finish_multiplexed_buffered_response(stream_id, stream_runtime->body_failure(),
-            body_failure_handled, response, request, routes_, request_memory_value, request_services,
+            body_failure_handled, response, request, routes_, request_services,
             options, remote_address_, admission.tail(), buffered_response_writer_, reset_dispatch_stream);
     } catch (...) {
         const auto failure = std::current_exception();
@@ -1163,8 +1146,15 @@ void http2_sans_io_session_engine::on_body_chunk(http2_message_body_chunk_event&
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
     }
-    if (store_status == http2_request_body_store_status::too_large) {
-        stream_runtime->mark_body_failure(http_request_body_failure::too_large);
+    if (store_status == http2_request_body_store_status::too_large ||
+        store_status == http2_request_body_store_status::buffer_limit) {
+        const auto failure = store_status == http2_request_body_store_status::buffer_limit
+                                 ? http_request_body_failure::buffer_limit
+                                 : http_request_body_failure::too_large;
+        if (failure == http_request_body_failure::buffer_limit) {
+            stream_runtime->discard_body();
+        }
+        stream_runtime->mark_body_failure(failure);
         (void)body_chunk.take_credit();
         if (stream_runtime->response_committed()) {
             reset_event_stream(stream_id, http2_error_code::cancel);
@@ -1209,8 +1199,9 @@ void http2_sans_io_session_engine::on_tunnel_data(http2_tunnel_data_event& tunne
         wake_writer();
         return;
     }
-    if (!stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(),
-            tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_)) {
+    if (stream_runtime->body_queue().enqueue_bounded(tunnel_data.bytes(),
+            tunnel_data.take_credit(), options.server_.max_buffered_body_bytes_) !=
+        http2_body_queue_store_status::stored) {
         reset_event_stream(stream_id, http2_error_code::cancel);
         return;
     }
@@ -1342,7 +1333,7 @@ namespace {
 
 template <typename stream_type>
 task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_engine& engine) {
-    std::pmr::string write_scratch(process_resource());
+    std::string write_scratch;
     for (;;) {
         while (engine.wants_write()) {
             engine.take_output(write_scratch);
@@ -1367,7 +1358,7 @@ task<void> run_http2_sans_io_writer(stream_type& stream, http2_sans_io_session_e
             }
             engine.output_write_completed();
             // Leave room for the frame header and string capacity growth, but keep retention bounded.
-            http_clear_pmr_string_retaining_small(
+            http_clear_string_retaining_small(
                 write_scratch, http2_data_output_credit_slots * http2_data_output_credit_bytes + 4096);
         }
         if (engine.writer_should_exit()) {

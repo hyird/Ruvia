@@ -51,7 +51,7 @@ endif()
 
 ruvia_install_component(ruvia-web web)
 
-set(_ruvia_web_excluded_header_patterns)
+set(_ruvia_web_excluded_header_patterns ${_ruvia_disabled_protocol_patterns})
 if(NOT RUVIA_ENABLE_MARIADB AND NOT RUVIA_ENABLE_POSTGRESQL)
     list(APPEND _ruvia_web_excluded_header_patterns "/db/")
 endif()

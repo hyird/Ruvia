@@ -7,7 +7,6 @@
 #include <initializer_list>
 #include <map>
 #include <memory>
-#include <memory_resource>
 #include <semaphore>
 #include <stdexcept>
 #include <string>
@@ -23,7 +22,6 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
@@ -59,26 +57,26 @@ public:
 using ruvia::test::read_to_end;
 
 // The status line of `request` on a fresh cleartext connection.
-std::pmr::string http_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
+std::string http_exchange(asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::string_view request) {
     asio::ip::tcp::socket socket(io);
     asio::error_code error;
     socket.connect(endpoint, error);
     if (!error) {
         asio::write(socket, asio::buffer(request), error);
     }
-    const auto response = error ? std::pmr::string{ruvia::process_resource()} : read_to_end(socket, error);
-    return std::pmr::string(std::string_view(response).substr(0, response.find("\r\n")), ruvia::process_resource());
+    const auto response = error ? std::string{} : read_to_end(socket, error);
+    return std::string(std::string_view(response).substr(0, response.find("\r\n")));
 }
 
 // The status line of `request` on a fresh TLS connection offering `sni`
 // (none when null). The client authenticates nothing: the server decides.
-std::pmr::string https_exchange(
+std::string https_exchange(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, const char* sni, std::string_view request) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
     asio::ssl::stream<asio::ip::tcp::socket> stream(io, client);
     if (sni != nullptr && SSL_set_tlsext_host_name(stream.native_handle(), sni) != 1) {
-        return std::pmr::string{ruvia::process_resource()};
+        return std::string{};
     }
     asio::error_code error;
     stream.next_layer().connect(endpoint, error);
@@ -88,12 +86,12 @@ std::pmr::string https_exchange(
     if (!error) {
         asio::write(stream, asio::buffer(request), error);
     }
-    const auto response = error ? std::pmr::string{ruvia::process_resource()} : read_to_end(stream, error);
-    return std::pmr::string(std::string_view(response).substr(0, response.find("\r\n")), ruvia::process_resource());
+    const auto response = error ? std::string{} : read_to_end(stream, error);
+    return std::string(std::string_view(response).substr(0, response.find("\r\n")));
 }
 
-[[nodiscard]] std::pmr::string get(std::string_view target, std::string_view host) {
-    return std::pmr::string("GET ", ruvia::process_resource()) + std::pmr::string(target, ruvia::process_resource()) + " HTTP/1.1\r\nHost: " + std::pmr::string(host, ruvia::process_resource()) +
+[[nodiscard]] std::string get(std::string_view target, std::string_view host) {
+    return std::string("GET ") + std::string(target) + " HTTP/1.1\r\nHost: " + std::string(host) +
            "\r\nConnection: close\r\n\r\n";
 }
 
@@ -106,10 +104,10 @@ struct http2_target final {
 // Sends every request on one HTTP/2 connection over `stream` and returns the
 // response status of each, in order; 0 when a stream ended without one.
 template <typename stream_type>
-std::pmr::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<http2_target> targets) {
+std::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_list<http2_target> targets) {
     auto peer = ruvia::http2_connection::client();
-    std::pmr::map<std::uint32_t, std::size_t> pending{ruvia::process_resource()};
-    std::pmr::vector<unsigned> statuses(targets.size(), 0, ruvia::process_resource());
+    std::map<std::uint32_t, std::size_t> pending{};
+    std::vector<unsigned> statuses(targets.size(), 0);
     for (std::size_t i = 0; i < targets.size(); ++i) {
         const auto submitted = peer.submit_request_head(ruvia::http2_regular_request_head_view{
             .scheme_ = (targets.begin() + i)->scheme_, .authority_ = (targets.begin() + i)->authority_, .target_ = "/origin"});
@@ -119,7 +117,7 @@ std::pmr::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_
         }
         pending.emplace(*id, i);
     }
-    std::pmr::string output;
+    std::string output;
     std::array<char, 16384> input{};
     while (!pending.empty()) {
         while (peer.wants_write()) {
@@ -147,7 +145,7 @@ std::pmr::vector<unsigned> http2_statuses(stream_type& stream, std::initializer_
     return statuses;
 }
 
-std::pmr::vector<unsigned> h2_over_tls(
+std::vector<unsigned> h2_over_tls(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.set_verify_mode(asio::ssl::verify_none);
@@ -164,7 +162,7 @@ std::pmr::vector<unsigned> h2_over_tls(
     return http2_statuses(stream, targets);
 }
 
-std::pmr::vector<unsigned> h2_cleartext(
+std::vector<unsigned> h2_cleartext(
     asio::io_context& io, const asio::ip::tcp::endpoint& endpoint, std::initializer_list<http2_target> targets) {
     asio::ip::tcp::socket socket(io);
     socket.connect(endpoint);
@@ -196,7 +194,7 @@ TEST(Ruvia, requests_the_connection_cannot_carry_are_answered_421) {
             .tls_ = {.identity_ = {.certificate_chain_file_ = identity.ca_file_, .private_key_file_ = private_key}},
         })
         .on_start([] { started.release(); });
-    const auto ip_host = std::move(std::pmr::string("127.0.0.1:", ruvia::process_resource()).append(std::to_string(https_endpoint.port())));
+    const auto ip_host = std::move(std::string("127.0.0.1:").append(std::to_string(https_endpoint.port())));
     for (const bool trusted : {false, true}) {
         if (trusted) {
             app.trusted_proxies({.cidrs_ = {"127.0.0.1/32"}});

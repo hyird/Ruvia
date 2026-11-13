@@ -11,7 +11,6 @@
 #include <asio/bind_executor.hpp>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/request_memory.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/web/prepared_listener.h"
 
@@ -23,7 +22,7 @@ namespace ruvia::detail {
 // boundary, retaining its serialization lease and rollback state.
 class prepared_listener_state final {
 public:
-    explicit prepared_listener_state(worker_handle caller)
+    explicit prepared_listener_state(worker_ref caller)
         : caller_(std::move(caller)),
           ready_(caller_),
           finished_(caller_),
@@ -86,7 +85,7 @@ public:
         finished_receipt_->complete(std::move(failure));
         finished_receipt_.reset();
     }
-    worker_handle caller_;
+    worker_ref caller_;
     runtime_control_completion ready_;
     runtime_control_completion finished_;
 
@@ -103,9 +102,8 @@ struct prepared_listener_access final {
         auto prepared = co_await std::move(preparation);
         co_await std::move(prepared).activate();
     }
-    static std::shared_ptr<prepared_listener_state> make(worker_handle caller) {
-        return std::allocate_shared<prepared_listener_state>(
-            std::pmr::polymorphic_allocator<prepared_listener_state>(process_resource()), std::move(caller));
+    static std::shared_ptr<prepared_listener_state> make(worker_ref caller) {
+        return std::make_shared<prepared_listener_state>(std::move(caller));
     }
     static task<prepared_listener> launch(std::shared_ptr<prepared_listener_state> state, task<void> operation) {
         if (!state->caller_.is_current() || !state->caller_.accepting()) {

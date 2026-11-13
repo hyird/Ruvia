@@ -5,7 +5,6 @@
 
 #include "ruvia/core/bytes.h"
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/http/http_request_target.h"
 #include "ruvia/web/http_client_websocket_request.h"
@@ -16,7 +15,7 @@
 #include "http/inline_http_header_views.h"
 #include "tls/tls_random.h"
 #include "websocket/http_websocket_connection.h"
-#include "websocket/websocket_facade.h"
+#include "websocket/http_websocket_session.h"
 
 namespace ruvia::detail {
 
@@ -107,9 +106,9 @@ public:
           retire_signal_(worker_),
           scanner_(worker_, scanner_options(lifecycle)),
           connection_(http_client_websocket_transport(std::move(tunnel), entry_), worker_, entry_, normalize_websocket_lifecycle_options(lifecycle),
-              protocol_byte_limit::limited(message_limit), *process_resource(), {},
+              protocol_byte_limit::limited(message_limit), {},
               {.compression_ = handshake.compression_, .role_ = websocket_connection_role::client, .mask_key_generator_ = &mask_key, .deflater_ = deflate.deflater_},
-              std::pmr::string(handshake.selected_subprotocol_, process_resource())),
+              std::string(handshake.selected_subprotocol_)),
           scanner_guard_(scanner_, entry_, {&connection_, &abort_transport, &abort_transport}) {
         entry_.enter_long_lived();
         scanner_.start();
@@ -154,7 +153,7 @@ private:
     static void abort_transport(void* target) noexcept {
         static_cast<websocket_session_connection<http_client_websocket_transport>*>(target)->abort();
     }
-    worker_handle worker_;
+    worker_ref worker_;
     worker_signal retire_signal_;
     connection_scanner scanner_;
     connection_scanner::entry entry_;
@@ -171,11 +170,11 @@ private:
 
 namespace ruvia {
 
-http_client_websocket_request::http_client_websocket_request(const http_client_handle& client, std::string_view path)
+http_client_websocket_request::http_client_websocket_request(const http_client_ref& client, std::string_view path)
     : client_(client),
-      path_(path, process_resource()),
-      headers_(process_resource()),
-      subprotocols_(process_resource()) {
+      path_(path),
+      headers_(),
+      subprotocols_() {
     require_open();
     if (!is_valid_http_origin_form_target(path_)) {
         throw std::invalid_argument("WebSocket path must use origin-form");
@@ -189,7 +188,7 @@ void http_client_websocket_request::require_open() const {
 }
 http_client_websocket_request& http_client_websocket_request::header(std::string_view name, std::string_view value) {
     require_open();
-    headers_.emplace_back(name, value, headers_.get_allocator().resource());
+    headers_.emplace_back(name, value);
     return *this;
 }
 http_client_websocket_request& http_client_websocket_request::headers(std::span<const http_header_view> fields) {
@@ -198,7 +197,7 @@ http_client_websocket_request& http_client_websocket_request::headers(std::span<
     headers_.reserve(old_size + fields.size());
     try {
         for (const auto& field : fields) {
-            headers_.emplace_back(field.name(), field.value(), headers_.get_allocator().resource());
+            headers_.emplace_back(field.name(), field.value());
         }
     } catch (...) {
         while (headers_.size() > old_size) {
@@ -233,10 +232,7 @@ http_client_websocket_request& http_client_websocket_request::max_message_bytes(
 }
 http_client_websocket_request& http_client_websocket_request::configure(http_client_request_options options) {
     require_open();
-    if (options.field_source_ != http_request_field_source::generated &&
-        options.field_source_ != http_request_field_source::forwarded) {
-        throw std::invalid_argument("invalid HTTP request field source");
-    }
+    detail::validate_http_client_request_options(options);
     request_options_ = std::move(options);
     return *this;
 }
@@ -248,21 +244,18 @@ task<websocket> http_client_websocket_request::connect() {
 task<websocket> http_client_websocket_request::connect_owned(http_client_websocket_request request) {
     request.client_.registration_.require_active();
     auto& pool = *request.client_.pool_;
-    auto* resource = process_resource();
     std::shared_ptr<detail::http_client_websocket_handshake> handshake;
     std::optional<detail::http_client_request_storage> stored;
     {
-        const detail::inline_http_header_views headers(request.headers_, resource);
+        const detail::inline_http_header_views headers(request.headers_);
         validate_http1_websocket_client_handshake_configuration(headers.view());
-        std::pmr::vector<std::string_view> protocols(resource);
+        std::vector<std::string_view> protocols;
         protocols.reserve(request.subprotocols_.size());
         for (const auto& protocol : request.subprotocols_) {
             protocols.emplace_back(protocol);
         }
-        handshake = std::allocate_shared<detail::http_client_websocket_handshake>(
-            std::pmr::polymorphic_allocator<detail::http_client_websocket_handshake>(resource),
-            websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_}, resource);
-        stored.emplace("GET", request.path_, headers.view(), resource);
+        handshake = std::make_shared<detail::http_client_websocket_handshake>(websocket_client_negotiation_config_view{.subprotocols_ = std::span<const std::string_view>(protocols), .deflate_ = request.deflate_});
+        stored.emplace("GET", request.path_, headers.view());
         stored->options_ = detail::copy_http_client_request_settings(request.request_options_);
         stored->informational_ = detail::share_http_client_informational(std::move(request.request_options_.informational_));
         stored->pool_owner_ = request.client_.pool_owner_;
@@ -270,9 +263,9 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
         stored->set_tunnel(pool.config().authority_, "websocket");
         stored->set_websocket(handshake);
     }
-    std::pmr::string(request.path_.get_allocator()).swap(request.path_);
-    std::pmr::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
-    std::pmr::vector<std::pmr::string>(request.subprotocols_.get_allocator()).swap(request.subprotocols_);
+    std::string(request.path_.get_allocator()).swap(request.path_);
+    std::vector<http_header>(request.headers_.get_allocator()).swap(request.headers_);
+    std::vector<std::string>(request.subprotocols_.get_allocator()).swap(request.subprotocols_);
     // The opening deadline covers admission, transport establishment and every
     // handshake byte, but must not become the established tunnel's lifetime.
     // After opening, user cancellation belongs to each operation's snapshot.
@@ -313,10 +306,8 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
         throw http_client_error(make_error_code(http_client_errc::handshake_rejected),
             "WebSocket handshake rejected", opened->response()->status());
     }
-    auto owner = std::allocate_shared<detail::client_websocket_session>(
-        std::pmr::polymorphic_allocator<detail::client_websocket_session>(resource),
-        pool, std::move(*tunnel), *handshake, request.deflate_, request.lifecycle_, request.max_message_bytes_);
-    auto result = detail::make_websocket_facade(owner->connection_, *resource);
+    auto owner = std::make_shared<detail::client_websocket_session>(pool, std::move(*tunnel), *handshake, request.deflate_, request.lifecycle_, request.max_message_bytes_);
+    auto result = detail::make_websocket_facade(owner->connection_);
     pool.tasks().spawn(detail::client_websocket_session::run(owner, pool.pool_stop_token()));
     result.state_->owner_ = owner;
     result.state_->retire_ = &detail::client_websocket_session::retire;
@@ -324,7 +315,7 @@ task<websocket> http_client_websocket_request::connect_owned(http_client_websock
     result.state_->read_timeout_ = request.request_options_.timeouts_.read_.resolve(pool.config().read_timeout_);
     co_return result;
 }
-http_client_websocket_request http_client_handle::websocket(std::string_view path) const {
+http_client_websocket_request http_client_ref::websocket(std::string_view path) const {
     registration_.require_active();
     return http_client_websocket_request(*this, path);
 }

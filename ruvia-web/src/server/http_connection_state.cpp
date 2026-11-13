@@ -6,7 +6,6 @@
 #include <new>
 
 #include "ruvia/http/http_limits.h"
-#include "ruvia/http/http_pmr_string.h"
 
 #include "server/http1_session_request_completion.h"
 #include "server/http_server_options.h"
@@ -23,8 +22,7 @@ constexpr std::size_t retained_deferred_access_entries = 64;
 }  // namespace
 
 // Reserve the initial capacity before exposing the active work set.
-connection_read_buffer::connection_read_buffer(std::pmr::polymorphic_allocator<char> allocator)
-    : storage_(allocator) {
+connection_read_buffer::connection_read_buffer() noexcept {
     storage_.reserve(initial_read_buffer_bytes);
 }
 
@@ -75,9 +73,7 @@ void connection_read_buffer::trim() {
     }
 }
 
-http1_deferred_access_log::http1_deferred_access_log(std::pmr::polymorphic_allocator<char> allocator)
-    : entries_(allocator),
-      text_(allocator) {}
+http1_deferred_access_log::http1_deferred_access_log() noexcept = default;
 
 void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request,
     ip_address client_address, std::chrono::steady_clock::time_point start,
@@ -138,39 +134,15 @@ void http1_deferred_access_log::complete(
 void http1_deferred_access_log::reset() noexcept {
     entries_.clear();
     if (entries_.capacity() > retained_deferred_access_entries) {
-        std::pmr::vector<entry_type>(entries_.get_allocator()).swap(entries_);
+        std::vector<entry_type>(entries_.get_allocator()).swap(entries_);
     }
-    http_clear_pmr_string_retaining_small(text_);
+    http_clear_string_retaining_small(text_);
 }
 
-connection_work_set::connection_work_set(std::span<std::byte> arena_block)
-    : read_buffer_(std::pmr::polymorphic_allocator<char>(process_resource())),
-      response_head_(std::pmr::polymorphic_allocator<char>(process_resource())),
-      deferred_access_(std::pmr::polymorphic_allocator<char>(process_resource())),
-      arena_block_(arena_block) {}
+connection_work_set::connection_work_set() noexcept = default;
 
-std::unique_ptr<connection_work_set, connection_work_set_deleter>
-make_connection_work_set(std::size_t arena_bytes) {
-    if (arena_bytes > std::numeric_limits<std::size_t>::max() - sizeof(connection_work_set)) {
-        throw std::bad_alloc();
-    }
-    const auto allocation_bytes = sizeof(connection_work_set) + arena_bytes;
-    auto* const resource = process_resource();
-    auto* const storage = static_cast<std::byte*>(resource->allocate(allocation_bytes, alignof(connection_work_set)));
-    try {
-        auto* work_set = ::new (static_cast<void*>(storage))
-            connection_work_set(std::span<std::byte>(storage + sizeof(connection_work_set), arena_bytes));
-        return std::unique_ptr<connection_work_set, connection_work_set_deleter>(work_set);
-    } catch (...) {
-        resource->deallocate(storage, allocation_bytes, alignof(connection_work_set));
-        throw;
-    }
-}
-
-void connection_work_set_deleter::operator()(connection_work_set* work_set) const noexcept {
-    const auto allocation_bytes = sizeof(connection_work_set) + work_set->arena_block_.size();
-    work_set->~connection_work_set();
-    process_resource()->deallocate(work_set, allocation_bytes, alignof(connection_work_set));
+std::unique_ptr<connection_work_set> make_connection_work_set() {
+    return std::make_unique<connection_work_set>();
 }
 
 }  // namespace ruvia::detail

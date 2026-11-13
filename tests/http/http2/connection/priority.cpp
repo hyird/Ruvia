@@ -2,7 +2,6 @@
 
 #include <array>
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -88,10 +87,9 @@ TEST(Ruvia, http2_priority_update_zero_length_on_client_yields_protocol_error) {
 }
 
 TEST(Ruvia, http2_priority_update_on_idle_stream_is_attached_to_snapshot_and_cleaned_up_on_release) {
-    std::pmr::unsynchronized_pool_resource resource;
     ruvia::test::output_relay relay;
-    auto client = ruvia::http2_connection::client({.resource_ = &resource});
-    auto server = ruvia::http2_connection::server({.resource_ = &resource});
+    auto client = ruvia::http2_connection::client({});
+    auto server = ruvia::http2_connection::server({});
     relay.transfer(client, server);
     relay.transfer(server, client);
     relay.transfer(client, server);
@@ -116,7 +114,7 @@ TEST(Ruvia, http2_priority_update_on_idle_stream_is_attached_to_snapshot_and_cle
             EXPECT_EQ(req_head->snapshot().priority_update_->request_priority().urgency_, std::uint8_t{1});
             EXPECT_TRUE(req_head->snapshot().priority_update_->request_priority().incremental_);
         }
-        ruvia::http_response resp(&resource);
+        ruvia::http_response resp;
         resp.status(ruvia::http_status::no_content);
         (void)server.submit_response_head(
             1, resp, ruvia::plan_buffered_http_response_write(ruvia::http_known_method::get, resp));

@@ -10,7 +10,6 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http_ascii.h"
@@ -41,14 +40,14 @@ constexpr std::chrono::milliseconds http2_client_goaway_flush_time{1000};
 }  // namespace
 
 http2_client_session::http2_client_session(http_client_connection& handler, client_tcp_transport& transport, task_scope& tasks,
-    const worker_handle& worker_value, std::optional<timeout_duration> ping_interval)
+    const worker_ref& worker_value, std::optional<timeout_duration> ping_interval)
     : handler_(handler),
       transport_(transport),
       tasks_(tasks),
       worker_(worker_value),
       ping_interval_(ping_interval),
-      read_buffer_(process_resource()),
-      write_buffer_(process_resource()),
+      read_buffer_(),
+      write_buffer_(),
       write_signal_(worker_value),
       state_signal_(worker_value),
       capacity_signal_(worker_value) {}
@@ -58,7 +57,6 @@ task<http2_client_session_start_result> http2_client_session::start(
     if (session_tasks_ != 0) {
         std::terminate();
     }
-    options.resource_ = process_resource();
     connection_.emplace(::ruvia::http2_connection::client(options));
     next_nonzero_id(generation_);
     failed_ = false;
@@ -72,7 +70,7 @@ task<http2_client_session_start_result> http2_client_session::start(
         while (connection_->wants_write()) {
             take_output_batch(write_buffer_);
             const auto written = co_await transport_.write(write_buffer_, timeout);
-            http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
+            http_clear_string_retaining_small(write_buffer_, write_batch_bytes);
             if (!written.ok()) {
                 reset();
                 co_return http2_client_session_start_result{
@@ -243,7 +241,7 @@ void http2_client_session::reset() noexcept {
     if (session_tasks_ == 0) {
         connection_.reset();
         read_buffer_.clear();
-        std::pmr::string(process_resource()).swap(write_buffer_);
+        std::string().swap(write_buffer_);
     }
 }
 
@@ -295,7 +293,7 @@ void http2_client_session::check_liveness(std::uint64_t generation) noexcept {
     }
 }
 
-void http2_client_session::take_output_batch(std::pmr::string& output) {
+void http2_client_session::take_output_batch(std::string& output) {
     output.clear();
     (void)connection_->take_output_batch(write_batch_bytes, output);
 }
@@ -390,7 +388,7 @@ task<void> http2_client_session::run_writer(std::uint64_t generation) {
                 // Retain ordinary heads and frame-sized DATA batches, but
                 // return an unexpectedly larger indivisible frame before
                 // the connection idles.
-                http_clear_pmr_string_retaining_small(write_buffer_, write_batch_bytes);
+                http_clear_string_retaining_small(write_buffer_, write_batch_bytes);
                 if (!written.ok()) {
                     fail(generation, written, {});
                     co_return;
@@ -670,7 +668,7 @@ void http_client_connection::finish_http2_message(std::uint32_t stream_id, http2
         state_value.trailers_.clear();
         state_value.trailers_.reserve(trailers.size());
         for (const auto& trailer : trailers) {
-            state_value.trailers_.emplace_back(trailer.name(), trailer.value(), state_value.resource_);
+            state_value.trailers_.emplace_back(trailer.name(), trailer.value());
         }
         if (stream->timeout_ == nullptr) {
             std::terminate();
@@ -732,6 +730,19 @@ void http_client_connection::on_http2_event(http2_event& event) {
         pool_.advertisements().retain(index_, http_protocol_version::http2, *origins);
     } else if (const auto* service = event.alternative_service_advertisement()) {
         pool_.advertisements().retain(index_, *service);
+        if (service->stream_id_ != 0) {
+            if (auto* stream = find_http2_stream(service->stream_id_);
+                stream != nullptr && stream->addresses_origin_ && stream->state_ != nullptr && stream->state_->route_ != nullptr) {
+                const http_header field("alt-svc", service->field_value_);
+                pool_.observe_alt_svc(*stream->state_->route_, std::span<const http_header>(&field, 1));
+            }
+        } else if (alias_route() && service->origin_.size() > 8 &&
+                   http_ascii_equals_ignore_case(std::string_view(service->origin_).substr(0, 8), "https://") &&
+                   http_authorities_equal(borrowed_text(std::string_view(service->origin_).substr(8)),
+                       borrowed_text(std::string_view(pool_.config().authority_)), 443)) {
+            const http_header field("alt-svc", service->field_value_);
+            pool_.observe_alt_svc(http_client_route{.origin_ = pool_.config().origin(), .authority_ = pool_.config().authority_, .dial_host_ = pool_.config().dial_host_, .dial_port_ = pool_.config().dial_port_, .server_name_ = pool_.config().host_, .alias_origin_ = true, .versions_ = pool_.config().versions_}, std::span<const http_header>(&field, 1));
+        }
     }
     if (const auto* push = event.push_promise()) {
         pool_.accept_http2_push(*this, *push);
@@ -1007,7 +1018,6 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
         throw http_client_error(make_error_code(http_client_errc::protocol_unavailable), "HTTP Upgrade requires HTTP/1.1");
     }
     const auto& config = pool_.config();
-    auto* const resource = process_resource();
     const std::string_view scheme = config.scheme_ == http_scheme::https ? "https" : "http";
     const auto content = request.upload() != nullptr
                              ? ::ruvia::http_request_content_plan::streaming(request.upload()->config_.content_length_)
@@ -1063,7 +1073,7 @@ task<bool> http_client_connection::execute_http2(const http_client_request_stora
                                                              : http_client_request_expectation::none;
         // Prepared once per attempt: a wait for stream capacity resubmits the
         // same head instead of rescanning the jar on every session wake.
-        client_prepared_request_scratch scratch(resource);
+        client_prepared_request_scratch scratch;
         const auto source_value = pool_.policy().prepare_request(request, scratch);
         const auto headers = static_cast<std::span<const http_header_view>>(source_value.headers_);
         // Whether another request already used this session when this head
@@ -1245,7 +1255,6 @@ task<bool> http_client_connection::send_http2_request_data(http2_stream& stream,
 task<void> http_client_connection::stream_http2_upload(
     const http_client_request_storage& request, http2_stream& stream, http_client_output_queue& upload) {
     auto& connection = http2_.connection();
-    auto& state_value = *stream.state_;
     const auto stopped = [&stream, &upload] { return stream.failed() || stream.retryable_ || upload.stopped_; };
     co_await run_multiplexed_client_upload(
         pool_.worker(), request, upload, stream.signal_,
@@ -1269,7 +1278,7 @@ task<void> http_client_connection::stream_http2_upload(
                 finished = co_await http2_.send_data(stream.stream_id_, {}, http2_end_stream::end_stream, 0, stopped,
                     &stream.tunnel_end_submitted_);
             } else {
-                const inline_http_header_views trailers(request.upload()->trailers_, state_value.resource_);
+                const inline_http_header_views trailers(request.upload()->trailers_);
                 finished = co_await http2_.finish_request(stream.stream_id_, trailers.view(), stopped);
             }
             if (finished == http2_client_data_status::rejected) {
@@ -1334,7 +1343,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         state_value.connection_generation_ = connection.generation_;
         state_value.stream_id_ = promise.promised_stream_id_;
         state_value.request_id_ = connection.next_http2_request_id();
-        state_value.promised_request_.emplace(state_value.resource_);
+        state_value.promised_request_.emplace();
         auto& request = *state_value.promised_request_;
         request.method_ = promise.request_.method_;
         request.scheme_ = promise.request_.scheme_;
@@ -1342,10 +1351,9 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
         request.path_ = promise.request_.path_;
         request.headers_.reserve(promise.request_.headers_.size());
         for (const auto& field : promise.request_.headers_) {
-            request.headers_.emplace_back(field.name(), field.value(), state_value.resource_);
+            request.headers_.emplace_back(field.name(), field.value());
         }
-        auto driver = make_pmr_object<http2_push_driver>(
-            process_resource(), *this, connection, http_client_response(response.state_), state_value);
+        auto driver = std::make_unique<http2_push_driver>(*this, connection, http_client_response(response.state_), state_value);
         driver->stream_.timeout_ = &driver->timeout_;
         driver->stream_.request_target_ = request.path_;
         driver->stream_.request_id_ = state_value.request_id_;
@@ -1366,7 +1374,7 @@ void http_client_pool::accept_http2_push(http_client_connection& connection, con
 }
 
 task<void> http_client_pool::run_http2_push(
-    std::unique_ptr<http2_push_driver, pmr_object_deleter<http2_push_driver>> driver) {
+    std::unique_ptr<http2_push_driver> driver) {
     auto& stream = driver->stream_;
     auto& state_value = driver->state_;
     try {

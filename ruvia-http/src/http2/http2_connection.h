@@ -26,7 +26,6 @@
 #include <exception>
 #include <limits>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -38,8 +37,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
-#include "ruvia/http/detail/util/http_pmr_object.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http2_event.h"
 #include "ruvia/http/http2_framing.h"
 #include "ruvia/http/http2_observation.h"
@@ -61,9 +59,9 @@
 #include "http2/http2_field_list.h"
 #include "http2/http2_request_headers.h"
 #include "http2/http2_stream_state.h"
+#include "memory/geometric_reserve.h"
+#include "memory/http_c_library_memory.h"
 #include "response/http_framed_response_head_plan.h"
-#include "util/geometric_reserve.h"
-#include "util/http_c_library_memory.h"
 #include "websocket/websocket_server_negotiation.h"
 namespace ruvia::detail {
 
@@ -161,16 +159,14 @@ public:
         std::uint32_t stream_id_;
         bool is_data_;
     };
-    explicit http2_output_buffer(std::pmr::memory_resource* resource)
-        : bytes_(std::string_view{}, resource),
-          segments_(std::size_t{0}, resource) {}
+    http2_output_buffer() noexcept = default;
 
     [[nodiscard]] bool wants_write() const noexcept {
         return consumed_ < bytes_.size();
     }
 
     // Appends one complete frame (or the client connection preface) as a
-    // segment; both reservations precede the copy, so a throwing resource
+    // segment; both reservations precede the copy, so a throwing allocation
     // leaves the pending output unchanged.
     void append_segment(std::string_view bytes_value, std::uint32_t stream_id, bool is_data) {
         if (bytes_value.empty()) {
@@ -188,7 +184,7 @@ public:
         segments_.push_back(segment_type{begin, bytes_.size(), stream_id, is_data});
     }
 
-    [[nodiscard]] http2_output_batch_result take_batch(std::size_t max_bytes, std::pmr::string& into,
+    [[nodiscard]] http2_output_batch_result take_batch(std::size_t max_bytes, std::string& into,
         http2_data_output_observer_type observer, void* observer_context) {
         if (consumed_ == bytes_.size()) {
             return {http2_output_batch_status::empty, 0};
@@ -211,7 +207,7 @@ public:
         // Only a storage handoff benefits from compacting this batch in place.
         const auto batch_bytes = end - consumed_;
         const bool complete_batch = end == bytes_.size();
-        const bool transferable = into.empty() && into.get_allocator() == bytes_.get_allocator();
+        const bool transferable = into.empty();
         if (complete_batch && transferable) {
             compact_consumed_prefix();
         }
@@ -323,8 +319,8 @@ private:
         reserve_geometric(segments_, segments_.size() + 1);
     }
 
-    std::pmr::string bytes_;
-    std::pmr::vector<segment_type> segments_;
+    std::string bytes_;
+    std::vector<segment_type> segments_;
     std::size_t segment_offset_{0};
     std::size_t consumed_{0};
     std::size_t observer_depth_{0};
@@ -358,10 +354,7 @@ public:
     static constexpr std::size_t max_push_streams =
         max_streams - static_cast<std::size_t>(http2_local_settings::max_concurrent_streams);
 
-    explicit http2_stream_table(std::pmr::memory_resource* resource)
-        : resource_(http_pmr_resource_or_default(resource)),
-          overflow_ids_(std::size_t{0}, resource_),
-          overflow_(std::size_t{0}, resource_) {}
+    http2_stream_table() noexcept = default;
 
     [[nodiscard]] std::size_t size() const noexcept {
         return size_;
@@ -408,7 +401,7 @@ public:
     [[nodiscard]] const http2_stream_state* find(std::uint32_t) const&& = delete;
 
     // NOTE on slot reuse: a closed stream's http2_stream_state is destroyed here (inline
-    // slot .reset() / overflow erase), freeing its per-stream pmr strings. We do NOT
+    // slot .reset() / overflow erase), freeing its per-stream strings. We do NOT
     // pool the storage and reset-in-place to retain capacity, deliberately. A correct
     // reset_for_reuse would have to reinitialise ~85 fields across 8 sub-objects, and a
     // single missed field would leak one request's decoded headers / routing / body
@@ -424,7 +417,7 @@ public:
         }
         for (auto& slot : inline_) {
             if (!slot) {
-                slot.emplace(stream_id, resource_);
+                slot.emplace(stream_id);
                 ++size_;
                 if (is_push) {
                     ++push_size_;
@@ -432,7 +425,7 @@ public:
                 return &*slot;
             }
         }
-        auto stream = make_http_pmr_object<http2_stream_state>(resource_, stream_id, resource_);
+        auto stream = std::make_unique<http2_stream_state>(stream_id);
         reserve_geometric(overflow_ids_, overflow_ids_.size() + 1);
         reserve_geometric(overflow_, overflow_.size() + 1);
         auto* result_value = stream.get();
@@ -497,10 +490,9 @@ private:
     // paying the full concurrent-stream budget up front: each slot embeds a
     // ~1.3 KB http2_stream_state, and the table lives in the connection object
     // for the connection's whole lifetime, so the two slots put ~2.6 KB into
-    // every connection. Deeper multiplexing spills to the pmr overflow path.
+    // every connection. Deeper multiplexing spills to the overflow path.
     static constexpr std::size_t inline_capacity = 2;
-    using overflow_stream_type =
-        std::unique_ptr<http2_stream_state, http_pmr_object_deleter<http2_stream_state>>;
+    using overflow_stream_type = std::unique_ptr<http2_stream_state>;
 
     class snapshot_iteration_guard_type final {
     public:
@@ -555,10 +547,9 @@ private:
         overflow_needs_compact_ = false;
     }
 
-    std::pmr::memory_resource* resource_;
     std::array<std::optional<http2_stream_state>, inline_capacity> inline_{};
-    std::pmr::vector<std::uint32_t> overflow_ids_;
-    std::pmr::vector<overflow_stream_type> overflow_;
+    std::vector<std::uint32_t> overflow_ids_;
+    std::vector<overflow_stream_type> overflow_;
     std::size_t size_{0};
     std::size_t push_size_{0};
     std::size_t snapshot_iteration_depth_{0};
@@ -814,7 +805,7 @@ struct http2_extension_payload final {
 
 class http2_connection final {
 public:
-    explicit http2_connection(std::pmr::memory_resource* resource, http2_role role = http2_role::server,
+    explicit http2_connection(http2_role role = http2_role::server,
         bool enable_push = false, bool receive_origin_advertisements = false, bool receive_frame_metadata = false,
         http2_frame_observer_type frame_observer = nullptr, http2_header_observer_type header_observer = nullptr,
         void* observer_context = nullptr);
@@ -854,7 +845,7 @@ public:
 
     // --- outbound --------------------------------------------------------------
     [[nodiscard]] http2_output_batch_result take_output_batch(std::size_t max_bytes,
-        std::pmr::string& into, http2_data_output_observer_type observer, void* observer_context);
+        std::string& into, http2_data_output_observer_type observer, void* observer_context);
     [[nodiscard]] bool wants_write() const noexcept {
         return output_.wants_write();
     }
@@ -994,16 +985,14 @@ private:
         push_promise,
     };
     struct header_block_type final {
-        header_block_type(header_block_kind kind, http2_stream_state& stream,
-            std::pmr::memory_resource* resource) noexcept
+        header_block_type(header_block_kind kind, http2_stream_state& stream) noexcept
             : kind_(kind),
-              context_(stream),
-              informational_fields_(resource) {}
+              context_(stream) {}
 
         header_block_kind kind_;
         http2_header_decode_context context_;
         // Response heads: a 1xx keeps its fields separately from the final head.
-        std::pmr::vector<http_header> informational_fields_;
+        std::vector<http_header> informational_fields_;
         std::optional<http_received_status> status_;
         http_response_content_semantics content_semantics_{http_response_content_semantics::with_content};
         bool saw_regular_{false};
@@ -1154,7 +1143,6 @@ private:
     void begin_final_drain();
     void submit_goaway(std::uint32_t last_stream_id);
 
-    std::pmr::memory_resource* resource_;
     http_c_library_memory memory_;
     nghttp2_mem memory_table_;
     std::unique_ptr<nghttp2_session, session_deleter> session_;
@@ -1162,12 +1150,12 @@ private:
     http2_field_list fields_;
     http2_stream_table streams_;
     // RFC 9218 priority signals received for streams the peer has not opened yet.
-    std::pmr::unordered_map<std::uint32_t, http_priority_fields> priorities_;
-    std::pmr::vector<http2_event> events_;
+    std::unordered_map<std::uint32_t, http_priority_fields> priorities_;
+    std::vector<http2_event> events_;
     std::size_t event_offset_{0};
     http2_stream_lease_ledger leases_;
-    std::pmr::vector<std::uint32_t> owner_resets_;
-    std::pmr::string extension_payload_;
+    std::vector<std::uint32_t> owner_resets_;
+    std::string extension_payload_;
     std::optional<header_block_type> header_block_;
     // A PUSH_PROMISE's request decodes into scratch storage; the promised
     // stream's own receive state awaits the pushed response.
@@ -1204,8 +1192,8 @@ private:
     std::size_t header_block_bytes_{0};
 
     std::uint32_t malformed_request_streams_{0};
-    std::uint32_t peer_reset_streams_{0};
-    std::uint32_t completed_responses_{0};
+    std::uint64_t peer_reset_streams_{0};
+    std::uint64_t completed_responses_{0};
     std::uint32_t undrained_control_frames_{0};
     std::uint32_t peer_error_resets_{0};
 };

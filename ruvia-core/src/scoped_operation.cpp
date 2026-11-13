@@ -3,7 +3,7 @@
 #include <exception>
 #include <stdexcept>
 
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 

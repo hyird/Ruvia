@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
-#include <memory_resource>
 #include <string_view>
 #include <system_error>
 #include <utility>
@@ -21,7 +20,7 @@
 #include "http2/http2_sans_io_session.h"
 #include "http2/http2_sans_io_stream_runtime.h"
 #include "server/http_request_admission.h"
-#include "server/inbound_buffer_resource.h"
+#include "server/inbound_buffer_budget.h"
 #include "server/multiplexed_stream_signal.h"
 
 namespace ruvia::detail {
@@ -110,7 +109,7 @@ public:
     [[nodiscard]] http2_feed_result feed_and_drain(std::string_view bytes);
 
     [[nodiscard]] bool wants_write() const noexcept;
-    void take_output(std::pmr::string& output);
+    void take_output(std::string& output);
     [[nodiscard]] bool write_failed() const noexcept;
     [[nodiscard]] bool writer_should_exit() const noexcept;
     [[nodiscard]] worker_signal::wait_operation wait_for_write();
@@ -175,7 +174,7 @@ private:
     asio::ip::tcp::socket& socket_;
     const route_table& routes_;
     http2_sans_io_session_context session_;
-    inbound_buffer_resource inbound_buffers_;
+    inbound_buffer_account inbound_buffers_;
     context_services base_services_;
     std::string_view remote_address_;
     ruvia::http2_connection connection_;

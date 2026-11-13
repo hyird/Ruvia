@@ -12,6 +12,7 @@
 #include <cstddef>
 #include <exception>
 #include <iostream>
+#include <string>
 #include <system_error>
 
 #include "ruvia/core/timer.h"
@@ -43,7 +44,7 @@ private:
             bytes_value += chunk->size();
         }
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("uploaded bytes=");
         ruvia::http_append_unsigned(body, bytes_value);
         body.push_back('\n');
@@ -62,7 +63,7 @@ private:
             bytes_value += part->body().size();
         }
 
-        std::pmr::string body(c.allocator<char>());
+        std::string body;
         body.append("multipart parts=");
         ruvia::http_append_unsigned(body, parts);
         body.append(" bytes=");

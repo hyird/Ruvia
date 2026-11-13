@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -286,8 +285,8 @@ private:
     explicit constexpr http1_client_response_need_more() noexcept = default;
 };
 
-// One complete response head. The response owns status/header storage through
-// PMR; consumed_bytes() is the exact boundary after CRLF CRLF, so a sans-I/O
+// One complete response head. The response owns status/header storage;
+// consumed_bytes() is the exact boundary after CRLF CRLF, so a sans-I/O
 // driver can feed the remaining bytes to the body/tunnel/upgrade path directly.
 class http1_parsed_client_response_head final {
 public:
@@ -382,9 +381,8 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // exchange until a final response, CONNECT tunnel, or protocol switch completes
 // it. Header validation is transactional and owning response allocation occurs
 // only after protocol validation succeeds. Temporary field descriptors use
-// bounded inline storage and spill to the supplied PMR as needed. Response
-// obs-fold is replaced with spaces before field validation; its temporary
-// storage uses the same PMR.
+// bounded inline storage and spill to heap storage as needed. Response
+// obs-fold is replaced with spaces before field validation.
 // Auxiliary fields do not select framing: initial Trailer values are opaque
 // declaration metadata subject to ordinary field-byte and size limits, not
 // trailer-name/list validation, and are accepted without chunked framing.
@@ -400,13 +398,12 @@ static_assert(std::is_nothrow_move_constructible_v<http1_client_response_parse_r
 // Ignored 1xx/204/304/HEAD/CONNECT framing values are not interpreted.
 // Any number of informational heads may precede the final response; each head
 // remains subject to the header limits (max_http_header_bytes and
-// max_http_header_fields) and the supplied memory resource. An invalid status
+// max_http_header_fields). An invalid status
 // line or a line ending in a bare LF fails as soon as it arrives, without
 // waiting for the rest of the head.
 class http1_client_response_parser final {
 public:
-    explicit http1_client_response_parser(
-        http1_client_exchange_state exchange_state, std::pmr::memory_resource* resource = nullptr) noexcept;
+    explicit http1_client_response_parser(http1_client_exchange_state exchange_state) noexcept;
 
     http1_client_response_parser(const http1_client_response_parser&) = delete;
     http1_client_response_parser& operator=(const http1_client_response_parser&) = delete;
@@ -441,7 +438,6 @@ private:
     };
 
     http1_client_exchange_state exchange_state_;
-    std::pmr::memory_resource* resource_;
     phase_type phase_{phase_type::await_response};
     detail::http1_client_request_content_phase request_content_phase_;
     bool interim_faulty_framing_{false};

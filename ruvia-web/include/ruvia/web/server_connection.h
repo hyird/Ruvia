@@ -3,7 +3,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -15,7 +14,7 @@
 #include "ruvia/core/scoped_operation.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/context.h"
 
 namespace ruvia {
@@ -93,10 +92,10 @@ public:
     }
 
     // Borrowed for this callback; copy the handle to retain its dispatcher.
-    [[nodiscard]] const worker_handle& worker() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const worker_ref& worker() const& noexcept RUVIA_LIFETIMEBOUND {
         return worker_;
     }
-    const worker_handle& worker() const&& = delete;
+    const worker_ref& worker() const&& = delete;
     [[nodiscard]] std::shared_ptr<void> connection_state() const noexcept {
         return state_ == nullptr ? std::shared_ptr<void>{} : *state_;
     }
@@ -119,11 +118,11 @@ public:
     task<void> write(std::string_view, operation_options = {}) && = delete;
     [[nodiscard]] task<void> write(std::span<const std::byte> bytes, operation_options operation = {}) &;
     task<void> write(std::span<const std::byte>, operation_options = {}) && = delete;
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     [[nodiscard]] task<void> write(string_type&& bytes, operation_options operation = {}) & {
         return write_owned(std::move(bytes), std::move(operation));
     }
-    template <std::same_as<std::pmr::string> string_type>
+    template <std::same_as<std::string> string_type>
     task<void> write(string_type&&, operation_options = {}) && = delete;
     // Ends the send direction: TCP shuts down its send side, TLS sends
     // close_notify. Reading remains available until the peer ends its own.
@@ -143,12 +142,12 @@ private:
     using abort_type = void (*)(void*) noexcept;
 
     server_connection(const detail::server_connection_fields& fields, const ::ruvia::stop_token& stop_token_value,
-        const worker_handle& worker_value, void* target, read_type read, write_type write, finish_type finish_value,
+        const worker_ref& worker_value, void* target, read_type read, write_type write, finish_type finish_value,
         abort_type abort_value) noexcept;
     void require_active() const;
-    [[nodiscard]] task<void> write_owned(std::pmr::string&& bytes, operation_options operation);
+    [[nodiscard]] task<void> write_owned(std::string&& bytes, operation_options operation);
 
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     void* target_;
     read_type read_;
     write_type write_;

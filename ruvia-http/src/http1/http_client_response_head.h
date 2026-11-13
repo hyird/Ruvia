@@ -1,6 +1,5 @@
 #pragma once
 
-#include <memory_resource>
 #include <string_view>
 #include <variant>
 #include <vector>
@@ -24,12 +23,12 @@
 namespace ruvia::detail {
 
 struct http_client_response_head_access final {
-    [[nodiscard]] static http_client_response_head make(http_received_status status,
-        http_protocol_version protocol_version, std::pmr::memory_resource* resource) {
-        return http_client_response_head(status, protocol_version, resource);
+    [[nodiscard]] static http_client_response_head make(
+        http_received_status status, http_protocol_version protocol_version) noexcept {
+        return http_client_response_head(status, protocol_version);
     }
 
-    [[nodiscard]] static std::pmr::vector<http_header>& headers(
+    [[nodiscard]] static std::vector<http_header>& headers(
         http_client_response_head& head) noexcept {
         return head.headers_;
     }
@@ -61,8 +60,8 @@ struct http1_client_exchange_state_access final {
 };
 
 struct http1_client_parsed_response_head final {
-    explicit http1_client_parsed_response_head(const http1_client_parsed_status_line& status_line,
-        std::pmr::memory_resource* resource) noexcept;
+    explicit http1_client_parsed_response_head(
+        const http1_client_parsed_status_line& status_line) noexcept;
 
     http_received_status received_status_;
     // The status the response is processed as (received_status_.status()).
@@ -94,7 +93,7 @@ using http1_client_response_planning_result_type =
 // unfolded.
 [[nodiscard]] http1_client_response_head_parse_result_type parse_http1_client_response_head_fields(
     const http1_client_parsed_status_line& status_line, std::string_view field_section,
-    const http1_client_exchange_state& exchange_state, std::pmr::memory_resource* resource);
+    const http1_client_exchange_state& exchange_state);
 
 // Decide the response plan a parsed head implies for this request.
 [[nodiscard]] http1_client_response_planning_result_type plan_http1_client_response(

@@ -1,5 +1,4 @@
 #include <algorithm>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -11,10 +10,9 @@
 
 #include "field/http_origin_payload.h"
 #include "http2/http2_connection.h"
-#include "http2/http2_header_rules.h"
-#include "http2/http2_response_headers.h"
 #include "http2/http2_websocket_handshake.h"
 #include "request/http_binary_request_fields.h"
+#include "response/http_binary_response_fields.h"
 #include "response/http_final_response_control_plan.h"
 #include "response/http_response_header_state.h"
 namespace ruvia::detail {
@@ -341,7 +339,7 @@ http2_connection::submit_websocket_handshake(
         !http2_is_pending_websocket_connect(*stream) || validation.accepted() == nullptr) {
         return http2_websocket_handshake_submit_error::invalid_state;
     }
-    auto negotiation = make_websocket_server_negotiation(request, options, resource_);
+    auto negotiation = make_websocket_server_negotiation(request, options);
     if (!append_http_binary_websocket_response_fields(fields_, negotiation, max_http_header_bytes)) {
         throw std::invalid_argument("WebSocket response headers exceed HTTP/2 header list limit");
     }
@@ -400,7 +398,9 @@ http2_finish_status http2_connection::finish_response(
             return http2_finish_status::backpressured;
         }
     } else {
-        append_http2_response_trailers(fields_, trailers);
+        fields_.clear();
+        fields_.reserve(trailers.fields().size());
+        fields_.add_lowercase_fields(trailers.fields());
     }
     end_local_stream(*stream, trailers.empty());
     return http2_finish_status::accepted;

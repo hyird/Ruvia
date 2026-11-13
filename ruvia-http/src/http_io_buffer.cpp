@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "util/http_address_overlap.h"
+#include "memory/http_address_overlap.h"
 
 namespace ruvia {
 namespace {
@@ -18,8 +18,7 @@ constexpr std::size_t max_io_buffer_bytes = static_cast<std::size_t>((std::numer
 }  // namespace
 
 http_io_buffer::http_io_buffer(http_io_buffer&& other) noexcept
-    : allocator_(other.allocator_),
-      storage_(std::exchange(other.storage_, nullptr)),
+    : storage_(std::exchange(other.storage_, nullptr)),
       capacity_(std::exchange(other.capacity_, 0)),
       begin_(std::exchange(other.begin_, 0)),
       end_(std::exchange(other.end_, 0)) {}
@@ -135,7 +134,7 @@ void http_io_buffer::move_window_to_front() noexcept {
 
 void http_io_buffer::reallocate(std::size_t capacity, std::string_view tail) {
     const auto live = size();
-    char* storage = capacity == 0 ? nullptr : allocator_.allocate(capacity);
+    char* storage = capacity == 0 ? nullptr : std::allocator<char>{}.allocate(capacity);
     if (live != 0) {
         std::memcpy(storage, storage_ + begin_, live);
     }
@@ -156,8 +155,7 @@ void http_io_buffer::release() noexcept {
     begin_ = 0;
     end_ = 0;
     if (storage != nullptr) {
-        auto allocator = allocator_;
-        allocator.deallocate(storage, capacity);
+        std::allocator<char>{}.deallocate(storage, capacity);
     }
 }
 

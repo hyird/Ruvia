@@ -35,7 +35,6 @@
 #include "test_tls_identity.h"
 
 #if defined(RUVIA_ENABLE_HTTP2)
-#include <memory_resource>
 
 #include "ruvia/http/hpack.h"
 #include "ruvia/http/http2_framing.h"
@@ -227,12 +226,12 @@ tls_exchange https_connection_id(asio::io_context& io, const asio::ip::tcp::endp
 #if defined(RUVIA_ENABLE_HTTP2)
 // The client connection preface, its SETTINGS and GET /id on stream 1.
 std::string http2_opening(std::string_view scheme) {
-    std::pmr::string block;
+    std::string block;
     ruvia::hpack_encoder::encode_header(block, ":method", "GET");
     ruvia::hpack_encoder::encode_header(block, ":scheme", scheme);
     ruvia::hpack_encoder::encode_header(block, ":authority", "localhost");
     ruvia::hpack_encoder::encode_header(block, ":path", "/id");
-    std::pmr::string wire(ruvia::http2_client_preface);
+    std::string wire(ruvia::http2_client_preface);
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::settings, 0, 0, {});
     // END_STREAM | END_HEADERS.
     ruvia::test::append_frame(wire, ruvia::http2_frame_type::headers, 0x5, 1, block);

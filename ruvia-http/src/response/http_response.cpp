@@ -10,7 +10,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/detail/util/pmr_resource.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/http/http_status.h"
@@ -171,12 +170,7 @@ http_response_body_plan plan_http_response_body(
         !connect_tunnel && body_allowed);
 }
 
-http_response::http_response(std::pmr::memory_resource* resource)
-    : http_response(detail::http_resolved_pmr_resource_tag{},
-          detail::http_pmr_resource_or_default(resource)) {}
-
-http_response::http_response(detail::http_resolved_pmr_resource_tag, std::pmr::memory_resource* resource)
-    : headers_(detail::http_resolved_pmr_resource_tag{}, resource) {}
+http_response::http_response() noexcept = default;
 
 http_response::http_response(http_response&& other) noexcept
     : status_code_(other.status_code_),
@@ -187,21 +181,10 @@ http_response& http_response::operator=(http_response&& other) noexcept {
     if (this == &other) {
         return *this;
     }
-
-    // A response is one resource domain. Member-wise assignment would retain the
-    // target allocator in PMR alternatives while http_response_headers follows the
-    // source resource, leaving one response split across unrelated request arenas.
-    // Reconstructing transfers every owning alternative together and does not
-    // allocate on the response hot path.
-    // Keep old payloads alive until ownership and the return reference are committed.
     http_response retired(std::move(*this));
     std::destroy_at(this);
     std::construct_at(this, std::move(other));
     return *this;
-}
-
-std::pmr::memory_resource* http_response::memory_resource() const noexcept {
-    return headers_.resource_;
 }
 
 void http_response::commit_headers(http_response_headers&& staged) noexcept {
@@ -269,19 +252,19 @@ void http_response::transfer_headers_from(
 }
 
 void http_response::body(std::string_view value) {
-    body_.set_copy(memory_resource(), value);
+    body_.set_copy(value);
 }
 
-void http_response::owned_body(std::pmr::string&& value) {
-    body_.set_owned(memory_resource(), std::move(value));
+void http_response::owned_body(std::string&& value) noexcept {
+    body_.set_owned(std::move(value));
 }
 
 void http_response::static_body(std::string_view value) noexcept {
     body_.set_static(value);
 }
 
-void http_response::file_bytes_body(std::pmr::string&& value) {
-    body_.set_file_bytes(memory_resource(), std::move(value));
+void http_response::file_bytes_body(std::string&& value) noexcept {
+    body_.set_file_bytes(std::move(value));
 }
 
 void http_response::apply_content_encoding(std::string_view content_encoding) {
@@ -289,12 +272,12 @@ void http_response::apply_content_encoding(std::string_view content_encoding) {
 }
 
 void http_response::replace_body_with_content_encoding(
-    std::pmr::string&& value, std::string_view content_encoding) {
+    std::string&& value, std::string_view content_encoding) {
     apply_encoded_representation(content_encoding, &value);
 }
 
 void http_response::apply_encoded_representation(
-    std::string_view content_encoding, std::pmr::string* body) {
+    std::string_view content_encoding, std::string* body) {
     detail::validate_response_header_storage_size(std::string_view("Content-Encoding").size(), content_encoding.size());
     // Coding-list parsing permits field-line OWS; publish normalized field
     // content so the same response can be emitted by HTTP/1 and HTTP/2.
@@ -325,7 +308,7 @@ void http_response::apply_encoded_representation(
     // Every descriptor and table slot exists before the body changes. set_owned
     // has a strong failure guarantee; everything after it is no-throw publication.
     if (body != nullptr) {
-        body_.set_owned(memory_resource(), std::move(*body));
+        body_.set_owned(std::move(*body));
     } else {
         if (body_.size() == 0 && !body_.file_representation()) {
             head_metadata_body();
@@ -344,7 +327,7 @@ void http_response::apply_encoded_representation(
 
 void http_response::file_body(http_native_path_view_type file, http_content_length size,
     http_content_length offset, http_content_length length, http_response_file_identity identity,
-    http_response_file_handle opened) {
+    http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
@@ -352,18 +335,18 @@ void http_response::file_body(http_native_path_view_type file, http_content_leng
         throw std::invalid_argument("file response byte range is outside the file");
     }
 
-    body_.set_owned_file(memory_resource(), file, size.value(), offset.value(), length.value(),
+    body_.set_owned_file(file, size.value(), offset.value(), length.value(),
         identity, std::move(opened));
 }
 
 void http_response::multipart_file_body(http_native_path_view_type file, http_content_length size,
     http_response_file_identity identity, http_multipart_byte_range_plan&& plan,
-    http_response_file_handle opened) {
+    http_response_file_descriptor opened) {
     if (file.empty()) {
         throw std::invalid_argument("file response path must not be empty");
     }
     body_.set_multipart(
-        memory_resource(), file, size.value(), identity, std::move(plan), std::move(opened));
+        file, size.value(), identity, std::move(plan), std::move(opened));
 }
 
 void http_response::content_range(

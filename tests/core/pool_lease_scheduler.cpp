@@ -6,7 +6,6 @@
 #include <chrono>
 #include <cstddef>
 #include <initializer_list>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <utility>
@@ -17,7 +16,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
 
-#include "memory_resource_fixture.h"
 #include "worker_task_fixture.h"
 
 namespace {
@@ -108,7 +106,7 @@ ruvia::task<void> exercise_saturated_acquire_timeout(
 }
 
 ruvia::task<void> exercise_acquire_cancellation(ruvia::pool_lease_scheduler& scheduler,
-    asio::io_context& io_context, const ruvia::worker_handle& worker_value, bool& success) {
+    asio::io_context& io_context, const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::stop_source source;
     asio::post(io_context, [&scheduler, &source] {
         source.request_stop();
@@ -139,7 +137,7 @@ ruvia::task<void> expire_then_release(ruvia::pool_lease_scheduler& scheduler, st
 }
 
 ruvia::task<void> exercise_timeout_between_cancel_and_release(
-    const ruvia::worker_handle& worker, bool& success) {
+    const ruvia::worker_ref& worker, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker);
     const auto held = co_await scheduler.acquire();
     if (!held.has_value()) {
@@ -160,7 +158,7 @@ ruvia::task<void> exercise_timeout_between_cancel_and_release(
 }
 
 ruvia::task<void> exercise_passed_deadline_does_not_steal_same_turn_release(
-    const ruvia::worker_handle& worker_value, bool& success) {
+    const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker_value);
     const ruvia::operation_timeout passed(std::chrono::steady_clock::time_point{});
     const ruvia::operation_timeout now(std::chrono::steady_clock::now());
@@ -188,18 +186,12 @@ ruvia::task<void> exercise_passed_deadline_does_not_steal_same_turn_release(
     scheduler.release(reacquired.value());
     success = zero_timed_out && negative_timed_out;
 }
-ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
-    asio::io_context& io_context, const ruvia::worker_handle& worker_value,
-    ruvia::test::counting_memory_resource& resource, std::size_t baseline_blocks,
+ruvia::task<void> exercise_repeated_lifecycle(ruvia::pool_lease_scheduler& scheduler,
+    asio::io_context& io_context,
     std::optional<ruvia::worker_wait_result<std::size_t>>& retained_result, bool& success) {
     for (std::size_t i = 0; i < 32; ++i) {
-        {
-            auto discarded_cold_acquire = scheduler.acquire();
-            static_cast<void>(discarded_cold_acquire);
-        }
-        if (resource.live_allocations() != baseline_blocks) {
-            co_return;
-        }
+        auto discarded_cold_acquire = scheduler.acquire();
+        static_cast<void>(discarded_cold_acquire);
     }
 
     const auto held = co_await scheduler.acquire();
@@ -209,8 +201,7 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
     for (std::size_t i = 0; i < 32; ++i) {
         scheduler.release(held.value());
         const auto acquired = co_await scheduler.acquire();
-        if (!acquired.has_value() || acquired.value() != held.value() ||
-            resource.live_allocations() != baseline_blocks) {
+        if (!acquired.has_value() || acquired.value() != held.value()) {
             co_return;
         }
         retained_result.emplace(acquired);
@@ -218,21 +209,21 @@ ruvia::task<void> exercise_pmr_lifecycle(ruvia::pool_lease_scheduler& scheduler,
 
     for (std::size_t i = 0; i < 32; ++i) {
         const auto timed_out = co_await scheduler.acquire({.timeout_ = std::chrono::milliseconds(1)});
-        if (timed_out.status() != ruvia::worker_wait_status::timed_out || resource.live_allocations() != baseline_blocks) {
+        if (timed_out.status() != ruvia::worker_wait_status::timed_out) {
             co_return;
         }
 
         ruvia::stop_source source;
         asio::post(io_context, [&source] { source.request_stop(); });
         const auto cancelled = co_await scheduler.acquire({.stop_token_ = source.token()});
-        if (cancelled.status() != ruvia::worker_wait_status::cancelled || resource.live_allocations() != baseline_blocks) {
+        if (cancelled.status() != ruvia::worker_wait_status::cancelled) {
             co_return;
         }
     }
 
     scheduler.release(held.value());
-    success = resource.live_allocations() == baseline_blocks && retained_result.has_value() &&
-              retained_result->has_value() && retained_result->value() == held.value();
+    success = retained_result.has_value() && retained_result->has_value() &&
+              retained_result->value() == held.value();
 }
 
 ruvia::task<void> observe_timed_out_acquire(ruvia::pool_lease_acquire pending, bool& timed_out) {
@@ -246,7 +237,7 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
         asio::io_context context;
         auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
         {
-            ruvia::pool_lease_scheduler scheduler(0, attachment.loop().handle());
+            ruvia::pool_lease_scheduler scheduler(0, attachment.loop().worker());
             std::optional<ruvia::pool_lease_acquire> pending;
             {
                 std::optional<ruvia::timeout_duration> timeout = std::chrono::milliseconds(1);
@@ -269,7 +260,7 @@ bool test_scheduler_owns_timeout_for_lazy_acquires() {
 }
 
 ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending,
-    const ruvia::worker_handle& worker_value, ruvia::stop_source& source, bool& cancelled) {
+    const ruvia::worker_ref& worker_value, ruvia::stop_source& source, bool& cancelled) {
     static_cast<void>(worker_value.post([&source] { source.request_stop(); }));
     const auto result_value = co_await std::move(pending);
     cancelled = result_value.status() == ruvia::worker_wait_status::cancelled;
@@ -278,8 +269,7 @@ ruvia::task<void> observe_worker_acquire(ruvia::pool_lease_acquire pending,
 bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
     asio::io_context context;
     auto attachment = ruvia::attach_event_loop(context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
-    ruvia::test::counting_memory_resource memory;
+    const auto worker_value = attachment.loop().worker();
     bool success = true;
     {
         std::optional<ruvia::pool_lease_scheduler> scheduler;
@@ -287,40 +277,33 @@ bool test_scheduler_retains_worker_binding_for_lazy_acquires() {
         ruvia::stop_source source;
         {
             auto temporary_worker = worker_value;
-            scheduler.emplace(0, temporary_worker, &memory);
+            scheduler.emplace(0, temporary_worker);
             pending.emplace(scheduler->acquire({.stop_token_ = source.token()}));
         }
-        const auto baseline = memory.live_allocations();
         // An unstarted operation releases its reservation before its scheduler.
         // The scheduler needs a live worker, so this runs before the loop retires.
         {
-            ruvia::pool_lease_scheduler temporary_scheduler(1, worker_value, &memory);
+            ruvia::pool_lease_scheduler temporary_scheduler(1, worker_value);
             auto discarded = temporary_scheduler.acquire({.stop_token_ = ruvia::stop_source{}.token()});
+            static_cast<void>(discarded);
         }
-        success = memory.live_allocations() == baseline;
         bool cancelled = false;
         auto prepared = std::move(*pending);
         pending.reset();
         ruvia::test::run_worker_tasks(
             attachment, observe_worker_acquire(std::move(prepared), worker_value, source, cancelled));
-        success = success && cancelled && memory.live_allocations() == baseline;
+        success = success && cancelled;
     }
-    return success && memory.live_allocations() == 0 && memory.allocation_count() == memory.deallocation_count();
+    return success;
 }
 
-ruvia::task<void> exercise_pmr_test(asio::io_context& io_context,
-    const ruvia::worker_handle& worker_value, bool& success) {
-    ruvia::test::counting_memory_resource resource;
+ruvia::task<void> exercise_repeated_test(asio::io_context& io_context,
+    const ruvia::worker_ref& worker_value, bool& success) {
     std::optional<ruvia::worker_wait_result<std::size_t>> retained_result;
     {
-        ruvia::pool_lease_scheduler scheduler(1, worker_value, &resource);
-        const auto baseline_blocks = resource.live_allocations();
-        co_await exercise_pmr_lifecycle(scheduler, io_context, worker_value,
-            resource, baseline_blocks, retained_result, success);
-        success = success && resource.live_allocations() == baseline_blocks;
+        ruvia::pool_lease_scheduler scheduler(1, worker_value);
+        co_await exercise_repeated_lifecycle(scheduler, io_context, retained_result, success);
     }
-    success = success && resource.live_allocations() == 0 &&
-              resource.allocation_count() == resource.deallocation_count();
 }
 
 }  // namespace
@@ -349,7 +332,7 @@ task<void> release_immediately(
     --state.depth_;
 }
 
-task<void> exercise_long_chain(const worker_handle& worker, bool& success) {
+task<void> exercise_long_chain(const worker_ref& worker, bool& success) {
     constexpr std::size_t waiter_count = 512;
     pool_lease_scheduler scheduler(1, worker);
     task_scope scope(worker);
@@ -364,7 +347,7 @@ task<void> exercise_long_chain(const worker_handle& worker, bool& success) {
               state.completed_ == waiter_count && state.ordered_;
 }
 
-task<void> exercise_committed_handoff(const worker_handle& worker, bool& success) {
+task<void> exercise_committed_handoff(const worker_ref& worker, bool& success) {
     pool_lease_scheduler scheduler(1, worker);
     task_scope scope(worker);
     stop_source cancellation;
@@ -382,7 +365,7 @@ task<void> exercise_committed_handoff(const worker_handle& worker, bool& success
               closed == worker_wait_status::closed;
 }
 
-task<void> exercise_close_defers_resumption(const worker_handle& worker, bool& success) {
+task<void> exercise_close_defers_resumption(const worker_ref& worker, bool& success) {
     pool_lease_scheduler scheduler(0, worker);
     task_scope scope(worker);
     std::optional<worker_wait_status> first;
@@ -409,7 +392,7 @@ ruvia::task<void> record_acquire_status(ruvia::pool_lease_scheduler& scheduler, 
 }
 
 ruvia::task<void> exercise_acquire_observes_worker_stop(
-    ruvia::event_loop_attachment& attachment, const ruvia::worker_handle& worker_value, bool& success) {
+    ruvia::event_loop_attachment& attachment, const ruvia::worker_ref& worker_value, bool& success) {
     ruvia::pool_lease_scheduler scheduler(1, worker_value);
     const auto held = co_await scheduler.acquire();
     if (!held.has_value()) {
@@ -438,7 +421,7 @@ ruvia::task<void> exercise_acquire_observes_worker_stop(
 TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     ruvia::pool_lease_scheduler lease_scheduler(1, worker_value);
     ruvia::pool_lease_scheduler saturated_timeout_scheduler(0, worker_value);
     ruvia::pool_lease_scheduler worker_timeout_scheduler(0, worker_value);
@@ -448,7 +431,7 @@ TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
     bool nonpositive_timeout_success = false;
     bool saturated_timeout_success = false;
     bool cancellation_success = false;
-    bool pmr_lifecycle_success = false;
+    bool repeated_lifecycle_success = false;
     bool mixed_waiters_success = false;
     bool handoff_chain_success = false;
     bool committed_handoff_success = false;
@@ -464,13 +447,13 @@ TEST(Ruvia, PoolLeaseSchedulerLifecycle) {
         exercise_saturated_acquire_timeout(saturated_timeout_scheduler, io_context, saturated_timeout_success),
         exercise_timeout_between_cancel_and_release(worker_value, mixed_waiters_success),
         exercise_acquire_cancellation(cancellation_scheduler, io_context, worker_value, cancellation_success),
-        exercise_pmr_test(io_context, worker_value, pmr_lifecycle_success));
+        exercise_repeated_test(io_context, worker_value, repeated_lifecycle_success));
     EXPECT_TRUE(lease_success);
     EXPECT_TRUE(worker_timeout_success);
     EXPECT_TRUE(nonpositive_timeout_success);
     EXPECT_TRUE(saturated_timeout_success);
     EXPECT_TRUE(cancellation_success);
-    EXPECT_TRUE(pmr_lifecycle_success);
+    EXPECT_TRUE(repeated_lifecycle_success);
     EXPECT_TRUE(mixed_waiters_success);
     EXPECT_TRUE(handoff_chain_success);
     EXPECT_TRUE(committed_handoff_success);
@@ -488,7 +471,7 @@ TEST(Ruvia, SchedulerRetainsWorkerBindingForLazyAcquires) {
 TEST(Ruvia, PoolLeaseAcquireCompletesWithWorkerStopping) {
     asio::io_context io_context;
     auto attachment = ruvia::attach_event_loop(io_context, {.queue_capacity_ = 8});
-    const auto worker_value = attachment.loop().handle();
+    const auto worker_value = attachment.loop().worker();
     bool success = false;
     ruvia::test::run_worker_tasks(attachment, exercise_acquire_observes_worker_stop(attachment, worker_value, success));
     EXPECT_TRUE(success);

@@ -5,7 +5,6 @@
 #include <filesystem>
 #include <initializer_list>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -16,7 +15,7 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/core/task.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/web/connection_events.h"
 #include "ruvia/web/detail/app/app_configuration.h"
 #include "ruvia/web/dotenv.h"
@@ -151,9 +150,9 @@ public:
     // effect in the order they publish. config's password and PEM copies are
     // owned immediately and cleansed on completion or destruction of the task.
     [[nodiscard]] task<void> replace_tls_identities(
-        worker_handle caller, const listener_endpoint& endpoint, tls_config config) &;
+        worker_ref caller, const listener_endpoint& endpoint, tls_config config) &;
     task<void> replace_tls_identities(
-        worker_handle caller, const listener_endpoint& endpoint, tls_config config) && = delete;
+        worker_ref caller, const listener_endpoint& endpoint, tls_config config) && = delete;
     // Adds config's listeners to the running app, validated and loaded as
     // listen() would (an endpoint a listener already serves throws
     // std::invalid_argument), with any inherited_sockets_. Preparation uses
@@ -166,15 +165,15 @@ public:
     // unless the app is running, or when it starts stopping
     // before every worker accepted, and then they are not kept. config's
     // secrets are owned immediately and cleansed when the task completes or is dropped.
-    [[nodiscard]] task<void> add_listener(worker_handle caller, listen_config config) &;
-    task<void> add_listener(worker_handle caller, listen_config config) && = delete;
+    [[nodiscard]] task<void> add_listener(worker_ref caller, listen_config config) &;
+    task<void> add_listener(worker_ref caller, listen_config config) && = delete;
     // 与 add_listener 共用事务；全部 worker 已准备后返回未接入的 owning 句柄。
-    [[nodiscard]] task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) &;
-    task<prepared_listener> prepare_listener(worker_handle caller, listen_config config) && = delete;
+    [[nodiscard]] task<prepared_listener> prepare_listener(worker_ref caller, listen_config config) &;
+    task<prepared_listener> prepare_listener(worker_ref caller, listen_config config) && = delete;
     // 同一业务配置的多个端点必须同批准备；任一失败均回滚整批，旧监听不变。
     // 调用时拥有化全部配置及继承 socket；返回后可释放输入 span 与借用地址。
-    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) &;
-    task<prepared_listener> prepare_listeners(worker_handle caller, std::span<const listen_config> configs) && = delete;
+    [[nodiscard]] task<prepared_listener> prepare_listeners(worker_ref caller, std::span<const listen_config> configs) &;
+    task<prepared_listener> prepare_listeners(worker_ref caller, std::span<const listen_config> configs) && = delete;
     // Removes the running TCP service `endpoint` names (as for
     // replace_tls_identities()), with its HTTP/3 service. Awaiting completes
     // once every worker stopped admitting it, closed its TCP sockets and its
@@ -187,18 +186,18 @@ public:
     // run()s. Concurrent runtime controls take effect one at a time.
     // close_connections_ 同时关闭目标监听的全部连接；会话由独立退休任务
     // join，不在本调用中等待（允许连接自己的处理器发起强制移除）。
-    [[nodiscard]] task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
-    task<void> remove_listener(worker_handle caller, const listener_endpoint& endpoint, listener_remove_options options = {}) && = delete;
+    [[nodiscard]] task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {}) &;
+    task<void> remove_listener(worker_ref caller, const listener_endpoint& endpoint, listener_remove_options options = {}) && = delete;
     // Waits for the serving or latest removed listener's TCP/TLS and QUIC
     // connections to reach zero. Cancellation/timeout leave connections alone;
     // stopping the app cancels the wait with operation_canceled.
     // Unknown endpoints throw std::invalid_argument; requires a running app.
-    [[nodiscard]] task<void> wait_connections_closed(worker_handle caller, const listener_endpoint& endpoint, operation_options options = {}) &;
-    task<void> wait_connections_closed(worker_handle, const listener_endpoint&, operation_options = {}) && = delete;
+    [[nodiscard]] task<void> wait_connections_closed(worker_ref caller, const listener_endpoint& endpoint, operation_options options = {}) &;
+    task<void> wait_connections_closed(worker_ref, const listener_endpoint&, operation_options = {}) && = delete;
     // Closes every protocol stream of the connection; false means the ID is
     // no longer live. Application workers may await this control too.
-    [[nodiscard]] task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) &;
-    task<bool> close_connection(worker_handle caller, std::uint64_t connection_id) && = delete;
+    [[nodiscard]] task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) &;
+    task<bool> close_connection(worker_ref caller, std::uint64_t connection_id) && = delete;
 #ifndef _WIN32
     // Duplicates (dup()) every worker's socket of the running TCP service
     // `endpoint` names, and of its HTTP/3 service, into http_ or https_ and
@@ -210,9 +209,9 @@ public:
     // rules of add_listener() apply. POSIX only: on Windows the acceptor owns
     // a single exclusive socket per service.
     [[nodiscard]] task<listener_sockets> duplicate_listener_sockets(
-        worker_handle caller, const listener_endpoint& endpoint) const&;
+        worker_ref caller, const listener_endpoint& endpoint) const&;
     task<listener_sockets> duplicate_listener_sockets(
-        worker_handle caller, const listener_endpoint& endpoint) const&& = delete;
+        worker_ref caller, const listener_endpoint& endpoint) const&& = delete;
 #endif
     application& document_root(document_root_config config) &;
     application& document_root(document_root_config config) && = delete;
@@ -431,9 +430,9 @@ public:
     [[nodiscard]] ::ruvia::blocking_pool_stats blocking_pool_stats() const;
     // Worker handles, published once every worker is ready (before on_start
     // hooks run) and until run() returns. Empty or invalid otherwise.
-    [[nodiscard]] std::pmr::vector<web_worker_handle> workers() const;
-    [[nodiscard]] web_worker_handle worker_for(std::uint64_t key) const;
-    [[nodiscard]] web_worker_handle worker_for(std::string_view key) const;
+    [[nodiscard]] std::vector<web_worker_ref> workers() const;
+    [[nodiscard]] web_worker_ref worker_for(std::uint64_t key) const;
+    [[nodiscard]] web_worker_ref worker_for(std::string_view key) const;
 
 private:
     friend application& app();

@@ -5,7 +5,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -16,7 +15,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/port_number.h"
@@ -41,54 +39,40 @@ class redis_search_mapping;
 // resource; assignment retains the destination resource.
 class redis_compiled_command final {
 public:
-    redis_compiled_command(const redis_compiled_command& other)
-        : arguments_(other.arguments_, other.resource()) {}
+    redis_compiled_command(const redis_compiled_command&) = default;
     redis_compiled_command(redis_compiled_command&&) noexcept = default;
-    redis_compiled_command& operator=(const redis_compiled_command& other) {
+    redis_compiled_command& operator=(const redis_compiled_command&) = default;
+    redis_compiled_command& operator=(redis_compiled_command&& other) noexcept {
         if (this != &other) {
-            std::pmr::vector<std::pmr::string> replacement(other.arguments_, resource());
-            arguments_.swap(replacement);
-        }
-        return *this;
-    }
-    redis_compiled_command& operator=(redis_compiled_command&& other) {
-        if (this != &other) {
-            if (resource() == other.resource()) {
-                arguments_.swap(other.arguments_);
-                other.arguments_.clear();
-            } else {
-                *this = other;
-            }
+            arguments_ = std::move(other.arguments_);
+            other.arguments_.clear();
         }
         return *this;
     }
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return arguments_.get_allocator().resource();
-    }
-    [[nodiscard]] std::span<const std::pmr::string> arguments() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const std::string> arguments() const& noexcept RUVIA_LIFETIMEBOUND {
         return arguments_;
     }
-    std::span<const std::pmr::string> arguments() const&& = delete;
-    [[nodiscard]] std::pmr::vector<std::pmr::string> take_arguments() && noexcept {
+    std::span<const std::string> arguments() const&& = delete;
+    [[nodiscard]] std::vector<std::string> take_arguments() && noexcept {
         return std::move(arguments_);
     }
 
 private:
     friend class redis_search_mapping;
-    explicit redis_compiled_command(std::pmr::vector<std::pmr::string>&& arguments) noexcept
+    explicit redis_compiled_command(std::vector<std::string>&& arguments) noexcept
         : arguments_(std::move(arguments)) {}
 
-    std::pmr::vector<std::pmr::string> arguments_;
+    std::vector<std::string> arguments_;
 };
 
 struct redis_config final {
     // Validated unbracketed transport host; DNS names may retain one trailing dot.
-    std::pmr::string host_{"127.0.0.1", process_resource()};
+    std::string host_{"127.0.0.1"};
     // Checked before narrowing; must be non-zero.
     port_number port_{6379};
-    std::pmr::string username_{process_resource()};
-    std::pmr::string password_{process_resource()};
+    std::string username_;
+    std::string password_;
     client_tls_config tls_{};
     std::uint32_t database_{0};
     // Must be greater than zero.
@@ -272,33 +256,28 @@ struct redis_types_access;
 
 class redis_set_result final {
 public:
-    redis_set_result(const redis_set_result& other);
+    redis_set_result(const redis_set_result&) = default;
     redis_set_result(redis_set_result&&) noexcept = default;
-    redis_set_result& operator=(const redis_set_result& other);
-    redis_set_result& operator=(redis_set_result&& other);
+    redis_set_result& operator=(const redis_set_result&) = default;
+    redis_set_result& operator=(redis_set_result&&) noexcept = default;
 
     [[nodiscard]] constexpr bool applied() const noexcept {
         return applied_;
     }
 
-    [[nodiscard]] const std::optional<std::pmr::string>& previous() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] const std::optional<std::string>& previous() const& noexcept RUVIA_LIFETIMEBOUND {
         return previous_;
     }
-    const std::optional<std::pmr::string>& previous() const&& = delete;
+    const std::optional<std::string>& previous() const&& = delete;
 
 private:
     friend struct detail::redis_types_access;
 
-    redis_set_result(bool applied, std::pmr::memory_resource* resource,
-        std::optional<std::pmr::string> previous) noexcept
-        : resource_(resource),
-          applied_(applied),
+    redis_set_result(bool applied, std::optional<std::string> previous) noexcept
+        : applied_(applied),
           previous_(std::move(previous)) {}
-
-    // Absent previous values retain the destination allocator binding.
-    std::pmr::memory_resource* resource_;
     bool applied_{false};
-    std::optional<std::pmr::string> previous_;
+    std::optional<std::string> previous_;
 };
 
 class redis_scan_cursor final {
@@ -355,16 +334,10 @@ struct redis_scan_options final {
 
 class redis_key_value final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    redis_key_value(const redis_key_value& other, allocator_type allocator);
-    redis_key_value(redis_key_value&& other, allocator_type allocator);
-    redis_key_value(const redis_key_value& other)
-        : redis_key_value(other, other.key_.get_allocator()) {}
-    redis_key_value& operator=(const redis_key_value& other);
+    redis_key_value(const redis_key_value&) = default;
+    redis_key_value& operator=(const redis_key_value&) = default;
     redis_key_value(redis_key_value&&) noexcept = default;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_key_value& operator=(redis_key_value&& other);
+    redis_key_value& operator=(redis_key_value&&) noexcept = default;
 
     [[nodiscard]] std::string_view key() const& noexcept RUVIA_LIFETIMEBOUND {
         return key_;
@@ -379,26 +352,20 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_key_value(std::pmr::string&& key, std::pmr::string&& value) noexcept
+    redis_key_value(std::string&& key, std::string&& value) noexcept
         : key_(std::move(key)),
           value_(std::move(value)) {}
 
-    std::pmr::string key_;
-    std::pmr::string value_;
+    std::string key_;
+    std::string value_;
 };
 
 class redis_scored_value final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    redis_scored_value(const redis_scored_value& other, allocator_type allocator);
-    redis_scored_value(redis_scored_value&& other, allocator_type allocator);
-    redis_scored_value(const redis_scored_value& other)
-        : redis_scored_value(other, other.value_.get_allocator()) {}
-    redis_scored_value& operator=(const redis_scored_value& other);
+    redis_scored_value(const redis_scored_value&) = default;
+    redis_scored_value& operator=(const redis_scored_value&) = default;
     redis_scored_value(redis_scored_value&&) noexcept = default;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_scored_value& operator=(redis_scored_value&& other);
+    redis_scored_value& operator=(redis_scored_value&&) noexcept = default;
 
     [[nodiscard]] std::string_view value() const& noexcept RUVIA_LIFETIMEBOUND {
         return value_;
@@ -412,11 +379,11 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    redis_scored_value(std::pmr::string&& value, double score) noexcept
+    redis_scored_value(std::string&& value, double score) noexcept
         : value_(std::move(value)),
           score_(score) {}
 
-    std::pmr::string value_;
+    std::string value_;
     double score_{0};
 };
 
@@ -430,7 +397,7 @@ public:
     redis_scan_result(const redis_scan_result&) = delete;
     redis_scan_result& operator=(const redis_scan_result&) = delete;
     redis_scan_result(redis_scan_result&&) noexcept = default;
-    redis_scan_result& operator=(redis_scan_result&& other);
+    redis_scan_result& operator=(redis_scan_result&& other) noexcept = default;
 
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
@@ -440,19 +407,18 @@ public:
         return next_cursor_;
     }
 
-    [[nodiscard]] std::span<const std::pmr::string> values() const& noexcept RUVIA_LIFETIMEBOUND {
+    [[nodiscard]] std::span<const std::string> values() const& noexcept RUVIA_LIFETIMEBOUND {
         return values_;
     }
-    [[nodiscard]] std::span<const std::pmr::string> values() const&& = delete;
+    [[nodiscard]] std::span<const std::string> values() const&& = delete;
 
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_scan_result(std::pmr::memory_resource* resource)
-        : values_(pmr_resource_or_default(resource)) {}
+    redis_scan_result() noexcept = default;
 
     std::optional<redis_scan_cursor> next_cursor_;
-    std::pmr::vector<std::pmr::string> values_;
+    std::vector<std::string> values_;
 };
 
 class redis_hash_scan_result final {
@@ -460,7 +426,7 @@ public:
     redis_hash_scan_result(const redis_hash_scan_result&) = delete;
     redis_hash_scan_result& operator=(const redis_hash_scan_result&) = delete;
     redis_hash_scan_result(redis_hash_scan_result&&) noexcept = default;
-    redis_hash_scan_result& operator=(redis_hash_scan_result&& other);
+    redis_hash_scan_result& operator=(redis_hash_scan_result&& other) noexcept = default;
 
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
@@ -478,11 +444,10 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_hash_scan_result(std::pmr::memory_resource* resource)
-        : entries_(pmr_resource_or_default(resource)) {}
+    redis_hash_scan_result() noexcept = default;
 
     std::optional<redis_scan_cursor> next_cursor_;
-    std::pmr::vector<redis_key_value> entries_;
+    std::vector<redis_key_value> entries_;
 };
 
 class redis_z_scan_result final {
@@ -490,7 +455,7 @@ public:
     redis_z_scan_result(const redis_z_scan_result&) = delete;
     redis_z_scan_result& operator=(const redis_z_scan_result&) = delete;
     redis_z_scan_result(redis_z_scan_result&&) noexcept = default;
-    redis_z_scan_result& operator=(redis_z_scan_result&& other);
+    redis_z_scan_result& operator=(redis_z_scan_result&& other) noexcept = default;
 
     [[nodiscard]] bool done() const noexcept {
         return !next_cursor_.has_value();
@@ -508,25 +473,18 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_z_scan_result(std::pmr::memory_resource* resource)
-        : entries_(pmr_resource_or_default(resource)) {}
+    redis_z_scan_result() noexcept = default;
 
     std::optional<redis_scan_cursor> next_cursor_;
-    std::pmr::vector<redis_scored_value> entries_;
+    std::vector<redis_scored_value> entries_;
 };
 
 class redis_stream_entry final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    redis_stream_entry(const redis_stream_entry& other, allocator_type allocator);
-    redis_stream_entry(redis_stream_entry&& other, allocator_type allocator);
-    redis_stream_entry(const redis_stream_entry& other)
-        : redis_stream_entry(other, other.id_.get_allocator()) {}
-    redis_stream_entry& operator=(const redis_stream_entry& other);
+    redis_stream_entry(const redis_stream_entry&) = default;
+    redis_stream_entry& operator=(const redis_stream_entry&) = default;
     redis_stream_entry(redis_stream_entry&&) noexcept = default;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_stream_entry& operator=(redis_stream_entry&& other);
+    redis_stream_entry& operator=(redis_stream_entry&&) noexcept = default;
 
     [[nodiscard]] std::string_view id() const& noexcept RUVIA_LIFETIMEBOUND {
         return id_;
@@ -542,26 +500,19 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_stream_entry(std::pmr::string&& id) noexcept
-        : id_(std::move(id)),
-          fields_(id_.get_allocator().resource()) {}
+    explicit redis_stream_entry(std::string&& id) noexcept
+        : id_(std::move(id)) {}
 
-    std::pmr::string id_;
-    std::pmr::vector<redis_key_value> fields_;
+    std::string id_;
+    std::vector<redis_key_value> fields_;
 };
 
 class redis_stream_read_result final {
 public:
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    redis_stream_read_result(const redis_stream_read_result& other, allocator_type allocator);
-    redis_stream_read_result(redis_stream_read_result&& other, allocator_type allocator);
-    redis_stream_read_result(const redis_stream_read_result& other)
-        : redis_stream_read_result(other, other.stream_.get_allocator()) {}
-    redis_stream_read_result& operator=(const redis_stream_read_result& other);
+    redis_stream_read_result(const redis_stream_read_result&) = default;
+    redis_stream_read_result& operator=(const redis_stream_read_result&) = default;
     redis_stream_read_result(redis_stream_read_result&&) noexcept = default;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_stream_read_result& operator=(redis_stream_read_result&& other);
+    redis_stream_read_result& operator=(redis_stream_read_result&&) noexcept = default;
 
     [[nodiscard]] std::string_view stream() const& noexcept RUVIA_LIFETIMEBOUND {
         return stream_;
@@ -576,12 +527,11 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_stream_read_result(std::pmr::string&& stream) noexcept
-        : stream_(std::move(stream)),
-          entries_(stream_.get_allocator().resource()) {}
+    explicit redis_stream_read_result(std::string&& stream) noexcept
+        : stream_(std::move(stream)) {}
 
-    std::pmr::string stream_;
-    std::pmr::vector<redis_stream_entry> entries_;
+    std::string stream_;
+    std::vector<redis_stream_entry> entries_;
 };
 
 class redis_x_read_group_result final {
@@ -589,7 +539,7 @@ public:
     redis_x_read_group_result(const redis_x_read_group_result&) = delete;
     redis_x_read_group_result& operator=(const redis_x_read_group_result&) = delete;
     redis_x_read_group_result(redis_x_read_group_result&&) noexcept = default;
-    redis_x_read_group_result& operator=(redis_x_read_group_result&& other);
+    redis_x_read_group_result& operator=(redis_x_read_group_result&& other) noexcept = default;
 
     [[nodiscard]] std::span<const redis_stream_read_result> streams() const& noexcept RUVIA_LIFETIMEBOUND {
         return streams_;
@@ -599,9 +549,8 @@ public:
 private:
     friend struct detail::redis_types_access;
 
-    explicit redis_x_read_group_result(std::pmr::memory_resource* resource)
-        : streams_(pmr_resource_or_default(resource)) {}
-    std::pmr::vector<redis_stream_read_result> streams_;
+    redis_x_read_group_result() noexcept = default;
+    std::vector<redis_stream_read_result> streams_;
 };
 
 namespace detail {
@@ -635,8 +584,8 @@ private:
 namespace detail {
 
 template <text_scalar t_type>
-[[nodiscard]] t_type convert_redis_text(std::string_view text, std::pmr::memory_resource* resource) {
-    auto parsed = parse_text_scalar<t_type>(text, resource);
+[[nodiscard]] t_type convert_redis_text(std::string_view text) {
+    auto parsed = parse_text_scalar<t_type>(text);
     if (std::holds_alternative<text_scalar_parse_error>(parsed)) {
         if constexpr (std::is_same_v<t_type, bool>) {
             throw redis_error(redis_error::code_type::protocol_error, "redis value is not a boolean");
@@ -650,25 +599,16 @@ template <text_scalar t_type>
 }  // namespace detail
 class redis_value final {
 public:
-    // PMR containers construct every nested result in their own resource.
-    using allocator_type = std::pmr::polymorphic_allocator<std::byte>;
-    redis_value(const redis_value& other, allocator_type allocator);
-    redis_value(redis_value&& other, allocator_type allocator);
     enum class kind_type : std::uint8_t { null,
         string,
         integer,
         array,
         error };
 
-    redis_value(const redis_value& other)
-        : redis_value(other, other.string_.get_allocator()) {}
-    // The source may be a subtree of this value, and the result keeps this
-    // value's PMR resource.
+    redis_value(const redis_value& other) = default;
     redis_value& operator=(const redis_value& other);
     redis_value(redis_value&&) noexcept = default;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    redis_value& operator=(redis_value&& other);
+    redis_value& operator=(redis_value&& other) noexcept;
 
     [[nodiscard]] kind_type kind() const noexcept;
     [[nodiscard]] bool null() const noexcept;
@@ -718,7 +658,7 @@ public:
                 return static_cast<t_type>(integer_);
             }
         }
-        return detail::convert_redis_text<t_type>(string(), string_.get_allocator().resource());
+        return detail::convert_redis_text<t_type>(string());
     }
     template <detail::text_scalar t_type>
     [[nodiscard]] std::optional<t_type> as() const&& = delete;
@@ -727,23 +667,17 @@ private:
     friend class detail::redis_pool;
     friend struct detail::redis_types_access;
 
-    explicit redis_value(std::pmr::memory_resource* resource = nullptr);
-    [[nodiscard]] static redis_value null_value(std::pmr::memory_resource* resource);
-    [[nodiscard]] static redis_value string_value(
-        std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static redis_value error_value(
-        std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static redis_value integer_value(
-        std::int64_t value, std::pmr::memory_resource* resource);
-    // An empty array with room for `capacity` elements, all in `resource`.
-    [[nodiscard]] static redis_value array_value(std::size_t capacity, std::pmr::memory_resource* resource);
-
-    redis_value(resolved_pmr_resource_tag, std::pmr::memory_resource* resource);
+    redis_value() noexcept;
+    [[nodiscard]] static redis_value null_value() noexcept;
+    [[nodiscard]] static redis_value string_value(std::string_view value);
+    [[nodiscard]] static redis_value error_value(std::string_view value);
+    [[nodiscard]] static redis_value integer_value(std::int64_t value) noexcept;
+    [[nodiscard]] static redis_value array_value(std::size_t capacity);
 
     kind_type kind_{kind_type::null};
-    std::pmr::string string_;
+    std::string string_;
     std::int64_t integer_{0};
-    std::pmr::vector<redis_value> array_;
+    std::vector<redis_value> array_;
 };
 
 }  // namespace ruvia

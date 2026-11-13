@@ -1,7 +1,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -217,15 +216,15 @@ TEST(Ruvia, byte_range_set_preserves_disjoint_order_and_coalesces_touching_range
 TEST(Ruvia, byte_range_set_never_repeats_representation_bytes) {
     // Descending open-ended and suffix ranges each overlap every earlier one;
     // as separate parts they would multiply the response size.
-    std::pmr::string open_ended = "bytes=";
-    std::pmr::string suffixes = "bytes=";
+    std::string open_ended = "bytes=";
+    std::string suffixes = "bytes=";
     for (std::size_t index = 0; index < http_byte_range_set::capacity; ++index) {
         if (index != 0) {
             open_ended.push_back(',');
             suffixes.push_back(',');
         }
         open_ended.append(std::to_string(http_byte_range_set::capacity - 1 - index) + "-");
-        suffixes.append(std::pmr::string("-") + std::to_string(1000 - index).c_str());
+        suffixes.append(std::string("-") + std::to_string(1000 - index).c_str());
     }
     for (const auto& field : {open_ended, suffixes}) {
         const auto ranges = resolve_http_byte_range_set(field, 1000);
@@ -262,7 +261,7 @@ TEST(Ruvia, byte_range_set_tolerates_bounded_empty_members) {
 }
 
 TEST(Ruvia, byte_range_set_counts_only_received_empty_members) {
-    const auto prefix = std::pmr::string("bytes=") + std::pmr::string(32, ',');
+    const auto prefix = std::string("bytes=") + std::string(32, ',');
     for (const auto tail : {"100-", "100-199", "-0"}) {
         const auto ranges = resolve_http_byte_range_set(prefix + tail, 100);
         EXPECT_TRUE(!ranges.ignored());
@@ -279,7 +278,7 @@ TEST(Ruvia, byte_range_set_counts_only_received_empty_members) {
 }
 
 TEST(Ruvia, byte_range_set_ignores_malformed_and_over_limit_sets) {
-    std::pmr::string ranges = "bytes=";
+    std::string ranges = "bytes=";
     for (std::size_t index = 0; index <= http_byte_range_set::capacity; ++index) {
         if (index != 0) {
             ranges.push_back(',');
@@ -291,10 +290,19 @@ TEST(Ruvia, byte_range_set_ignores_malformed_and_over_limit_sets) {
     EXPECT_TRUE(resolve_http_byte_range_set(ranges, 100).ignored());
 }
 
-TEST(Ruvia, byte_range_set_empty_representation_uses_ignore_policy) {
-    EXPECT_TRUE(is_ignored_range("bytes=0-99", 0));
-    EXPECT_TRUE(is_ignored_range("bytes=-1", 0));
-    EXPECT_TRUE(is_ignored_range("BYTES=0-", 0));
+TEST(Ruvia, byte_range_set_empty_representation_validates_syntax_before_unsatisfiable) {
+    EXPECT_TRUE(is_unsatisfiable_range("bytes=0-0", 0));
+    EXPECT_TRUE(is_unsatisfiable_range("bytes=0-99", 0));
+    EXPECT_TRUE(is_unsatisfiable_range("bytes=-5", 0));
+    EXPECT_TRUE(is_unsatisfiable_range("bytes=-1", 0));
+    EXPECT_TRUE(is_unsatisfiable_range("BYTES=0-", 0));
+
+    EXPECT_TRUE(is_ignored_range("bytes=abc", 0));
+    EXPECT_TRUE(is_ignored_range("bytes=5-2", 0));
+    EXPECT_TRUE(is_ignored_range("bytes=", 0));
+    EXPECT_TRUE(is_ignored_range("bytes=-", 0));
+    EXPECT_TRUE(is_ignored_range("bytes=0-0, invalid", 0));
+
     for (const auto invalid : {std::numeric_limits<std::int64_t>::min(), std::int64_t{-1}}) {
         EXPECT_TRUE(ruvia::test::throws_on(
             [&] { (void)resolve_http_byte_range_set("bytes=0-1", invalid); }));

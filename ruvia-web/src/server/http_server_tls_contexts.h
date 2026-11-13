@@ -35,7 +35,7 @@ namespace ruvia::detail {
 void configure_http_server_tls_contexts(http_server_session_config& session, bool observe_client_hello);
 
 using prepared_http_server_session =
-    std::unique_ptr<http_server_session_config, pmr_object_deleter<http_server_session_config>>;
+    std::unique_ptr<http_server_session_config>;
 
 // Builds a stable-address candidate off the owner loop. Its contexts borrow
 // only its own fields; move the owning pointer, never the session itself.

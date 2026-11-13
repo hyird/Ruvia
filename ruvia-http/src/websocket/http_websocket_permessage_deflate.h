@@ -5,14 +5,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "ruvia/http/detail/field/http_field_list_grammar.h"
-#include "ruvia/http/detail/util/http_pmr_object.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/protocol_byte_limit.h"
 #include "ruvia/http/websocket_deflate_codecs.h"
@@ -29,17 +27,16 @@ namespace ruvia::detail {
 // RFC 7692 codec state of one connection. A direction negotiated without
 // context takeover starts every message from an empty dictionary, so it uses
 // the borrowed shared codec set when the owner supplies one and then holds no
-// codec memory. Every other direction owns a private zlib stream from the
-// connection's resource, created on its first compressed message and kept,
+// codec memory. Every other direction owns a private zlib stream,
+// created on its first compressed message and kept,
 // with its dictionary, until the connection ends. The owner validates the
 // deflater (validate_websocket_deflater_config) and windows (8-15).
 class websocket_deflate final {
 public:
-    websocket_deflate(std::pmr::memory_resource* resource, websocket_deflate_codecs* shared,
+    websocket_deflate(websocket_deflate_codecs* shared,
         websocket_deflater_config deflater, bool send_takeover, bool receive_takeover, int send_window,
         int receive_window) noexcept
-        : resource_(resource),
-          shared_(shared),
+        : shared_(shared),
           deflater_config_(deflater),
           send_window_(send_window),
           receive_window_(receive_window),
@@ -51,13 +48,13 @@ public:
 
     // Appends the compressed message to `out`. false reports a codec failure;
     // allocation exceptions propagate.
-    bool compress(std::string_view input, std::pmr::string& out) {
+    bool compress(std::string_view input, std::string& out) {
         if (!send_takeover_ && shared_ != nullptr) {
             // Reset after every call, including failures and exceptions.
             return shared_->deflate_message(input, out, deflater_config_.compression_level_, send_window_);
         }
         if (deflater_ == nullptr) {
-            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_,
+            deflater_ = std::make_unique<zlib_deflate_stream>(
                 deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
                 deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
             if (!deflater_->initialized()) {
@@ -67,16 +64,16 @@ public:
         } else if (!send_takeover_ && !deflater_->reset()) {
             return false;
         }
-        return websocket_deflate_message(*deflater_, input, out, resource_);
+        return websocket_deflate_message(*deflater_, input, out);
     }
 
     // Compresses one fragment of a message sent as several frames. The whole
     // message is one DEFLATE stream, so it uses a private codec even where
     // whole messages borrow the shared one, and starts from an empty
     // dictionary at its first fragment unless context takeover applies.
-    bool compress_fragment(std::string_view input, bool first, bool final, std::pmr::string& out) {
+    bool compress_fragment(std::string_view input, bool first, bool final, std::string& out) {
         if (deflater_ == nullptr) {
-            deflater_ = make_http_pmr_object<zlib_deflate_stream>(resource_, resource_,
+            deflater_ = std::make_unique<zlib_deflate_stream>(
                 deflater_config_.compression_level_, websocket_deflate_zlib_window_bits(send_window_),
                 deflater_config_.mem_level_, websocket_deflate_zlib_strategy(send_window_));
             if (!deflater_->initialized()) {
@@ -86,18 +83,18 @@ public:
         } else if (first && !send_takeover_ && !deflater_->reset()) {
             return false;
         }
-        return websocket_deflate_message(*deflater_, input, out, resource_, final);
+        return websocket_deflate_message(*deflater_, input, out, final);
     }
 
     websocket_inflate_result decompress(
-        std::string_view input, std::pmr::string& out, protocol_byte_limit message_limit) {
+        std::string_view input, std::string& out, protocol_byte_limit message_limit) {
         if (!receive_takeover_ && shared_ != nullptr) {
             // The shared inflater has a 15-bit window, which also inflates
             // every smaller negotiated window.
             return shared_->inflate_message(input, out, message_limit);
         }
         if (inflater_ == nullptr) {
-            inflater_ = make_http_pmr_object<zlib_inflate_stream>(resource_, resource_, -receive_window_);
+            inflater_ = std::make_unique<zlib_inflate_stream>(-receive_window_);
             if (!inflater_->initialized()) {
                 inflater_.reset();
                 return websocket_inflate_result::error;
@@ -105,7 +102,7 @@ public:
         } else if (!receive_takeover_ && !inflater_->reset()) {
             return websocket_inflate_result::error;
         }
-        return websocket_inflate_message(*inflater_, input, out, message_limit, resource_);
+        return websocket_inflate_message(*inflater_, input, out, message_limit);
     }
 
     // A trial that is not sent must not enter the peer's future dictionary.
@@ -119,13 +116,9 @@ public:
     }
 
 private:
-    template <typename stream_type>
-    using private_stream_type = std::unique_ptr<stream_type, http_pmr_object_deleter<stream_type>>;
-
-    std::pmr::memory_resource* resource_;
     websocket_deflate_codecs* shared_;
-    private_stream_type<zlib_deflate_stream> deflater_;
-    private_stream_type<zlib_inflate_stream> inflater_;
+    std::unique_ptr<zlib_deflate_stream> deflater_;
+    std::unique_ptr<zlib_inflate_stream> inflater_;
     websocket_deflater_config deflater_config_;
     int send_window_;
     int receive_window_;

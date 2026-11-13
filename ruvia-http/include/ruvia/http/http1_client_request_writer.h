@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -264,7 +263,7 @@ private:
 // content prohibition or generated OPTIONS' Content-Type requirement.
 class http1_client_request_writer final {
 public:
-    explicit http1_client_request_writer(std::pmr::memory_resource* resource = nullptr) noexcept;
+    http1_client_request_writer() noexcept = default;
 
     [[nodiscard]] std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small,
         http1_client_request_prepare_error>
@@ -302,9 +301,6 @@ public:
     prepare_connect(borrowed_text authority,
         std::span<const http_header_view> headers, std::span<char> head_buffer,
         http1_client_request_wire_policy policy = {}) const;
-
-private:
-    std::pmr::memory_resource* resource_;
 };
 
 }  // namespace ruvia

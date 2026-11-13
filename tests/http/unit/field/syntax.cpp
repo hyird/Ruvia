@@ -1,6 +1,5 @@
 #include <gtest/gtest.h>
 
-#include <memory_resource>
 #include <string>
 #include <string_view>
 
@@ -68,7 +67,7 @@ TEST(Ruvia, http_outbound_field_checks_normalized_syntax) {
     // 同时覆盖短值与长值：内部 HTAB、SP、可打印 ASCII 和 obs-text 合法，
     // NUL、CR/LF、其余控制字节及 DEL 不得进入应用发送的字段值。
     for (const std::size_t size : {std::size_t{3}, std::size_t{40}}) {
-        std::pmr::string value(size, 'a');
+        std::string value(size, 'a');
         for (unsigned byte = 0; byte < 256; ++byte) {
             value[size / 2] = static_cast<char>(byte);
             const bool allowed = byte == '\t' || (byte >= 0x20 && byte != 0x7f);

@@ -5,24 +5,22 @@
 #include <cstdint>
 #include <exception>
 #include <memory>
-#include <memory_resource>
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 
 namespace ruvia {
 
-// Owns only a detachable owner pointer and a stable worker handle; queued work
+// Owns only a detachable owner pointer and a stable worker_ref; queued work
 // retains the target so that releasing it never depends on the owner's lifetime.
 template <typename owner_type>
 class worker_cancellation_target;
 
 template <typename owner_type>
 [[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>>
-make_worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value);
+make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value);
 
 template <typename owner_type>
 class worker_cancellation_target final
@@ -32,14 +30,14 @@ private:
 
 public:
     worker_cancellation_target(
-        constructor_token, owner_type& owner_value, const worker_handle& worker_value) noexcept
+        constructor_token, owner_type& owner_value, const worker_ref& worker_value) noexcept
         : owner_(&owner_value),
           worker_(worker_value) {}
     worker_cancellation_target(const worker_cancellation_target&) = delete;
     worker_cancellation_target& operator=(const worker_cancellation_target&) = delete;
     worker_cancellation_target(worker_cancellation_target&&) = delete;
     worker_cancellation_target& operator=(worker_cancellation_target&&) = delete;
-    [[nodiscard]] const worker_handle& worker() const noexcept {
+    [[nodiscard]] const worker_ref& worker() const noexcept {
         return worker_;
     }
     [[nodiscard]] std::uint64_t next_operation_id() noexcept {
@@ -72,20 +70,19 @@ public:
 
 private:
     friend std::shared_ptr<worker_cancellation_target<owner_type>>
-    make_worker_cancellation_target<owner_type>(owner_type&, const worker_handle&);
+    make_worker_cancellation_target<owner_type>(owner_type&, const worker_ref&);
 
     // Construction is restricted to make_worker_cancellation_target via constructor_token.
     std::atomic<owner_type*> owner_;
-    worker_handle worker_;
+    worker_ref worker_;
     std::uint64_t next_operation_id_{0};
 };
 
 template <typename owner_type>
 [[nodiscard]] inline std::shared_ptr<worker_cancellation_target<owner_type>>
-make_worker_cancellation_target(owner_type& owner_value, const worker_handle& worker_value) {
+make_worker_cancellation_target(owner_type& owner_value, const worker_ref& worker_value) {
     using target_type = worker_cancellation_target<owner_type>;
-    return std::allocate_shared<target_type>(
-        std::pmr::polymorphic_allocator<target_type>(process_resource()),
+    return std::make_shared<target_type>(
         typename target_type::constructor_token{}, owner_value, worker_value);
 }
 

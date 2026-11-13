@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <string>
 #include <string_view>
@@ -21,26 +20,20 @@ struct http_push_request_view final {
 };
 
 // Detached promise metadata owns its decoded bytes independently of feed input.
-// Its resource must outlive this value, including when it survives the pushed
-// stream or connection. Accepting a promise does
+// Accepting a promise does
 // not establish transport authority: the driver validates the URI origin using
 // its authenticated connection before consuming the pushed response.
 struct http_push_request final {
-    explicit http_push_request(std::pmr::memory_resource* resource)
-        : method_(resource),
-          scheme_(resource),
-          authority_(resource),
-          path_(resource),
-          headers_(resource) {}
+    http_push_request() noexcept = default;
     http_push_request(const http_push_request&) = delete;
     http_push_request& operator=(const http_push_request&) = delete;
     http_push_request(http_push_request&&) noexcept = default;
     http_push_request& operator=(http_push_request&&) = delete;
-    std::pmr::string method_;
-    std::pmr::string scheme_;
-    std::pmr::string authority_;
-    std::pmr::string path_;
-    std::pmr::vector<http_header> headers_;
+    std::string method_;
+    std::string scheme_;
+    std::string authority_;
+    std::string path_;
+    std::vector<http_header> headers_;
 };
 
 struct http2_push_promise_event final {

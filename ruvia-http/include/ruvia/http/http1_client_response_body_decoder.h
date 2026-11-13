@@ -1,14 +1,13 @@
 #pragma once
 
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 #include "ruvia/http/http1_chunked_body_decoder.h"
 #include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_transfer_coding_decoder.h"
@@ -156,8 +155,7 @@ public:
     // Fixed-length plans forward wire content without a transfer-decoding stage.
     // A plan that discards_content() consumes the content its framing delimits
     // (without transfer decoding) and never emits output.
-    http1_client_response_body_decoder(http1_client_response_plan plan,
-        std::pmr::memory_resource* resource);
+    explicit http1_client_response_body_decoder(http1_client_response_plan plan);
     ~http1_client_response_body_decoder() = default;
     http1_client_response_body_decoder(const http1_client_response_body_decoder&) = delete;
     http1_client_response_body_decoder& operator=(const http1_client_response_body_decoder&) = delete;
@@ -166,8 +164,8 @@ public:
 
     // Output borrows available without transfer coding and scratch otherwise;
     // consume it before changing either storage or making the next call.
-    // Trailer fields are validated and owned by the decoder, allocated from
-    // `resource` only for a section that keeps a field: names are lowercase,
+    // Trailer fields are validated and owned by the decoder, allocated only
+    // for a section that keeps a field: names are lowercase,
     // each obs-fold is already replaced with SP (RFC 9112 section 5.2), and
     // fields RFC 9110 section 6.5.1 forbids in response trailers are discarded
     // (RFC 9112 section 7.1.2). They stay valid until the next decode() or

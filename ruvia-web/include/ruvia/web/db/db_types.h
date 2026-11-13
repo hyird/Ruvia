@@ -4,7 +4,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -15,7 +14,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_options.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_number_format.h"
@@ -89,14 +87,14 @@ enum class db_data_type : unsigned char { inferred,
 struct db_config final {
     db_driver driver_{db_driver::unspecified};
     // Host name or unbracketed address only; keep the port in port.
-    std::pmr::string host_{"127.0.0.1", process_resource()};
+    std::string host_{"127.0.0.1"};
     // Absence selects the driver's standard port: 3306 or 5432. Explicit values
     // are checked before narrowing and must be non-zero.
     std::optional<port_number> port_{};
-    std::pmr::string username_{process_resource()};
-    std::pmr::string password_{process_resource()};
+    std::string username_;
+    std::string password_;
     client_tls_config tls_{};
-    std::pmr::string database_{process_resource()};
+    std::string database_;
     // Opened at startup; must be positive. Total application connections per
     // alias are worker_count * pool_size_per_worker. A transaction or streaming
     // result holds its connection until completed or released.
@@ -137,12 +135,12 @@ struct db_cache_config final {
     bool always_enabled_{false};
     bool ignore_errors_{false};
     // Use a distinct namespace for databases sharing one Redis database.
-    std::pmr::string key_prefix_{"ruvia:query-result-cache", process_resource()};
+    std::string key_prefix_{"ruvia:query-result-cache"};
 };
 
 // application startup resolves this alias to its existing worker-local Redis capability.
 struct db_query_cache_registration final {
-    std::pmr::string redis_alias_{"default", process_resource()};
+    std::string redis_alias_{"default"};
     db_cache_config policy_{};
 };
 
@@ -165,16 +163,16 @@ class db_pool;
 // shared ownership, or request-path allocation.
 using db_pool_ref_type = std::variant<std::monostate, db_pool<mariadb_driver>*, db_pool<postgresql_driver>*>;
 
-inline void append_db_number(std::pmr::string& output, std::int64_t value) {
+inline void append_db_number(std::string& output, std::int64_t value) {
     http_append_signed(output, value);
 }
 
-inline void append_db_number(std::pmr::string& output, std::uint64_t value) {
+inline void append_db_number(std::string& output, std::uint64_t value) {
     http_append_unsigned(output, value);
 }
 
 template <std::floating_point number_type>
-inline void append_db_number(std::pmr::string& output, number_type value) {
+inline void append_db_number(std::string& output, number_type value) {
     // SQL numeric literals cannot contain the inf/nan spellings of to_chars.
     http_append_formatted_finite_number(output, value, "database floating-point value must be finite",
         "database floating-point value cannot be formatted");
@@ -213,8 +211,8 @@ public:
           code_(code),
           driver_(driver),
           native_code_(native_code),
-          sql_state_(sql_state, process_resource()),
-          constraint_name_(constraint_name, process_resource()) {}
+          sql_state_(sql_state),
+          constraint_name_(constraint_name) {}
 
     db_error(const db_error& other)
         : std::runtime_error(other),
@@ -261,8 +259,8 @@ private:
     code_type code_;
     std::optional<db_driver> driver_;
     std::optional<std::int64_t> native_code_;
-    std::pmr::string sql_state_;
-    std::pmr::string constraint_name_;
+    std::string sql_state_;
+    std::string constraint_name_;
 };
 
 namespace detail {
@@ -312,14 +310,14 @@ template <typename t_type, bool allow_array>
 struct db_mapped_value_traits<std::optional<t_type>, allow_array> : db_mapped_value_traits<t_type, allow_array> {};
 
 template <typename t_type, bool allow_array>
-struct db_mapped_value_traits<std::pmr::vector<t_type>, allow_array>
+struct db_mapped_value_traits<std::vector<t_type>, allow_array>
     : std::bool_constant<allow_array && db_mapped_value_traits<t_type, false>::value> {};
 
 // The one text-to-scalar conversion for database results: fields and array
 // elements accept the same boolean tokens and numeric syntax.
 template <text_scalar t_type>
-[[nodiscard]] t_type convert_db_text(std::string_view text, std::pmr::memory_resource* resource) {
-    auto parsed = parse_text_scalar<t_type>(text, resource);
+[[nodiscard]] t_type convert_db_text(std::string_view text) {
+    auto parsed = parse_text_scalar<t_type>(text);
     if (const auto* error = std::get_if<text_scalar_parse_error>(&parsed)) {
         if constexpr (std::is_same_v<t_type, bool>) {
             throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database text is not a boolean");
@@ -336,7 +334,7 @@ template <text_scalar t_type>
 }  // namespace detail
 
 // Mapped SQL values own their text independently of db_rows: numbers, bool,
-// std::pmr::string, ruvia::string, and one-dimensional std::pmr::vector values.
+// std::string, ruvia::string, and one-dimensional std::vector values.
 // Optional wrappers preserve ownership, including nullable array elements;
 // borrowed views, references, and nested arrays are not mapped value types.
 template <typename t_type>
@@ -344,7 +342,7 @@ concept db_mapped_value = detail::db_mapped_value_traits<t_type>::value;
 
 class db_value final {
 private:
-    using storage_type = std::variant<std::monostate, borrowed_text, std::pmr::string, std::int64_t,
+    using storage_type = std::variant<std::monostate, borrowed_text, std::string, std::int64_t,
         std::uint64_t, double, bool>;
 
 public:
@@ -395,8 +393,8 @@ private:
     friend struct detail::db_value_access;
 
     // Tagged so it never competes with the public borrowing constructors: a
-    // std::pmr::string lvalue argument still borrows through string_view.
-    db_value(std::in_place_type_t<std::pmr::string>, std::pmr::string value);
+    // std::string lvalue argument still borrows through string_view.
+    db_value(std::in_place_type_t<std::string>, std::string value);
 
     template <typename t_type>
     [[nodiscard]] static storage_type make_integer_storage(t_type value) {
@@ -413,16 +411,16 @@ private:
 namespace detail {
 
 struct db_value_access final {
-    [[nodiscard]] static db_value owned_string(std::pmr::string value) {
-        return db_value(std::in_place_type<std::pmr::string>, std::move(value));
+    [[nodiscard]] static db_value owned_string(std::string value) {
+        return db_value(std::in_place_type<std::string>, std::move(value));
     }
 
     // Prepared statement parameters own their text. Requiring that alternative
     // gives native text protocols a checked, NUL-terminated borrowing boundary.
-    [[nodiscard]] static const std::pmr::string& owned_text(const db_value& value) {
-        return std::get<std::pmr::string>(value.storage_);
+    [[nodiscard]] static const std::string& owned_text(const db_value& value) {
+        return std::get<std::string>(value.storage_);
     }
-    static const std::pmr::string& owned_text(const db_value&&) = delete;
+    static const std::string& owned_text(const db_value&&) = delete;
 };
 
 template <typename t_type>
@@ -463,13 +461,11 @@ template <typename param_type>
 }  // namespace detail
 class db_field final {
 private:
-    using storage_type = std::variant<std::monostate, std::pmr::string, borrowed_text>;
+    using storage_type = std::variant<std::monostate, std::string, borrowed_text>;
 
 public:
     db_field(db_field&& other) noexcept;
-    // A different PMR resource can require allocation during assignment.
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    db_field& operator=(db_field&& other);
+    db_field& operator=(db_field&& other) noexcept;
 
     db_field(const db_field&) = delete;
     db_field& operator=(const db_field&) = delete;
@@ -488,7 +484,7 @@ public:
         if (!source_value) {
             return std::nullopt;
         }
-        return detail::convert_db_text<t_type>(*source_value, resource_);
+        return detail::convert_db_text<t_type>(*source_value);
     }
 
     template <detail::text_scalar t_type>
@@ -501,14 +497,12 @@ private:
 
     struct borrowed_tag_type final {};
 
-    explicit db_field(std::pmr::memory_resource* resource);
-    db_field(std::nullptr_t, std::pmr::memory_resource* resource);
-    db_field(std::string_view value, std::pmr::memory_resource* resource);
-    db_field(borrowed_tag_type, std::string_view value, std::pmr::memory_resource* resource);
-    [[nodiscard]] static db_field borrowed(
-        std::string_view value, std::pmr::memory_resource* resource);
+    db_field() noexcept;
+    explicit db_field(std::nullptr_t) noexcept;
+    explicit db_field(std::string_view value);
+    db_field(borrowed_tag_type, std::string_view value) noexcept;
+    [[nodiscard]] static db_field borrowed(std::string_view value) noexcept;
 
-    std::pmr::memory_resource* resource_;
     storage_type storage_;
 };
 
@@ -529,8 +523,8 @@ public:
     [[nodiscard]] bool contains(std::string_view column) const noexcept;
     [[nodiscard]] const db_field* find(std::string_view column) const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field* find(std::string_view column) const&& = delete;
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
-    [[nodiscard]] std::span<const std::pmr::string> column_names() const&& = delete;
+    [[nodiscard]] std::span<const std::string> column_names() const& noexcept RUVIA_LIFETIMEBOUND;
+    [[nodiscard]] std::span<const std::string> column_names() const&& = delete;
     [[nodiscard]] const db_field* begin() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] const db_field* begin() const&& = delete;
     [[nodiscard]] const db_field* end() const& noexcept RUVIA_LIFETIMEBOUND;
@@ -541,11 +535,11 @@ private:
     friend class db_rows;
 
     db_row() noexcept = default;
-    db_row(const db_field* fields_value, std::size_t size, const std::pmr::string* column_names,
+    db_row(const db_field* fields_value, std::size_t size, const std::string* column_names,
         std::size_t column_count) noexcept;
 
     std::span<const db_field> fields_{};
-    std::span<const std::pmr::string> column_names_{};
+    std::span<const std::string> column_names_{};
 };
 
 }  // namespace ruvia

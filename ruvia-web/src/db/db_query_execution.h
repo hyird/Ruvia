@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstddef>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -11,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/operation_deadline.h"
 #include "ruvia/core/task.h"
 #include "ruvia/web/db/db_rows.h"
@@ -26,8 +24,8 @@ class db_query;
 // caller's arguments: a suspended query keeps borrowing its SQL and parameters
 // long after the expression that produced them has ended.
 struct prepared_db_statement final {
-    std::pmr::string sql_;
-    std::pmr::vector<db_value> params_;
+    std::string sql_;
+    std::vector<db_value> params_;
 };
 
 // Raw SQL is checked once, where the caller hands it over: it must hold a
@@ -37,23 +35,23 @@ struct prepared_db_statement final {
 void validate_db_sql_text(std::string_view sql);
 
 [[nodiscard]] prepared_db_statement prepare_db_statement(
-    std::string_view sql, std::span<const db_value> params, std::pmr::memory_resource* resource);
+    std::string_view sql, std::span<const db_value> params);
 
 // PostgreSQL NOTIFY as a pg_notify() call, so channel and payload travel as
 // bound parameters rather than as SQL text.
 [[nodiscard]] prepared_db_statement prepare_db_notify(
-    std::string_view channel, std::string_view payload, std::pmr::memory_resource* resource);
+    std::string_view channel, std::string_view payload);
 
 namespace detail {
 
 [[nodiscard]] inline db_value clone_db_value_for_resource(
-    const db_value& value, std::pmr::memory_resource* resolved_resource) {
+    const db_value& value) {
     switch (value.type()) {
         case db_value_type::null:
             return db_value(nullptr);
         case db_value_type::string:
             return db_value_access::owned_string(
-                std::pmr::string(value.text(), resolved_resource));
+                std::string(value.text()));
         case db_value_type::signed_value:
             return db_value(value.signed_value());
         case db_value_type::unsigned_value:
@@ -66,13 +64,12 @@ namespace detail {
     return db_value(nullptr);
 }
 
-[[nodiscard]] inline std::pmr::vector<db_value> clone_db_values(
-    std::span<const db_value> values, std::pmr::memory_resource* resource) {
-    auto* resolved = pmr_resource_or_default(resource);
-    std::pmr::vector<db_value> output(resolved);
+[[nodiscard]] inline std::vector<db_value> clone_db_values(
+    std::span<const db_value> values) {
+    std::vector<db_value> output;
     output.reserve(values.size());
     for (const auto& value : values) {
-        output.push_back(clone_db_value_for_resource(value, resolved));
+        output.push_back(clone_db_value_for_resource(value));
     }
     return output;
 }
@@ -88,7 +85,6 @@ class db_query_cache_state;
 struct db_query_backend final {
     db_pool_ref_type pool_;
     std::optional<std::size_t> slot_;
-    std::pmr::memory_resource* resource_;
     // The request's counter block; null outside a request.
     request_io_metrics* io_metrics_{nullptr};
     // Set when the database statement itself failed: a transaction statement
@@ -102,11 +98,11 @@ struct db_query_backend final {
 };
 
 struct db_query_step final {
-    std::pmr::string sql_;
-    std::pmr::vector<db_value> params_;
+    std::string sql_;
+    std::vector<db_value> params_;
 #ifdef RUVIA_ENABLE_REDIS
     // Present only when a configured cache applies to this statement.
-    std::optional<std::pmr::string> cache_key_;
+    std::optional<std::string> cache_key_;
     std::optional<std::chrono::milliseconds> cache_duration_;
 #endif
 };
@@ -130,8 +126,8 @@ template <bool with_count>
 // Runs one statement on the backend without a cache. `options` is owned by the
 // awaiting frame, which must outlive the returned task; a pooled statement
 // takes it over, a transaction statement borrows it.
-[[nodiscard]] task<db_rows> query_db_backend(const db_query_backend& backend, std::pmr::string sql,
-    std::pmr::vector<db_value> params, operation_options& options);
+[[nodiscard]] task<db_rows> query_db_backend(const db_query_backend& backend, std::string sql,
+    std::vector<db_value> params, operation_options& options);
 
 [[nodiscard]] inline operation_options db_remaining_options(
     const operation_options& base, const operation_deadline& timeout) {

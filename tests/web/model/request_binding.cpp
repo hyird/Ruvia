@@ -1,11 +1,9 @@
 #include <gtest/gtest.h>
 
-#include <memory_resource>
 #include <string>
 #include <string_view>
 #include <utility>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/testing.h"
 
@@ -33,9 +31,8 @@ RUVIA_MODEL(tags_binding_input, RUVIA_OPTIONAL_FIELD(tags, ruvia::array<ruvia::s
 
 namespace {
 
-ruvia::task<request_binding_out> make_response(std::string_view id, std::string_view name,
-    std::pmr::memory_resource* resource) {
-    request_binding_out response({.resource_ = resource});
+ruvia::task<request_binding_out> make_response(std::string_view id, std::string_view name) {
+    request_binding_out response;
     response.set<"id">(id);
     response.set<"name">(name);
     co_return response;
@@ -83,7 +80,7 @@ public:
     ruvia::task<ruvia::http_response> update(ruvia::context& c) {
         const auto& params = c.req().validated<request_binding_params>();
         const auto& body = c.req().validated<request_binding_body>();
-        auto response = co_await make_response(params.get<"id">().view(), body.get<"name">().view(), c.arena());
+        auto response = co_await make_response(params.get<"id">().view(), body.get<"name">().view());
         co_return c.json(response);
     }
 };
@@ -128,12 +125,12 @@ TEST(Ruvia, request_binding_form_keeps_malformed_percent_sequences_literally) {
     ruvia::test_app app;
     for (const std::string_view invalid : {"%", "%G0", "%0G"}) {
         for (const auto& body : {
-                 std::move(std::pmr::string("name=Al", ruvia::process_resource()).append(invalid)) + "&unknown=" + std::pmr::string(invalid, ruvia::process_resource()),
-                 std::move(std::pmr::string("unknown=", ruvia::process_resource()).append(invalid)) + "&name=Al" + std::pmr::string(invalid, ruvia::process_resource())}) {
+                 std::move(std::string("name=Al").append(invalid)) + "&unknown=" + std::string(invalid),
+                 std::move(std::string("unknown=").append(invalid)) + "&name=Al" + std::string(invalid)}) {
             const auto response = app.request(
                 ruvia::test_request::post("/request-binding-form").form(body));
             EXPECT_TRUE(response.status() == ruvia::http_status::ok);
-            EXPECT_EQ(response.body(), std::move(std::pmr::string(R"({"name":"Al)", ruvia::process_resource()).append(invalid)) + R"("})");
+            EXPECT_EQ(response.body(), std::move(std::string(R"({"name":"Al)").append(invalid)) + R"("})");
         }
     }
     const auto valid = app.request(ruvia::test_request::post("/request-binding-form")
@@ -175,7 +172,7 @@ TEST(Ruvia, request_binding_dynamic_json_distinguishes_syntax_from_field_type_er
 }
 
 TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
-    std::pmr::string elements{ruvia::process_resource()};
+    std::string elements{};
     for (std::size_t index = 0; index < 40000; ++index) {
         if (index != 0) {
             elements.push_back(',');
@@ -184,8 +181,8 @@ TEST(Ruvia, request_binding_large_wrong_type_arrays_report_field_validation) {
     }
     ruvia::test_app app;
     for (const auto& body : {
-             std::pmr::string("{\"object\":[", ruvia::process_resource()) + elements + "]}",
-             std::pmr::string("{\"numbers\":[", ruvia::process_resource()) + elements + ",\"wrong type\"]}"}) {
+             std::string("{\"object\":[") + elements + "]}",
+             std::string("{\"numbers\":[") + elements + ",\"wrong type\"]}"}) {
         const auto response = app.request(ruvia::test_request::post("/request-binding-dynamic").json(body));
         EXPECT_TRUE(response.status() == ruvia::http_status::bad_request);
         EXPECT_TRUE(response.body().find("validation_failed") != std::string_view::npos);

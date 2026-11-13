@@ -1,5 +1,4 @@
 #include <cstdint>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string>
@@ -22,9 +21,9 @@ namespace ruvia {
 
 namespace {
 
-http_response make_allow_no_content_response(request_memory& memory, std::uint32_t method_mask,
+http_response make_allow_no_content_response(std::uint32_t method_mask,
     std::span<const std::string_view> extension_methods) {
-    http_response response(memory.resource());
+    http_response response;
     response.status(ruvia::http_status::no_content);
     response.allow_methods(method_mask, extension_methods);
     return response;
@@ -46,8 +45,8 @@ struct document_root_probe final {
 
 [[nodiscard]] document_root_probe probe_document_root_resource(
     const detail::document_root_binding& document_root, const http_request& request,
-    std::optional<std::pmr::string>& decoded,
-    std::optional<std::pmr::string>& storage) {
+    std::optional<std::string>& decoded,
+    std::optional<std::string>& storage) {
     const auto* const root = document_root.root();
     // Only an origin-form path names a document-root resource: a CONNECT
     // authority or "OPTIONS *" reaches here unrouted as well and must not be
@@ -58,13 +57,13 @@ struct document_root_probe final {
         request.path().find("//") != std::string_view::npos) {
         return {};
     }
-    const auto path = detail::decode_request_path(request.path(), decoded.emplace(ruvia::process_resource()));
+    const auto path = detail::decode_request_path(request.path(), decoded.emplace());
     if (!path) {
         return {};
     }
     auto relative = path->substr(1);
     auto entry_value = detail::static_root_access::try_resolve(
-        *root, relative, storage.emplace(ruvia::process_resource()));
+        *root, relative, storage.emplace());
     if (!entry_value.has_value()) {
         return {};
     }
@@ -74,27 +73,27 @@ struct document_root_probe final {
 }  // namespace
 
 task<std::optional<http_response>> detail::route_table::dispatch_response_stream(
-    const http_request& request, const resolved_route& resolved, request_memory& memory,
+    const http_request& request, const resolved_route& resolved,
     response_stream_writer& response_stream, const context_services& services) const {
     if (resolved.route().endpoint().response_stream() == nullptr) {
         throw std::logic_error("route is not a response stream route");
     }
     return dispatch_stream_route(
-        request, resolved, memory, resolved.stream_handler(), services, &response_stream);
+        request, resolved, resolved.stream_handler(), services, &response_stream);
 }
 
 task<std::optional<http_response>> detail::route_table::dispatch_upgrade(const http_request& request,
-    const resolved_route& resolved, request_memory& memory, const route_stream_handler& handler,
+    const resolved_route& resolved, const route_stream_handler& handler,
     const context_services& services) const {
     const auto& endpoint = resolved.route().endpoint();
     if (endpoint.tunnel() == nullptr && endpoint.websocket() == nullptr) {
         throw std::logic_error("route is not an upgrade route");
     }
-    return dispatch_stream_route(request, resolved, memory, handler, services);
+    return dispatch_stream_route(request, resolved, handler, services);
 }
 
 task<void> detail::route_table::dispatch_buffered_response(const http_request& request,
-    const route_resolution& resolution, request_memory& memory, document_root_binding document_root,
+    const route_resolution& resolution, document_root_binding document_root,
     const context_services& services, static_file_selection_mode static_file_mode,
     http_response& response) const {
     std::exception_ptr dispatch_exception;
@@ -105,8 +104,8 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             // responses that still pass through the unmatched-request chain,
             // like every other answer to a request no route matched. A
             // rejected target is answered by the not-found path alone.
-            std::optional<std::pmr::string> decoded_fallback_path;
-            std::optional<std::pmr::string> fallback_path_storage;
+            std::optional<std::string> decoded_fallback_path;
+            std::optional<std::string> fallback_path_storage;
             const auto fallback_probe =
                 resolution.rejected() != nullptr || document_root.root() == nullptr
                     ? document_root_probe{}
@@ -116,7 +115,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             const auto method = request.known_method();
             if (fallback_probe.entry_.has_value() &&
                 (method == http_known_method::get || method == http_known_method::head)) {
-                auto context_value = detail::context_access::make(memory, request, services);
+                auto context_value = detail::context_access::make(request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
                 auto fallback_response = co_await detail::context_access::static_file_resolved(
                     context_value, *document_root.root(), fallback_probe.relative_, {},
@@ -148,7 +147,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                 // RFC 9110 9.3.7: OPTIONS * asks about the server in general.
                 // Methods differ per resource, so a server-wide Allow would
                 // advertise methods most resources reject; answer without one.
-                unmatched_response.emplace(http_response(memory.resource()));
+                unmatched_response.emplace(http_response());
                 unmatched_response->status(ruvia::http_status::no_content);
             } else if (resolution.method_not_allowed() != nullptr || fallback_probe.entry_.has_value()) {
                 // The method is known here (registered as an extension token
@@ -164,7 +163,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
                     allowed_methods |= document_root_method_mask;
                 }
                 if (request.known_method() == http_known_method::options) {
-                    unmatched_response.emplace(make_allow_no_content_response(memory, allowed_methods, extension_methods));
+                    unmatched_response.emplace(make_allow_no_content_response(allowed_methods, extension_methods));
                     allowed_methods = 0;
                     extension_methods = {};
                 } else {
@@ -174,7 +173,7 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             }
 
             if (unmatched_response) {
-                auto context_value = detail::context_access::make(memory, request, services);
+                auto context_value = detail::context_access::make(request, services);
                 detail::context_access::services(context_value).bind_routes(*this);
                 auto terminal = [&unmatched_response](context&) -> task<http_response> {
                     co_return std::move(*unmatched_response);
@@ -185,33 +184,33 @@ task<void> detail::route_table::dispatch_buffered_response(const http_request& r
             }
 
             if (error) {
-                response = co_await handle_error(request, memory, *error, services);
+                response = co_await handle_error(request, *error, services);
                 if (allowed_methods != 0 || !extension_methods.empty()) {
                     response.allow_methods(allowed_methods, extension_methods);
                 }
                 co_return;
             }
 
-            response = co_await handle_not_found(request, memory, services);
+            response = co_await handle_not_found(request, services);
             co_return;
         }
 
-        (void)co_await dispatch_resolved_route(request, memory, *resolved, services, nullptr, response);
+        (void)co_await dispatch_resolved_route(request, *resolved, services, nullptr, response);
         co_return;
     } catch (...) {
         dispatch_exception = std::current_exception();
     }
-    response = co_await handle_exception(request, memory, dispatch_exception, services);
+    response = co_await handle_exception(request, dispatch_exception, services);
 }
 
-task<bool> detail::route_table::dispatch_resolved_route(const http_request& request, request_memory& memory,
+task<bool> detail::route_table::dispatch_resolved_route(const http_request& request,
     const resolved_route& resolved, const context_services& services,
     const std::optional<http_request_body_failure>* body_failure, http_response& response) const {
     const auto body_failed = [body_failure] { return body_failure != nullptr && body_failure->has_value(); };
     bool body_failure_handled = false;
     std::exception_ptr dispatch_exception;
     try {
-        auto context_value = make_route_context(memory, request, resolved, services);
+        auto context_value = make_route_context(request, resolved, services);
         auto& context_services_value = detail::context_access::services(context_value);
         context_services_value.bind_routes(*this);
         context_services_value.bind_route_body_limit(resolved.route().max_request_body_bytes());
@@ -224,7 +223,7 @@ task<bool> detail::route_table::dispatch_resolved_route(const http_request& requ
         // Context construction and failed error finalization keep the
         // request-only fallback; transport failures still escape to the session.
         body_failure_handled = body_failed();
-        response = co_await handle_exception(request, memory, dispatch_exception, services);
+        response = co_await handle_exception(request, dispatch_exception, services);
     }
     co_return body_failure_handled;
 }

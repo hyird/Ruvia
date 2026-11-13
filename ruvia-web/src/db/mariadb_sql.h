@@ -1,7 +1,6 @@
 #pragma once
 
 #include <cstdint>
-#include <memory_resource>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -55,7 +54,7 @@ inline constexpr std::string_view mariadb_charset_query = "SELECT @@character_se
 // mariadb_escape_needs_charset() says so. A string parameter with a NUL byte is
 // refused: no SQL literal carries one.
 void interpolate_sql(st_mysql& connection, std::string_view sql, std::span<const db_value> params,
-    std::pmr::string& output, const ma_charset_info_st* charset = nullptr);
+    std::string& output, const ma_charset_info_st* charset = nullptr);
 
 // What a statement's text tells about how it may run.
 struct mariadb_statement_traits final {

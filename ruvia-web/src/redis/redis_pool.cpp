@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "ruvia/core/async.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 #include "integration/request_io_metrics.h"
 #include "redis/redis_protocol.h"
@@ -17,7 +16,7 @@
 namespace ruvia::detail {
 namespace {
 
-[[nodiscard]] const worker_handle& require_redis_worker(const worker_handle& worker_value) {
+[[nodiscard]] const worker_ref& require_redis_worker(const worker_ref& worker_value) {
     if (!worker_value.valid()) {
         throw std::invalid_argument("redis pool requires a valid worker");
     }
@@ -31,7 +30,7 @@ void release_redis_source_storage(container_type& source) noexcept {
 }
 
 void encode_and_release_redis_source(
-    std::pmr::string& write_buffer, redis_owned_command& source, bool) {
+    std::string& write_buffer, redis_owned_command& source, bool) {
     if (source.wire_.empty()) {
         throw std::invalid_argument("redis command must not be empty");
     }
@@ -39,8 +38,8 @@ void encode_and_release_redis_source(
     release_redis_source_storage(source.wire_);
 }
 
-void encode_and_release_redis_source(std::pmr::string& write_buffer,
-    std::pmr::vector<redis_owned_command>& source, bool wrap_transaction) {
+void encode_and_release_redis_source(std::string& write_buffer,
+    std::vector<redis_owned_command>& source, bool wrap_transaction) {
     constexpr std::string_view multi_command = "*1\r\n$5\r\nMULTI\r\n";
     constexpr std::string_view exec_command = "*1\r\n$4\r\nEXEC\r\n";
     std::size_t serialized_bytes =
@@ -68,13 +67,13 @@ void encode_and_release_redis_source(std::pmr::string& write_buffer,
 }
 
 void encode_and_release_redis_source(
-    std::pmr::string& write_buffer, std::pmr::vector<std::pmr::string>& source, bool) {
+    std::string& write_buffer, std::vector<std::string>& source, bool) {
     append_resp_command(write_buffer, source);
     release_redis_source_storage(source);
 }
 
 void encode_and_release_redis_source(
-    std::pmr::string& write_buffer, redis_command_args_view source, bool) {
+    std::string& write_buffer, redis_command_args_view source, bool) {
     append_resp_command(write_buffer, source.args_);
 }
 
@@ -82,15 +81,14 @@ void encode_and_release_redis_source(
 
 redis_pool::redis_pool(asio::io_context& io_context, const redis_config_storage& config,
     asio::ssl::context& tls_context, std::optional<timeout_duration> command_timeout,
-    std::size_t pool_size, const worker_handle& worker_value)
+    std::size_t pool_size, const worker_ref& worker_value)
     : config_(config),
       command_timeout_(command_timeout),
       slots_(*this, pool_size, require_redis_worker(worker_value)),
-      connections_(process_resource()) {
+      connections_() {
     connections_.reserve(pool_size);
     for (std::size_t i = 0; i < pool_size; ++i) {
-        connections_.push_back(make_pmr_object<redis_connection>(
-            process_resource(), io_context, tls_context, slots_.worker(), config_, wire_counters_));
+        connections_.push_back(std::make_unique<redis_connection>(io_context, tls_context, slots_.worker(), config_, wire_counters_));
     }
 }
 
@@ -147,25 +145,22 @@ void redis_pool::slot_policy::cancel_slot(redis_pool& pool, std::size_t slot) no
     pool.connections_[slot]->abort(client_abort_reason::cancelled);
 }
 
-task<redis_value> redis_pool::execute_owned(redis_owned_command command,
-    std::pmr::memory_resource* resource, operation_options options,
+task<redis_value> redis_pool::execute_owned(redis_owned_command command, operation_options options,
     std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
     std::optional<operation_deadline> deadline) {
     return execute_commands<redis_value>(
-        std::move(command), std::move(options), reply_timeout, resource, deadline, io_metrics);
+        std::move(command), std::move(options), reply_timeout, deadline, io_metrics);
 }
 
-task<redis_value> redis_pool::execute_owned(std::pmr::vector<std::pmr::string> args,
-    std::pmr::memory_resource* resource, operation_options options,
+task<redis_value> redis_pool::execute_owned(std::vector<std::string> args, operation_options options,
     std::optional<timeout_duration> reply_timeout, request_io_metrics* io_metrics,
     std::optional<operation_deadline> deadline) {
     return execute_commands<redis_value>(
-        std::move(args), std::move(options), reply_timeout, resource, deadline, io_metrics);
+        std::move(args), std::move(options), reply_timeout, deadline, io_metrics);
 }
 
-task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
-    std::pmr::memory_resource* resource, operation_options options, operation_deadline deadline) {
-    return execute_commands<redis_value>(args, std::move(options), std::nullopt, resource, deadline);
+task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args, operation_options options, operation_deadline deadline) {
+    return execute_commands<redis_value>(args, std::move(options), std::nullopt, deadline);
 }
 
 // Own one lease, cancellation registration and failure cleanup for both a
@@ -173,7 +168,7 @@ task<redis_value> redis_pool::execute_borrowed(redis_command_args_view args,
 // enclosing caller; owned commands can be released after encoding.
 template <typename result_type, typename command_source_type>
 task<result_type> redis_pool::execute_commands(command_source_type source, operation_options options,
-    std::optional<timeout_duration> reply_timeout, std::pmr::memory_resource* resource,
+    std::optional<timeout_duration> reply_timeout,
     std::optional<operation_deadline> deadline, request_io_metrics* io_metrics, bool wrap_transaction) {
     scoped_request_io_timer timer(io_metrics, request_io_kind::redis);
     constexpr bool single_reply = std::is_same_v<result_type, redis_value>;
@@ -184,8 +179,7 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
             return source.size() + (wrap_transaction ? 2U : 0U);
         }
     }();
-    auto* const resolved = pmr_resource_or_default(resource);
-    result_type result(resolved);
+    result_type result;
     if constexpr (!single_reply) {
         if (reply_count == 0) {
             co_return result;
@@ -210,12 +204,12 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
         const auto deadline_value = operation_timeout_value.constrained_by(command_timeout_).constrained_by(reply_timeout);
         co_await connection.write_request(deadline_value);
         if constexpr (single_reply) {
-            result = co_await connection.read_reply(deadline_value, resolved);
+            result = co_await connection.read_reply(deadline_value);
             slots_.throw_if_aborted(slot);
         } else {
             result.reserve(reply_count);
             while (result.size() < reply_count) {
-                result.emplace_back(co_await connection.read_reply(deadline_value, resolved));
+                result.emplace_back(co_await connection.read_reply(deadline_value));
                 slots_.throw_if_aborted(slot);
             }
         }
@@ -227,11 +221,10 @@ task<result_type> redis_pool::execute_commands(command_source_type source, opera
     }
 }
 
-task<std::pmr::vector<redis_value>> redis_pool::execute_pipeline(
-    std::pmr::vector<redis_owned_command> commands, operation_options options,
-    std::pmr::memory_resource* resource, bool wrap_transaction) {
-    return execute_commands<std::pmr::vector<redis_value>>(
-        std::move(commands), std::move(options), std::nullopt, resource, std::nullopt, nullptr, wrap_transaction);
+task<std::vector<redis_value>> redis_pool::execute_pipeline(
+    std::vector<redis_owned_command> commands, operation_options options, bool wrap_transaction) {
+    return execute_commands<std::vector<redis_value>>(
+        std::move(commands), std::move(options), std::nullopt, std::nullopt, nullptr, wrap_transaction);
 }
 
 }  // namespace ruvia::detail

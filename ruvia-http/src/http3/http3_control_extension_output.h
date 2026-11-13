@@ -6,7 +6,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <memory_resource>
 #include <optional>
 #include <span>
 #include <string_view>
@@ -16,7 +15,7 @@
 #include "ruvia/http/http3_connection.h"
 
 #include "field/http_origin_payload.h"
-#include "util/quic_varint.h"
+#include "wire/quic_varint.h"
 
 namespace ruvia::detail {
 
@@ -25,10 +24,10 @@ namespace ruvia::detail {
 // for extension bytes. Each frame owns address-stable storage until its ACK.
 class http3_control_extension_output final {
     struct frame final {
-        frame(std::size_t size, std::pmr::memory_resource* resource)
-            : bytes_(size, resource) {}
+        explicit frame(std::size_t size)
+            : bytes_(size) {}
 
-        std::pmr::vector<std::byte> bytes_;
+        std::vector<std::byte> bytes_;
         std::size_t written_{0};
         std::size_t acknowledged_{0};
     };
@@ -39,9 +38,7 @@ class http3_control_extension_output final {
     };
 
 public:
-    explicit http3_control_extension_output(std::pmr::memory_resource* resource)
-        : frames_(resource),
-          segments_(resource) {}
+    http3_control_extension_output() noexcept = default;
 
     http3_control_extension_output(const http3_control_extension_output&) = delete;
     http3_control_extension_output& operator=(const http3_control_extension_output&) = delete;
@@ -65,7 +62,7 @@ public:
 
         // All allocation precedes publication of counters. Appending never
         // relocates another frame's bytes already borrowed by QUIC.
-        auto& queued = frames_.emplace_back(total_bytes, frames_.get_allocator().resource());
+        auto& queued = frames_.emplace_back(total_bytes);
         auto* const dst = queued.bytes_.data();
         dst[0] = std::byte{0x0c};
         (void)encode_quic_varint(
@@ -225,8 +222,8 @@ private:
         frame_in_progress_ = false;
     }
 
-    std::pmr::deque<frame> frames_;
-    std::pmr::deque<segment> segments_;
+    std::deque<frame> frames_;
+    std::deque<segment> segments_;
     std::size_t pending_bytes_{0};
     std::size_t unwritten_bytes_{0};
     std::size_t write_frame_{0};

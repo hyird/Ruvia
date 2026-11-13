@@ -12,7 +12,7 @@
 #include <variant>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/detail/util/borrowed_view.h"
+#include "ruvia/http/detail/borrowed_view.h"
 
 namespace ruvia {
 enum class http_capsule_codec_error : std::uint8_t { need_more_data,

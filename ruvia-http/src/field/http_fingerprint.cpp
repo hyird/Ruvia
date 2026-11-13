@@ -228,7 +228,7 @@ namespace {
 }
 
 template <typename int_type>
-void append_decimal_list(std::pmr::string& out, std::span<const int_type> items) {
+void append_decimal_list(std::string& out, std::span<const int_type> items) {
     for (std::size_t index = 0; index < items.size(); ++index) {
         if (index != 0) {
             out.push_back('-');
@@ -237,7 +237,7 @@ void append_decimal_list(std::pmr::string& out, std::span<const int_type> items)
     }
 }
 
-void append_hex_u16(std::pmr::string& out, std::uint16_t value) {
+void append_hex_u16(std::string& out, std::uint16_t value) {
     static constexpr char hex_digits[] = "0123456789abcdef";
     out.push_back(hex_digits[(value >> 12U) & 0x0fU]);
     out.push_back(hex_digits[(value >> 8U) & 0x0fU]);
@@ -289,10 +289,8 @@ std::uint16_t tls_client_hello_info::version() const noexcept {
     return legacy_version_;
 }
 
-std::pmr::string tls_client_hello_info::ja3_raw(std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    std::pmr::string out(target_resource);
+std::string tls_client_hello_info::ja3_raw() const {
+    std::string out;
     http_append_unsigned(out, legacy_version_);
     out.push_back(',');
     append_decimal_list<std::uint16_t>(out, cipher_suites_);
@@ -305,19 +303,14 @@ std::pmr::string tls_client_hello_info::ja3_raw(std::pmr::memory_resource* resou
     return out;
 }
 
-std::pmr::string tls_client_hello_info::ja3(std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    const auto raw = ja3_raw(target_resource);
+std::string tls_client_hello_info::ja3() const {
+    const auto raw = ja3_raw();
     const auto digest = md5_hex_lower(raw);
-    return std::pmr::string(digest.data(), digest.size(), target_resource);
+    return std::string(digest.data(), digest.size());
 }
 
-std::pmr::string tls_client_hello_info::ja4(
-    bool quic, std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    std::pmr::string out(target_resource);
+std::string tls_client_hello_info::ja4(bool quic) const {
+    std::string out;
     out.reserve(36);
 
     out.push_back(quic ? 'q' : 't');
@@ -356,9 +349,9 @@ std::pmr::string tls_client_hello_info::ja4(
     if (cipher_suites_.empty()) {
         out.append("000000000000");
     } else {
-        std::pmr::vector<std::uint16_t> sorted_ciphers(cipher_suites_, target_resource);
+        std::vector<std::uint16_t> sorted_ciphers(cipher_suites_);
         std::ranges::sort(sorted_ciphers);
-        std::pmr::string cipher_list(target_resource);
+        std::string cipher_list;
         cipher_list.reserve(sorted_ciphers.size() * 5U);
         for (std::size_t index = 0; index < sorted_ciphers.size(); ++index) {
             if (index != 0) {
@@ -371,7 +364,7 @@ std::pmr::string tls_client_hello_info::ja4(
     }
     out.push_back('_');
 
-    std::pmr::vector<std::uint16_t> filtered_exts(target_resource);
+    std::vector<std::uint16_t> filtered_exts;
     filtered_exts.reserve(extensions_.size());
     for (const auto ext : extensions_) {
         if (ext != 0x0000U && ext != 0x0010U) {
@@ -383,7 +376,7 @@ std::pmr::string tls_client_hello_info::ja4(
     if (filtered_exts.empty() && signature_algorithms_.empty()) {
         out.append("000000000000");
     } else {
-        std::pmr::string ext_sig_list(target_resource);
+        std::string ext_sig_list;
         for (std::size_t index = 0; index < filtered_exts.size(); ++index) {
             if (index != 0) {
                 ext_sig_list.push_back(',');
@@ -406,10 +399,8 @@ std::pmr::string tls_client_hello_info::ja4(
     return out;
 }
 
-std::pmr::string tls_client_hello_info::peetprint(std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    std::pmr::string out(target_resource);
+std::string tls_client_hello_info::peetprint() const {
+    std::string out;
     if (!supported_versions_.empty()) {
         append_decimal_list<std::uint16_t>(out, supported_versions_);
     } else {
@@ -435,33 +426,26 @@ std::pmr::string tls_client_hello_info::peetprint(std::pmr::memory_resource* res
     return out;
 }
 
-std::pmr::string tls_client_hello_info::peetprint_hash(
-    std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    const auto raw = peetprint(target_resource);
+std::string tls_client_hello_info::peetprint_hash() const {
+    const auto raw = peetprint();
     const auto digest = md5_hex_lower(raw);
-    return std::pmr::string(digest.data(), digest.size(), target_resource);
+    return std::string(digest.data(), digest.size());
 }
 
-tls_client_hello_fingerprints tls_client_hello_info::fingerprints(
-    bool quic, std::pmr::memory_resource* resource) const {
-    auto* const target_resource = detail::http_pmr_resource_or_default(
-        resource != nullptr ? resource : cipher_suites_.get_allocator().resource());
-    tls_client_hello_fingerprints result(target_resource);
-    result.ja3_raw_ = ja3_raw(target_resource);
+tls_client_hello_fingerprints tls_client_hello_info::fingerprints(bool quic) const {
+    tls_client_hello_fingerprints result;
+    result.ja3_raw_ = ja3_raw();
     const auto ja3_md5 = md5_hex_lower(result.ja3_raw_);
     result.ja3_.assign(ja3_md5.data(), ja3_md5.size());
-    result.ja4_ = ja4(quic, target_resource);
-    result.peetprint_ = peetprint(target_resource);
+    result.ja4_ = ja4(quic);
+    result.peetprint_ = peetprint();
     const auto peet_md5 = md5_hex_lower(result.peetprint_);
     result.peetprint_hash_.assign(peet_md5.data(), peet_md5.size());
     return result;
 }
 
 std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::span<const std::byte> message, std::pmr::memory_resource* resource) {
-    auto* const target_resource = detail::http_pmr_resource_or_default(resource);
+    std::span<const std::byte> message) {
     const auto* data = reinterpret_cast<const std::uint8_t*>(message.data());
     std::size_t size = message.size();
 
@@ -505,7 +489,7 @@ std::optional<tls_client_hello_info> parse_tls_client_hello(
         return true;
     };
 
-    tls_client_hello_info info(target_resource);
+    tls_client_hello_info info;
     if (!read_u16(info.legacy_version_)) {
         return std::nullopt;
     }
@@ -700,45 +684,32 @@ std::optional<tls_client_hello_info> parse_tls_client_hello(
     return info;
 }
 
-std::optional<tls_client_hello_info> parse_tls_client_hello(
-    std::string_view message, std::pmr::memory_resource* resource) {
-    return parse_tls_client_hello(
-        std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(message.data()), message.size()),
-        resource);
+std::optional<tls_client_hello_info> parse_tls_client_hello(std::string_view message) {
+    return parse_tls_client_hello(std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(message.data()), message.size()));
 }
 
 std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::span<const std::byte> message, bool quic, std::pmr::memory_resource* resource) {
-    const auto parsed = parse_tls_client_hello(message, resource);
+    std::span<const std::byte> message, bool quic) {
+    const auto parsed = parse_tls_client_hello(message);
     if (!parsed.has_value()) {
         return std::nullopt;
     }
-    return parsed->fingerprints(quic, resource);
+    return parsed->fingerprints(quic);
 }
 
 std::optional<tls_client_hello_fingerprints> compute_tls_client_hello_fingerprints(
-    std::string_view message, bool quic, std::pmr::memory_resource* resource) {
-    const auto parsed = parse_tls_client_hello(message, resource);
+    std::string_view message, bool quic) {
+    const auto parsed = parse_tls_client_hello(message);
     if (!parsed.has_value()) {
         return std::nullopt;
     }
-    return parsed->fingerprints(quic, resource);
+    return parsed->fingerprints(quic);
 }
-
-http2_akamai_fingerprint_collector::http2_akamai_fingerprint_collector(
-    std::pmr::memory_resource* resource)
-    : http2_akamai_fingerprint_collector(
-          http2_akamai_fingerprint_options{.resource_ = resource}) {}
 
 http2_akamai_fingerprint_collector::http2_akamai_fingerprint_collector(
     http2_akamai_fingerprint_options options)
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      settings_(resource_),
-      priorities_(resource_),
-      pseudo_headers_(resource_),
-      fingerprint_(resource_),
-      max_frames_(options.max_frames_),
+    : max_frames_(options.max_frames_),
       max_bytes_(options.max_bytes_) {}
 
 void http2_akamai_fingerprint_collector::reset() noexcept {
@@ -917,16 +888,8 @@ void http2_akamai_fingerprint_collector::observe_header(
     }
 }
 
-http3_fingerprint_collector::http3_fingerprint_collector(
-    std::pmr::memory_resource* resource)
-    : http3_fingerprint_collector(http3_fingerprint_options{.resource_ = resource}) {}
-
 http3_fingerprint_collector::http3_fingerprint_collector(http3_fingerprint_options options)
-    : resource_(detail::http_pmr_resource_or_default(options.resource_)),
-      control_frames_(resource_),
-      pseudo_headers_(resource_),
-      fingerprint_(resource_),
-      max_frames_(options.max_frames_),
+    : max_frames_(options.max_frames_),
       max_bytes_(options.max_bytes_) {}
 
 void http3_fingerprint_collector::reset() noexcept {

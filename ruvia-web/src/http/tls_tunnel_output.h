@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <memory>
-#include <memory_resource>
 #include <system_error>
 #include <vector>
 
@@ -12,7 +11,7 @@
 
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_handle.h"
+#include "ruvia/core/worker_ref.h"
 #include "ruvia/core/worker_signal.h"
 
 namespace ruvia::detail {
@@ -26,9 +25,9 @@ class connection_lifecycle;
 // once; flush() waits for that alert without consuming the peer's remaining data.
 class tls_tunnel_output final {
 public:
-    tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_handle& worker_value,
-        std::pmr::memory_resource& resource, connection_lifecycle* lifecycle = nullptr);
-    tls_tunnel_output(SSL&, asio::ip::tcp::socket&, worker_handle&&, std::pmr::memory_resource&, connection_lifecycle* = nullptr) = delete;
+    tls_tunnel_output(SSL& ssl, asio::ip::tcp::socket& socket, const worker_ref& worker_value,
+        connection_lifecycle* lifecycle = nullptr);
+    tls_tunnel_output(SSL&, asio::ip::tcp::socket&, worker_ref&&, connection_lifecycle* = nullptr) = delete;
     ~tls_tunnel_output();
     tls_tunnel_output(const tls_tunnel_output&) = delete;
     tls_tunnel_output& operator=(const tls_tunnel_output&) = delete;
@@ -50,10 +49,10 @@ private:
 
     SSL& ssl_;
     asio::ip::tcp::socket& socket_;
-    const worker_handle& worker_;
+    const worker_ref& worker_;
     connection_lifecycle* lifecycle_;
     BIO* previous_{nullptr};
-    std::pmr::vector<char> bytes_;
+    std::vector<char> bytes_;
     std::size_t head_{0};
     std::size_t size_{0};
     std::error_code error_{};

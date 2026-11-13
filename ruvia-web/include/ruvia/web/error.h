@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <exception>
 #include <initializer_list>
-#include <memory_resource>
 #include <ranges>
 #include <span>
 #include <string>
@@ -14,7 +13,6 @@
 #include <type_traits>
 #include <vector>
 
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/http/borrowed_text.h"
@@ -47,17 +45,14 @@ struct validation_issue_options final {
     borrowed_text field_{};
     borrowed_text code_{};
     borrowed_text message_{};
-    std::pmr::memory_resource* resource_{nullptr};
 };
 
-// Standalone copies retain the source resource. Assignment retains the
-// destination resource and prepares all diagnostic text before committing.
 class validation_issue final {
 public:
-    validation_issue(const validation_issue& other);
+    validation_issue(const validation_issue&) = default;
     validation_issue(validation_issue&&) noexcept = default;
     validation_issue& operator=(const validation_issue& other);
-    validation_issue& operator=(validation_issue&& other);
+    validation_issue& operator=(validation_issue&& other) noexcept;
 
     [[nodiscard]] std::string_view field() const& noexcept RUVIA_LIFETIMEBOUND {
         return field_;
@@ -78,49 +73,17 @@ private:
     friend class validator;
     friend struct detail::validation_issue_access;
 
-    validation_issue(const validation_issue& other, std::pmr::memory_resource* resource);
     void swap(validation_issue& other) noexcept;
 
     explicit validation_issue(validation_issue_options options)
-        : validation_issue(resolved_pmr_resource_tag{}, options.field_.view(),
-              options.code_.view(), options.message_.view(),
-              pmr_resource_or_default(options.resource_)) {}
+        : field_(detail::bounded_validation_text(options.field_.view())),
+          code_(detail::bounded_validation_text(options.code_.view())),
+          message_(detail::bounded_validation_text(options.message_.view())) {}
 
-    validation_issue(resolved_pmr_resource_tag, std::string_view field_name,
-        std::string_view code_value, std::string_view message_value,
-        std::pmr::memory_resource* resource)
-        : field_(detail::bounded_validation_text(field_name), resource),
-          code_(detail::bounded_validation_text(code_value), resource),
-          message_(detail::bounded_validation_text(message_value), resource) {}
-
-    std::pmr::string field_;
-    std::pmr::string code_;
-    std::pmr::string message_;
+    std::string field_;
+    std::string code_;
+    std::string message_;
 };
-
-namespace detail {
-
-struct validation_issue_access final {
-    [[nodiscard]] static validation_issue copy(
-        const validation_issue& issue, std::pmr::memory_resource* resource) {
-        return validation_issue(issue, pmr_resource_or_default(resource));
-    }
-};
-
-// Copies issues into resource. The vector is built with a constructor that can
-// propagate allocation failure while the source diagnostics remain intact.
-[[nodiscard]] inline std::pmr::vector<validation_issue> clone_validation_issues(
-    std::span<const validation_issue> issues, std::pmr::memory_resource* resource) {
-    auto* const target = pmr_resource_or_default(resource);
-    std::pmr::vector<validation_issue> copied(std::initializer_list<validation_issue>{}, target);
-    copied.reserve(issues.size());
-    for (const auto& issue : issues) {
-        copied.push_back(validation_issue_access::copy(issue, target));
-    }
-    return copied;
-}
-
-}  // namespace detail
 using borrowed_validation_issues = borrowed_span<validation_issue>;
 
 struct http_error_info_options final {
@@ -174,22 +137,14 @@ private:
 };
 
 // The owning Web application error: status, code, message, status text and
-// validation issues are deep-copied from the options. Thrown by application
-// code it lives in the process resource, because an exception may be rethrown
-// and destroyed on a thread other than the one that built it. The resource
-// overload binds the error to a caller-provided resource, which must outlive
-// the error and every copy made from it; copies keep the source resource.
+// validation issues are deep-copied from the options.
 class http_error final : public std::exception {
 public:
     explicit http_error(http_error_info_options options);
-    http_error(http_error_info_options options, std::pmr::memory_resource* resource);
-    http_error(const http_error& other);
-    http_error(const http_error& other, std::pmr::memory_resource* resource);
+    http_error(const http_error&) = default;
     http_error& operator=(const http_error& other);
     http_error(http_error&&) noexcept = default;
-    // NOLINTNEXTLINE(performance-noexcept-move-constructor)
-    http_error& operator=(http_error&& other);
-
+    http_error& operator=(http_error&&) noexcept = default;
     [[nodiscard]] const char* what() const noexcept override;
     [[nodiscard]] http_error_info info() const& noexcept RUVIA_LIFETIMEBOUND;
     [[nodiscard]] http_error_info info() const&& = delete;
@@ -218,20 +173,15 @@ public:
     }
     [[nodiscard]] std::span<const validation_issue> validation_issues() const&& = delete;
 
-    [[nodiscard]] std::pmr::memory_resource* resource() const noexcept {
-        return validation_issues_.get_allocator().resource();
-    }
-
 private:
     friend class validator;
     http_error(http_status_code status, std::string_view code, std::string_view message,
-        std::string_view status_text, std::pmr::vector<validation_issue>&& issues,
-        std::pmr::memory_resource* resource);
+        std::string_view status_text, std::vector<validation_issue>&& issues);
     http_status_code status_{http_status::internal_server_error};
-    std::pmr::string status_text_;
-    std::pmr::string code_;
-    std::pmr::string message_;
-    std::pmr::vector<validation_issue> validation_issues_;
+    std::string status_text_;
+    std::string code_;
+    std::string message_;
+    std::vector<validation_issue> validation_issues_;
 };
 
 [[nodiscard]] std::string_view default_error_code(http_status_code status) noexcept;
@@ -242,7 +192,7 @@ private:
 // message is replaced with its UTF-8 form. Any other std::exception yields
 // what(), a non-standard exception a fixed description, and null an empty
 // string.
-[[nodiscard]] std::pmr::string exception_text(const std::exception_ptr& exception);
+[[nodiscard]] std::string exception_text(const std::exception_ptr& exception);
 
 namespace detail {
 using http_error_handler_ref = callback_ref<task<http_response>(context&, http_error_info)>;

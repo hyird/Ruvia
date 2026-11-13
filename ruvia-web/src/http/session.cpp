@@ -3,7 +3,6 @@
 #include <array>
 #include <chrono>
 #include <exception>
-#include <memory_resource>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -16,16 +15,15 @@
 #include "http/session_access.h"
 
 #ifdef RUVIA_ENABLE_REDIS
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_field_syntax.h"
 #include "ruvia/http/http_number_format.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/middleware.h"
-#include "ruvia/web/redis/redis_handle.h"
+#include "ruvia/web/redis/redis_session.h"
 
 #include "context/context_access.h"
+#include "http/inline_text_concat.h"
 #include "tls/tls_random.h"
-#include "util/inline_text_concat.h"
 #endif
 
 namespace ruvia {
@@ -67,13 +65,9 @@ void context_session_state::fail_commit(std::exception_ptr exception) noexcept {
     phase_ = phase_type::failed;
 }
 
-std::pmr::string context_session_state::copy(std::string_view value) const {
-    return std::pmr::string(value, resource_);
-}
-
 void context_session_state::observe_presented_id(std::string_view id) {
     require_mutable();
-    value_.template emplace<session_unrecognized>(copy(id));
+    value_.template emplace<session_unrecognized>(std::string(id));
 }
 
 void context_session_state::load_recognized(std::string_view data) {
@@ -82,7 +76,7 @@ void context_session_state::load_recognized(std::string_view data) {
     if (presented == nullptr) {
         throw std::logic_error("recognized session requires a presented id");
     }
-    auto data_copy = copy(data);
+    auto data_copy = std::string(data);
     auto id = std::move(presented->id_);
     value_.template emplace<session_loaded>(std::move(id), std::move(data_copy));
 }
@@ -94,7 +88,7 @@ void context_session_state::set(std::string_view data) {
         return;
     }
     if (auto* loaded_state = std::get_if<session_loaded>(&value_)) {
-        auto data_copy = copy(data);
+        auto data_copy = std::string(data);
         auto id = std::move(loaded_state->id_);
         value_.template emplace<session_rotate>(std::move(id), std::move(data_copy));
         return;
@@ -109,15 +103,15 @@ void context_session_state::set(std::string_view data) {
     }
     if (auto* cleared = std::get_if<session_clear>(&value_)) {
         if (!cleared->old_id_.has_value()) {
-            value_.template emplace<session_persist_new>(copy(data));
+            value_.template emplace<session_persist_new>(std::string(data));
             return;
         }
-        auto data_copy = copy(data);
+        auto data_copy = std::string(data);
         auto old_id = std::move(*cleared->old_id_);
         value_.template emplace<session_rotate>(std::move(old_id), std::move(data_copy));
         return;
     }
-    value_.template emplace<session_persist_new>(copy(data));
+    value_.template emplace<session_persist_new>(std::string(data));
 }
 
 void context_session_state::clear() {
@@ -126,12 +120,12 @@ void context_session_state::clear() {
         return;
     }
     if (auto* loaded_state = std::get_if<session_loaded>(&value_)) {
-        std::optional<std::pmr::string> id(std::move(loaded_state->id_));
+        std::optional<std::string> id(std::move(loaded_state->id_));
         value_.template emplace<session_clear>(std::move(id));
         return;
     }
     if (auto* rotated = std::get_if<session_rotate>(&value_)) {
-        std::optional<std::pmr::string> id(std::move(rotated->old_id_));
+        std::optional<std::string> id(std::move(rotated->old_id_));
         value_.template emplace<session_clear>(std::move(id));
         return;
     }
@@ -148,7 +142,7 @@ void context_session_state::regenerate() {
     auto data = std::move(loaded_state->data_);
     if (data.empty()) {
         value_.template emplace<session_clear>(
-            std::optional<std::pmr::string>(std::move(old_id)));
+            std::optional<std::string>(std::move(old_id)));
     } else {
         value_.template emplace<session_rotate>(std::move(old_id), std::move(data));
     }
@@ -192,23 +186,23 @@ session context::session() {
     return ruvia::session(session_state());
 }
 
+#ifdef RUVIA_ENABLE_REDIS
 task<void> detail::session_access::commit(context& context_value) {
     auto& state_value = context_value.session_state();
     if (!state_value.begin_commit()) {
         co_return;
     }
     try {
-#ifdef RUVIA_ENABLE_REDIS
         if (const auto* owner = state_value.owner()) {
             co_await owner->commit(context_value);
         }
-#endif
         state_value.finish_commit();
     } catch (...) {
         state_value.fail_commit(std::current_exception());
         throw;
     }
 }
+#endif
 
 }  // namespace ruvia
 
@@ -243,26 +237,22 @@ const session_config& session_middleware::validate(const session_config& source_
     return source_value;
 }
 
-session_middleware::session_middleware(
-    const session_config& validated, std::pmr::memory_resource* resource)
-    : redis_alias_(validated.redis_alias_, resource),
-      cookie_name_(validated.cookie_name_, resource),
-      key_prefix_(validated.key_prefix_, resource),
-      ttl_(validated.ttl_) {}
-
 session_middleware::session_middleware()
     : session_middleware(session_config{}) {}
 
 session_middleware::session_middleware(const session_config& config)
-    : session_middleware(validate(config), process_resource()) {}
+    : redis_alias_(validate(config).redis_alias_),
+      cookie_name_(config.cookie_name_),
+      key_prefix_(config.key_prefix_),
+      ttl_(config.ttl_) {}
 
-task<void> session_middleware::handle(context& c, next& next_value) {
+task<void> session_middleware::invoke(context& c, next& next_value) {
     detail::session_access::bind(c, this);
     const auto cookie = c.req().cookie(cookie_name_);
     if (cookie && detail::is_valid_session_id(*cookie)) {
         detail::session_access::observe_presented_id(c, *cookie);
         auto get_task = [&] {
-            const session_key key({key_prefix_, *cookie}, ruvia::process_resource());
+            const session_key key({key_prefix_, *cookie});
             return c.redis(redis_alias_).get(key.view());
         }();
         if (auto stored = co_await std::move(get_task)) {
@@ -294,7 +284,7 @@ task<void> session_middleware::commit(context& c) const {
         detail::append_expired_session_cookie_header(staged, cookie_name_, secure);
         if (cleared->old_id_.has_value()) {
             auto del_task = [&] {
-                const session_key key({key_prefix_, *cleared->old_id_}, ruvia::process_resource());
+                const session_key key({key_prefix_, *cleared->old_id_});
                 return c.redis(redis_alias_).del(key.view());
             }();
             (void)(co_await std::move(del_task));
@@ -316,11 +306,11 @@ task<void> session_middleware::commit(context& c) const {
     const auto new_id = detail::generate_secure_token(id_buffer);
     detail::append_session_cookie_header(staged, cookie_name_, new_id, secure);
 
-    const session_key key({key_prefix_, new_id}, ruvia::process_resource());
+    const session_key key({key_prefix_, new_id});
     bool applied = false;
     if (!old_id.empty()) {
         auto eval_task = [&] {
-            const session_key old_key({key_prefix_, old_id}, ruvia::process_resource());
+            const session_key old_key({key_prefix_, old_id});
             // session_middleware::validate requires a positive TTL.
             std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
             const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));

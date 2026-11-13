@@ -6,7 +6,6 @@
 #include <utility>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/web/context.h"
@@ -47,8 +46,7 @@ namespace {
         .validation_issues_ = error.validation_issues()});
 }
 
-[[nodiscard]] std::pmr::string serialize_error_response(
-    http_error_info error, std::pmr::memory_resource* resource) {
+[[nodiscard]] std::string serialize_error_response(http_error_info error) {
     const auto phrase = http_reason_phrase(error.status());
     const auto title = phrase.empty() ? std::string_view("HTTP Error") : phrase;
     const auto issues = error.validation_issues();
@@ -60,7 +58,7 @@ namespace {
                         detail::json_string_size_hint(issue.code()) +
                         detail::json_string_size_hint(issue.message());
     }
-    std::pmr::string out(resource);
+    std::string out;
     out.reserve(reserve_size);
     out.append("{\"type\":\"about:blank\",\"title\":");
     detail::append_json_string(out, title);
@@ -91,27 +89,17 @@ namespace {
 }
 
 // `error` is already normalized.
-[[nodiscard]] http_response make_normalized_error_response(
-    std::pmr::memory_resource* resource, http_error_info error) {
-    http_response response(resource);
+[[nodiscard]] http_response make_normalized_error_response(http_error_info error) {
+    http_response response;
     response.status(error.status());
     response.header_stable_view("Content-Type", "application/problem+json");
-    response.owned_body(serialize_error_response(error, resource));
+    response.owned_body(serialize_error_response(error));
     return response;
 }
 
 }  // namespace
 
-validation_issue::validation_issue(const validation_issue& other)
-    : validation_issue(other, other.field_.get_allocator().resource()) {}
-
-validation_issue::validation_issue(const validation_issue& other, std::pmr::memory_resource* resource)
-    : field_(other.field_, resource),
-      code_(other.code_, resource),
-      message_(other.message_, resource) {}
-
 void validation_issue::swap(validation_issue& other) noexcept {
-    // All fields share one resource; assignment preserves each destination allocator.
     field_.swap(other.field_);
     code_.swap(other.code_);
     message_.swap(other.message_);
@@ -119,69 +107,43 @@ void validation_issue::swap(validation_issue& other) noexcept {
 
 validation_issue& validation_issue::operator=(const validation_issue& other) {
     if (this != &other) {
-        validation_issue candidate(other, field_.get_allocator().resource());
+        validation_issue candidate(other);
         swap(candidate);
     }
     return *this;
 }
 
-validation_issue& validation_issue::operator=(validation_issue&& other) {
+validation_issue& validation_issue::operator=(validation_issue&& other) noexcept {
     if (this != &other) {
-        if (field_.get_allocator() == other.field_.get_allocator()) {
-            validation_issue candidate(std::move(other));
-            swap(candidate);
-        } else {
-            *this = other;
-        }
+        swap(other);
+        other.field_.clear();
+        other.code_.clear();
+        other.message_.clear();
     }
     return *this;
 }
 
-// http_error defaults to the process resource. An exception object may escape
-// the worker that handles it: one thrown by a run_blocking callable is built on
-// a blocking-pool thread and rethrown on the worker, a task stores it in an
-// exception_ptr, application::run rethrows it to its caller, and a handler may
-// hand it to another thread. The thread that frees its text is unknown when it
-// is built, which rules out the worker's unsynchronized pool. Short codes and
-// messages (most framework errors) fit the strings' inline buffers and
-// allocate nothing. The dispatcher binds its own copies to the request arena.
 http_error::http_error(http_error_info_options options)
-    : http_error(options, process_resource()) {}
-
-http_error::http_error(http_error_info_options options, std::pmr::memory_resource* resource)
     : status_(options.status_),
-      status_text_(options.status_text_.view(), pmr_resource_or_default(resource)),
-      code_(options.code_.view(), pmr_resource_or_default(resource)),
-      message_(options.message_.view(), pmr_resource_or_default(resource)),
-      validation_issues_(detail::clone_validation_issues(
-          options.validation_issues_.view(), pmr_resource_or_default(resource))) {}
+      status_text_(options.status_text_.view()),
+      code_(options.code_.view()),
+      message_(options.message_.view()),
+      validation_issues_(options.validation_issues_.begin(), options.validation_issues_.end()) {}
 
 http_error::http_error(http_status_code status, std::string_view code, std::string_view message,
-    std::string_view status_text, std::pmr::vector<validation_issue>&& issues,
-    std::pmr::memory_resource* resource)
+    std::string_view status_text, std::vector<validation_issue>&& issues)
     : status_(status),
-      status_text_(status_text, pmr_resource_or_default(resource)),
-      code_(code, pmr_resource_or_default(resource)),
-      message_(message, pmr_resource_or_default(resource)),
+      status_text_(status_text),
+      code_(code),
+      message_(message),
       validation_issues_(std::move(issues)) {}
-
-http_error::http_error(const http_error& other)
-    : http_error(other, other.resource()) {}
-
-http_error::http_error(const http_error& other, std::pmr::memory_resource* resource)
-    : status_(other.status_),
-      status_text_(other.status_text_, pmr_resource_or_default(resource)),
-      code_(other.code_, pmr_resource_or_default(resource)),
-      message_(other.message_, pmr_resource_or_default(resource)),
-      validation_issues_(
-          detail::clone_validation_issues(other.validation_issues_, pmr_resource_or_default(resource))) {}
 
 http_error& http_error::operator=(const http_error& other) {
     if (this != &other) {
-        auto copied_issues = detail::clone_validation_issues(other.validation_issues_, resource());
-        std::pmr::string copied_status_text(other.status_text_, resource());
-        std::pmr::string copied_code(other.code_, resource());
-        std::pmr::string copied_message(other.message_, resource());
+        std::vector<validation_issue> copied_issues(other.validation_issues_);
+        std::string copied_status_text(other.status_text_);
+        std::string copied_code(other.code_);
+        std::string copied_message(other.message_);
         validation_issues_.swap(copied_issues);
         status_text_.swap(copied_status_text);
         code_.swap(copied_code);
@@ -190,23 +152,6 @@ http_error& http_error::operator=(const http_error& other) {
     }
     return *this;
 }
-
-// NOLINTNEXTLINE(performance-noexcept-move-constructor)
-http_error& http_error::operator=(http_error&& other) {
-    if (this != &other) {
-        if (resource() == other.resource()) {
-            validation_issues_ = std::move(other.validation_issues_);
-            status_text_ = std::move(other.status_text_);
-            code_ = std::move(other.code_);
-            message_ = std::move(other.message_);
-            status_ = other.status_;
-        } else {
-            *this = other;
-        }
-    }
-    return *this;
-}
-
 const char* http_error::what() const noexcept {
     return message_.c_str();
 }
@@ -260,29 +205,28 @@ std::string_view default_error_code(http_status_code status) noexcept {
     }
 }
 
-std::pmr::string exception_text(const std::exception_ptr& exception) {
+std::string exception_text(const std::exception_ptr& exception) {
     if (exception == nullptr) {
-        return std::pmr::string(process_resource());
+        return {};
     }
     try {
         std::rethrow_exception(exception);
     } catch (const std::system_error& error) {
         return system_error_text(error);
     } catch (const std::exception& error) {
-        return std::pmr::string(error.what(), process_resource());
+        return std::string(error.what());
     } catch (...) {
-        return std::pmr::string("non-standard exception", process_resource());
+        return std::string("non-standard exception");
     }
 }
 
-http_response detail::make_default_error_response(
-    std::pmr::memory_resource* resource, http_error_info error) {
-    return make_normalized_error_response(resource, normalize_http_error_info(error));
+http_response detail::make_default_error_response(http_error_info error) {
+    return make_normalized_error_response(normalize_http_error_info(error));
 }
 
-http_response detail::make_route_not_found_response(std::pmr::memory_resource* resource) {
+http_response detail::make_route_not_found_response() {
     return make_default_error_response(
-        resource, http_error_info({.status_ = http_status::not_found, .message_ = "route not found"}));
+        http_error_info({.status_ = http_status::not_found, .message_ = "route not found"}));
 }
 
 // Running the application's error handler, or the default response when there
@@ -297,20 +241,20 @@ task<http_response> detail::invoke_error_handler(
         try {
             co_return co_await handler(context_value, error);
         } catch (const http_error& nested) {
-            co_return make_default_error_response(context_value.arena(), nested.info());
+            co_return make_default_error_response(nested.info());
         } catch (...) {
             // The error handler itself threw: nothing above it observes the
             // failure, so report it server-side, keep transport output
             // deterministic, and avoid echoing exception detail to the client.
             ruvia::report_unhandled_failure("error handler", std::current_exception());
-            co_return make_default_error_response(context_value.arena(),
+            co_return make_default_error_response(
                 http_error_info({.status_ = ruvia::http_status::internal_server_error,
                     .code_ = "error_handler_failed",
                     .message_ = "error handler failed"}));
         }
     }
 
-    co_return make_normalized_error_response(context_value.arena(), error);
+    co_return make_normalized_error_response(error);
 }
 
 }  // namespace ruvia

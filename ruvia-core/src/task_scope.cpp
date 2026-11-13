@@ -6,7 +6,6 @@
 #include <variant>
 
 #include "ruvia/core/failure_report.h"
-#include "ruvia/core/memory/pmr_object.h"
 
 namespace ruvia {
 
@@ -37,11 +36,10 @@ struct task_scope::retiring_guard final {
     bool destroyed_{false};
 };
 
-task_scope::task_scope(const worker_handle& worker_value, task_scope_options options)
+task_scope::task_scope(const worker_ref& worker_value)
     : worker_(worker_value.valid()
                   ? worker_value
-                  : throw std::invalid_argument("task scope requires a valid worker")),
-      resource_(pmr_resource_or_default(options.resource_)) {}
+                  : throw std::invalid_argument("task scope requires a valid worker")) {}
 
 task_scope::~task_scope() {
     if (active_ != 0 || std::holds_alternative<task_scope_joining_type>(lifecycle_)) {
@@ -72,10 +70,9 @@ void task_scope::spawn(task<void> task_value) & {
 
     // Admission must remain visible while the allocator can reenter join.
     ++active_;
-    std::pmr::polymorphic_allocator<node_type> allocator(resource_);
     node_type* node_value = nullptr;
     try {
-        node_value = allocator.new_object<node_type>(*this, std::move(task_value));
+        node_value = new node_type(*this, std::move(task_value));
     } catch (...) {
         // Destroy the still-cold child before allowing a join to retire its owner.
         {
@@ -86,13 +83,13 @@ void task_scope::spawn(task<void> task_value) & {
         throw;
     }
     if (join_started()) {
-        allocator.delete_object(node_value);
+        delete node_value;
         --active_;
         resume_join_if_idle();
         throw std::logic_error("cannot spawn a task after task scope join started");
     }
 
-    node_value->task_.handle_.promise().control_.set_completion(node_value, &task_scope::child_complete);
+    node_value->task_.coroutine_.promise().control_.set_completion(node_value, &task_scope::child_complete);
     node_value->task_.start();
 }
 
@@ -174,7 +171,7 @@ void task_scope::resume_join_if_idle() noexcept {
 
 void task_scope::child_complete(void* raw) noexcept {
     auto* node_value = static_cast<node_type*>(raw);
-    detail::worker_handle_access::defer_or_terminate(
+    detail::worker_ref_access::defer_or_terminate(
         node_value->scope_.worker_, [node_value] { node_value->scope_.finish(node_value); });
 }
 
@@ -182,7 +179,7 @@ void task_scope::finish(node_type* node_value) noexcept {
     bool notify_stop = false;
     node_value->task_.prepare_direct_completion();
     try {
-        node_value->task_.handle_.promise().result();
+        node_value->task_.coroutine_.promise().result();
     } catch (...) {
         if (failure_ == nullptr) {
             failure_ = std::current_exception();
@@ -199,9 +196,8 @@ void task_scope::finish(node_type* node_value) noexcept {
     --active_;
     {
         retiring_guard retiring(*this);
-        std::pmr::polymorphic_allocator<node_type> allocator(resource_);
         task<void> retired_task(std::move(node_value->task_));
-        allocator.delete_object(node_value);
+        delete node_value;
         retired_task.finish_direct_completion();
         retired_task.reset();
         if (retiring.destroyed_) {

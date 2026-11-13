@@ -11,7 +11,6 @@
 #include <cstdlib>
 #include <exception>
 #include <iostream>
-#include <memory_resource>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -20,9 +19,9 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/web/db/db_handle.h"
 #include "ruvia/web/db/db_repository.h"
 #include "ruvia/web/db/db_schema.h"
+#include "ruvia/web/db/db_session.h"
 #include "ruvia/web/error.h"
 
 #include "backend_config.h"
@@ -38,24 +37,24 @@ struct student;
 
 RUVIA_DB_ENTITY(department, "orm_relations.orm_department",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(name, std::string),
     RUVIA_DB_ONE_TO_MANY(employees, employee, department))
 
 RUVIA_DB_ENTITY(employee, "orm_relations.orm_employee",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
     RUVIA_DB_COLUMN(department_id, std::int64_t),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(name, std::string),
     RUVIA_DB_MANY_TO_ONE(department, department, RUVIA_DB_JOIN_COLUMN(department_id, id)))
 
 RUVIA_DB_ENTITY(profile, "orm_relations.orm_profile",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(display_name, std::pmr::string),
+    RUVIA_DB_COLUMN(display_name, std::string),
     RUVIA_DB_ONE_TO_ONE(user, user, RUVIA_DB_INVERSE(profile)))
 
 RUVIA_DB_ENTITY(user, "orm_relations.orm_user",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
     RUVIA_DB_COLUMN(profile_id, std::int64_t),
-    RUVIA_DB_COLUMN(login, std::pmr::string),
+    RUVIA_DB_COLUMN(login, std::string),
     RUVIA_DB_ONE_TO_ONE(profile, profile, RUVIA_DB_JOIN_COLUMN(profile_id, id)))
 
 using student_course_table_type = RUVIA_DB_JOIN_TABLE("orm_relations.orm_student_course",
@@ -64,12 +63,12 @@ using student_course_table_type = RUVIA_DB_JOIN_TABLE("orm_relations.orm_student
 
 RUVIA_DB_ENTITY(course, "orm_relations.orm_course",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(title, std::pmr::string),
+    RUVIA_DB_COLUMN(title, std::string),
     RUVIA_DB_MANY_TO_MANY(students, student, RUVIA_DB_INVERSE(courses)))
 
 RUVIA_DB_ENTITY(student, "orm_relations.orm_student",
     RUVIA_DB_COLUMN(id, std::int64_t, db_column_options{.primary_key_ = true}),
-    RUVIA_DB_COLUMN(name, std::pmr::string),
+    RUVIA_DB_COLUMN(name, std::string),
     RUVIA_DB_MANY_TO_MANY(courses, course, student_course_table_type))
 
 RUVIA_DB_ENTITY(student_course, "orm_relations.orm_student_course",
