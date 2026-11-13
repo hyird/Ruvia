@@ -20,7 +20,7 @@
 #include <variant>
 
 #include <asio/bind_allocator.hpp>
-#include <asio/co_spawn.hpp>
+#include <asio/bind_executor.hpp>
 #include <asio/error.hpp>
 
 #include "ruvia/core/async.h"
@@ -976,20 +976,19 @@ bool http3_session::admit_stream(std::int64_t stream_id) {
         }
         ++active_handler_tasks_;
         counted = true;
-        asio::co_spawn(services_.io_.get_executor(), ruvia::as_awaitable(dispatch_one(stream_id)),
-            asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), [this, stream_id](std::exception_ptr exception) noexcept {
-                if (exception != nullptr) {
-                    services_.options_.connection_failure_.invoke(remote_address_, std::move(exception));
-                }
-                finish_stream_handler(stream_id);
-                --active_handler_tasks_;
-                set_inactivity_phase();
-                finish_drain_if_ready();
-                if (active_handler_tasks_ == 0) {
-                    handler_finished_.notify();
-                }
-                wake_writer();
-            }));
+        ruvia::async_start(dispatch_one(stream_id), asio::bind_executor(services_.io_.get_executor(), asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()), [this, stream_id](std::exception_ptr exception) noexcept {
+            if (exception != nullptr) {
+                services_.options_.connection_failure_.invoke(remote_address_, std::move(exception));
+            }
+            finish_stream_handler(stream_id);
+            --active_handler_tasks_;
+            set_inactivity_phase();
+            finish_drain_if_ready();
+            if (active_handler_tasks_ == 0) {
+                handler_finished_.notify();
+            }
+            wake_writer();
+        })));
     } catch (...) {
         if (counted) {
             --active_handler_tasks_;

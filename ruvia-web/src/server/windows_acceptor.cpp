@@ -15,10 +15,11 @@
 #include <vector>
 
 #include <asio/bind_allocator.hpp>
+#include <asio/bind_executor.hpp>
 #include <asio/buffer.hpp>
-#include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
 #include <asio/ip/v6_only.hpp>
+#include <asio/post.hpp>
 #include <asio/socket_base.hpp>
 #include <asio/windows/object_handle.hpp>
 #include <asio/windows/overlapped_ptr.hpp>
@@ -327,13 +328,17 @@ windows_acceptor::windows_acceptor(std::span<const http_server_listener_definiti
             process_resource(), io_, definition.endpoint_, index, http3_index, definition.inherited_sockets_, definition.ipv6_only_));
     }
     runtime_.configure({
-        .startup_ = [this] { asio::co_spawn(io_, ruvia::as_awaitable(run()),
-                                 asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()),
-                                     [this](std::exception_ptr failure) noexcept {
-                                         if (failure) {
-                                             (void)runtime_.fail(failure);
-                                         }
-                                     })); },
+        .startup_ = [this] {
+            // Startup runs before the context does; the task starts in its first turn.
+            asio::post(io_, [this] {
+                ruvia::async_start(run(),
+                    asio::bind_executor(io_, asio::bind_allocator(std::pmr::polymorphic_allocator<std::byte>(process_resource()),
+                                                 [this](std::exception_ptr failure) noexcept {
+                                                     if (failure) {
+                                                         (void)runtime_.fail(failure);
+                                                     }
+                                                 })));
+            }); },
         .serve_ = [this] { serve_on_context(); complete_phase(false); },
         .stop_admission_ = [this] {
             stopping_ = true;

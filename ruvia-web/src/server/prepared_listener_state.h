@@ -8,7 +8,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
+#include <asio/bind_executor.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/memory/request_memory.h"
@@ -111,8 +111,7 @@ struct prepared_listener_access final {
         if (!state->caller_.is_current() || !state->caller_.accepting()) {
             throw std::logic_error("listener preparation must run on its live caller worker");
         }
-        asio::co_spawn(state->caller_.executor(), as_awaitable(std::move(operation)),
-            [state](std::exception_ptr failure) { state->complete(std::move(failure)); });
+        async_start(std::move(operation), asio::bind_executor(state->caller_.executor(), [state](std::exception_ptr failure) { state->complete(std::move(failure)); }));
         co_await state->ready_.wait();
         if (auto failure = state->ready_.failure()) {
             co_await state->finished_.wait();

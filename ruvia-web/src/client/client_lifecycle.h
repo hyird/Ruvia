@@ -9,7 +9,7 @@
 #include <string_view>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
+#include <asio/bind_executor.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/event_loop.h"
@@ -223,10 +223,9 @@ private:
         }
         close_started_ = true;
         try {
-            asio::co_spawn(loop_.executor(), ruvia::as_awaitable(close_on_worker()),
-                [state = owner_.shared_from_this()](std::exception_ptr failure) {
-                    state->lifecycle_.finish_close(std::move(failure));
-                });
+            ruvia::async_start(close_on_worker(), asio::bind_executor(loop_.executor(), [state = owner_.shared_from_this()](std::exception_ptr failure) {
+                state->lifecycle_.finish_close(std::move(failure));
+            }));
         } catch (...) {
             std::terminate();
         }

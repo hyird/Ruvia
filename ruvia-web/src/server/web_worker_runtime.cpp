@@ -4,7 +4,8 @@
 #include <memory>
 #include <utility>
 
-#include <asio/co_spawn.hpp>
+#include <asio/bind_executor.hpp>
+#include <asio/post.hpp>
 
 #include "ruvia/core/async.h"
 
@@ -81,12 +82,14 @@ web_worker_runtime::web_worker_runtime(std::span<const http_server_listener_defi
     runtime_.configure({
         .startup_ = [this] {
             worker_state_ = http_server_worker_state::running;
-            asio::co_spawn(io_context_, ruvia::as_awaitable(run_worker()),
-                [this](std::exception_ptr failure) noexcept {
+            // Startup runs before the context does; the task starts in its first turn.
+            asio::post(io_context_, [this] {
+                ruvia::async_start(run_worker(), asio::bind_executor(io_context_, [this](std::exception_ptr failure) noexcept {
                     if (failure) {
                         (void)runtime_.fail(failure);
                     }
-                }); },
+                }));
+            }); },
         .serve_ = [this] { serve_on_context(); },
         .stop_admission_ = [this] { stop_admission_on_context(); },
         .finalize_ = [this] { finalize_on_context(); },

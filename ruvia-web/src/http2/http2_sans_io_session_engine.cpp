@@ -15,8 +15,8 @@
 #include <utility>
 #include <variant>
 
+#include <asio/bind_executor.hpp>
 #include <asio/buffer.hpp>
-#include <asio/co_spawn.hpp>
 #include <asio/error.hpp>
 
 #include "ruvia/core/async.h"
@@ -994,20 +994,19 @@ bool http2_sans_io_session_engine::admit_stream(std::uint32_t stream_id) {
         }
         ++active_handler_tasks_;
         counted = true;
-        asio::co_spawn(executor_, ruvia::as_awaitable(dispatch_one(stream_id)),
-            [this](std::exception_ptr exception) noexcept {
-                if (exception != nullptr) {
-                    session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
-                    terminate(std::make_error_code(std::errc::operation_canceled));
-                }
-                --active_handler_tasks_;
-                set_inactivity_phase();
-                finish_drain_if_ready();
-                if (active_handler_tasks_ == 0) {
-                    handler_finished_.notify();
-                }
-                wake_writer();
-            });
+        ruvia::async_start(dispatch_one(stream_id), asio::bind_executor(executor_, [this](std::exception_ptr exception) noexcept {
+            if (exception != nullptr) {
+                session_.options().connection_failure_.invoke(remote_address_, std::move(exception));
+                terminate(std::make_error_code(std::errc::operation_canceled));
+            }
+            --active_handler_tasks_;
+            set_inactivity_phase();
+            finish_drain_if_ready();
+            if (active_handler_tasks_ == 0) {
+                handler_finished_.notify();
+            }
+            wake_writer();
+        }));
     } catch (...) {
         if (counted) {
             --active_handler_tasks_;
@@ -1380,9 +1379,8 @@ task<http_connection_close> run_http2_sans_io_session_impl(stream_type& stream, 
 
     engine.writer_submitting();
     try {
-        asio::co_spawn(executor, ruvia::as_awaitable(run_http2_sans_io_writer(stream, engine)),
-            [&engine](
-                std::exception_ptr exception) noexcept { engine.writer_completed(exception); });
+        ruvia::async_start(run_http2_sans_io_writer(stream, engine),
+            asio::bind_executor(executor, [&engine](std::exception_ptr exception) noexcept { engine.writer_completed(exception); }));
     } catch (...) {
         engine.writer_launch_failed();
         engine.terminate(std::make_error_code(std::errc::operation_canceled));

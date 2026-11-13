@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include <asio/co_spawn.hpp>
+#include <asio/bind_executor.hpp>
 
 #include "ruvia/core/async.h"
 #include "ruvia/core/blocking_pool.h"
@@ -777,20 +777,19 @@ private:
         connections_.stop();
         capabilities_.close_now();
         try {
-            asio::co_spawn(loop_.executor(), ruvia::as_awaitable(cleanup()),
-                [self = shared_from_this()](std::exception_ptr failure) noexcept {
-                    if (failure) {
-                        {
-                            std::lock_guard lock(self->failure_mutex_);
-                            if (!self->failure_) {
-                                self->failure_ = failure;
-                            }
+            ruvia::async_start(cleanup(), asio::bind_executor(loop_.executor(), [self = shared_from_this()](std::exception_ptr failure) noexcept {
+                if (failure) {
+                    {
+                        std::lock_guard lock(self->failure_mutex_);
+                        if (!self->failure_) {
+                            self->failure_ = failure;
                         }
-                        fail_server_group(self->group_, failure);
                     }
-                    self->finish_closed();
-                    self->changed_.notify();
-                });
+                    fail_server_group(self->group_, failure);
+                }
+                self->finish_closed();
+                self->changed_.notify();
+            }));
         } catch (...) {
             std::terminate();
         }
@@ -1113,12 +1112,11 @@ private:
                         auto finish = receipt;
                         ++worker->controls_;
                         try {
-                            asio::co_spawn(worker->loop_.executor(), ruvia::as_awaitable((*operation)(worker)),
-                                std::move(finish).bind([worker, operation](const auto& done, std::exception_ptr failure) {
-                                    --worker->controls_;
-                                    worker->changed_.notify();
-                                    done.complete(failure);
-                                }));
+                            ruvia::async_start((*operation)(worker), asio::bind_executor(worker->loop_.executor(), std::move(finish).bind([worker, operation](const auto& done, std::exception_ptr failure) {
+                                --worker->controls_;
+                                worker->changed_.notify();
+                                done.complete(failure);
+                            })));
                         } catch (...) {
                             --worker->controls_;
                             worker->changed_.notify();
