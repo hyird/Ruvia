@@ -151,9 +151,9 @@ TEST(Ruvia, worker_cancellation_registration_handles_precancel_and_exception_unw
 #include <asio/co_spawn.hpp>
 #include <asio/steady_timer.hpp>
 
-#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"
+#include "ruvia/core/worker_timer.h"
 
 #include "worker_task_fixture.h"
 

@@ -14,7 +14,6 @@
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_signal.h"
 #include "ruvia/web/controller.h"
 #include "ruvia/web/http_client.h"
 #include "ruvia/web/streaming.h"

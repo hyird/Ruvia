@@ -50,7 +50,6 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http_connection_fields.h"
-#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 struct http2_stored_header_view final {

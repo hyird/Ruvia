@@ -16,7 +16,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"

@@ -21,9 +21,7 @@
 #include <asio.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_signal.h"
 #include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 #include "ruvia/web/app.h"

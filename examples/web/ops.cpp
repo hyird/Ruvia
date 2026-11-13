@@ -20,8 +20,7 @@
 #include "ruvia/web/middleware.h"
 #include "ruvia/web/streaming.h"
 
-#include "environment.h"
-
+#include "backend_config.h"
 class ops_controller final {
 public:
     RUVIA_CONTROLLER_GROUP("/admin", ruvia::security_headers_middleware)

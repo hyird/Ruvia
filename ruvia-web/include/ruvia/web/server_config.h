@@ -15,14 +15,13 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_header.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_status.h"
-#include "ruvia/http/proxy_protocol.h"
 #include "ruvia/web/error.h"
 #include "ruvia/web/http_client_types.h"
 namespace ruvia {

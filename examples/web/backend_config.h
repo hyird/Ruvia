@@ -1,12 +1,17 @@
 #pragma once
 
+#include <charconv>
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
+#include <optional>
 #include <span>
+#include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
 #include <utility>
 
 #include "ruvia/core/blocking_pool.h"
@@ -14,11 +19,66 @@
 #include "ruvia/web/app.h"
 #include "ruvia/web/http_client_types.h"
 
-#include "environment.h"
-
 #ifdef RUVIA_ENABLE_DATABASE
 #include "ruvia/web/db/db.h"
 #endif
+
+namespace example {
+
+// Startup-only lookup shared by the examples. Process variables take precedence
+// over an optional application::env() loaded from .env beside the executable. A default
+// ruvia::env is empty: it does not import the process environment automatically.
+class environment final {
+public:
+    explicit environment(const ruvia::env* dotenv = nullptr) noexcept
+        : dotenv_(dotenv) {}
+
+    std::optional<std::string_view> get(std::string_view name) const {
+        const std::string key(name);
+        if (const auto* value = std::getenv(key.c_str())) {
+            return std::string_view(value);
+        }
+        return dotenv_ ? dotenv_->get(name) : std::nullopt;
+    }
+
+    template <typename value_type>
+        requires std::is_arithmetic_v<value_type>
+    std::optional<value_type> get(std::string_view name) const {
+        const auto text = get(name);
+        if (!text) {
+            return std::nullopt;
+        }
+        if constexpr (std::is_same_v<value_type, bool>) {
+            if (*text == "true" || *text == "1") {
+                return true;
+            }
+            if (*text == "false" || *text == "0") {
+                return false;
+            }
+        } else {
+            value_type value{};
+            const auto [end, error] = std::from_chars(text->data(), text->data() + text->size(), value);
+            if (error == std::errc{} && end == text->data() + text->size()) {
+                return value;
+            }
+        }
+        throw std::invalid_argument("invalid example setting: " + std::string(name));
+    }
+
+    // A file setting; an absent or empty value selects none.
+    std::optional<std::filesystem::path> path(std::string_view name) const {
+        const auto text = get(name);
+        if (!text || text->empty()) {
+            return std::nullopt;
+        }
+        return std::filesystem::path(*text);
+    }
+
+private:
+    const ruvia::env* dotenv_;
+};
+
+}  // namespace example
 
 namespace example {
 

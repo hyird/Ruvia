@@ -15,7 +15,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/cookies.h"
+#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
@@ -24,7 +24,6 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
-#include "http_zlib_stream.h"
 namespace ruvia {
 http_request& http_request::operator=(http_request&& other) noexcept {
     if (this == &other) {

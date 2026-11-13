@@ -19,7 +19,6 @@
 #include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
-#include "pipeline_support.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_MARIADB
 namespace mariadb_statement_test {

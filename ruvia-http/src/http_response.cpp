@@ -15,7 +15,6 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/cookies.h"
 #include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"
@@ -27,8 +26,6 @@
 
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"
-#include "http_zlib_stream.h"
-
 namespace ruvia {
 
 // Owns only newly staged descriptors, never copies the existing header block.

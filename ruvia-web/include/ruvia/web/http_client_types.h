@@ -16,7 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"

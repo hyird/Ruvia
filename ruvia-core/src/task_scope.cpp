@@ -20,7 +20,7 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/failure_report.h"
+#include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/worker_ref.h"

@@ -27,7 +27,6 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_signal.h"
 #include "ruvia/web/db/db.h"
 #include "ruvia/web/db/db_query.h"
 #include "ruvia/web/db/db_session.h"

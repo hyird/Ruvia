@@ -32,8 +32,6 @@
 #include "ruvia/http/url_encoding.h"
 
 #include "http_connection_fields.h"
-#include "http_zlib_stream.h"
-
 namespace ruvia::detail {
 
 struct http_media_type_parts final {

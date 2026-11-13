@@ -23,11 +23,10 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_content_coding.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 #include "ruvia/http/multipart_parser.h"
 

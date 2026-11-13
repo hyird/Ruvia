@@ -7,10 +7,215 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
+#include <exception>
+#include <functional>
 #include <limits>
+#include <new>
 #include <ratio>
 #include <type_traits>
 #include <utility>
+
+namespace ruvia {
+
+namespace detail {
+
+template <typename result_type, typename fn_type, typename... args_type>
+concept move_only_function_target =
+    (std::is_void_v<result_type> &&
+        std::same_as<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>, void>) ||
+    (!std::is_void_v<result_type> &&
+        std::is_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...> &&
+        (!std::is_reference_v<result_type> ||
+            (std::is_reference_v<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>> &&
+                std::is_convertible_v<
+                    std::add_pointer_t<std::remove_reference_t<std::invoke_result_t<std::decay_t<fn_type>&, args_type...>>>,
+                    std::add_pointer_t<std::remove_reference_t<result_type>>>)));
+
+}  // namespace detail
+
+template <typename signature_type>
+class move_only_function;
+
+namespace detail {
+
+inline constexpr std::size_t move_only_function_inline_size = 3 * sizeof(void*);
+inline constexpr std::size_t move_only_function_inline_alignment = alignof(std::max_align_t);
+
+template <typename stored_type>
+inline constexpr bool move_only_function_fits_inline =
+    sizeof(stored_type) <= move_only_function_inline_size &&
+    alignof(stored_type) <= move_only_function_inline_alignment &&
+    std::is_nothrow_move_constructible_v<stored_type>;
+
+template <typename signature_type, typename fn_type>
+inline constexpr bool move_only_function_borrow_safe_input =
+    !std::same_as<std::remove_cvref_t<fn_type>, move_only_function<signature_type>> &&
+    move_only_function_fits_inline<std::decay_t<fn_type>> &&
+    std::is_trivially_constructible_v<std::decay_t<fn_type>, fn_type&&> &&
+    std::is_trivially_move_constructible_v<std::decay_t<fn_type>> &&
+    std::is_trivially_destructible_v<std::decay_t<fn_type>>;
+
+}  // namespace detail
+
+template <typename result_type, bool is_noexcept, typename... args_type>
+class move_only_function<result_type(args_type...) noexcept(is_noexcept)> final {
+public:
+    move_only_function() noexcept = default;
+    move_only_function(std::nullptr_t) noexcept {}
+
+    // 引用签名只接受直接返回兼容引用的目标（允许 cv 与派生到基类转换），
+    // 不从返回值或转换临时量生成引用。自定义转换须由显式返回引用的 lambda
+    // 完成；目标负责被引用对象的寿命。值签名仍允许正常隐式结果转换。
+    template <typename fn_type>
+        requires(!std::same_as<std::remove_cvref_t<fn_type>, move_only_function>) &&
+                detail::move_only_function_target<result_type, fn_type, args_type...> &&
+                (!is_noexcept || std::is_nothrow_invocable_r_v<result_type, std::decay_t<fn_type>&, args_type...>)
+    move_only_function(fn_type&& fn) {
+        using stored_type = std::decay_t<fn_type>;
+        if constexpr (std::is_pointer_v<std::remove_reference_t<fn_type>> || std::is_member_pointer_v<std::remove_reference_t<fn_type>>) {
+            if (fn == nullptr) {
+                return;
+            }
+        }
+        if constexpr (detail::move_only_function_fits_inline<stored_type>) {
+            ::new (storage_) stored_type(std::forward<fn_type>(fn));
+            object_ = storage_;
+            operations_ = &inline_operations<stored_type>;
+        } else {
+            object_ = new stored_type(std::forward<fn_type>(fn));
+            operations_ = &heap_operations<stored_type>;
+        }
+    }
+
+    ~move_only_function() {
+        reset();
+    }
+
+    move_only_function(const move_only_function&) = delete;
+    move_only_function& operator=(const move_only_function&) = delete;
+
+    move_only_function(move_only_function&& other) noexcept {
+        move_from(other);
+    }
+
+    move_only_function& operator=(move_only_function&& other) noexcept {
+        if (this != &other) {
+            if (operations_ == nullptr) {
+                move_from(other);
+            } else {
+                // Extract a source the old target may own before retiring it.
+                move_only_function incoming(std::move(other));
+                // Retire inline targets outside this wrapper's storage, and
+                // commit before destruction so reentrant assignments win.
+                move_only_function retired(std::move(*this));
+                move_from(incoming);
+                // Evaluate the return before retirement can destroy this wrapper.
+                return *this;
+            }
+        }
+        return *this;
+    }
+
+    move_only_function& operator=(std::nullptr_t) noexcept {
+        return *this = move_only_function{};
+    }
+
+    [[nodiscard]] explicit operator bool() const noexcept {
+        return operations_ != nullptr;
+    }
+
+    [[nodiscard]] friend constexpr bool operator==(const move_only_function& fn, std::nullptr_t) noexcept {
+        return !fn;
+    }
+
+    // The value-parameter signature is part of the erased callable contract;
+    // forwarding it preserves value and reference argument behavior.
+    // Constness applies to the wrapper, not its target. Concurrent invocation
+    // requires the target to synchronize its own mutable state.
+    // NOLINTNEXTLINE(performance-unnecessary-value-param)
+    result_type operator()(args_type... args) const noexcept(is_noexcept) {
+        if (operations_ == nullptr) {
+            std::terminate();
+        }
+        return operations_->invoke_(object_, std::forward<args_type>(args)...);
+    }
+
+private:
+    // The members are initialized explicitly rather than left to default
+    // construction: the operation tables below are const static aggregates, and
+    // MSVC reports C4268 when such an object is zero-filled by a compiler
+    // generated default constructor. Aggregate initialization is unaffected.
+    struct operations final {
+        result_type (*invoke_)(void*, args_type&&...) noexcept(is_noexcept) = nullptr;
+        void (*destroy_)(void*) noexcept = nullptr;
+        void (*move_)(void*, void*) noexcept = nullptr;
+    };
+
+    template <typename stored_type>
+    static result_type invoke(void* object, args_type&&... args) noexcept(is_noexcept) {
+        return std::invoke(*static_cast<stored_type*>(object), std::forward<args_type>(args)...);
+    }
+
+    template <typename stored_type>
+    static void destroy_inline(void* object) noexcept {
+        static_cast<stored_type*>(object)->~stored_type();
+    }
+
+    template <typename stored_type>
+    static void move_inline(void* source_value, void* destination) noexcept {
+        auto* stored = static_cast<stored_type*>(source_value);
+        ::new (destination) stored_type(std::move(*stored));
+        stored->~stored_type();
+    }
+
+    template <typename stored_type>
+    static void destroy_heap(void* object) noexcept {
+        delete static_cast<stored_type*>(object);
+    }
+
+    template <typename stored_type>
+    static inline constexpr operations inline_operations{
+        &invoke<stored_type>, &destroy_inline<stored_type>, &move_inline<stored_type>};
+
+    // move_from() relocates only inline storage; heap targets keep their pointer.
+    template <typename stored_type>
+    static inline constexpr operations heap_operations{&invoke<stored_type>, &destroy_heap<stored_type>, nullptr};
+
+    [[nodiscard]] bool is_inline() const noexcept {
+        return object_ == static_cast<const void*>(storage_);
+    }
+
+    void reset() noexcept {
+        // User destruction may reset or destroy this wrapper again.
+        const auto* const operations_value = std::exchange(operations_, nullptr);
+        void* const object_value = std::exchange(object_, nullptr);
+        if (operations_value != nullptr) {
+            operations_value->destroy_(object_value);
+        }
+    }
+
+    void move_from(move_only_function& other) noexcept {
+        // Moving or retiring the target may destroy its source wrapper.
+        const bool inline_storage = other.is_inline();
+        const auto* const operations_value = std::exchange(other.operations_, nullptr);
+        void* const object_value = std::exchange(other.object_, nullptr);
+        if (operations_value == nullptr) {
+            return;
+        }
+        if (inline_storage) {
+            operations_value->move_(object_value, storage_);
+        }
+        object_ = inline_storage ? storage_ : object_value;
+        operations_ = operations_value;
+    }
+
+    alignas(detail::move_only_function_inline_alignment)
+        std::byte storage_[detail::move_only_function_inline_size];
+    void* object_{nullptr};
+    const operations* operations_{nullptr};
+};
+
+}  // namespace ruvia
 
 namespace ruvia {
 

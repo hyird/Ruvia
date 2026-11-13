@@ -28,8 +28,6 @@
 
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"
-#include "http_zlib_stream.h"
-
 namespace ruvia::detail {
 
 // Dynamic ORIGIN frames share the control stream with nghttp3 output. The

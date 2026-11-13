@@ -15,7 +15,7 @@
 #include <string>
 #include <system_error>
 
-#include "ruvia/core/worker_signal.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/multipart_parser.h"
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/app.h"

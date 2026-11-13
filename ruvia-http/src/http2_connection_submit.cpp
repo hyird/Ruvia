@@ -30,8 +30,6 @@
 #include "http2_connection.h"
 #include "http_connection_fields.h"
 #include "http_websocket_permessage_deflate.h"
-#include "http_zlib_stream.h"
-
 namespace ruvia::detail {
 namespace {
 

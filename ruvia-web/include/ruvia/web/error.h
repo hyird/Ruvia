@@ -19,8 +19,8 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/task.h"
+#include "ruvia/core/worker_timer.h"
 #include "ruvia/http/borrowed_text.h"
 #include "ruvia/http/http_response.h"
 #include "ruvia/http/http_status.h"

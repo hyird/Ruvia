@@ -24,7 +24,7 @@
 
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/proxy_protocol.h"
+#include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
 #include "ruvia/web/controller.h"

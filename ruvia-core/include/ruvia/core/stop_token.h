@@ -19,7 +19,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/move_only_function.h"
 #include "ruvia/core/worker_timer.h"
 
 namespace ruvia {

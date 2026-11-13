@@ -33,7 +33,7 @@
 
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/worker_signal.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/web/redis/redis.h"
 #include "ruvia/web/redis/redis_session.h"
 

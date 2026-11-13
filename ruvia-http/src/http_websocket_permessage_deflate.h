@@ -24,8 +24,6 @@
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http_connection_fields.h"
-#include "http_zlib_stream.h"
-
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #endif
@@ -33,7 +31,6 @@
 #include <bit>
 #include <type_traits>
 
-#include "ruvia/http/http1_client_response_parser.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"

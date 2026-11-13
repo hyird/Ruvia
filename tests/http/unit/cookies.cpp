@@ -1,5 +1,3 @@
-#include "ruvia/http/cookies.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -17,6 +15,7 @@
 #include <utility>
 #include <vector>
 
+#include "ruvia/http/http_cache.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/url_encoding.h"
 

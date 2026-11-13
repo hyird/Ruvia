@@ -17,12 +17,11 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/http1_client_response_parser.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_client.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/http_status.h"
 
 namespace ruvia {

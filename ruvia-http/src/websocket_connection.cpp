@@ -25,14 +25,13 @@
 #include <bit>
 #include <exception>
 
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 #include "ruvia/http/websocket_handshake.h"
 
 #include "http_connection_fields.h"
-#include "http_zlib_stream.h"
 namespace ruvia::detail {
 
 enum class websocket_close_payload_encode_error : std::uint8_t {

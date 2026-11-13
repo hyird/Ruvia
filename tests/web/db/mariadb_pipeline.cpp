@@ -13,11 +13,9 @@
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_signal.h"
 #include "ruvia/web/db/db_session.h"
 
 #include "backend_client_fixture.h"
-#include "pipeline_support.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_MARIADB
 namespace mariadb_pipeline_test {

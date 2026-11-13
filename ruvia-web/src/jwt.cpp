@@ -22,7 +22,7 @@
 #include "ruvia/http/url_encoding.h"
 #include "ruvia/web/model.h"
 
-#include "http/operation_interrupt.h"
+#include "operation_interrupt.h"
 namespace ruvia {
 
 namespace detail {

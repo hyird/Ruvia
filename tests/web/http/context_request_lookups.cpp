@@ -27,7 +27,6 @@ using ruvia::http_header_view;
 #include <asio/io_context.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/failure_report.h"
 #include "ruvia/core/task.h"
 #include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_response.h"

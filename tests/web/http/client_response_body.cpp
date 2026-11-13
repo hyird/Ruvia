@@ -42,8 +42,6 @@
 #include "ruvia/core/blocking_pool.h"
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/task_scope.h"
-#include "ruvia/core/worker_signal.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http_content_coding.h"
 #include "ruvia/http/http_header.h"

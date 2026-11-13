@@ -8,7 +8,7 @@
 #include <string_view>
 #include <utility>
 
-#include "ruvia/http/http1_client_response_parser.h"
+#include "ruvia/http/http_client.h"
 
 #include "content_decoding_fixture.h"
 using namespace ruvia::test;

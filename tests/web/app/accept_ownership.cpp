@@ -22,7 +22,7 @@
 #include <asio/write.hpp>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/worker_signal.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/http_header.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"

@@ -1,5 +1,3 @@
-#include "ruvia/http/proxy_protocol.h"
-
 #include <gtest/gtest.h>
 
 #include <array>
@@ -22,8 +20,6 @@
 #include <vector>
 
 #include "ruvia/http/borrowed_text.h"
-#include "ruvia/http/cookies.h"
-#include "ruvia/http/http1_server_request_parser.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/http/http3_connection.h"
 #include "ruvia/http/http_cache.h"
@@ -32,6 +28,7 @@
 #include "ruvia/http/http_header.h"
 #include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
+#include "ruvia/http/http_response_server.h"
 
 #include "test_exceptions.h"
 

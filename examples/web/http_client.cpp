@@ -24,8 +24,7 @@
 #include "ruvia/web/error.h"
 #include "ruvia/web/streaming.h"
 
-#include "environment.h"
-
+#include "backend_config.h"
 namespace {
 
 struct upstream_failure final {

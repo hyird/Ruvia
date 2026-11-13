@@ -22,7 +22,7 @@
 
 #include "ruvia/core/event_loop.h"
 #include "ruvia/core/stop_token.h"
-#include "ruvia/core/worker_signal.h"
+#include "ruvia/core/task_scope.h"
 #include "ruvia/http/http2_connection.h"
 #include "ruvia/web/app.h"
 #include "ruvia/web/context.h"
