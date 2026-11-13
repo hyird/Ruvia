@@ -664,7 +664,7 @@ TEST(Ruvia, redis_client_handle_uses_explicit_stop_group_after_copy_and_derivati
             pool.loop(0), peer.config(), base_stop, override_stop));
         peer.wait_for_blocked_command();
         (stop_base ? base_stop : override_stop).request_stop();
-        operation.get();
+        std::move(operation).get();
     }
     pool.join();
 }
@@ -703,7 +703,7 @@ TEST(Ruvia, redis_client_accepts_many_user_sources_and_replaces_old_handle_cance
         auto pending = pool.loop(0).start(run());
         peer.wait_for_blocked_command();
         sources[selected].request_stop();
-        pending.get();
+        std::move(pending).get();
         pool.join();
     }
 }
@@ -746,7 +746,7 @@ TEST(Ruvia, redis_client_runs_on_its_event_loop_and_retains_results) {
     auto wrong_loop = pool.loop(1).start(client.connect());
     bool rejected = false;
     try {
-        wrong_loop.get();
+        std::move(wrong_loop).get();
     } catch (const std::logic_error&) {
         rejected = true;
     }
@@ -1087,7 +1087,7 @@ TEST(Ruvia, redis_pipeline_timeout_and_cancellation_release_the_slot_for_reconne
         if (cancel) {
             stop.request_stop();
         }
-        pending.get();
+        std::move(pending).get();
         pool.join();
     }
 }
@@ -1115,7 +1115,7 @@ TEST(Ruvia, redis_pipeline_barrier_timeout_cancellation_and_protocol_failure_ret
             if (cancel) {
                 stop.request_stop();
             }
-            pending.get();
+            std::move(pending).get();
             pool.join();
             std::pmr::vector<std::pmr::vector<std::pmr::string>> commands({std::pmr::vector<std::pmr::string>({std::pmr::string("SET", ruvia::process_resource()), std::pmr::string("barrier-key", ruvia::process_resource()), std::pmr::string("value", ruvia::process_resource())}, ruvia::process_resource()), std::pmr::vector<std::pmr::string>({std::pmr::string(barrier, ruvia::process_resource()), std::pmr::string("1", ruvia::process_resource())}, ruvia::process_resource())}, ruvia::process_resource());
             if (std::string_view(barrier) == "WAITAOF") {
@@ -1137,7 +1137,7 @@ TEST(Ruvia, redis_client_loop_stop_cancels_and_joins_pending_commands) {
     pool.stop();
     bool cancelled = false;
     try {
-        pending.get();
+        std::move(pending).get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
@@ -1160,12 +1160,12 @@ TEST(Ruvia, redis_client_close_and_shutdown_waiters_join_pending_commands) {
     auto also_closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {
-        pending.get();
+        std::move(pending).get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
-    closing.get();
-    also_closing.get();
+    std::move(closing).get();
+    std::move(also_closing).get();
     pool.loop(0).start(client.shutdown()).get();
     pool.stop();
     pool.join();
@@ -1193,7 +1193,7 @@ TEST(Ruvia, redis_client_event_loop_stop_awaits_retirement_of_pending_authentica
         peer.wait_for_blocked_command();
         attachment.stop();
         driver.join();
-        root.get();
+        std::move(root).get();
         EXPECT_TRUE(cancelled);
         EXPECT_TRUE(!client.worker().accepting());
     }
@@ -1218,11 +1218,11 @@ TEST(Ruvia, redis_client_shutdown_joins_an_inflight_connect) {
     auto closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {
-        connecting.get();
+        std::move(connecting).get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
-    closing.get();
+    std::move(closing).get();
     pool.join();
     EXPECT_TRUE(cancelled);
 }
@@ -1243,11 +1243,11 @@ TEST(Ruvia, redis_client_authenticates_a_username_without_password) {
     auto closing = pool.loop(0).start(client.shutdown());
     bool cancelled = false;
     try {
-        connecting.get();
+        std::move(connecting).get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }
-    closing.get();
+    std::move(closing).get();
     pool.join();
     EXPECT_TRUE(cancelled);
 }
@@ -1373,7 +1373,7 @@ TEST(Ruvia, redis_tls_shutdown_joins_pending_authenticated_transport_io) {
     client.close();
     bool cancelled = false;
     try {
-        pending.get();
+        std::move(pending).get();
     } catch (const ruvia::redis_error&) {
         cancelled = true;
     }

@@ -1387,7 +1387,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
                     completed_ops)));
             }
             for (auto& fut : loop_futures) {
-                fut.get();
+                std::move(fut).get();
             }
 #ifdef RUVIA_ENABLE_HTTP2
             constexpr std::size_t lanes_per_worker = 2 + 4 + 4;
@@ -1466,7 +1466,7 @@ TEST(Ruvia, a_multi_worker_app_serves_http3_and_closes_it_on_stop) {
                     loop, port, identity.ca_file_)));
             }
             for (auto& f : futures) {
-                f.get();
+                std::move(f).get();
             }
         } catch (...) {
             capped_loops.stop();

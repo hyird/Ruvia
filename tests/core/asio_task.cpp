@@ -126,7 +126,7 @@ TEST(Ruvia, AsioTaskLifecycle) {
     auto same_loop_get_result = same_loop_get_rejected.get_future();
     const auto probe_posted = loop.handle().post([&] {
         try {
-            static_cast<void>(value.get());
+            static_cast<void>(std::move(value).get());
             same_loop_get_rejected.set_value(false);
         } catch (const std::logic_error&) {
             same_loop_get_rejected.set_value(value.valid());
@@ -139,11 +139,11 @@ TEST(Ruvia, AsioTaskLifecycle) {
     std::optional<ruvia::test::asio_task_tests::aligned_result> result_value;
     try {
         const auto same_loop_guard_held = same_loop_get_result.get();
-        result_value.emplace(value.get());
-        no_value.get();
+        result_value.emplace(std::move(value).get());
+        std::move(no_value).get();
         bool failure_observed = false;
         try {
-            failure.get();
+            std::move(failure).get();
         } catch (const std::runtime_error& error) {
             failure_observed = std::string_view(error.what()) == "root task failure";
         }
@@ -227,7 +227,7 @@ TEST(Ruvia, EventLoopTryStartReturnsRejectedTask) {
     loops.start();
     EXPECT_TRUE(root.wait_for(std::chrono::seconds(30)));
     EXPECT_TRUE(root.ready());
-    EXPECT_EQ(root.get(), 7);
+    EXPECT_EQ(std::move(root).get(), 7);
     EXPECT_FALSE(root.ready());
 
     loops.stop();

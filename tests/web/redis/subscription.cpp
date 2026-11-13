@@ -718,7 +718,7 @@ TEST(Ruvia, redis_subscription_stop_token_ends_the_stream) {
     auto operation = pool.loop(0).start(check_stop_token_ends_the_stream(client, stop, confirmed));
     confirmed.get_future().get();
     stop.request_stop();
-    operation.get();
+    std::move(operation).get();
     pool.stop();
     pool.join();
 }
@@ -742,7 +742,7 @@ TEST(Ruvia, redis_subscription_client_close_ends_a_pending_read) {
     auto operation = pool.loop(0).start(check_client_close_ends_pending_read(client, confirmed));
     confirmed.get_future().get();
     client.close();
-    operation.get();
+    std::move(operation).get();
     pool.stop();
     pool.join();
 }

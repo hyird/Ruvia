@@ -61,7 +61,7 @@ void run_worker_tasks(event_loop_attachment& attachment, Tasks&&... tasks) {
     if (!joined) {
         throw std::logic_error("worker owner stopped before root tasks joined");
     }
-    root.get();
+    std::move(root).get();
 }
 
 }  // namespace ruvia::test

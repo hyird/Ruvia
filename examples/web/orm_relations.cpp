@@ -264,7 +264,7 @@ int main(int argc, char** argv) {
             ruvia::db_client db(attachment.loop(), settings);
             auto root = attachment.loop().start(ruvia::examples::run(db, attachment));
             attachment.run();
-            root.get();
+            std::move(root).get();
         }
         return 0;
     } catch (...) {

@@ -238,10 +238,12 @@ public:
         return require_state().completion().wait_until(deadline);
     }
 
-    // User result moves run without the state mutex and may re-enter this
-    // root_task. The object must remain alive for the entire synchronous call;
-    // replacing its owned state during a move is supported.
-    decltype(auto) get() {
+    // Consumes the result, so only an rvalue extracts it:
+    // std::move(root).get(). User result moves run without the state mutex
+    // and may re-enter this root_task. The object must remain alive for the
+    // entire synchronous call; replacing its owned state during a move is
+    // supported.
+    decltype(auto) get() && {
         if (!state_) {
             throw std::logic_error("root task has no result");
         }
@@ -262,6 +264,7 @@ public:
             return state_value->get();
         }
     }
+    void get() & = delete;
 
 private:
     explicit root_task(std::shared_ptr<detail::root_task_state<t_type>> state_value) noexcept

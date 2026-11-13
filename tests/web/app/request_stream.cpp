@@ -824,7 +824,7 @@ TEST(Ruvia, request_stream_listeners_serve_every_protocol_beside_routes) {
         };
         auto root = attachment.loop().start(run());
         attachment.run();
-        root.get();
+        std::move(root).get();
         if (failure != nullptr) {
             std::rethrow_exception(failure);
         }
@@ -1153,7 +1153,7 @@ TEST(Ruvia, standalone_streamed_tunnel_refusals_propagate_upstream_disconnect) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
@@ -1404,5 +1404,5 @@ TEST(Ruvia, request_stream_body_wait_cancellation_and_reset_are_isolated) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }

@@ -198,7 +198,7 @@ TEST(Ruvia, http2_client_tunnel_owns_cold_input_half_closes_and_preserves_siblin
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -310,7 +310,7 @@ TEST(Ruvia, http2_client_capsule_stream_retains_results_and_cold_operations_afte
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -418,7 +418,7 @@ TEST(Ruvia, http2_client_udp_tunnel_skips_dropped_capsules_and_resets_malformed_
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -508,7 +508,7 @@ TEST(Ruvia, http2_client_half_closed_tunnel_rejects_truncated_capsule_on_end_str
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(client_threw);
 }
 
@@ -635,7 +635,7 @@ TEST(Ruvia, http2_client_stale_tunnel_malformed_abort_does_not_reset_reconnected
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(udp1_threw);
     EXPECT_EQ(second_conn_rst_stream_id, std::uint32_t{0});
     EXPECT_EQ(second_conn_rst_code, std::uint32_t{0});

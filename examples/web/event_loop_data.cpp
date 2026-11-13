@@ -120,7 +120,7 @@ int main(int argc, char** argv) {
         auto observe = [&] {
             for (auto& task : tasks) {
                 try {
-                    task.get();
+                    std::move(task).get();
                 } catch (...) {
                     if (!failure) {
                         failure = std::current_exception();

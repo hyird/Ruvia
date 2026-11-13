@@ -379,7 +379,7 @@ TEST(Ruvia, http2_connect_routes_echo_large_duplex_streams_and_leave_sibling_req
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -491,7 +491,7 @@ TEST(Ruvia, http2_connect_route_receives_data_sent_before_the_response) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -640,7 +640,7 @@ TEST(Ruvia, http2_slow_body_and_tunnel_consumers_return_receive_window_without_p
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -725,7 +725,7 @@ TEST(Ruvia, http2_websocket_request_half_closed_before_handshake_receives_error_
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -818,7 +818,7 @@ TEST(Ruvia, http2_rejected_expectation_discards_request_content_received_during_
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -906,7 +906,7 @@ TEST(Ruvia, http2_capsule_route_resets_truncated_capsule_with_protocol_error) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -1004,7 +1004,7 @@ TEST(Ruvia, http2_capsule_route_closed_stream_rejects_truncated_capsule_without_
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     observation->halfclose_capsules_ = false;
 
     EXPECT_TRUE(ping_acknowledged());

@@ -308,7 +308,7 @@ void exercise_lazy_body_reads(
     };
     auto done = attachment.loop().start(run());
     attachment.run();
-    done.get();
+    std::move(done).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -386,7 +386,7 @@ std::pmr::string exchange_raw_request(
     };
     auto done = attachment.loop().start(run());
     attachment.run();
-    done.get();
+    std::move(done).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);

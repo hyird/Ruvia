@@ -145,7 +145,7 @@ void exercise_connect(bool finish_first) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     server.finish();
     ruvia::close_socket(client);
     if (failure) {
@@ -248,7 +248,7 @@ std::pmr::string exchange_closing_request(std::string_view request) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     ruvia::close_socket(client);
     server.finish();
     if (failure) {

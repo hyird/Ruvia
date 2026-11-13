@@ -458,7 +458,7 @@ void check_fair_handoff(bool peer_close) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -562,7 +562,7 @@ TEST(Ruvia, http1_websocket_read_reports_orderly_peer_eof_as_end) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     ruvia::close_socket(client);
     server.finish();
     if (failure) {
@@ -688,7 +688,7 @@ TEST(Ruvia, http1_websocket_send_echoes_borrowed_message_while_holding_read_lane
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     ruvia::close_socket(client);
     server.finish();
     if (failure) {
@@ -773,7 +773,7 @@ TEST(Ruvia, http1_websocket_longest_heartbeat_never_aborts_a_slow_write) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -907,7 +907,7 @@ TEST(Ruvia, http1_websocket_required_subprotocol_refuses_offers_without_one) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);
@@ -965,7 +965,7 @@ TEST(Ruvia, http1_websocket_upgrade_with_continue_expectation_sends_100_before_1
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);

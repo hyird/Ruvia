@@ -110,9 +110,9 @@ TEST(Ruvia, WorkerRootMoveAssignmentCapturesSourceBeforeRetiringOldResult) {
     };
     destination = std::move(source);
     EXPECT_TRUE(retired);
-    EXPECT_EQ(destination.get().value_, 42);
+    EXPECT_EQ(std::move(destination).get().value_, 42);
     ASSERT_TRUE(source.valid());
-    EXPECT_EQ(source.get().value_, 99);
+    EXPECT_EQ(std::move(source).get().value_, 99);
 }
 
 TEST(Ruvia, WorkerRootMoveAssignmentCanTakeSourceOwnedByOldResult) {
@@ -137,9 +137,9 @@ TEST(Ruvia, WorkerRootMoveAssignmentCanTakeSourceOwnedByOldResult) {
         destination = std::move(*source);
         EXPECT_TRUE(retired);
         if (fail) {
-            EXPECT_THROW(static_cast<void>(destination.get()), std::runtime_error);
+            EXPECT_THROW(static_cast<void>(std::move(destination).get()), std::runtime_error);
         } else {
-            EXPECT_EQ(destination.get().value_, 42);
+            EXPECT_EQ(std::move(destination).get().value_, 42);
         }
         EXPECT_FALSE(destination.valid());
     }
@@ -1629,7 +1629,7 @@ bool test_pool_failure_handoff_during_destructor_report() {
     auto root = loop.start(report_pool_root_failure(loop, gate));
     pool->start();
     root.wait();
-    root.get();
+    std::move(root).get();
 
     std::thread destroyer([&] { pool.reset(); });
     bool first_report_entered = false;
@@ -2181,7 +2181,7 @@ bool test_abandoned_root_task_completes_when_queue_drain_fails() {
     }
 
     try {
-        static_cast<void>(root.get());
+        static_cast<void>(std::move(root).get());
         return false;
     } catch (const ruvia::event_loop_start_rejected& error) {
         return error.status() == ruvia::post_status::worker_stopping;
@@ -2568,10 +2568,10 @@ bool test_root_task_result_moves_outside_lock_and_preserves_reentrant_owner() {
     root->wait();
     replacement->wait();
     trigger.store(true, std::memory_order_release);
-    static_cast<void>(root->get());
+    static_cast<void>(std::move(*root).get());
     const bool replacement_survived = root->valid();
     if (replacement_survived) {
-        static_cast<void>(root->get());
+        static_cast<void>(std::move(*root).get());
     }
     loops.join();
     return !valid_during_move && replacement_survived && !root->valid();
@@ -2586,7 +2586,7 @@ bool test_root_task_delivers_const_result() {
     const auto worker_value = loops.loop(0).handle();
     auto root = loops.loop(0).start(immutable_root_result(worker_value));
     loops.start();
-    const auto value = root.get();
+    const auto value = std::move(root).get();
     loops.stop();
     loops.join();
     return value == 17 && !root.valid();
@@ -2603,7 +2603,7 @@ bool test_root_task_result_owns_pmr_storage_past_pool_retirement() {
     loops.join();
     bool retained = false;
     {
-        auto result_value = root.get();
+        auto result_value = std::move(root).get();
         const auto payload_bytes = result_value.values_.capacity() * sizeof(int);
         const bool payload_retained = resource.owns(result_value.values_.data(), payload_bytes);
         const bool values_valid = result_value.values_.size() == 32 &&
@@ -2636,7 +2636,7 @@ bool test_root_tasks_join_nested_scopes_during_stop() {
     loops.stop();
     loops.join();
     try {
-        root.get();
+        std::move(root).get();
     } catch (...) {
         return false;
     }
@@ -2774,7 +2774,7 @@ TEST(Ruvia, WorkerAttachmentOnlyReportsUnconsumedRootFailures) {
     {
         auto consumed = loop.start(failed_abandoned_attachment_root());
         context.poll();
-        EXPECT_THROW(consumed.get(), std::runtime_error);
+        EXPECT_THROW(std::move(consumed).get(), std::runtime_error);
     }
     EXPECT_EQ(reports, 0);
     EXPECT_TRUE(loop.accepting());

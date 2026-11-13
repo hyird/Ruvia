@@ -1784,7 +1784,7 @@ TEST(Ruvia, http3_outbound_migration_cancellation_and_deadlines_cover_path_valid
         auto root = attachment.loop().start(http3_resumption_test::exercise_blocked_migration(
             attachment, server.outbound_config(), server.enabled_endpoint(), mode));
         attachment.run();
-        root.get();
+        std::move(root).get();
     }
 }
 
@@ -1981,7 +1981,7 @@ TEST(Ruvia, http3_outbound_concurrent_early_data_retry_and_goaway_drain_stress) 
                 loop, config, retry_config)));
         }
         for (auto& f : futures) {
-            f.get();
+            std::move(f).get();
         }
     } catch (...) {
         loops.stop();

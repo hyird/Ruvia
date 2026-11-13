@@ -569,8 +569,8 @@ TEST(Ruvia, tcp_client_cancels_inflight_reads_and_writes_from_another_thread) {
         // Only one direction owns this token. Its cancellation must also end
         // the opposite in-flight operation when the connection is retired.
         stop.request_stop();
-        operation.get();
-        other.get();
+        std::move(operation).get();
+        std::move(other).get();
         pool.loop(0).start(client.shutdown()).get();
         pool.join();
     }
@@ -595,7 +595,7 @@ TEST(Ruvia, tcp_client_loop_stop_joins_pending_reads_and_writes) {
         auto operation = pool.loop(0).start(expect_io_failure(client, writing, {}, std::errc::operation_canceled, &started));
         started.get_future().get();
         pool.stop();
-        operation.get();
+        std::move(operation).get();
         pool.join();
     }
 }
@@ -623,7 +623,7 @@ TEST(Ruvia, tcp_client_tls_handshake_has_deadline_and_inflight_cancellation) {
         }
         bool failed = false;
         try {
-            operation.get();
+            std::move(operation).get();
         } catch (const std::system_error& error) {
             EXPECT_EQ(error.code(), std::make_error_code(cancelling ? std::errc::operation_canceled : std::errc::timed_out));
             failed = true;

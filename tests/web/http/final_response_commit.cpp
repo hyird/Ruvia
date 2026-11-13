@@ -83,7 +83,7 @@ TEST(Ruvia, server_answers_an_uncommittable_route_response_with_a_closing_error)
     };
     auto done = attachment.loop().start(run());
     attachment.run();
-    done.get();
+    std::move(done).get();
     server.finish();
     if (failure) {
         std::rethrow_exception(failure);

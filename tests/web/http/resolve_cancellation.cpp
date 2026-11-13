@@ -168,7 +168,7 @@ TEST(Ruvia, host_lookup_timeout_cancel_and_shutdown_retire_before_system_work_fi
             pool.join();
         }
         lookups.join();
-        root.get();
+        std::move(root).get();
         EXPECT_TRUE(observed.retired_before_release_);
         const auto expected = kind == stop_kind::timeout        ? ruvia::http_client_error::code_type::timeout
                               : kind == stop_kind::cancellation ? ruvia::http_client_error::code_type::cancelled

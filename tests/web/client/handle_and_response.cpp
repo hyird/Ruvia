@@ -291,7 +291,7 @@ TEST(Ruvia, http_client_handle_origin_and_expired_send_reject_after_shutdown) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -350,7 +350,7 @@ TEST(Ruvia, http_client_response_and_body_moved_from_throw_logic_error) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -885,7 +885,7 @@ TEST(Ruvia, http_client_fluent_ownership_helpers_json_and_registered_redirects) 
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (!failure) {
         fluent_client_tests::verify_standalone_origins(server);
         fluent_client_tests::verify_request_host_cancellation(server);
@@ -1105,7 +1105,7 @@ TEST(Ruvia, http_client_unconsumed_builders_outlive_shutdown_and_client_storage)
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }

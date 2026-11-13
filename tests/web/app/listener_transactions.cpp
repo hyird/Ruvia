@@ -283,7 +283,7 @@ TEST(Ruvia, runtime_tls_listener_preparation_does_not_block_its_caller_worker) {
     if (posted == ruvia::post_status::accepted) {
         observed.wait();
     }
-    addition.get();
+    std::move(addition).get();
 
     asio::ssl::context client(asio::ssl::context::tls_client);
     client.load_verify_file(identity.ca_file_.string());

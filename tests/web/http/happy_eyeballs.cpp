@@ -217,7 +217,7 @@ TEST(Ruvia, http_client_fast_address_failure_immediately_starts_the_next_family)
 #endif
     auto root = loop.start(exercise(attachment, peer, "localhost", connect_timeout));
     attachment.run();
-    root.get();
+    std::move(root).get();
     lookups.join();
 }
 
@@ -234,5 +234,5 @@ TEST(Ruvia, http_client_connects_to_an_ipv6_literal) {
     peer.start();
     auto root = loop.start(exercise(attachment, peer, "::1", 3s));
     attachment.run();
-    root.get();
+    std::move(root).get();
 }

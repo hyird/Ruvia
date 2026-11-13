@@ -190,7 +190,7 @@ TEST(Ruvia, http2_push_routes_and_client_preserve_owners_flow_control_cold_reads
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_response_usable) {
@@ -230,6 +230,6 @@ TEST(Ruvia, http2_push_queue_overflow_and_disabled_permission_keep_parent_respon
         };
         auto root = attachment.loop().start(run());
         attachment.run();
-        root.get();
+        std::move(root).get();
     }
 }

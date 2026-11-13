@@ -162,7 +162,7 @@ TEST(Ruvia, independent_servers_share_an_external_loop_without_routes_or_shared_
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_services) {
@@ -215,7 +215,7 @@ TEST(Ruvia, independent_server_adopts_connected_sockets_for_raw_and_http_service
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener) {
@@ -254,7 +254,7 @@ TEST(Ruvia, independent_server_failed_addition_releases_every_prepared_listener)
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection) {
@@ -288,7 +288,7 @@ TEST(Ruvia, independent_server_loop_retirement_joins_pending_adopted_connection)
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(cancelled);
     EXPECT_TRUE(token_stopped);
     EXPECT_FALSE(attachment.valid());
@@ -325,7 +325,7 @@ TEST(Ruvia, independent_server_cold_runtime_addition_owns_configuration) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, independent_server_discarded_cold_addition_closes_inherited_socket) {
@@ -354,7 +354,7 @@ TEST(Ruvia, independent_server_discarded_cold_addition_closes_inherited_socket) 
     };
     auto completed = attachment.loop().start(shutdown());
     attachment.run();
-    completed.get();
+    std::move(completed).get();
 }
 
 TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
@@ -397,7 +397,7 @@ TEST(Ruvia, independent_server_cold_shutdown_joins_after_host_destruction) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(retired);
 }
 
@@ -455,7 +455,7 @@ TEST(Ruvia, independent_server_prepared_batch_cancel_and_shutdown_are_owning_tra
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_socket) {
@@ -501,7 +501,7 @@ TEST(Ruvia, independent_server_ipv6_only_rejects_ipv4_and_mismatched_inherited_s
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 #if defined(RUVIA_ENABLE_HTTP3)
@@ -543,6 +543,6 @@ TEST(Ruvia, independent_server_ipv6_only_validates_inherited_quic_socket_before_
     };
     auto root = attachment.loop().start(shutdown());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 #endif

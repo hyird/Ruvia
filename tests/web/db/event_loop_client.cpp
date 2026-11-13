@@ -56,16 +56,16 @@ TEST(Ruvia, db_client_rejects_duplicate_connect_without_interrupting_startup) {
     auto closing = loop.start(client.shutdown());
     closing.wait();
     pool.join();
-    first.get();
-    closing.get();
+    std::move(first).get();
+    std::move(closing).get();
     bool rejected = false;
     try {
-        duplicate.get();
+        std::move(duplicate).get();
     } catch (const std::logic_error&) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    EXPECT_TRUE(ready.get());
+    EXPECT_TRUE(std::move(ready).get());
 }
 
 TEST(Ruvia, db_client_rejects_duplicate_connect_without_closing_connected_client) {
@@ -85,16 +85,16 @@ TEST(Ruvia, db_client_rejects_duplicate_connect_without_closing_connected_client
     auto closing = loop.start(client.shutdown());
     closing.wait();
     pool.join();
-    first.get();
-    closing.get();
+    std::move(first).get();
+    std::move(closing).get();
     bool rejected = false;
     try {
-        duplicate.get();
+        std::move(duplicate).get();
     } catch (const std::logic_error&) {
         rejected = true;
     }
     EXPECT_TRUE(rejected);
-    EXPECT_TRUE(ready.get());
+    EXPECT_TRUE(std::move(ready).get());
 }
 
 TEST(Ruvia, db_client_fresh_close_and_loop_stop_share_worker_completion) {
@@ -149,7 +149,7 @@ TEST(Ruvia, db_client_event_loop_stop_awaits_retirement_of_pending_authenticatio
         }
         attachment.stop();
         driver.join();
-        root.get();
+        std::move(root).get();
         if (peer_failure) {
             std::rethrow_exception(peer_failure);
         }
@@ -178,16 +178,16 @@ TEST(Ruvia, db_client_shutdown_waiters_join_pending_authentication) {
     pool.join();
     bool cancelled = false;
     try {
-        first.get();
+        std::move(first).get();
     } catch (const ruvia::db_error& error) {
         if (error.code() != ruvia::db_error::code_type::closing) {
             throw;
         }
         cancelled = true;
     }
-    closing.get();
-    also_closing.get();
-    closed_again.get();
+    std::move(closing).get();
+    std::move(also_closing).get();
+    std::move(closed_again).get();
     EXPECT_TRUE(cancelled);
-    EXPECT_TRUE(!ready.get());
+    EXPECT_TRUE(!std::move(ready).get());
 }

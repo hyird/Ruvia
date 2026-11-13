@@ -254,7 +254,7 @@ int main(int argc, char** argv) {
             auto attachment = attach_event_loop(context_value, {.blocking_pool_ = &host_lookups});
             auto root = attachment.loop().start(run(settings, attachment, env));
             attachment.run();
-            root.get();
+            std::move(root).get();
         }
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

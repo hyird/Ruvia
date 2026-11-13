@@ -1451,7 +1451,7 @@ inline void drive_backend_task(event_loop_attachment& attachment, task<void> ope
     completed.wait();
     io.stop();
     runner.join();
-    completed.get();
+    std::move(completed).get();
 }
 
 inline void retire_backend_attachment(event_loop_attachment& attachment) {

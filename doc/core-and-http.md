@@ -11,7 +11,7 @@
 | 头文件 | 核心公开类型 / 函数 | 说明与契约 |
 | --- | --- | --- |
 | `"ruvia/core/task.h"` | `template <typename T> class task final`、`template <typename T> class task_awaiter final` | 结构化惰性协程（仅支持移动构造与右值 `co_await`）。未启动（cold）或已完成（done）可安全析构；**销毁已启动但仍挂起的 `task` 直接触发 `std::terminate()`**。`co_await std::move(t)` 返回的 `task_awaiter<T>` 仅由 `task` 构造，不可复制、移动或取址 |
-| `"ruvia/core/root_task.h"` | `template <typename T> class root_task final` | 由 `event_loop::start(task<T>)` 或 `try_start(task<T>)` 返回的跨线程等待句柄。提供 `valid()`、`ready()`、`wait()`、`wait_for(timeout_duration)`、`wait_until(steady_clock::time_point)`、`get()`；析构时若未调用 `get()` 则转为后台托管直至完成，**禁止在所属 `event_loop` 自身线程调用 `wait()` / `get()`** |
+| `"ruvia/core/root_task.h"` | `template <typename T> class root_task final` | 由 `event_loop::start(task<T>)` 或 `try_start(task<T>)` 返回的跨线程等待句柄。提供 `valid()`、`ready()`、`wait()`、`wait_for(timeout_duration)`、`wait_until(steady_clock::time_point)`、`std::move(root).get()`（仅右值提取并消费结果）；析构时若未调用 `get()` 则转为后台托管直至完成，**禁止在所属 `event_loop` 自身线程调用 `wait()` / `get()`** |
 | `"ruvia/core/task_scope.h"` | `class task_scope final`、`task_scope::join_operation`、`struct task_scope_options` | 单 Worker 亲和的结构化并发任务域。提供 `spawn(task<void>)`、`request_stop()`、`token()`、`stop_requested()`、`size()`、`empty()`、`join()`；构造期建立停止状态，`token() const&` 只读且不分配，第一个子任务失败时作用域自动请求停止；`join()` 返回可丢弃、仅启动前可移动的单次冷 `join_operation`，创建和启动须在绑定 Worker，启动后独占该作用域并关闭 `spawn`，并重新抛出第一个子任务失败；之后与其不等价（同一异常对象，或动态类型与 `what()` 均相同）的子任务失败在该子任务完成时交给 `report_unhandled_failure`，不被静默丢弃；析构前若曾 `spawn` 过任务，必须完成 `co_await scope.join()` |
 | `"ruvia/core/scoped_operation.h"` | `class operation_scope final`、`class scoped_capability_registration final`、`make_scoped_operation(...)` | 将借用型能力（capability）与惰性协程操作 `task<T>` 绑定到同一 Worker 作用域，`close_and_join()` 先回收冷协程帧并等待已启动操作完成后再失效 capability；`bind_worker(worker)` 借用该 Worker 句柄后，作用域内每个操作的启动、完成与冷帧回收都必须在该 Worker 上，否则 `std::terminate()` |
 | `"ruvia/core/async.h"` | `async_start(task<T>&&, token)`、`template <typename T> using task_completion_result`、`template <typename T> asio::awaitable<T> as_awaitable(task<T> task_value)`、`template <typename Result = void> class asio_completion final`、`template <typename Result, typename Initiate> class asio_completion_awaiter final`、`template <typename Result = void, typename Initiate> auto async_asio(Initiate&& initiate)` | 将 `ruvia::task<T>` 作为任意 Asio 完成令牌的异步操作启动，或适配为 `asio::awaitable<T>`；将基于完成回调的 Asio 异步启动操作适配为 Ruvia 协程可直接 `co_await` 的 `asio_completion_awaiter`（返回 `asio_completion<Result>`，提供 `error_code()`、`succeeded()`、`failed()`、`result()` / `take_result()`） |
@@ -69,7 +69,7 @@ auto root = loop.start([](ruvia::worker_handle worker) -> ruvia::task<int> {
     co_return 42;
 }(loop.handle()));
 
-int answer = root.get();
+int answer = std::move(root).get();
 pool.join();
 ```
 

@@ -252,7 +252,7 @@ void run_client(asio::io_context& io, ruvia::event_loop_attachment& attachment, 
     };
     auto root = loop.start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     (void)io;
     if (failure) {
         std::rethrow_exception(failure);

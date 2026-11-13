@@ -181,7 +181,7 @@ void exercise_client_connect(unsigned mode) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -310,7 +310,7 @@ TEST(Ruvia, http1_client_rejected_keep_alive_connect_retires_the_proxy_connectio
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }

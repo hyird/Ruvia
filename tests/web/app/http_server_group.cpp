@@ -361,7 +361,7 @@ TEST(Ruvia, independent_group_accepts_member_worker_controls_and_coordinates_loo
     EXPECT_EQ(retiring.stats().active_connections_, std::size_t{0});
     EXPECT_EQ(resumed_result.wait_for(0s), std::future_status::timeout);
     unrelated_stop.request_stop();
-    EXPECT_EQ(unrelated_root.get(), ruvia::timer_sleep_result::stop_requested);
+    EXPECT_EQ(std::move(unrelated_root).get(), ruvia::timer_sleep_result::stop_requested);
 }
 
 #if !defined(_WIN32)
@@ -590,8 +590,8 @@ TEST(Ruvia, independent_group_cross_worker_add_preserves_caller_timers_and_cold_
     const auto progress = tick.wait_for(2s);
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
-    timer_root.get();
-    operation.get();
+    std::move(timer_root).get();
+    std::move(operation).get();
     EXPECT_NE(request(port.endpoint().port()).find(" 200 "), std::string::npos);
 
     auto removal = [&] {
@@ -642,8 +642,8 @@ TEST(Ruvia, independent_group_tls_preparation_keeps_caller_live_and_close_cancel
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
     EXPECT_GT(queued, 0U);
-    timer_root.get();
-    EXPECT_ANY_THROW(operation.get());
+    std::move(timer_root).get();
+    EXPECT_ANY_THROW(std::move(operation).get());
     runtime.loops_[0].start(group.shutdown(runtime.loops_[0].handle())).get();
     asio::ip::tcp::socket refused(ports);
     asio::error_code error;
@@ -753,8 +753,8 @@ TEST(Ruvia, independent_group_member_retirement_cancels_pending_cross_worker_add
     runtime.second_attachment_.stop();
     held.release();
     EXPECT_EQ(progress, std::future_status::ready);
-    observed.get();
-    EXPECT_ANY_THROW(operation.get());
+    std::move(observed).get();
+    EXPECT_ANY_THROW(std::move(operation).get());
     runtime.loops_[0].start(group.shutdown(runtime.loops_[0].handle())).get();
     EXPECT_EQ(group.stats().active_connections_, 0U);
     EXPECT_TRUE(runtime.loops_[0].accepting());

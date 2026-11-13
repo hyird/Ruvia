@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
             db_client concurrent(attachment.loop(), settings);
             auto root = attachment.loop().start(run(db, concurrent, attachment));
             attachment.run();
-            root.get();
+            std::move(root).get();
         }
     } catch (...) {
         std::cerr << ruvia::exception_text(std::current_exception()) << '\n';

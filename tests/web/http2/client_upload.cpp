@@ -470,7 +470,7 @@ void exercise_abandon_during_drain() {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -634,7 +634,7 @@ void exercise(response_mode mode) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }

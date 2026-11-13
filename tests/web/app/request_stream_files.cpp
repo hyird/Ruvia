@@ -99,7 +99,7 @@ void with_server(ruvia::request_stream_callback callback, check_type check) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     pool.stop();
     pool.join();
     EXPECT_EQ(pool.stats().queued_, 0);
@@ -509,7 +509,7 @@ TEST(Ruvia, independent_request_stream_releases_selected_file_exactly_once_on_er
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     EXPECT_EQ(releases, 2);
 }
 #endif

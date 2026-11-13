@@ -273,7 +273,7 @@ void check_file_end(bool exhaust_connection) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     EXPECT_EQ(status, std::pmr::string("200", ruvia::process_resource()));
     EXPECT_TRUE(file_backed);
     EXPECT_EQ(body, std::pmr::string(file_size, 'f', ruvia::process_resource()));
@@ -392,7 +392,7 @@ TEST(Ruvia, http2_buffered_response_resumes_after_stream_window_update) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     EXPECT_EQ(status, std::string_view("200"));
     EXPECT_EQ(body, std::string_view("alive"));
     EXPECT_TRUE(credited);
@@ -498,7 +498,7 @@ TEST(Ruvia, http2_file_body_is_read_only_after_send_window_is_granted) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(!expired);
     EXPECT_EQ(status, std::pmr::string("200", ruvia::process_resource()));
     EXPECT_TRUE(reset);
@@ -628,7 +628,7 @@ TEST(Ruvia, http2_failed_file_writes_release_output_budget_slots) {
     };
     auto root = attachment.loop().start(run());
     io.run();
-    root.get();
+    std::move(root).get();
     EXPECT_TRUE(!expired);
     EXPECT_EQ(resets_seen, std::size_t{5});
     EXPECT_EQ(final_status, std::pmr::string("200", ruvia::process_resource()));
@@ -759,7 +759,7 @@ TEST(Ruvia, http2_empty_file_validation_precedes_end_stream_headers) {
     };
     auto operation = attachment.loop().start(run());
     io.run();
-    operation.get();
+    std::move(operation).get();
     empty_root.reset();
     EXPECT_TRUE(!expired);
     if (failure) {

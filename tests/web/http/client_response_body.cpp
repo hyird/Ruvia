@@ -739,7 +739,7 @@ void run_operation(test_worker& worker_value, asio::io_context& io, operation_ty
     };
     auto root = worker_value.attachment_.loop().start(run());
     worker_value.attachment_.run();
-    root.get();
+    std::move(root).get();
     io.restart();
     if (failure != nullptr) {
         std::rethrow_exception(failure);

@@ -210,7 +210,7 @@ void exercise_client(bool reset_peer, bool secure = false) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -369,7 +369,7 @@ void exercise_closing_peer(closing_peer behavior) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -521,7 +521,7 @@ void exercise_handshake_end(handshake_end mode) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }

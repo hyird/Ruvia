@@ -102,7 +102,7 @@ peer_observation exchange(std::string_view wire, client_fn_type&& exercise) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -505,7 +505,7 @@ TEST(Ruvia, http1_client_buffered_upload_receives_hints_before_blocked_write_com
         };
         auto root = attachment.loop().start(run());
         attachment.run();
-        root.get();
+        std::move(root).get();
         if (failure) {
             std::rethrow_exception(failure);
         }
@@ -589,7 +589,7 @@ TEST(Ruvia, http1_client_borrowed_small_chunk_pauses_read_inactivity_until_next_
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }

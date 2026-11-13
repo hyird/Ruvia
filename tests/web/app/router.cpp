@@ -227,7 +227,7 @@ TEST(Ruvia, public_router_dispatches_parameters_bodies_streams_methods_and_middl
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lifetimes) {
@@ -272,7 +272,7 @@ TEST(Ruvia, public_router_freeze_rejects_ambiguity_and_rolls_back_middleware_lif
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joins_cancellation) {
@@ -318,5 +318,5 @@ TEST(Ruvia, public_router_retains_cold_dispatch_after_facade_destruction_and_joi
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }

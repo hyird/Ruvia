@@ -313,7 +313,7 @@ void exercise_with_server(redis_test_worker& worker, ruvia::redis_client& client
     worker.stop();
     runner.join();
     server.finish();
-    root.get();
+    std::move(root).get();
     if (peer_failure) {
         std::rethrow_exception(peer_failure);
     }
@@ -481,7 +481,7 @@ TEST(Ruvia, redis_repository_script_reload_shares_the_operation_timeout) {
             worker.stop();
             runner.join();
             server.finish();
-            root.get();
+            std::move(root).get();
         }
         EXPECT_TRUE(timed_out);
         const auto& commands = server.commands();
@@ -652,7 +652,7 @@ TEST(Ruvia, redis_repository_inflight_operation_observes_cancellation) {
         worker.stop();
         runner.join();
         server.finish();
-        root.get();
+        std::move(root).get();
         EXPECT_EQ(observed_error,
             std::optional{ruvia::redis_error::code_type::cancelled});
         if (peer_failure) {

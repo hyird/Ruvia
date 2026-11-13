@@ -167,7 +167,7 @@ int main(int argc, char** argv) {
         ruvia::event_loop_pool loops({.loop_count_ = 1, .blocking_pool_ = &host_lookups});
         loops.start();
         auto done = loops.loop(0).start(exercise(loops.loop(0), std::move(config)));
-        auto body = done.get();
+        auto body = std::move(done).get();
         loops.stop();
         loops.join();
         const auto bytes_value = body.bytes();

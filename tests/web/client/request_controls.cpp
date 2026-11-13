@@ -241,7 +241,7 @@ void raw_stream(bool http2, bool configured_raw) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -294,7 +294,7 @@ void read_timeout(bool http2, bool total_only) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -428,7 +428,7 @@ TEST(Ruvia, http_client_http2_informational_backpressure_does_not_block_other_st
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -509,7 +509,7 @@ TEST(Ruvia, http_client_ipv6_dial_target_preserves_logical_authority) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
     if (failure) {
         std::rethrow_exception(failure);
     }
@@ -585,5 +585,5 @@ TEST(Ruvia, http_client_dial_and_dns_ports_reject_invalid_original_integer_domai
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }

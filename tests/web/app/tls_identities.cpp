@@ -462,10 +462,10 @@ std::exception_ptr queued_preparation(external_runtime& runtime, ruvia::task<voi
     EXPECT_TRUE(timer_ran.try_acquire_for(2s));
     EXPECT_FALSE(completed.load());
     occupied.release();
-    task_result.get();
-    timer_result.get();
+    std::move(task_result).get();
+    std::move(timer_result).get();
     try {
-        pending.get();
+        std::move(pending).get();
         return {};
     } catch (...) {
         return std::current_exception();

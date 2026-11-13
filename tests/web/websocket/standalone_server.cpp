@@ -916,7 +916,7 @@ void exercise_protocol(ruvia::http_client_protocol protocol) {
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 }  // namespace standalone_websocket_test
 

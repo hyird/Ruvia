@@ -571,7 +571,7 @@ task<db_migration_report> stop_migration_loop_when_done(
         attachment, detail::db_migration_runner::run(io_context, worker_value, std::move(config), migrations,
                         std::move(options), resource)));
     attachment.run();
-    return result_value.get();
+    return std::move(result_value).get();
 }
 
 }  // namespace
