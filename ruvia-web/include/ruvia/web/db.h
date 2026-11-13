@@ -27,12 +27,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/context.h"
 #include "ruvia/web/http_client.h"
-#include "ruvia/web/model.h"
 
 namespace ruvia {
 

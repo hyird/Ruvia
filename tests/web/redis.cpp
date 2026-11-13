@@ -48,9 +48,6 @@
 #include <asio/write.hpp>
 #include <openssl/evp.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-
 #include "http_server_fixture.h"
 
 namespace redis_client_test {

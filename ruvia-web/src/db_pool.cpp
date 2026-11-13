@@ -16,9 +16,6 @@
 #include <utility>
 #include <variant>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_request.h"
-
 #include "web_internal.h"
 
 #if !defined(_WIN32)

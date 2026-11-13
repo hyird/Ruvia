@@ -46,8 +46,6 @@
 #include <asio/use_awaitable.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
 #include "ruvia/web/db.h"
 #include "ruvia/web/redis.h"
 

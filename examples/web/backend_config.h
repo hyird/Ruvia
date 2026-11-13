@@ -14,9 +14,7 @@
 #include <type_traits>
 #include <utility>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/http_client.h"
 #if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif

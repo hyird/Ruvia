@@ -48,7 +48,6 @@
 #include <asio/buffer.hpp>
 #include <asio/error.hpp>
 
-#include "ruvia/core/task.h"
 #ifdef _WIN32
 #include <charconv>
 

@@ -26,8 +26,6 @@
 #include <vector>
 
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #endif

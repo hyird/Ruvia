@@ -6,8 +6,6 @@
 // One configured pool per worker is reused across requests. The handle borrows
 // that pool and must not escape its worker; retained bytes have their own owner.
 
-#include "ruvia/web/http_client.h"
-
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -20,12 +18,6 @@
 #include <string_view>
 #include <utility>
 #include <variant>
-
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
 
 #include "backend_config.h"
 namespace {

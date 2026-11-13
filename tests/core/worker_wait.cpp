@@ -35,7 +35,6 @@
 #include <asio/post.hpp>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
 
 #include "http_server_fixture.h"
 

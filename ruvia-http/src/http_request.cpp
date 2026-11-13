@@ -33,9 +33,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_response.h"
-
 #include "http_internal.h"
 
 namespace ruvia {

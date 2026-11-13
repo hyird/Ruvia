@@ -14,7 +14,6 @@
 #include <string_view>
 
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
 #include "ruvia/web/jwt.h"
 
 namespace {

@@ -77,15 +77,8 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
-#include "ruvia/web/model.h"
 
 #include "http_server_fixture.h"
 #if defined(__linux__)
@@ -99,7 +92,6 @@
 #include <asio/ip/address_v6.hpp>
 #include <asio/ip/v6_only.hpp>
 
-#include "ruvia/core/task.h"
 #if defined(RUVIA_ENABLE_DATABASE)
 #include "ruvia/web/db.h"
 #endif

@@ -32,8 +32,6 @@
 #include <vector>
 
 #include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/http/http_response.h"
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>

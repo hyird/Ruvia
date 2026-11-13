@@ -49,12 +49,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
 
 #include "http_server_fixture.h"
 
@@ -73,9 +68,6 @@
 #include <asio/steady_timer.hpp>
 #include <asio/use_awaitable.hpp>
 #include <asio/use_future.hpp>
-
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/model.h"
 
 namespace connection_lifecycle_test {
 using namespace std::chrono_literals;

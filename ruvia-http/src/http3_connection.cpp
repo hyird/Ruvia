@@ -21,8 +21,6 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/http/http_request.h"
-
 #include "http_internal.h"
 namespace ruvia::detail {
 

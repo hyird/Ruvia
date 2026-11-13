@@ -23,13 +23,7 @@
 #include <asio/error.hpp>
 #include <asio/ip/tcp.hpp>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
 #include "ruvia/http/http2_connection.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/context.h"
 
 #include "web_internal.h"
 

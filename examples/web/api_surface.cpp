@@ -21,12 +21,6 @@
 #include <system_error>
 #include <utility>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-
 #include "backend_config.h"
 RUVIA_MODEL(surface_json_message, RUVIA_OPTIONAL_FIELD(message, ruvia::string));
 

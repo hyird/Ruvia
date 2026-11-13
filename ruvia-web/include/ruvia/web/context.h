@@ -21,11 +21,7 @@
 #include <variant>
 #include <vector>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
 #include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/model.h"
 
 // Worker-local user state: application::use_worker_state<T>() registers one recipe, each

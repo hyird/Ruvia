@@ -53,12 +53,8 @@
 #include <openssl/rand.h>
 #include <openssl/ssl.h>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
 
 #include "http_server_fixture.h"
 

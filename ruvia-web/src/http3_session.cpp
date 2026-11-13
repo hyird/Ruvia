@@ -29,12 +29,7 @@
 #include <asio/ip/udp.hpp>
 #include <asio/socket_base.hpp>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/http/http3_connection.h"
-#include "ruvia/http/http_client.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/context.h"
 
 #include "web_internal.h"
 

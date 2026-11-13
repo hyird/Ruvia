@@ -15,9 +15,7 @@
 #include <asio/ip/tcp.hpp>
 #include <asio/write.hpp>
 
-#include "ruvia/core/event_loop.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
 
 #include "http_server_fixture.h"
 // A peer that resets its connection while a buffered handler is still running
@@ -58,7 +56,6 @@
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "ruvia/http/http3_connection.h"
 #endif
-#include "ruvia/http/http_request.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>
@@ -79,9 +76,6 @@
 #include <asio/read_until.hpp>
 #include <asio/socket_base.hpp>
 #include <asio/use_awaitable.hpp>
-
-#include "ruvia/http/http_response.h"
-#include "ruvia/web/http_client.h"
 
 #if defined(RUVIA_ENABLE_REDIS)
 #include "ruvia/web/redis.h"
@@ -107,7 +101,6 @@
 #include <openssl/objects.h>
 #include <openssl/x509.h>
 
-#include "ruvia/http/http_client.h"
 namespace peer_reset_test {
 
 using namespace std::chrono_literals;

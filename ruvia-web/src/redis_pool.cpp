@@ -25,9 +25,6 @@
 #include <openssl/crypto.h>
 #include <openssl/evp.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/web/model.h"
 #include "ruvia/web/redis.h"
 
 #include "web_internal.h"

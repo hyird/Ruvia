@@ -56,13 +56,7 @@
 #include <openssl/types.h>
 #include <openssl/x509.h>
 
-#include "ruvia/core/event_loop.h"
-#include "ruvia/core/task.h"
-#include "ruvia/http/http_request.h"
-#include "ruvia/http/http_response.h"
 #include "ruvia/web/app.h"
-#include "ruvia/web/context.h"
-#include "ruvia/web/http_client.h"
 
 #if defined(__unix__)
 #include <fcntl.h>
@@ -100,8 +94,6 @@
 #include <asio/io_context.hpp>
 #include <asio/ip/udp.hpp>
 #include <asio/ssl/context.hpp>
-
-#include "ruvia/http/http_client.h"
 
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <ngtcp2/ngtcp2.h>
