@@ -448,7 +448,7 @@ TEST(Ruvia, public_router_applies_host_representation_policies_and_its_rate_limi
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_http2) {
@@ -558,7 +558,7 @@ TEST(Ruvia, public_router_routes_websocket_and_connect_upgrades_over_http1_and_h
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 
 #ifdef RUVIA_ENABLE_REDIS
@@ -658,6 +658,6 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
     };
     auto root = attachment.loop().start(run());
     attachment.run();
-    root.get();
+    std::move(root).get();
 }
 #endif
