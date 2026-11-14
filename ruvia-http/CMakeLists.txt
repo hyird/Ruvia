@@ -5,6 +5,9 @@ set(ruvia_http_sources
     src/http_client_protocol.cpp
     src/http_connect_udp.cpp
     src/http_content_coding.cpp
+    src/http_cookie.cpp
+    src/http_cors.cpp
+    src/http_date.cpp
     src/http_header.cpp
     src/http_io_buffer.cpp
     src/http_request.cpp
