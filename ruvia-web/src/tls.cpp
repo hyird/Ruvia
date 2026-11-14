@@ -46,7 +46,7 @@
 #include "task.h"
 #include "worker_ref.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3_connection.h"
+#include "http3_quic_connection.h"
 #endif
 namespace ruvia::detail {
 namespace {

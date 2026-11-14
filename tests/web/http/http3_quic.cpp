@@ -48,7 +48,7 @@
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
-#include "http3_connection.h"
+#include "http3_quic_connection.h"
 #include "http3_test_client.h"
 #include "http_client.h"
 #include "http_response.h"

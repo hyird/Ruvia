@@ -30,7 +30,7 @@
 #include "connection_lifecycle.h"
 #include "context_access.h"
 #include "event_loop.h"
-#include "http3_connection.h"
+#include "http3_quic_connection.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_response.h"

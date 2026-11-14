@@ -1,3 +1,5 @@
+#include "http3_quic_connection.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -14,7 +16,6 @@
 #include <utility>
 #include <vector>
 
-#include "http3_connection.h"
 #include "http_connection_fields.h"
 
 namespace ruvia {

@@ -61,7 +61,10 @@ if(RUVIA_ENABLE_HTTP2)
     list(APPEND ruvia_http_headers include/http2_connection.h)
 endif()
 if(RUVIA_ENABLE_HTTP3)
-    list(APPEND ruvia_http_headers include/http3_connection.h)
+    list(APPEND ruvia_http_headers
+        include/http3_connection.h
+        include/http3_quic_connection.h
+    )
 endif()
 ruvia_install_public_headers(http ${ruvia_http_headers})
 

@@ -397,9 +397,11 @@ HTTP/2 出站字段直接交给 `nghttp2` 的 HPACK deflater；动态表容量�
 - **关闭成本**：空观察器不保留输入、不增加分配或分帧工作；开启时仍使用同一 `nghttp2` 分帧与 HPACK 主链，不另建解析器。
 
 
-#### 4.3 HTTP/3、QPACK 与 QUIC（`"http3_connection.h"`）
+#### 4.3 HTTP/3、QPACK 与 QUIC（`"http3_connection.h"` / `"http3_quic_connection.h"`）
 
 `http3_connection` 用 `nghttp3` 封装请求流、控制流与 QPACK。`read_stream()` 消费输入，`peek_output()` / `commit_output()` / `acknowledge_output()` 管理借用输出与确认；正文块和动态 ORIGIN 帧在确认前保持地址稳定。RFC 9412 通告通过 `origins_` / `submit_origin_advertisement()` 提交，RFC 9218 优先级通过客户端 `submit_priority_update()`、服务端响应 `Priority` 字段与 `stream_priority()` 访问。
+
+- **公开边界**：`http3_connection.h` 仅公开 Sans-I/O HTTP/3 与 QPACK 编解码；`http3_quic_connection.h` 公开依赖 `ngtcp2` 的 QUIC 包、路径、计时与 UDP 数据报契约。只使用编解码层的调用方不再引入 `ngtcp2` 类型。
 
 独立传输驱动可直接使用 `http3_connection`，不必采用 `http3_quic_connection`：
 

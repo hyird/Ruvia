@@ -64,7 +64,7 @@
 #include "task_scope.h"
 #include "worker_ref.h"
 #if defined(RUVIA_ENABLE_HTTP3)
-#include "http3_connection.h"
+#include "http3_quic_connection.h"
 #endif
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_pool.h"

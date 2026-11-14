@@ -26,7 +26,7 @@
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
 #include "event_loop.h"
-#include "http3_connection.h"
+#include "http3_quic_connection.h"
 #include "http_client_pool.h"
 #include "http_header.h"
 #include "http_request.h"
