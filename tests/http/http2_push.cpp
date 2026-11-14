@@ -22,7 +22,6 @@
 #include "http_header.h"
 #include "http_response.h"
 #include "http_response_server.h"
-#include "websocket_handshake.h"
 namespace {
 
 void submit_buffered_response(ruvia::http2_connection& server, std::uint32_t stream_id, const ruvia::http_response& response) {

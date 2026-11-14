@@ -56,7 +56,7 @@
 #include "streaming.h"
 #include "task.h"
 #include "task_scope.h"
-#include "websocket_handshake.h"
+#include "websocket_connection.h"
 #include "worker_ref.h"
 #include "worker_wait.h"
 

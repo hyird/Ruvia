@@ -57,6 +57,7 @@ set(ruvia_http_headers
     include/http_request.h
     include/http_response.h
     include/http_response_server.h
+    include/websocket_connection.h
     include/websocket_handshake.h
 )
 if(RUVIA_ENABLE_HTTP2)
