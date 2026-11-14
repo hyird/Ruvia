@@ -4,11 +4,13 @@ set(ruvia_http_sources
     src/http_client_protocol.cpp
     src/http_content_coding.cpp
     src/http_header.cpp
+    src/http_io_buffer.cpp
     src/http_request.cpp
     src/http_response.cpp
     src/http_response_server.cpp
     src/multipart_parser.cpp
     src/proxy_protocol.cpp
+    src/server_sent_events.cpp
     src/websocket_connection.cpp
     src/websocket_handshake.cpp
 )
