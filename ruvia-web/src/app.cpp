@@ -1409,6 +1409,7 @@ task<void> worker_capabilities::start() {
         worker_states_.shutdown();
         throw;
     }
+    co_return;
 }
 
 void worker_capabilities::close_now() noexcept {
