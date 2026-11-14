@@ -18,7 +18,6 @@
 #include "http_protocol.h"
 #include "utf8.h"
 #include "websocket_deflate.h"
-#include "websocket_deflate_codecs.h"
 #include "websocket_frame.h"
 
 namespace ruvia {

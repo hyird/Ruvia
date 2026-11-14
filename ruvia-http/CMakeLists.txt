@@ -46,7 +46,6 @@ set(ruvia_http_sources
     src/proxy_protocol.cpp
     src/tls_client_hello.cpp
     src/url_encoding.cpp
-    src/websocket_accept_key.cpp
     src/websocket_client_handshake.cpp
     src/websocket_connection.cpp
     src/websocket_deflate.cpp
@@ -135,10 +134,8 @@ set(ruvia_http_headers
     include/http_representation.h
     include/http_request.h
     include/http_request_body_failure.h
-    include/http_request_target.h
     include/http_response.h
     include/http_response_body.h
-    include/http_response_file.h
     include/http_response_headers.h
     include/http_response_stream.h
     include/http_server_sent_events.h
@@ -151,7 +148,6 @@ set(ruvia_http_headers
     include/utf8.h
     include/websocket_client_handshake.h
     include/websocket_connection.h
-    include/websocket_deflate_codecs.h
     include/websocket_handshake.h
 )
 if(RUVIA_ENABLE_HTTP2)

@@ -47,7 +47,6 @@
 #include "http_request.h"
 #include "http_request_admission.h"
 #include "http_request_body_failure.h"
-#include "http_request_target.h"
 #include "http_response.h"
 #include "inline_storage.h"
 #include "middleware.h"

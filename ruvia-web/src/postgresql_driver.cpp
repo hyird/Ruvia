@@ -21,11 +21,11 @@
 
 #include "binary_text_encoding.h"
 #include "borrowed_text.h"
+#include "client_host_resolver.h"
 #include "connection_lifecycle.h"
 #include "crypto.h"
 #include "db_pool.h"
 #include "db_session.h"
-#include "host_name_syntax.h"
 #include "tls.h"
 
 namespace ruvia::detail {

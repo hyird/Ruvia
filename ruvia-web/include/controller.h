@@ -18,7 +18,6 @@
 #include "http_header.h"
 #include "http_message.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "http_response.h"
 #include "http_tunnel.h"
 #include "middleware.h"

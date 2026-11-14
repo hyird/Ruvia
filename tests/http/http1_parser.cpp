@@ -24,7 +24,6 @@
 #include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "http_response.h"
 
 namespace {

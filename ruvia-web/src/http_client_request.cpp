@@ -40,7 +40,6 @@
 #include "http_message.h"
 #include "http_protocol.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "inline_storage.h"
 #include "ip_address.h"
 #include "operation_options.h"

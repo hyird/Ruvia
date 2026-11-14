@@ -10,7 +10,6 @@
 
 #include "http_protocol.h"
 #include "websocket_connection.h"
-#include "websocket_deflate_codecs.h"
 
 namespace ruvia::detail {
 

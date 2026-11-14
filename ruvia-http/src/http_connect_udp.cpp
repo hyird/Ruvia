@@ -25,7 +25,6 @@
 #include "http_message_access.h"
 #include "http_message_framing_fields.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "http_uri_syntax.h"
 #include "ip_address.h"
 #include "url_encoding.h"

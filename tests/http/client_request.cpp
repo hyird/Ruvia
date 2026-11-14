@@ -27,7 +27,6 @@
 #include "http_client_request_view.h"
 #include "http_header.h"
 #include "http_request.h"
-#include "http_request_target.h"
 
 namespace {
 

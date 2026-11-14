@@ -30,7 +30,7 @@
 #include "request_stream.h"
 #include "stop_token.h"
 #include "task_scope.h"
-#include "websocket_deflate_codecs.h"
+#include "websocket_connection.h"
 #include "websocket_handshake.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"

@@ -16,7 +16,6 @@
 #include "http_error.h"
 #include "http_message.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "middleware.h"
 #include "route_path_segment.h"
 #include "route_table.h"

@@ -23,7 +23,7 @@
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
-#include "host_name_syntax.h"
+#include "client_host_resolver.h"
 #include "http_header.h"
 #include "http_request.h"
 

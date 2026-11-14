@@ -17,7 +17,6 @@
 #include "http_client_response_head.h"
 #include "http_header.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {

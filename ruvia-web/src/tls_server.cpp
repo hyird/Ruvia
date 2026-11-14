@@ -32,9 +32,9 @@
 #include <openssl/ssl.h>
 
 #include "blocking_pool.h"
+#include "client_host_resolver.h"
 #include "crypto.h"
 #include "event_loop.h"
-#include "host_name_syntax.h"
 #include "http_client_types.h"
 #include "http_header.h"
 #include "ip_address.h"

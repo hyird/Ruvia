@@ -30,7 +30,6 @@
 #include "http_io_buffer.h"
 #include "http_protocol.h"
 #include "http_request.h"
-#include "http_request_target.h"
 #include "http_status.h"
 #include "inline_storage.h"
 #include "operation_scope.h"

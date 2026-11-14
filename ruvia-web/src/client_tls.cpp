@@ -16,7 +16,7 @@
 #include <openssl/x509v3.h>
 
 #include "blocking_pool.h"
-#include "host_name_syntax.h"
+#include "client_host_resolver.h"
 #include "http_client_types.h"
 #include "stop_token.h"
 #include "task.h"

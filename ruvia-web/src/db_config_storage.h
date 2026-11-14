@@ -9,8 +9,8 @@
 #include <string>
 #include <string_view>
 
+#include "client_host_resolver.h"
 #include "db_session.h"
-#include "host_name_syntax.h"
 #include "http_client_pool.h"
 #include "startup_config.h"
 #include "timeout_duration.h"

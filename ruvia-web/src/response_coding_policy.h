@@ -16,7 +16,7 @@
 #include "http_server.h"
 #include "stop_token.h"
 #include "task.h"
-#include "websocket_deflate_codecs.h"
+#include "websocket_connection.h"
 #include "worker_ref.h"
 
 namespace ruvia::detail {

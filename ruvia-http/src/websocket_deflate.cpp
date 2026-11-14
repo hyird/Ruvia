@@ -14,7 +14,6 @@
 #include "http_field_text.h"
 #include "http_protocol.h"
 #include "websocket_connection.h"
-#include "websocket_deflate_codecs.h"
 
 namespace ruvia::detail {
 
