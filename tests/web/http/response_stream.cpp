@@ -40,6 +40,7 @@
 #include "http1_server_response.h"
 #include "http_content_coding.h"
 #include "http_header.h"
+#include "http_multipart.h"
 #include "http_response.h"
 #include "http_server.h"
 #include "http_server_fixture.h"

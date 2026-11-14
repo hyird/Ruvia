@@ -10,6 +10,7 @@
 
 #include "borrowed_text.h"
 #include "http1_server_response.h"
+#include "http_server_sent_events.h"
 
 namespace ruvia {
 namespace {

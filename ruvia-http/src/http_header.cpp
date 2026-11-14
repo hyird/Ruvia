@@ -11,7 +11,7 @@
 
 #include "http2_connection.h"
 #include "http_cache.h"
-#include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_response.h"
 
 // Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into

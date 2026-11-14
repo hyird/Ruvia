@@ -27,6 +27,7 @@
 #include "context.h"
 #include "controller.h"
 #include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "streaming.h"

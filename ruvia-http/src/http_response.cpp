@@ -17,8 +17,8 @@
 #include "borrowed_text.h"
 #include "http1_server_response.h"
 #include "http_connection_fields.h"
-#include "http_content_coding.h"
 #include "http_header.h"
+#include "http_multipart.h"
 #include "http_request.h"
 namespace ruvia {
 

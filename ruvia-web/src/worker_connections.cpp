@@ -57,6 +57,7 @@
 #include "http_client.h"
 #include "http_connect_udp.h"
 #include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"

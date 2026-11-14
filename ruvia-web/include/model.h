@@ -37,7 +37,7 @@
 
 #include <initializer_list>
 
-#include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_header.h"
 #include "middleware.h"
 

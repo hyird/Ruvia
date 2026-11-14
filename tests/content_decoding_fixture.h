@@ -29,6 +29,7 @@
 #include "http2_connection.h"
 #include "http_content_coding.h"
 #include "http_header.h"
+#include "http_multipart.h"
 namespace ruvia::test {
 #ifndef RUVIA_TEST_THROWS_ON_DEFINED
 #define RUVIA_TEST_THROWS_ON_DEFINED

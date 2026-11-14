@@ -8,6 +8,8 @@
 #include <utility>
 #include <variant>
 
+#include "http_multipart.h"
+
 // The MIME entity grammar multipart bodies are validated against (RFC 2045
 // sections 5.1 and 5.3): which characters form a token, what a field name, field
 // body, parameter and media type may contain, and the duplicate-parameter guard

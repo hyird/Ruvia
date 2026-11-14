@@ -18,7 +18,7 @@
 #include "app.h"
 #include "borrowed_text.h"
 #include "controller.h"
-#include "http_content_coding.h"
+#include "http_multipart.h"
 #include "middleware.h"
 #include "task_scope.h"
 class streaming_controller final {

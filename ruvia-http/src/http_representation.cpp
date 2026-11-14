@@ -16,8 +16,9 @@
 #include "http1_server_response.h"
 #include "http_cache.h"
 #include "http_connection_fields.h"
-#include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_header.h"
+#include "http_multipart.h"
 #include "http_request.h"
 #include "http_response.h"
 

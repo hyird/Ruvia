@@ -47,6 +47,7 @@
 #include "http_cache.h"
 #include "http_client_types.h"
 #include "http_content_coding.h"
+#include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"

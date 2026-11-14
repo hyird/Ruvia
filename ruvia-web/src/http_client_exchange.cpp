@@ -38,7 +38,6 @@
 #include "http_client_redirect.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
-#include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_server.h"

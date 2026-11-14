@@ -11,6 +11,7 @@
 
 #include "content_decoding_fixture.h"
 #include "http_content_coding.h"
+#include "http_content_negotiation.h"
 
 using namespace ruvia::test;
 

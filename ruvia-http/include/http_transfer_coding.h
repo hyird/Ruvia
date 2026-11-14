@@ -10,7 +10,7 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "http_content_coding.h"
+#include "http_header.h"
 
 namespace ruvia {
 

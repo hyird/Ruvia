@@ -10,7 +10,8 @@
 #include <utility>
 
 #include "content_decoding_fixture.h"
-#include "http_content_coding.h"
+#include "http_multipart.h"
+#include "http_server_sent_events.h"
 
 TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
     const auto throws_on = [](std::string_view value) {
