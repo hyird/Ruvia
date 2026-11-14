@@ -1048,7 +1048,8 @@ public:
                     stream->request_method_ = classify_http_method(value_view);
                     stream->connect_ = value_view == "CONNECT";
                 } else if (name_view == ":protocol") {
-                    stream->websocket_ = value_view == "websocket";
+                    // RFC 9110 §7.8: upgrade tokens compare case-insensitively.
+                    stream->websocket_ = http_canonical_extended_connect_protocol(value_view) == "websocket";
                 }
             }
         });
@@ -2239,7 +2240,7 @@ bool http3_request_head::connect() const noexcept {
 }
 
 websocket_handshake_validation_result validate_http3_websocket_handshake(const http3_request_head& head, const http_request& request, websocket_handshake_validation_options options) noexcept {
-    if (!head.connect() || head.protocol() != "websocket" || head.stream_ended() || (head.declared_content_length().has_value() && *head.declared_content_length() != 0)) {
+    if (!head.connect() || http_canonical_extended_connect_protocol(head.protocol()) != "websocket" || head.stream_ended() || (head.declared_content_length().has_value() && *head.declared_content_length() != 0)) {
         return websocket_handshake_validation_result::make_invalid_request();
     }
     return detail::validate_extended_connect_websocket_headers(request, options);

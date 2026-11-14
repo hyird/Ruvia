@@ -2833,6 +2833,17 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
     std::size_t first_slot = 0;
 #if defined(RUVIA_ENABLE_HTTP3)
     detail::http3_worker_directory* directory = nullptr;
+    // The control gate serializes every writer of http3_directory_, so the
+    // directory is built and bound before the lock and only published under it.
+    std::unique_ptr<detail::http3_worker_directory> created_directory;
+    if (runtime.http3_directory_ == nullptr && std::ranges::any_of(prepared, [](const auto& definition) {
+        return definition.http3_.has_value();
+    })) {
+        created_directory = std::make_unique<detail::http3_worker_directory>(runtime.workers_.size());
+        for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
+            created_directory->bind_worker(index, runtime.workers_[index].runtime_->runtime().worker());
+        }
+    }
 #endif
     {
         std::lock_guard lock(state->mutex_);
@@ -2841,14 +2852,8 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
         state->listeners_.reserve(state->listeners_.size() + added.size());
         http3_slots.reserve(added.size());
 #if defined(RUVIA_ENABLE_HTTP3)
-        if (runtime.http3_directory_ == nullptr && std::ranges::any_of(prepared, [](const auto& definition) {
-            return definition.http3_.has_value();
-        })) {
-            auto created = std::make_unique<detail::http3_worker_directory>(runtime.workers_.size());
-            for (std::size_t index = 0; index < runtime.workers_.size(); ++index) {
-                created->bind_worker(index, runtime.workers_[index].runtime_->runtime().worker());
-            }
-            runtime.http3_directory_ = std::move(created);
+        if (created_directory != nullptr) {
+            runtime.http3_directory_ = std::move(created_directory);
         }
         directory = runtime.http3_directory_.get();
 #endif
@@ -2943,7 +2948,11 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
         }
 #endif
     }
+    // Committed listeners drop their inherited-socket claim after the lock: the
+    // last owner closes whatever no worker claimed.
+    std::vector<std::shared_ptr<detail::inherited_listener_sockets>> released_sockets;
     if (!failure) {
+        released_sockets.reserve(added.size());
         std::lock_guard lock(state->mutex_);
         if (!state->lifecycle_.running()) {
             try {
@@ -2954,7 +2963,7 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
         } else {
             for (std::size_t index = 0; index < added.size(); ++index) {
                 runtime.listener_slots_[first_slot + index] = added[index].endpoint_;
-                added[index].inherited_sockets_.reset();
+                released_sockets.push_back(std::move(added[index].inherited_sockets_));
                 state->listeners_.push_back(std::move(added[index]));
             }
         }

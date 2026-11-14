@@ -119,7 +119,10 @@ public:
 private:
     using work_guard_type = asio::executor_work_guard<asio::io_context::executor_type>;
 
-    void defer_stop_control_locked() noexcept;
+    // Queues a control whose post was counted in control_posts_ under the
+    // chain mutex; the post itself runs unlocked.
+    void post_counted_control(move_only_function<void()> control) noexcept;
+    void post_stop_control() noexcept;
     // Refuses further controls, waits out accepted ones still being queued,
     // and hands the work guard to the caller to release unlocked.
     void release_work_locked(std::unique_lock<std::mutex>& lock, std::optional<work_guard_type>& work) noexcept;
@@ -1438,8 +1441,11 @@ void worker_stop_chain::request_stop() noexcept {
         // notifying listeners. Keep the work guard until all of them have
         // published their cleanup.
         worker_ref_access::when_shutdown_notifications_complete(context_.worker(), [this] {
-            const std::lock_guard lock(mutex_);
-            defer_stop_control_locked();
+            {
+                const std::lock_guard lock(mutex_);
+                ++control_posts_;
+            }
+            post_stop_control();
         });
     } catch (...) {
         std::terminate();
@@ -1448,15 +1454,19 @@ void worker_stop_chain::request_stop() noexcept {
 
 void worker_stop_chain::finalize() noexcept {
     request_stop();
-    const std::lock_guard lock(mutex_);
-    if (finalization_requested_) {
-        return;
+    {
+        const std::lock_guard lock(mutex_);
+        if (finalization_requested_) {
+            return;
+        }
+        finalization_requested_ = true;
+        // A stop control that has not yet run consumes this request itself.
+        if (!stop_control_ran_ || work_released_) {
+            return;
+        }
+        ++control_posts_;
     }
-    finalization_requested_ = true;
-    // A stop control that has not yet run consumes this request itself.
-    if (stop_control_ran_ && !work_released_) {
-        defer_stop_control_locked();
-    }
+    post_stop_control();
 }
 
 bool worker_stop_chain::post_control(move_only_function<void()> control) noexcept {
@@ -1467,7 +1477,12 @@ bool worker_stop_chain::post_control(move_only_function<void()> control) noexcep
         }
         ++control_posts_;
     }
-    // Both guard releases wait for this count, so the context keeps running
+    post_counted_control(std::move(control));
+    return true;
+}
+
+void worker_stop_chain::post_counted_control(move_only_function<void()> control) noexcept {
+    // Both guard releases wait for the count, so the context keeps running
     // until the control is queued.
     worker_ref_access::defer_or_terminate(context_.worker(), std::move(control));
     // Notified under the mutex: a released guard lets finalize_ destroy the
@@ -1476,7 +1491,6 @@ bool worker_stop_chain::post_control(move_only_function<void()> control) noexcep
     if (--control_posts_ == 0 && work_released_) {
         control_posts_drained_.notify_all();
     }
-    return true;
 }
 
 void worker_stop_chain::abandon() noexcept {
@@ -1499,8 +1513,8 @@ void worker_stop_chain::release_work_locked(std::unique_lock<std::mutex>& lock, 
     work.emplace(std::move(work_));
 }
 
-void worker_stop_chain::defer_stop_control_locked() noexcept {
-    worker_ref_access::defer_or_terminate(context_.worker(), [this] {
+void worker_stop_chain::post_stop_control() noexcept {
+    post_counted_control([this] {
         apply_stop();
     });
 }
