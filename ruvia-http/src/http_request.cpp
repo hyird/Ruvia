@@ -23,6 +23,7 @@
 #include "http_cache.h"
 #include "http_connection_fields.h"
 #include "http_content_negotiation.h"
+#include "http_cookie.h"
 #include "http_header.h"
 #include "http_response.h"
 

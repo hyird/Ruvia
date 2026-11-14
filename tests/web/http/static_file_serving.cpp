@@ -30,6 +30,7 @@
 
 #include "context.h"
 #include "http_cache.h"
+#include "http_date.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"

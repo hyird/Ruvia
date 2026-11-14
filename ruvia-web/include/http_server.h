@@ -24,6 +24,7 @@
 #include "http1_server_response.h"
 #include "http_cache.h"
 #include "http_client_types.h"
+#include "http_cors.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "middleware.h"

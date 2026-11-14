@@ -53,7 +53,6 @@
 #include <type_traits>
 
 #include "context.h"
-#include "http_cache.h"
 #include "model.h"
 #include "stop_token.h"
 #include "task.h"

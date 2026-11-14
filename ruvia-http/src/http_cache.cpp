@@ -15,6 +15,7 @@
 
 #include "borrowed_text.h"
 #include "http_connection_fields.h"
+#include "http_date.h"
 #include "http_header.h"
 #include "http_response.h"
 

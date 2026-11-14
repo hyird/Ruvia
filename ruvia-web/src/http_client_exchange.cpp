@@ -32,7 +32,6 @@
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_server_response.h"
-#include "http_cache.h"
 #include "http_client.h"
 #include "http_client_pool.h"
 #include "http_client_redirect.h"

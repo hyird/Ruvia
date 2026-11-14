@@ -254,7 +254,7 @@ ruvia::app().listen({
   - **HEAD 回退**：`GET` 路由（含 `HEAD` 回退）、0 字节文件与重定向响应在 `HEAD` 下与 `GET` 一致发送 `Content-Length: 0`；拒绝 identity 时同样编码 0 字节体。
   - **显式 HEAD**：`RUVIA_HEAD` 返回空非文件响应体时不压缩该空体；按声明的 `Content-Length` 决定是否添加编码，支持逗号分隔的相同值，无声明时仅在拒绝 identity 时添加。添加编码后去掉未知的编码长度（RFC 9110 §8.6）；未声明长度的显式空 `HEAD` 响应省略 `Content-Length`。
   - **请求解码**：按 `Content-Encoding` 透明解码时，前 64 KiB 输出在事件循环内完成，更大的表示改在阻塞池上解码。无阻塞池或池拒绝时仍在事件循环内解码，请求必须得到内容；两条路径均受解码上限约束。
-- `http_cors_policy_config`（`"http_cache.h"`）：
+- `http_cors_policy_config`（`"http_cors.h"`）：
   - `allow_any_origin_`、`allowed_origins_`（精确 Origin、`*` 或尾缀域名模式）、`allowed_origin_suffixes_`、`allowed_methods_`、`allowed_headers_`、`reflect_request_headers_`、`expose_headers_`、`allow_credentials_`、`max_age_`。
   - 默认构造 `http_cors_policy_config{}` 允许任意 Origin（`*`）、任意合法方法并反射 `Access-Control-Request-Headers`；显式配置任一列表时仅匹配所列项。
   - **预检判定**：仅 `OPTIONS` 同时携带合法 `Origin` 与 `Access-Control-Request-Method` 时才进入预检分支；未固定 `allowed_methods_` 时自动提升路由生成的 `Allow` 响应头为 `Access-Control-Allow-Methods`。
