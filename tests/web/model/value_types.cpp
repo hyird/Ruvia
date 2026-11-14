@@ -20,7 +20,7 @@
 
 #include "middleware.h"
 #include "model.h"
-#include "test_exceptions.h"
+#include "worker_task_fixture.h"
 
 namespace {
 RUVIA_MODEL(narrow_values, RUVIA_REQUIRED_FIELD(i8, ruvia::int8), RUVIA_REQUIRED_FIELD(u8, ruvia::uint8), RUVIA_REQUIRED_FIELD(i16, ruvia::int16), RUVIA_REQUIRED_FIELD(u16, ruvia::uint16), RUVIA_REQUIRED_FIELD(real, ruvia::double_value));

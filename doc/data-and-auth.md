@@ -12,7 +12,7 @@
 ## 1. SQL 数据库连接池、直接查询与事务
 
 聚合头文件：`"db.h"`（或按需包含 `"db_session.h"`、`"db_query.h"`）。
-参考示例：[examples/web/database.cpp](../examples/web/database.cpp)、[examples/web/event_loop_data.cpp](../examples/web/event_loop_data.cpp)。
+参考示例：[examples/database.cpp](../examples/database.cpp)、[examples/event_loop_data.cpp](../examples/event_loop_data.cpp)。
 
 ### 1.1 连接配置 `ruvia::db_config` 与注册
 
@@ -181,7 +181,7 @@ auto report = co_await migrator.migrate(migrations);
 ## 2. SQL 构建器、Schema DDL 与存储过程
 
 头文件：`"db_query.h"`、`"db.h"`。
-参考示例：[examples/web/sql_queries.cpp](../examples/web/sql_queries.cpp)。
+参考示例：[examples/sql_queries.cpp](../examples/sql_queries.cpp)。
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
 
@@ -227,7 +227,7 @@ auto report = co_await migrator.migrate(migrations);
 ## 3. 强类型关系型 ORM（`RUVIA_DB_ENTITY` 与 `db_repository`）
 
 头文件：`"db_query.h"`、`"db.h"`。
-参考示例：[examples/web/orm.cpp](../examples/web/orm.cpp)、[examples/web/orm_columns.cpp](../examples/web/orm_columns.cpp)、[examples/web/orm_relations.cpp](../examples/web/orm_relations.cpp)。
+参考示例：[examples/orm.cpp](../examples/orm.cpp)、[examples/orm_columns.cpp](../examples/orm_columns.cpp)、[examples/orm_relations.cpp](../examples/orm_relations.cpp)。
 
 ### 3.1 实体、生成列、关系与投影声明
 
@@ -380,7 +380,7 @@ auto users = ruvia::decode_db_rows<user_projection>(raw);
 ## 4. Redis 客户端、Pub/Sub、Streams 与 RediSearch ORM
 
 聚合头文件：`"redis.h"`。
-参考示例：[examples/web/redis.cpp](../examples/web/redis.cpp)、[examples/web/redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)、[examples/web/redis_streams.cpp](../examples/web/redis_streams.cpp)、[examples/web/redis_orm.cpp](../examples/web/redis_orm.cpp)。
+参考示例：[examples/redis.cpp](../examples/redis.cpp)、[examples/redis_pubsub.cpp](../examples/redis_pubsub.cpp)、[examples/redis_streams.cpp](../examples/redis_streams.cpp)、[examples/redis_orm.cpp](../examples/redis_orm.cpp)。
 
 ### 4.1 连接池配置 `ruvia::redis_config`
 
@@ -555,7 +555,7 @@ auto reply = co_await redis.command(std::move(command));
 
 ## 5. JWT 认证（`"jwt.h"`）
 
-参考示例：[examples/web/auth_jwt.cpp](../examples/web/auth_jwt.cpp)。
+参考示例：[examples/auth_jwt.cpp](../examples/auth_jwt.cpp)。
 
 支持 `jwt_algorithm::hs256`、`hs384`、`hs512`。遵循 RFC 7518 密钥最小长度要求（HS256 至少 32 字节、HS384 至少 48 字节、HS512 至少 64 字节）：
 

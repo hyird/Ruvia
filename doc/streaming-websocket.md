@@ -156,13 +156,13 @@ ruvia::task<void> stream_subscription(
 }
 ```
 
-在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/web/streaming.cpp) 与 [redis_pubsub.cpp](../examples/web/redis_pubsub.cpp)。
+在 handler 中持有订阅的 RAII owner 并 `co_await stream_subscription(...)`；返回后销毁订阅。已有额外取消源时声明 `ruvia::stop_group group{stop, extra_stop};`，把 `group.token()` 传给等待，并让 group 存活到等待及取消后的 join 完成。不要用临时 group 返回 token，也不要停止整个 Worker 来取消单个 SSE。可运行示例见 [streaming.cpp](../examples/streaming.cpp) 与 [redis_pubsub.cpp](../examples/redis_pubsub.cpp)。
 
 ---
 
 ## 2. HTTP/1.1、HTTP/2 & HTTP/3 服务端高级协议能力
 
-参考示例：[examples/web/http_features.cpp](../examples/web/http_features.cpp)。
+参考示例：[examples/http_features.cpp](../examples/http_features.cpp)。
 
 | `ruvia::context` / `context_request` 方法 | 适用协议与说明 |
 | --- | --- |
@@ -179,7 +179,7 @@ ruvia::task<void> stream_subscription(
 ## 3. WebSocket 服务端
 
 头文件：`"streaming.h"`、`"websocket_handshake.h"`。
-参考示例：[examples/web/websocket.cpp](../examples/web/websocket.cpp)。
+参考示例：[examples/websocket.cpp](../examples/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
 不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发http_serverh) 显式协商并取得同一个 `websocket` 会话接口。
@@ -302,7 +302,7 @@ private:
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
 头文件：`"streaming.h"`。
-参考示例：[examples/web/tunnels.cpp](../examples/web/tunnels.cpp)。
+参考示例：[examples/tunnels.cpp](../examples/tunnels.cpp)。
 不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发http_serverh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发http_serverh)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
@@ -530,4 +530,4 @@ TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten
 
 `client.next_advertisement()` 可观察 HTTP/2 与 HTTP/3 连接收到的 `ORIGIN` 帧（`advertisements_.receive_origins_ = true`）以及 HTTP/2 连接收到的 `ALTSVC` 帧（`advertisements_.receive_alternative_services_ = true`）。Server Push 仅适用于 HTTP/2；HTTP/3 的 Alt-Svc 发现从已验证源站的响应头获取。
 
-示例：[http_client.cpp](../examples/web/http_client.cpp)、[http_client_advanced.cpp](../examples/web/http_client_advanced.cpp)。
+示例：[http_client.cpp](../examples/http_client.cpp)、[http_client_advanced.cpp](../examples/http_client_advanced.cpp)。

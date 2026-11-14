@@ -13,7 +13,7 @@ endfunction()
 
 function(ruvia_apply_test_support_includes name lib)
     target_include_directories(${name} PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/support)
+        ${CMAKE_CURRENT_SOURCE_DIR})
     target_compile_definitions(${name} PRIVATE
         RUVIA_TEST_TEMP_ROOT="${PROJECT_SOURCE_DIR}/build/test-tmp")
     if(NOT "${lib}" STREQUAL "ruvia::core" AND NOT "${lib}" STREQUAL "ruvia::http" AND NOT "${lib}" STREQUAL "ruvia::web")
@@ -26,7 +26,7 @@ function(ruvia_add_test name lib)
     if(NOT test_SOURCES)
         message(FATAL_ERROR "test executable ${name} requires SOURCES")
     endif()
-    add_executable(${name} ${test_SOURCES} support/test_main.cpp)
+    add_executable(${name} ${test_SOURCES} test_main.cpp)
     target_link_libraries(${name} PRIVATE ${lib} GTest::gtest)
     ruvia_apply_test_support_includes(${name} ${lib})
     ruvia_apply_test_warnings(${name})
@@ -79,24 +79,24 @@ if(RUVIA_BUILD_HTTP)
         http/client_request.cpp
         http/client_response.cpp
         http/content_coding.cpp
-        http/http1/parser.cpp
+        http/http1_parser.cpp
         http/multipart.cpp
         http/proxy_protocol.cpp
         http/request.cpp
         http/response.cpp
         http/response_head.cpp
-        http/websocket/handshake.cpp
+        http/websocket_handshake.cpp
     )
     if(RUVIA_ENABLE_HTTP2)
         list(APPEND _ruvia_http_unit_sources
-            http/http2/connect_drain.cpp
-            http/http2/public.cpp
-            http/http2/push.cpp
+            http/http2_connect_drain.cpp
+            http/http2_connection.cpp
+            http/http2_push.cpp
         )
     endif()
     if(RUVIA_ENABLE_HTTP3)
         list(APPEND _ruvia_http_unit_sources
-            http/http3/connection.cpp
+            http/http3_connection.cpp
         )
     endif()
 
@@ -147,9 +147,13 @@ if(RUVIA_BUILD_WEB)
     # protocol token, makes every application in its executable fail startup, so
     # neither can share the process-wide controller registry.
     ruvia_add_web_standalone_test(ruvia_route_conflict 30 web/app/route_conflict.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/app/route_encoded_duplicate.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_protocol.cpp)
-    ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_dot_segment.cpp)
+    target_compile_definitions(ruvia_route_conflict PRIVATE RUVIA_ROUTE_CONFLICT_CASE=1)
+    ruvia_add_web_standalone_test(ruvia_route_encoded_duplicate 30 web/app/route_conflict.cpp)
+    target_compile_definitions(ruvia_route_encoded_duplicate PRIVATE RUVIA_ROUTE_CONFLICT_CASE=2)
+    ruvia_add_web_standalone_test(ruvia_route_protocol 30 web/app/route_conflict.cpp)
+    target_compile_definitions(ruvia_route_protocol PRIVATE RUVIA_ROUTE_CONFLICT_CASE=3)
+    ruvia_add_web_standalone_test(ruvia_route_dot_segment 30 web/app/route_conflict.cpp)
+    target_compile_definitions(ruvia_route_dot_segment PRIVATE RUVIA_ROUTE_CONFLICT_CASE=4)
     set(_ruvia_tcp_client_test_sources
         web/http1/websocket.cpp
         web/http/udp_tunnel.cpp)
@@ -212,12 +216,14 @@ if(RUVIA_BUILD_WEB)
     # Owns the process application whose routes stall each client operation.
     ruvia_add_web_standalone_test(ruvia_http_client_operation_tests 60
         web/client/operation_interruption.cpp)
+    target_compile_definitions(ruvia_http_client_operation_tests PRIVATE RUVIA_TEST_CLIENT_OPERATIONS)
     if(RUVIA_ENABLE_HTTP3)
         # Exercises QUIC TLS together with real application listeners.
         ruvia_add_web_standalone_test(ruvia_http3_quic_tests 60 web/http3/quic.cpp)
         # Owns a four-worker application serving HTTP/3 beside its HTTPS
         # listener, stopped gracefully at its end.
         ruvia_add_web_standalone_test(ruvia_app_http3 60 web/http3/serving.cpp)
+        target_compile_definitions(ruvia_app_http3 PRIVATE RUVIA_TEST_CLIENT_OPERATIONS)
     endif()
 
     # Feature files join the unit suite only when their feature is built.

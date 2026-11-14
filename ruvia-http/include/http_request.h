@@ -326,11 +326,6 @@ template <typename field_type>
 }
 }  // namespace detail
 
-}  // namespace ruvia
-
-#pragma once
-
-namespace ruvia {
 enum class http_request_trailer_error : unsigned char { invalid_field,
     forbidden_field,
     section_too_large };

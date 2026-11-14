@@ -1,15 +1,17 @@
 set(ruvia_web_sources
     src/app.cpp
-    src/context_response.cpp
+    src/context.cpp
     src/http1_server_session.cpp
     src/http_client_exchange.cpp
     src/http_client_pool.cpp
     src/http_server.cpp
+    src/middleware.cpp
     src/router.cpp
+    src/streaming.cpp
     src/worker_connections.cpp
 )
 if(RUVIA_ENABLE_HTTP2)
-    list(APPEND ruvia_web_sources src/http2_sans_io_session_engine.cpp)
+    list(APPEND ruvia_web_sources src/http2_session.cpp)
 endif()
 if(RUVIA_ENABLE_HTTP3)
     list(APPEND ruvia_web_sources src/http3_session.cpp)

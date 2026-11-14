@@ -24,7 +24,6 @@
 #include "http_request.h"
 #include "http_response.h"
 #include "http_response_server.h"
-#include "test_exceptions.h"
 
 namespace {
 

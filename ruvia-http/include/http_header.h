@@ -679,12 +679,6 @@ namespace detail {
 // 完整响应约束；返回 true 不代表该字段在任意响应上下文中都可发送。
 [[nodiscard]] bool is_valid_http_response_field(std::string_view name, std::string_view value) noexcept;
 
-}  // namespace ruvia
-
-#pragma once
-
-namespace ruvia {
-
 // Index of the next `delimiter` at or after `start` that is outside an RFC 9110
 // section 5.6.4 quoted-string, or value.size() when there is none. A quoted-pair
 // (`\"`) does not end the string. This is the only quote-aware delimiter scan;

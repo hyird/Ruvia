@@ -11,7 +11,6 @@
 
 #include "content_decoding_fixture.h"
 #include "http_content_coding.h"
-#include "test_exceptions.h"
 
 using namespace ruvia::test;
 

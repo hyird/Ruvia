@@ -18,8 +18,8 @@
 
 #include "event_loop.h"
 #include "task_scope.h"
-#include "test_exceptions.h"
 #include "worker_ref.h"
+#include "worker_task_fixture.h"
 
 namespace worker_runtime_test {
 

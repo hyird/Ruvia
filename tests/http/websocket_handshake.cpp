@@ -1,3 +1,5 @@
+#include "websocket_handshake.h"
+
 #include <gtest/gtest.h>
 #include <zlib.h>
 
@@ -23,8 +25,6 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "test_exceptions.h"
-#include "websocket_handshake.h"
 
 namespace {
 

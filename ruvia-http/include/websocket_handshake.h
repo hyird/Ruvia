@@ -604,12 +604,6 @@ private:
     std::unique_ptr<impl_type> impl_;
 };
 
-}  // namespace ruvia
-
-#pragma once
-
-namespace ruvia {
-
 inline constexpr std::size_t max_websocket_subprotocols = 64;
 
 // Allocation-free validated RFC 6455 subprotocol list, suitable for server

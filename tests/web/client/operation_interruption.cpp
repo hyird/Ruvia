@@ -1,15 +1,26 @@
 #include <gtest/gtest.h>
 
+#include <chrono>
+#include <cstddef>
 #include <exception>
+#include <optional>
+#include <span>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
-#include "client_operation_fixture.h"
+#include "controller.h"
 #include "event_loop.h"
 #include "http_client.h"
 #include "http_server_fixture.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task.h"
+#include "task_scope.h"
 #include "worker_task_fixture.h"
+
 namespace client_operation_interruption_test {
 
 void exercise(const std::string& url, ruvia::http_client_versions versions) {

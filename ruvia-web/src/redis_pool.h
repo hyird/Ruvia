@@ -321,12 +321,6 @@ struct redis_types_access final {
     // The resource every allocation of `value` comes from.
 };
 
-}  // namespace ruvia::detail
-
-#pragma once
-
-namespace ruvia::detail {
-
 // Consumes reply storage when its resource matches; otherwise owns a copy in
 // the destination resource. Never returns a borrow into the discarded reply.
 [[nodiscard]] std::string take_redis_string(redis_value&& value);

@@ -28,7 +28,6 @@
 #include "event_loop.h"
 #include "stop_token.h"
 #include "task_scope.h"
-#include "test_exceptions.h"
 #include "worker_task_fixture.h"
 
 namespace {

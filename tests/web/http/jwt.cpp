@@ -17,7 +17,7 @@
 #include <openssl/evp.h>
 #include <openssl/hmac.h>
 
-#include "test_exceptions.h"
+#include "worker_task_fixture.h"
 
 namespace {
 

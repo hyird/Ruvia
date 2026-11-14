@@ -56,7 +56,7 @@
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
-#include "test_exceptions.h"
+#include "worker_task_fixture.h"
 namespace {
 
 using namespace std::chrono_literals;

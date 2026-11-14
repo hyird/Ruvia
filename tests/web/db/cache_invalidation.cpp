@@ -58,7 +58,6 @@
 #include <string_view>
 
 #include "db.h"
-#include "test_exceptions.h"
 
 namespace {
 

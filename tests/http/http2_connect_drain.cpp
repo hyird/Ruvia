@@ -22,7 +22,6 @@
 #include "content_decoding_fixture.h"
 #include "http2_connection.h"
 #include "http_response.h"
-#include "test_exceptions.h"
 
 namespace {
 

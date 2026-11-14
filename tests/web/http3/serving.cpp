@@ -39,7 +39,6 @@
 
 #include "app.h"
 #include "blocking_pool.h"
-#include "client_operation_fixture.h"
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"

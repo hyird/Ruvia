@@ -1,10 +1,14 @@
 set(ruvia_http_sources
-    src/http1_server_request_parser.cpp
+    src/http_cache.cpp
+    src/http_client_protocol.cpp
     src/http_content_coding.cpp
-    src/http_field_kind.cpp
+    src/http_header.cpp
     src/http_request.cpp
+    src/http_response.cpp
+    src/http_response_server.cpp
     src/multipart_parser.cpp
     src/proxy_protocol.cpp
+    src/websocket_handshake.cpp
 )
 if(RUVIA_ENABLE_HTTP2)
     list(APPEND ruvia_http_sources src/http2_connection.cpp)

@@ -23,7 +23,6 @@
 #include "db_session.h"
 #include "event_loop.h"
 #include "stop_token.h"
-#include "test_exceptions.h"
 #include "worker_task_fixture.h"
 namespace db_repository_test {
 using namespace ruvia;

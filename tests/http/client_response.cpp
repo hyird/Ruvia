@@ -20,7 +20,6 @@ using namespace ruvia::test;
 
 #include "http_content_coding.h"
 #include "http_header.h"
-#include "test_exceptions.h"
 
 namespace {
 

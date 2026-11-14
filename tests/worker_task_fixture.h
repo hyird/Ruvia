@@ -19,6 +19,19 @@
 
 namespace ruvia::test {
 
+#ifndef RUVIA_TEST_THROWS_ON_DEFINED
+#define RUVIA_TEST_THROWS_ON_DEFINED
+template <typename fn_type>
+[[nodiscard]] inline bool throws_on(fn_type&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+#endif
+
 // Hands each socket-driven unit test a fresh asio::io_context that is deliberately
 // never destroyed. This is a correctness requirement on Windows, not an optimization.
 //

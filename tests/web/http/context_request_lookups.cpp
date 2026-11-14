@@ -35,7 +35,6 @@ using ruvia::http_header_view;
 #include "model.h"
 #include "task.h"
 #include "task_scope.h"
-#include "test_exceptions.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db.h"

@@ -29,6 +29,18 @@
 #include "http_header.h"
 #include "http_response_server.h"
 namespace ruvia::test {
+#ifndef RUVIA_TEST_THROWS_ON_DEFINED
+#define RUVIA_TEST_THROWS_ON_DEFINED
+template <typename fn_type>
+[[nodiscard]] inline bool throws_on(fn_type&& fn) {
+    try {
+        fn();
+        return false;
+    } catch (const std::exception&) {
+        return true;
+    }
+}
+#endif
 
 using ruvia::decode_http_content;
 using ruvia::encode_http_content;

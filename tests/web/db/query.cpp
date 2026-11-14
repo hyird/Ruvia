@@ -15,7 +15,7 @@
 #include <vector>
 
 #include "db_query.h"
-#include "test_exceptions.h"
+#include "worker_task_fixture.h"
 
 namespace {
 using namespace ruvia;

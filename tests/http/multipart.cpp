@@ -11,7 +11,6 @@
 
 #include "content_decoding_fixture.h"
 #include "http_content_coding.h"
-#include "test_exceptions.h"
 
 TEST(Ruvia, multipart_boundary_value_enforces_rfc2046_grammar) {
     const auto throws_on = [](std::string_view value) {
