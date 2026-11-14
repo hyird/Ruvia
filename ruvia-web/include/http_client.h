@@ -16,9 +16,12 @@
 
 #include "event_loop.h"
 #include "http1_server_response.h"
+#include "http2_push.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
+#include "http_connection_advertisement.h"
 #include "http_header.h"
+#include "http_priority.h"
 #include "model.h"
 #include "stop_token.h"
 #include "streaming.h"

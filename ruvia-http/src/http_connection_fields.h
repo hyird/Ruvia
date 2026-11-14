@@ -31,6 +31,7 @@
 #include "http1_server_response.h"
 #include "http_c_library_memory.h"
 #include "http_connect_udp.h"
+#include "http_connection_advertisement.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"

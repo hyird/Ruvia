@@ -9,6 +9,7 @@ set(ruvia_http_sources
     src/http_client_ip.cpp
     src/http_client_redirect.cpp
     src/http_connect_udp.cpp
+    src/http_connection_advertisement.cpp
     src/http_content_coding.cpp
     src/http_content_negotiation.cpp
     src/http_cookie.cpp
@@ -16,6 +17,7 @@ set(ruvia_http_sources
     src/http_date.cpp
     src/http_header.cpp
     src/http_io_buffer.cpp
+    src/http_priority.cpp
     src/http_request.cpp
     src/http_request_target.cpp
     src/http_representation.cpp
@@ -74,10 +76,12 @@ set(ruvia_http_headers
     include/http1_client_response.h
     include/http1_server_request.h
     include/http1_server_response.h
+    include/http2_push.h
     include/http_cache.h
     include/http_client_ip.h
     include/http_client_redirect.h
     include/http_connect_udp.h
+    include/http_connection_advertisement.h
     include/http_content_coding.h
     include/http_content_negotiation.h
     include/http_cookie.h
@@ -85,6 +89,7 @@ set(ruvia_http_headers
     include/http_date.h
     include/http_header.h
     include/http_multipart.h
+    include/http_priority.h
     include/http_request.h
     include/http_response.h
     include/http_server_sent_events.h
