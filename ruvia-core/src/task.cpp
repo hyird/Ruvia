@@ -68,7 +68,22 @@ void free_mimalloc(void* block) noexcept {
 
 namespace detail {
 void* task_frame_allocate(std::size_t bytes_value) {
+#if RUVIA_SANITIZER_ALLOCATOR
+    // One deallocator serves both entries; Windows requires _aligned_free for
+    // every _aligned_malloc block, so sanitizer builds keep the aligned path.
     return allocate_mimalloc(bytes_value, alignof(std::max_align_t));
+#else
+    // mimalloc aligns every block of at least MI_MAX_ALIGN_SIZE (16) bytes to
+    // 16, and a frame always holds its two 8-byte resume/destroy pointers, so
+    // the plain size-class path already meets the default new alignment.
+    // mi_malloc_aligned would re-check the free block's address and, above
+    // MI_SMALL_SIZE_MAX, leave the small-page fast path for every frame.
+    static_assert(alignof(std::max_align_t) <= 16);
+    if (void* block = mi_malloc(bytes_value)) {
+        return block;
+    }
+    throw std::bad_alloc();
+#endif
 }
 
 void task_frame_deallocate(void* pointer) noexcept {
