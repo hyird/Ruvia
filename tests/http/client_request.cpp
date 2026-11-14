@@ -30,6 +30,13 @@
 
 namespace {
 
+// Borrowed request content refuses owning temporaries; lvalues and views still bind.
+template <typename value_type>
+concept content_bytes_binds = requires(value_type&& value) { ruvia::http_client_request_content_view::bytes(std::forward<value_type>(value)); };
+static_assert(content_bytes_binds<std::span<const std::byte>> && content_bytes_binds<const std::vector<std::byte>&>);
+static_assert(!content_bytes_binds<std::vector<std::byte>> && !content_bytes_binds<std::array<std::byte, 2>>);
+static_assert(!content_bytes_binds<std::string>);
+
 using ruvia::http1_client_request_buffer_too_small;
 using ruvia::http1_client_request_prepare_error;
 using ruvia::http1_client_request_wire_policy;

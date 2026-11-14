@@ -1133,7 +1133,9 @@ bool http_response_headers::remove_header_validated(std::string_view key, std::u
     return true;
 }
 
-void http_response_headers::header_stable_view(std::string_view key, std::string_view value) {
+void http_response_headers::header_stable_view(borrowed_text key_text, borrowed_text value_text) {
+    const std::string_view key = key_text;
+    const std::string_view value = value_text;
     const auto known_bit = validate_response_header_field(key, value);
     set_header_validated(key, value, known_bit, true);
 }

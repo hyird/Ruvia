@@ -44,7 +44,7 @@ public:
     // Header mutations follow http_response_headers.
     void header(std::string_view key, std::string_view value);
     void header(std::string_view key, std::string_view value, http_response_header_options options);
-    void header_stable_view(std::string_view key, std::string_view value);
+    void header_stable_view(borrowed_text key, borrowed_text value);
     void content_type(http_content_type type);
     // Format Allow from known-method bits followed by extension method values.
     // Extension methods must be nonempty HTTP tokens and may borrow current headers.
@@ -84,7 +84,9 @@ public:
     http_response_body_segment_view body_segment(std::size_t index) const&& = delete;
     void body(std::string_view value);
     void owned_body(std::string&& value) noexcept;
-    void static_body(std::string_view value) noexcept;
+    // Borrows `value` without copying; keep its bytes valid and unchanged while
+    // this response or a moved-to response retains the body.
+    void static_body(borrowed_text value) noexcept;
     // Own bytes read from a file: all of it, a byte range, or a multipart
     // byte-range payload of it. Unlike owned_body(), the body remains a file
     // representation, even when empty.

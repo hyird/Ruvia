@@ -27,6 +27,16 @@ namespace {
 using ruvia::http_header_view;
 using ruvia::http_request;
 
+// Entry points that retain caller bytes refuse owning temporaries at compile time.
+template <typename value_type>
+concept static_body_binds = requires(ruvia::http_response& response, value_type&& value) { response.static_body(std::forward<value_type>(value)); };
+template <typename value_type>
+concept stable_header_binds = requires(ruvia::http_response& response, value_type&& value) { response.header_stable_view("X-Test", std::forward<value_type>(value)); };
+static_assert(static_body_binds<std::string_view> && static_body_binds<const char (&)[3]> && static_body_binds<const std::string&>);
+static_assert(!static_body_binds<std::string>);
+static_assert(stable_header_binds<std::string_view> && stable_header_binds<const std::string&>);
+static_assert(!stable_header_binds<std::string>);
+
 http_request request(std::string_view method) {
     return ruvia::make_parsed_http_request(method, method == "CONNECT" ? "example.test:443" : "/", {}, {});
 }

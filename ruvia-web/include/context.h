@@ -822,7 +822,7 @@ private:
 
     [[nodiscard]] task<http_response> not_found_task();
     [[nodiscard]] task<dispatch_response> dispatch_task(std::string method, std::string target, std::string body, std::vector<http_header> headers, ::ruvia::stop_token stop);
-    context& set_stable_response_header(std::string_view name, std::string_view value);
+    context& set_stable_response_header(borrowed_text name, borrowed_text value);
     void apply_response_state(http_response& response, std::optional<http_status_code> status_code);
 
     [[nodiscard]] http_response json_serialized(std::string& body);

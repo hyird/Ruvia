@@ -274,7 +274,7 @@ task<http_response> detail::context_access::commit_streaming_head(context& conte
     co_return response;
 }
 
-context& context::set_stable_response_header(std::string_view name, std::string_view value) {
+context& context::set_stable_response_header(borrowed_text name, borrowed_text value) {
     if (response_output().committed()) {
         throw std::logic_error("response headers are already committed");
     }

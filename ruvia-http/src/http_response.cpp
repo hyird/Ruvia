@@ -201,7 +201,7 @@ void http_response::header(std::string_view key, std::string_view value, http_re
     headers_.header(key, value, options);
 }
 
-void http_response::header_stable_view(std::string_view key, std::string_view value) {
+void http_response::header_stable_view(borrowed_text key, borrowed_text value) {
     headers_.header_stable_view(key, value);
 }
 
@@ -247,8 +247,8 @@ void http_response::owned_body(std::string&& value) noexcept {
     body_.set_owned(std::move(value));
 }
 
-void http_response::static_body(std::string_view value) noexcept {
-    body_.set_static(value);
+void http_response::static_body(borrowed_text value) noexcept {
+    body_.set_static(value.view());
 }
 
 void http_response::file_bytes_body(std::string&& value) noexcept {

@@ -79,6 +79,9 @@ public:
     template <typename traits_type, typename allocator_type>
     static http_client_request_content_view bytes(const std::basic_string<char, traits_type, allocator_type>&&) = delete;
 
+    template <detail::http_temporary_owning_range<std::byte> bytes_type>
+    static http_client_request_content_view bytes(bytes_type&&) = delete;
+
     [[nodiscard]] constexpr const http_client_request_without_content* without_content() const& noexcept RUVIA_LIFETIMEBOUND {
         return std::get_if<http_client_request_without_content>(&content_);
     }
