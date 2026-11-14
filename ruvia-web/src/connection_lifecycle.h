@@ -477,17 +477,18 @@ public:
                 state->closed_.store(true, std::memory_order_relaxed);
             }
         }
+        // Never lock() under the gauge mutex: a temporary strong reference
+        // could become the last owner and destroy a wait state while locked.
         struct subscription final {
             connection_count& count_;
-            wait_state* state_;
+            std::weak_ptr<wait_state> state_;
             ~subscription() {
                 std::lock_guard lock(count_.mutex_);
                 std::erase_if(count_.waiters_, [this](const auto& weak) {
-                    const auto state = weak.lock();
-                    return !state || state.get() == state_;
+                    return weak.expired() || (!weak.owner_before(state_) && !state_.owner_before(weak));
                 });
             }
-        } registration{*count, state.get()};
+        } registration{*count, state};
         interrupt.throw_if_interrupted();
         while (!state->closed_.load(std::memory_order_acquire)) {
             co_await state->changed_.wait();
@@ -597,22 +598,8 @@ private:
 // sessions: dotted IPv4, also for an IPv4-mapped IPv6 peer, otherwise the
 // RFC 5952 IPv6 text.
 inline void assign_peer_address(std::string& output, const asio::ip::address& address) {
-    std::array<char, 64> buffer;
-    asio::error_code ec;
-    const char* formatted = nullptr;
-    if (address.is_v4() || address.to_v6().is_v4_mapped()) {
-        const auto v4 = address.is_v4() ? address.to_v4() : asio::ip::make_address_v4(asio::ip::v4_mapped, address.to_v6());
-        const auto bytes = v4.to_bytes();
-        formatted = asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET), bytes.data(), buffer.data(), buffer.size(), 0, ec);
-    } else {
-        const auto v6 = address.to_v6();
-        const auto bytes = v6.to_bytes();
-        formatted = asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET6), bytes.data(), buffer.data(), buffer.size(), v6.scope_id(), ec);
-    }
-    if (formatted == nullptr) {
-        asio::detail::throw_error(ec);
-    }
-    output.assign(formatted, std::strlen(formatted));
+    std::array<char, ip_address::max_text_size> buffer;
+    output.assign(to_ip_address(address).normalized_ipv4().format_to(buffer));
 }
 
 enum class accept_error_action : std::uint8_t { retry,
@@ -740,7 +727,8 @@ public:
         aborted_(other.aborted_),
         bound_(other.bound_),
         interface_index_(other.interface_index_),
-        local_text_(other.local_text_) {
+        local_text_(other.local_text_),
+        local_text_size_(other.local_text_size_) {
         if (registry_ != nullptr) {
             if (prev_ != nullptr) {
                 prev_->next_ = this;
@@ -780,7 +768,7 @@ public:
         return state_;
     }
     [[nodiscard]] std::string_view local_address() const noexcept {
-        return local_text_.data();
+        return std::string_view(local_text_.data(), local_text_size_);
     }
     [[nodiscard]] const ip_endpoint& local_endpoint() const noexcept {
         return event_.local();
@@ -858,20 +846,10 @@ public:
 private:
     friend class connection_registry;
     static void add_bytes(std::uint64_t& value, std::size_t bytes) noexcept {
-        const auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-        value += (std::min)(maximum - value, static_cast<std::uint64_t>(bytes));
+        value = saturating_add(value, static_cast<std::uint64_t>(bytes));
     }
     void format_local() noexcept {
-        const auto address = to_asio_address(event_.local().address());
-        asio::error_code error;
-        if (address.is_v4()) {
-            const auto bytes = address.to_v4().to_bytes();
-            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET), bytes.data(), local_text_.data(), local_text_.size(), 0, error);
-        } else {
-            const auto v6 = address.to_v6();
-            const auto bytes = v6.to_bytes();
-            (void)asio::detail::socket_ops::inet_ntop(ASIO_OS_DEF(AF_INET6), bytes.data(), local_text_.data(), local_text_.size(), v6.scope_id(), error);
-        }
+        local_text_size_ = static_cast<std::uint8_t>(event_.local().address().format_to(local_text_).size());
     }
     connection_registry* registry_;
     const void* listener_;
@@ -885,7 +863,8 @@ private:
     bool aborted_{};
     bool bound_{};
     std::uint32_t interface_index_{};
-    std::array<char, 64> local_text_{};
+    std::array<char, ip_address::max_text_size> local_text_{};
+    std::uint8_t local_text_size_{};
 };
 
 inline bool connection_registry::close_connection(std::uint64_t id) noexcept {

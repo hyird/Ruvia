@@ -36,7 +36,7 @@ struct normalized_host_unit final {
             // but an encoded reserved octet is not equivalent to the raw
             // reserved character. Preserve that distinction while still
             // normalizing the case of the hexadecimal spelling.
-            encoded_reserved = !is_unreserved_byte(byte);
+            encoded_reserved = !is_uri_unreserved_byte(byte);
         }
     }
     if (!encoded_reserved) {

@@ -1279,12 +1279,12 @@ private:
     // block ends; the promised stream it already reserved is cancelled here.
     void cancel_push_promise_on(std::uint32_t associated_stream_id);
     void finish_data_frame(http2_stream_state& stream);
-    void process_rst_stream(const nghttp2_frame& frame);
-    void process_goaway(const nghttp2_frame& frame);
-    void process_settings(const nghttp2_frame& frame);
-    void process_ping(const nghttp2_frame& frame);
-    void process_priority_update(const nghttp2_frame& frame);
-    void process_advertisement(const nghttp2_frame_hd& header);
+    void on_rst_stream_frame(const nghttp2_frame& frame);
+    void on_goaway_frame(const nghttp2_frame& frame);
+    void on_settings_frame(const nghttp2_frame& frame);
+    void on_ping_frame(const nghttp2_frame& frame);
+    void on_priority_update_frame(const nghttp2_frame& frame);
+    void on_advertisement_frame(const nghttp2_frame_hd& header);
     // A malformed field block: RST_STREAM(PROTOCOL_ERROR), plus the malformed
     // request-head budget for a server's initial head.
     void reject_header_block(std::uint32_t stream_id, bool malformed_request_head);

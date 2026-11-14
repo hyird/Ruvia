@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <limits>
 #include <span>
 #include <stdexcept>
@@ -16,7 +17,8 @@
 #include "inline_storage.h"
 
 // OpenSSL-backed secrets handling shared by sessions, signed cookies, CSRF,
-// JWT and QUIC: constant-time comparison, one-shot HMAC, and the CSPRNG.
+// JWT, QUIC, TLS and the database layer: constant-time comparison, SHA-256,
+// one-shot HMAC, and the CSPRNG.
 namespace ruvia::detail {
 
 // Length-checked, data-independent (constant-time) byte comparison for secrets
@@ -29,6 +31,91 @@ namespace ruvia::detail {
         return false;
     }
     return left.empty() || CRYPTO_memcmp(left.data(), right.data(), left.size()) == 0;
+}
+
+inline constexpr std::size_t sha256_digest_size = 32;
+using sha256_digest = std::array<unsigned char, sha256_digest_size>;
+
+// One-shot SHA-256 into `digest`. Returns false only when OpenSSL fails, so
+// noexcept callers such as handshake callbacks can map it to their own failure.
+[[nodiscard]] inline bool compute_sha256(std::span<const unsigned char> bytes, std::span<unsigned char, sha256_digest_size> digest) noexcept {
+    unsigned int size = 0;
+    return EVP_Digest(bytes.data(), bytes.size(), digest.data(), &size, EVP_sha256(), nullptr) == 1 && size == digest.size();
+}
+
+// SHA-256 over input fed in pieces. Input that fits the inline buffer is
+// digested in one call; longer input streams through an OpenSSL context
+// created once it overflows. Failures throw std::runtime_error.
+class sha256 final {
+public:
+    sha256() noexcept = default;
+
+    ~sha256() {
+        EVP_MD_CTX_free(context_);
+    }
+
+    sha256(const sha256&) = delete;
+    sha256& operator=(const sha256&) = delete;
+
+    void update(std::string_view bytes) {
+        if (bytes.empty()) {
+            return;
+        }
+        if (context_ == nullptr) {
+            if (bytes.size() <= buffer_.size() - buffered_) {
+                std::memcpy(buffer_.data() + buffered_, bytes.data(), bytes.size());
+                buffered_ += bytes.size();
+                return;
+            }
+            context_ = EVP_MD_CTX_new();
+            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 || (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
+                throw_digest_failure();
+            }
+        }
+        if (EVP_DigestUpdate(context_, bytes.data(), bytes.size()) != 1) {
+            throw_digest_failure();
+        }
+    }
+
+    // Eight little-endian bytes.
+    void update_u64_le(std::uint64_t value) {
+        std::array<char, 8> encoded;
+        for (unsigned index = 0; index < encoded.size(); ++index) {
+            encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
+        }
+        update({encoded.data(), encoded.size()});
+    }
+
+    // Ends the digest; nothing may be fed afterwards.
+    [[nodiscard]] sha256_digest finish() {
+        sha256_digest digest;
+        if (context_ == nullptr) {
+            if (!compute_sha256(std::span<const unsigned char>(buffer_.data(), buffered_), digest)) {
+                throw_digest_failure();
+            }
+            return digest;
+        }
+        unsigned int size = 0;
+        if (EVP_DigestFinal_ex(context_, digest.data(), &size) != 1 || size != digest.size()) {
+            throw_digest_failure();
+        }
+        return digest;
+    }
+
+private:
+    [[noreturn]] static void throw_digest_failure() {
+        throw std::runtime_error("SHA-256 digest failed");
+    }
+
+    std::array<unsigned char, 512> buffer_;
+    std::size_t buffered_{0};
+    EVP_MD_CTX* context_{nullptr};
+};
+
+[[nodiscard]] inline sha256_digest sha256_of(std::string_view bytes) {
+    sha256 digest;
+    digest.update(bytes);
+    return digest.finish();
 }
 
 // The digests behind signed cookies (SHA-256) and JWT HS256/HS384/HS512.

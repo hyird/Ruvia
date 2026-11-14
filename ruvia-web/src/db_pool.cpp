@@ -1135,7 +1135,7 @@ struct reader {
 // refused before it is decoded.
 constexpr std::string_view db_cache_entry_magic = "RUVIAQC";
 constexpr std::string_view cache_prefix = "ruvia:qc:";
-constexpr std::size_t digest_text_bytes = 2 * db_sha256::digest_size;
+constexpr std::size_t digest_text_bytes = 2 * sha256_digest_size;
 
 [[nodiscard]] std::string make_id_key_from_hex(std::string_view prefix, db_cache_shape shape, std::string_view digest_hex) {
     const auto shape_tag = db_cache_shape_tag(shape);
@@ -1146,7 +1146,7 @@ constexpr std::size_t digest_text_bytes = 2 * db_sha256::digest_size;
     return result;
 }
 
-[[nodiscard]] std::string make_id_key(std::string_view prefix, db_cache_shape shape, const db_sha256::digest_type& hash) {
+[[nodiscard]] std::string make_id_key(std::string_view prefix, db_cache_shape shape, const sha256_digest& hash) {
     std::array<char, digest_text_bytes> hex{};
     http_encode_lower_hex(hex.data(), hash);
     return make_id_key_from_hex(prefix, shape, std::string_view(hex.data(), hex.size()));
@@ -1159,7 +1159,7 @@ void release_cache_storage(void* storage) noexcept {
 
 // SQL and parameters can be large, so their byte encoding streams into the
 // digest instead of being copied into a temporary string first.
-void digest_text(db_sha256& digest, std::string_view value) {
+void digest_text(sha256& digest, std::string_view value) {
     digest.update_u64_le(value.size());
     digest.update(value);
 }
@@ -1280,7 +1280,7 @@ db_rows decode_db_cache_rows(std::string bytes_value) {
 }
 std::string db_cache_prefix(std::string_view name_space, std::string_view alias, const db_config_storage& config) {
     const auto server_name = config.tls_.server_name_ ? std::string_view(*config.tls_.server_name_) : std::string_view{};
-    db_sha256 identity;
+    sha256 identity;
     digest_text(identity, name_space);
     digest_text(identity, alias);
     identity.update_u64_le(static_cast<std::uint64_t>(config.driver_));
@@ -1297,7 +1297,7 @@ std::string db_cache_prefix(std::string_view name_space, std::string_view alias,
     return result_value;
 }
 void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view prefix, std::string_view id) {
-    const auto hash = db_sha256_of(id);
+    const auto hash = sha256_of(id);
     std::array<char, digest_text_bytes> hex{};
     http_encode_lower_hex(hex.data(), hash);
     const std::string_view hex_view(hex.data(), hex.size());
@@ -1307,12 +1307,12 @@ void append_db_cache_id_keys(std::vector<std::string>& keys, std::string_view pr
 }
 std::string db_cache_key(std::string_view prefix, std::string_view id, db_cache_shape shape, std::string_view sql, std::span<const db_value> params, db_driver driver) {
     if (!id.empty()) {
-        return make_id_key(prefix, shape, db_sha256_of(id));
+        return make_id_key(prefix, shape, sha256_of(id));
     }
     std::string result_value;
     result_value.reserve(prefix.size() + 4 + digest_text_bytes);
     result_value.append(prefix);
-    db_sha256 input;
+    sha256 input;
     input.update_u64_le(static_cast<std::uint64_t>(driver));
     digest_text(input, sql);
     input.update_u64_le(params.size());
@@ -2007,7 +2007,7 @@ void append_migration_id(std::vector<std::string>& ids, std::string_view id) {
 // known collisions costs nothing here and leaves no judgement call.
 [[nodiscard]] std::string migration_checksum(std::string_view sql) {
     std::string hex;
-    http_append_lower_hex(hex, detail::db_sha256_of(sql));
+    http_append_lower_hex(hex, detail::sha256_of(sql));
     return hex;
 }
 

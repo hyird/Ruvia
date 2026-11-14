@@ -236,7 +236,7 @@ namespace {
 }
 
 void skip_websocket_extension_ows(std::string_view value, std::size_t& cursor_value) noexcept {
-    while (cursor_value < value.size() && (value[cursor_value] == ' ' || value[cursor_value] == '\t')) {
+    while (cursor_value < value.size() && is_http_ows_char(value[cursor_value])) {
         ++cursor_value;
     }
 }

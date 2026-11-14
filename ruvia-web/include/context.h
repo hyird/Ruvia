@@ -41,8 +41,8 @@ class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: http_client.h, websocket.h, http_tunnel.h,
-// session.h, streaming.h and multipart_reader.h.
+// where they are used: http_client.h, streaming.h (websocket, http_tunnel,
+// multipart_reader) and middleware.h (session).
 class http_client_ref;
 class http_client_response;
 class websocket;

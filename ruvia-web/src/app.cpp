@@ -170,6 +170,7 @@ void application::run() & {
 
 void application::stop() & {
     auto& state_value = *state_;
+    detail::app_runtime_graph* rollback = nullptr;
     {
         std::lock_guard lock(state_value.mutex_);
         const auto request = state_value.lifecycle_.request_stop();
@@ -177,10 +178,23 @@ void application::stop() & {
             return;
         }
         // A serving app's run() owner wakes below and stops admission, then
-        // the runtime, which closes every connection at once.
-        if (request == detail::app_stop_request::startup) {
-            detail::request_runtime_stop(state_value);
+        // the runtime, which closes every connection at once. A startup stop
+        // rolls back a published runtime here instead; the control count pins
+        // it against retirement while its stop callbacks run outside the lock,
+        // where they may reenter the application.
+        if (request == detail::app_stop_request::startup && state_value.runtime_ != nullptr) {
+            rollback = state_value.runtime_.get();
+            ++state_value.runtime_controls_;
         }
+    }
+    if (rollback != nullptr) {
+        detail::request_runtime_stop(*rollback);
+        // Notify before unlocking: the woken run() owner retires the runtime
+        // and may return, ending the application, as soon as the lock frees.
+        std::lock_guard lock(state_value.mutex_);
+        --state_value.runtime_controls_;
+        state_value.lifecycle_changed_.notify_all();
+        return;
     }
     state_value.lifecycle_changed_.notify_all();
 }
@@ -1237,13 +1251,11 @@ void detail::run_app(application& app, app_state& state_value) {
     app_run_coordinator(app, state_value).run();
 }
 
-void detail::request_runtime_stop(app_state& state_value) noexcept {
-    if (state_value.runtime_ != nullptr) {
-        state_value.runtime_->group_.request_stop();
+void detail::request_runtime_stop(app_runtime_graph& runtime) noexcept {
+    runtime.group_.request_stop();
 #if defined(_WIN32)
-        state_value.runtime_->acceptor_->request_stop();
+    runtime.acceptor_->request_stop();
 #endif
-    }
 }
 
 }  // namespace ruvia
@@ -2302,6 +2314,14 @@ void append_listen_configs(std::vector<detail::http_server_listener_definition>&
     return *state_value.runtime_;
 }
 
+// A lifecycle snapshot taken under the application lock. Controls posted
+// after it run unlocked: their owner threads recheck admission, and every
+// commit rechecks the lifecycle under the lock.
+[[nodiscard]] bool app_running(detail::app_state& state_value) {
+    std::lock_guard lock(state_value.mutex_);
+    return state_value.lifecycle_.running();
+}
+
 class active_app_control final {
 public:
     active_app_control(std::shared_ptr<detail::app_state> state, const char* not_running) :
@@ -2653,17 +2673,19 @@ task<void> replace_app_tls_identities(std::shared_ptr<detail::app_state> state, 
     control_list controls;
     auto& runtime = active.runtime();
     std::size_t index = 0;
-    bool posted = false;
+    std::size_t slot = 0;
     {
         std::lock_guard lock(state->mutex_);
         (void)running_runtime(*state, "TLS identities can be replaced only while the app is running");
         index = stored_listener_index(*state, target);
-        const auto slot = runtime_listener_slot(runtime, target);
-        make_worker_controls(controls, runtime, completion, [slot, identities](detail::web_worker_runtime& worker, std::size_t) {
-            worker.adopt_tls_identities(slot, identities);
-        });
-        posted = post_worker_controls(runtime, controls);
+        slot = runtime_listener_slot(runtime, target);
     }
+    // The control gate keeps the slot stable and `active` pins the runtime,
+    // so the controls are built, posted and dropped outside the lock.
+    make_worker_controls(controls, runtime, completion, [slot, identities](detail::web_worker_runtime& worker, std::size_t) {
+        worker.adopt_tls_identities(slot, identities);
+    });
+    const bool posted = post_worker_controls(runtime, controls);
     co_await completion.wait();
     if (auto failure = completion.failure()) {
         std::rethrow_exception(failure);
@@ -2905,19 +2927,16 @@ task<void> add_app_listener(std::shared_ptr<detail::app_state> state, worker_ref
         }
     }
     if (!failure) {
-        {
-            std::lock_guard lock(state->mutex_);
-            posted = state->lifecycle_.running() && post_worker_controls(runtime, open_controls);
-        }
+        // Owner threads recheck admission when an open runs, and the commit
+        // below rechecks the lifecycle, so a stop racing these unlocked posts
+        // leaves the listeners closed and rolls them back.
+        posted = app_running(*state) && post_worker_controls(runtime, open_controls);
         open_controls.clear();
         co_await opened_completion.wait();
         failure = control_round_failure(opened_completion, posted, runtime.workers_.size(), "the app began stopping before every worker accepted the listeners");
 #if defined(_WIN32)
         if (!failure) {
-            {
-                std::lock_guard lock(state->mutex_);
-                posted = state->lifecycle_.running() && runtime.acceptor_->post_control(std::move(open_acceptor));
-            }
+            posted = app_running(*state) && runtime.acceptor_->post_control(std::move(open_acceptor));
             open_acceptor = nullptr;
             co_await accepting_completion.wait();
             failure = control_round_failure(accepting_completion, posted, 1, "the app began stopping before the acceptor accepted the listeners");
@@ -3004,11 +3023,9 @@ task<void> remove_app_listener(std::shared_ptr<detail::app_state> state, worker_
     make_worker_controls(controls, runtime, completion, [slot, receipt = std::move(lifetime), options](detail::web_worker_runtime& worker, std::size_t) {
         worker.remove_listener(slot, receipt, options);
     });
-    bool posted = false;
-    {
-        std::lock_guard lock(state->mutex_);
-        posted = state->lifecycle_.running() && post_worker_controls(runtime, controls);
-    }
+    // A stopping worker refuses the post, and the commit below rechecks the
+    // lifecycle, so the post needs no lock.
+    const bool posted = app_running(*state) && post_worker_controls(runtime, controls);
     controls.clear();
     co_await completion.wait();
     if (auto failure = control_round_failure(completion, posted, runtime.workers_.size(), "the app began stopping before every worker removed the listener")) {
@@ -3043,17 +3060,18 @@ task<listener_sockets> duplicate_app_listener_sockets(std::shared_ptr<detail::ap
     control_list controls;
     bool https = false;
     bool http3 = false;
+    std::size_t slot = 0;
     {
         std::lock_guard lock(state->mutex_);
         const auto& stored = state->listeners_[stored_listener_index(*state, target)];
         https = std::holds_alternative<detail::http_server_listener_definition::tls>(stored.transport_);
         http3 = stored.http3_.has_value();
-        const auto slot = runtime_listener_slot(runtime, target);
-        duplicates.resize(runtime.workers_.size());
-        make_worker_controls(controls, runtime, completion, [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
-            duplicates[index] = worker.duplicate_listener(slot);
-        });
+        slot = runtime_listener_slot(runtime, target);
     }
+    duplicates.resize(runtime.workers_.size());
+    make_worker_controls(controls, runtime, completion, [slot, &duplicates](detail::web_worker_runtime& worker, std::size_t index) {
+        duplicates[index] = worker.duplicate_listener(slot);
+    });
     const bool posted = post_worker_controls(runtime, controls);
     co_await completion.wait();
     listener_sockets result;

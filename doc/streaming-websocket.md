@@ -450,7 +450,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 
 - **失败连接观测**：`http_client_error::connection_info()` 在已有实际连接时提供自有快照，拨号尚未建立连接时为空；错误中的动态文本不借用响应资源。
 - **统一中断与重试**：`http_client_error` 继承 `std::system_error`；协议/连接池错误比较 `http_client_errc`，超时与取消比较 `std::errc::timed_out` / `operation_canceled`。`request_written() == false` 保证尚未向 transport 提交本请求字节；`true` 表示可能已交付。HTTP/2 REFUSED_STREAM / GOAWAY 与 HTTP/3 request_unprocessed 只保证未处理，不清除写出进度；协议层安全重试使用独立的未处理状态。没有该协议保证时，非幂等请求不得自动重试。中断保留该状态及连接快照。
-- **回调所有权**：请求回调由 `configure(options)` 移入；需要跨 worker 复制的 `address_validator_` 显式使用 `shared_ptr<const http_client_address_validator>`。不再提供与配置字段重叠的 setter。
+- **回调所有权**：请求回调由 `configure(options)` 移入；需要跨 worker 复制的 `address_validator_` 显式使用 `shared_ptr<const http_client_address_validator>`；回调与配置只经 `configure(options)` 一个入口设置。
 - **隧道借用**：`http_tunnel::read()` 返回 `optional<span<const byte>>`，仅 `nullopt` 表示 EOF；非空视图有效至下一次 read 开始，留存内容须由调用方复制。
 - **通用 Upgrade**：调用方提供并转发子协议、扩展及握手字段；此入口只校验 HTTP 切换协定，不替调用方做 WebSocket 消息协商。成功后交付 101 之后已收到的原始字节，不解释消息帧；普通 `.send()` 仍不接受意外 101。
 - **Upgrade 协议选择**：`upgrade()` 总在 HTTP/1.1 上进行，复用已协商 HTTP/1.1 的空闲连接或新建仅报价 `http/1.1` 的连接，普通请求继续使用 h2 / h3；版本集合不含 HTTP/1.1 时返回 `protocol_unavailable`。WebSocket 客户端仍按 RFC 8441 / 9220 走所协商协议。
@@ -516,7 +516,7 @@ WebSocket 握手错误仍抛 `http_client_error`；`handshake_rejected` 可通�
 | 含 3 且含 1 或 2 | 先走 TCP，同一路由的认证响应通告 `Alt-Svc` `h3` 后升级 QUIC | 不允许 |
 | 仅 {3} | 直连路由的 QUIC | 不允许 |
 
-TCP TLS 的版本与旧版兼容例外见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)；含 1 的协商可在旧服务端使用 HTTP/1.1，仅 h2 的报价不降到 TLS 1.1，非法的低版本 `h2` 在发送应用数据前拒绝。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
+TCP TLS 的版本下限（TLS 1.2）见[协议策略](web-guide.md#ruvialisten_config-与-ruviatls_config)。HTTP/3 使用 QUIC/TLS 1.3；连接、读写、准入与整体请求期限仍由客户端配置约束。`http3_` 分别限制并发流、Alt-Svc 缓存、数据报及待确认输出。
 
 - **Alt-Svc 按路由**：替代服务按实际路由（拨号 host、拨号端口、TLS server name）记录与查找，包括 alias 原路由与请求级覆盖；只采信 TLS 认证的响应，alt-authority 省略 host 时取该路由的拨号 host，QUIC 用同一 server name 校验证书。不含 3 的请求不记录、不升级。
 - **容量**：条目数受 `http3_.max_alt_svc_entries_` 跨路由约束，最久未用者先淘汰；`Alt-Svc: clear` 只清除该路由。

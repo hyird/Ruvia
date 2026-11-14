@@ -351,16 +351,12 @@ struct http_cache_age_input final {
 [[nodiscard]] std::optional<std::uint64_t> parse_http_age(std::string_view field_value) noexcept;
 
 [[nodiscard]] constexpr std::uint64_t compute_http_cache_age(const http_cache_age_input& input) noexcept {
-    const auto add_saturating = [](std::uint64_t left, std::uint64_t right) constexpr noexcept {
-        constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-        return left > maximum - right ? maximum : left + right;
-    };
     const std::uint64_t apparent_age = (input.date_value_.has_value() && input.response_time_ > *input.date_value_) ? static_cast<std::uint64_t>(input.response_time_) - static_cast<std::uint64_t>(*input.date_value_) : 0U;
     const std::uint64_t response_delay = input.response_time_ > input.request_time_ ? static_cast<std::uint64_t>(input.response_time_) - static_cast<std::uint64_t>(input.request_time_) : 0U;
-    const std::uint64_t corrected_age_value = add_saturating(input.age_value_.value_or(0U), response_delay);
+    const std::uint64_t corrected_age_value = saturating_add(input.age_value_.value_or(0U), response_delay);
     const std::uint64_t corrected_initial_age = (std::max)(apparent_age, corrected_age_value);
     const std::uint64_t resident_time = input.now_ > input.response_time_ ? static_cast<std::uint64_t>(input.now_) - static_cast<std::uint64_t>(input.response_time_) : 0U;
-    return add_saturating(corrected_initial_age, resident_time);
+    return saturating_add(corrected_initial_age, resident_time);
 }
 
 [[nodiscard]] constexpr std::uint64_t compute_http_cache_age(std::optional<std::time_t> date_value, std::optional<std::uint64_t> age_value, std::time_t request_time, std::time_t response_time, std::time_t now) noexcept {

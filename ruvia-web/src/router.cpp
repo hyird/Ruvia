@@ -846,7 +846,8 @@ namespace {
 
 // RFC 3986 pchar minus pct-encoded: bytes a path segment may carry verbatim.
 [[nodiscard]] constexpr bool is_url_for_segment_byte(char value) noexcept {
-    return (value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') || (value >= '0' && value <= '9') || value == '-' || value == '.' || value == '_' || value == '~' || value == '!' || value == '$' || value == '&' || value == '\'' || value == '(' || value == ')' || value == '*' || value == '+' || value == ',' || value == ';' || value == '=' || value == ':' || value == '@';
+    const auto byte = static_cast<unsigned char>(value);
+    return is_uri_unreserved_byte(byte) || value == '!' || value == '$' || value == '&' || value == '\'' || value == '(' || value == ')' || value == '*' || value == '+' || value == ',' || value == ';' || value == '=' || value == ':' || value == '@';
 }
 
 [[nodiscard]] constexpr std::size_t url_for_encoded_size(std::string_view value, bool keep_slashes) noexcept {
@@ -1422,7 +1423,7 @@ struct document_root_probe final {
     if (root == nullptr || !request.path().starts_with('/') || request.path().find("//") != std::string_view::npos) {
         return {};
     }
-    const auto path = detail::decode_request_path(request.path(), decoded.emplace());
+    const auto path = decode_url_component(request.path(), decoded.emplace(), url_decode_mode::path);
     if (!path) {
         return {};
     }
@@ -2216,7 +2217,7 @@ private:
         .method_ = request.method(),
         .path_ = request.path(),
         .connect_target_ = request.authority(),
-        .extended_protocol_ = http_ascii_equals_ignore_case(protocol, "websocket") ? std::string_view("websocket") : protocol,
+        .extended_protocol_ = http_canonical_extended_connect_protocol(protocol),
     });
 }
 
@@ -2408,9 +2409,7 @@ public:
             // send 100 Continue or run application code for an oversized body.
             if (limit) {
                 if (const auto length = request.header("Content-Length")) {
-                    std::size_t declared = 0;
-                    const auto parsed = std::from_chars(length->data(), length->data() + length->size(), declared);
-                    if (parsed.ec == std::errc::result_out_of_range || (parsed.ec == std::errc{} && declared > *limit)) {
+                    if (const auto declared = http_parse_content_length(*length); declared.has_value() && *declared > *limit) {
                         throw http_request_body_protocol_error(http_request_body_failure::too_large);
                     }
                 }

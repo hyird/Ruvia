@@ -44,7 +44,7 @@ namespace ruvia::detail {
 // Serializes a command into RESP multi-bulk form, appending directly to the
 // reused connection write buffer. Both overloads avoid the extra heap
 // allocation + copy that hiredis' redisFormatCommandArgv would impose; the
-// pmr::string overload also lets owned-argument paths skip building an
+// std::string overload also lets owned-argument paths skip building an
 // intermediate string_view vector.
 [[nodiscard]] std::size_t resp_header_serialized_size(std::size_t arg_count);
 [[nodiscard]] std::size_t resp_bulk_serialized_size(std::size_t arg_bytes);
@@ -66,7 +66,7 @@ void append_resp_command(std::string& output, std::string_view first, std::span<
 
 // The only RESP reply construction path: hiredis' reader calls these object
 // functions while parsing. The root lives in the connection's builder;
-// payload and nested storage use the resource of the read in progress. One
+// payload and nested storage are owned std::string / std::vector nodes. One
 // builder serves one reader for its whole life and enforces the configured
 // reply budget: total array elements (one per three reply bytes) and array
 // nesting depth. A rejected or failed node makes the reader fail; the reader
@@ -82,8 +82,7 @@ public:
     // outlive it. Throws redis_error when hiredis cannot allocate the reader.
     [[nodiscard]] redisReader* create_reader();
 
-    // Starts reading one reply: its owned payload uses `resource` and the
-    // per-reply budget is restored.
+    // Starts reading one reply: restores the per-reply budget.
     void begin() noexcept;
 
     // After the reader failed, reports a rejection raised by this builder:
@@ -132,13 +131,7 @@ private:
     std::exception_ptr failure_;
 };
 
-inline constexpr std::size_t redis_int_scratch_size = 20;
 inline constexpr std::size_t redis_score_scratch_size = 64;
-
-[[nodiscard]] inline std::string_view format_redis_int(std::span<char, redis_int_scratch_size> scratch, std::int64_t value) noexcept {
-    const auto end = std::to_chars(scratch.data(), scratch.data() + scratch.size(), value).ptr;
-    return {scratch.data(), static_cast<std::size_t>(end - scratch.data())};
-}
 
 // Redis accepts "+inf"/"-inf" as sorted-set scores and range bounds, and
 // replies them back, so the client round-trips infinities. NaN has no Redis
@@ -311,19 +304,17 @@ struct redis_types_access final {
     [[nodiscard]] static std::string& text(redis_value& value) noexcept {
         return value.string_;
     }
-
-    // The resource every allocation of `value` comes from.
 };
 
-// Consumes reply storage when its resource matches; otherwise owns a copy in
-// the destination resource. Never returns a borrow into the discarded reply.
+// Moves the reply's string storage out after checking it is a string reply.
+// Never returns a borrow into the discarded reply.
 [[nodiscard]] std::string take_redis_string(redis_value&& value);
 [[nodiscard]] bool redis_value_integer_bool(const redis_value& value);
 [[nodiscard]] std::span<redis_value> redis_value_array(redis_value& value);
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index);
 
-// Reply decoders. Those taking only (redis_value&&, memory_resource*) are
-// mappers for map_redis_command; results own storage in `resource`.
+// Reply decoders. Those taking only (redis_value&&) are mappers for
+// map_redis_command; results own their storage.
 [[nodiscard]] std::optional<std::string> parse_redis_optional_string(redis_value&& value);
 [[nodiscard]] std::int64_t parse_redis_integer(redis_value&& value);
 [[nodiscard]] bool parse_redis_integer_bool(redis_value&& value);
@@ -365,7 +356,7 @@ inline void validate_redis_config(const redis_config& config) {
     detail::ensure_positive_optional_duration(config.subscription_ping_interval_, "redis subscription ping interval must be greater than zero");
 }
 
-// PMR-owned runtime form of the ordinary public redis_config value.
+// Owning runtime form of the ordinary public redis_config value.
 struct redis_config_storage final {
     redis_config_storage(const redis_config& source_value) :
         redis_config_storage(validated_config_tag_type{}, validate(source_value)) {}
@@ -447,7 +438,7 @@ class redis_reply_builder;
 
 inline constexpr std::size_t redis_read_buffer_bytes = 8192;
 // Serialized request capacity retained after a write's transport borrow ends.
-// Larger buffers return to their PMR resource, including on failure.
+// Larger buffers are released, including on failure.
 inline constexpr std::size_t redis_retained_write_buffer_bytes = std::size_t{64} * 1024;
 
 // A credential request (AUTH) is wiped from the write buffer once written, so
@@ -491,7 +482,7 @@ public:
     // Sends and then releases the serialized request, wiping it first when it
     // carries a credential, whether or not the write succeeded.
     task<void> write_request(const operation_deadline& timeout, redis_request_content content = redis_request_content::ordinary);
-    // Reads one complete reply, allocating its nodes from `resource`. Throws
+    // Reads one complete reply into owned nodes. Throws
     // redis_error(io_error) when the connection is or becomes closed. A
     // non-null `input_time` receives the time of every socket read that
     // delivered bytes, so a subscription's idle clock restarts on partial

@@ -50,7 +50,7 @@ namespace ruvia::detail {
 // RFC 8441 §4 / RFC 9220 §3: websocket extended CONNECT requires an HTTP(S) URI
 // scheme; other extended protocols retain the full RFC 3986 space.
 [[nodiscard]] inline bool is_valid_extended_connect_scheme(std::string_view protocol, std::string_view scheme) noexcept {
-    return !http_ascii_equals_ignore_case(protocol, "websocket") || is_http_request_scheme(scheme);
+    return http_canonical_extended_connect_protocol(protocol) != "websocket" || is_http_request_scheme(scheme);
 }
 
 [[nodiscard]] inline bool validate_binary_request_authority_and_host(std::string_view scheme, std::string_view path, bool has_authority, std::string_view authority, bool has_host, std::string_view host) noexcept {
@@ -479,6 +479,28 @@ private:
         }
     }
     return !websocket_connect || websocket_headers.client_offers_valid();
+}
+
+// The one outbound extended CONNECT request check for HTTP/2 (RFC 8441
+// section 4) and HTTP/3 (RFC 9220 section 3): :protocol token, scheme,
+// authority, path and application fields, with every field sized against
+// `limit`. Returns the :protocol value to send, or no value for an invalid
+// request. A websocket request needs an HTTP(S) scheme, carries no Host field
+// and offers a valid WebSocket handshake.
+[[nodiscard]] inline std::optional<std::string_view> http_binary_validate_extended_connect_request(std::string_view protocol, std::string_view scheme, std::string_view authority, std::string_view path, std::span<const http_header_view> headers, http_request_field_source source, std::uint64_t limit) noexcept {
+    const auto encoded_protocol = http_canonical_extended_connect_protocol(protocol);
+    const bool websocket = encoded_protocol == "websocket";
+    const auto default_port = http_uri_scheme_default_port(scheme);
+    binary_field_section_size section_size(limit);
+    request_field_state fields{request_field_framing::binary};
+    if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) || (websocket && default_port == 0) || !is_valid_binary_request_authority(scheme, authority) || !http_binary_is_valid_extended_connect_path(scheme, path) || !section_size.add(":method", "CONNECT") || !section_size.add(":protocol", encoded_protocol) || !section_size.add(":scheme", scheme) || !section_size.add(":authority", authority) || !section_size.add(":path", path) ||
+        !http_binary_are_valid_outbound_request_headers(authority, default_port, headers,
+            /*allow_host=*/!websocket,
+            /*allow_trailers=*/false, section_size, fields, source,
+            /*websocket_connect=*/websocket)) {
+        return std::nullopt;
+    }
+    return encoded_protocol;
 }
 
 [[nodiscard]] inline bool http_binary_is_valid_outbound_regular_request_head(std::string_view method, http_known_method known_method, std::string_view scheme, std::uint16_t default_port, std::optional<std::string_view> authority, std::string_view path, std::span<const http_header_view> headers, http_request_content_indication content_indication, std::string_view content_length_value, http_client_request_expectation expectation, http_request_field_source source, std::uint64_t limit) noexcept {

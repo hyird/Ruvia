@@ -1697,13 +1697,9 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     if (!settings->enable_connect_protocol_) {
         return http3_submit_status::peer_capability_unavailable;
     }
-    const bool websocket = http_ascii_equals_ignore_case(request.protocol_, "websocket");
-    const auto protocol = websocket ? std::string_view("websocket") : std::string_view(request.protocol_);
-    const auto port = detail::http_uri_scheme_default_port(request.scheme_);
-    detail::binary_field_section_size budget(impl_->outbound_field_limit());
-    detail::request_field_state fields(detail::request_field_framing::binary);
     const auto headers = static_cast<std::span<const http_header_view>>(request.headers_);
-    if (!is_valid_http_header_name(request.protocol_) || !detail::is_valid_uri_scheme(request.scheme_) || (websocket && port == 0) || !detail::is_valid_binary_request_authority(request.scheme_, request.authority_) || !detail::http_binary_is_valid_extended_connect_path(request.scheme_, request.target_) || !budget.add(":method", "CONNECT") || !budget.add(":protocol", protocol) || !budget.add(":scheme", request.scheme_) || !budget.add(":authority", request.authority_) || !budget.add(":path", request.target_) || !detail::http_binary_are_valid_outbound_request_headers(std::string_view(request.authority_), port, headers, !websocket, false, budget, fields, request.field_source_, websocket)) {
+    const auto protocol = detail::http_binary_validate_extended_connect_request(request.protocol_, request.scheme_, request.authority_, request.target_, headers, request.field_source_, impl_->outbound_field_limit());
+    if (!protocol) {
         return http3_submit_status::invalid_message;
     }
     std::size_t name_bytes = 0;
@@ -1712,7 +1708,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
     }
     outbound_field_section section(name_bytes, headers.size() + 5);
     section.add(":method", "CONNECT");
-    section.add(":protocol", protocol);
+    section.add(":protocol", *protocol);
     section.add(":scheme", request.scheme_);
     section.add(":authority", request.authority_);
     section.add(":path", request.target_);
@@ -1724,7 +1720,7 @@ http3_submit_status http3_connection::submit_request_head(std::int64_t stream_id
         auto& stream = *impl_->find_stream(stream_id);
         stream.request_method_ = http_known_method::connect;
         stream.connect_ = true;
-        stream.websocket_ = websocket;
+        stream.websocket_ = *protocol == "websocket";
         stream.local_content_.begin_forbidden();
     }
     return status;

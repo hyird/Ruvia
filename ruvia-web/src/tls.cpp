@@ -33,7 +33,6 @@
 #include <openssl/ocsp.h>
 #include <openssl/params.h>
 #include <openssl/pem.h>
-#include <openssl/rand.h>
 #include <openssl/ssl.h>
 #include <openssl/x509v3.h>
 
@@ -88,13 +87,8 @@ struct tls_context_policy final {
 
 int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int bits, int nid, void* other, void* opaque) noexcept {
     const auto& policy = *static_cast<const tls_context_policy*>(opaque);
-    if (operation == SSL_SECOP_VERSION) {
-        if (nid < TLS1_1_VERSION) {
-            return 0;
-        }
-        if (nid == TLS1_1_VERSION) {
-            return 1;
-        }
+    if (operation == SSL_SECOP_VERSION && nid < TLS1_2_VERSION) {
+        return 0;
     }
     if (operation == SSL_SECOP_COMPRESSION) {
         return 0;
@@ -109,26 +103,11 @@ int enforce_security(const SSL* ssl, const SSL_CTX* context, int operation, int 
             case TLS1_CK_ECDHE_ECDSA_WITH_CHACHA20_POLY1305:
             case TLS1_CK_ECDHE_RSA_WITH_CHACHA20_POLY1305:
                 break;
-            case TLS1_CK_ECDHE_ECDSA_WITH_AES_128_CBC_SHA:
-            case TLS1_CK_ECDHE_RSA_WITH_AES_128_CBC_SHA:
-            case TLS1_CK_ECDHE_ECDSA_WITH_AES_256_CBC_SHA:
-            case TLS1_CK_ECDHE_RSA_WITH_AES_256_CBC_SHA:
-                // SUPPORTED runs before the peer's version is known. Advertise
-                // CBC for fallback, but never select or accept it with TLS 1.2.
-                if (operation != SSL_SECOP_CIPHER_SUPPORTED && (!ssl || SSL_version(ssl) != TLS1_1_VERSION)) {
-                    return 0;
-                }
-                break;
             default:
                 if (std::string_view(SSL_CIPHER_get_version(cipher)) != "TLSv1.3") {
                     return 0;
                 }
         }
-    }
-    if (ssl && SSL_version(ssl) == TLS1_1_VERSION && (nid == NID_md5_sha1 || nid == NID_sha1) && (operation == SSL_SECOP_SIGALG_SUPPORTED || operation == SSL_SECOP_SIGALG_SHARED || operation == SSL_SECOP_SIGALG_CHECK || operation == SSL_SECOP_SIGALG_MASK)) {
-        // These are handshake signature operations only. In particular,
-        // SSL_SECOP_CA_MD, EE_KEY and CA_KEY are never exempted.
-        return 1;
     }
     return policy.original_security_ && policy.original_security_(ssl, context, operation, bits, nid, other, policy.original_security_data_);
 }
@@ -366,7 +345,7 @@ void apply_tls_protocol_policy(SSL_CTX& context, std::uint64_t record_limit) {
     auto* policy = owner.release();
     delete previous;
     install_context_callbacks(context, policy);
-    if (SSL_CTX_set_min_proto_version(&context, TLS1_1_VERSION) != 1 || SSL_CTX_set_max_proto_version(&context, 0) != 1) {
+    if (SSL_CTX_set_min_proto_version(&context, TLS1_2_VERSION) != 1 || SSL_CTX_set_max_proto_version(&context, 0) != 1) {
         throw std::runtime_error("failed to configure TLS versions");
     }
     SSL_CTX_set_options(&context, SSL_OP_NO_COMPRESSION | SSL_OP_NO_RENEGOTIATION);
@@ -898,17 +877,16 @@ namespace {
 }
 
 [[nodiscard]] bool set_ticket_mac_key(EVP_MAC_CTX& mac, const tls_session_ticket_key& key) noexcept {
-    static char digest[] = "SHA256";
     const OSSL_PARAM parameters[] = {
         OSSL_PARAM_construct_octet_string(OSSL_MAC_PARAM_KEY, const_cast<unsigned char*>(key.hmac_key_.data()), key.hmac_key_.size()),
-        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, digest, 0),
+        OSSL_PARAM_construct_utf8_string(OSSL_MAC_PARAM_DIGEST, const_cast<char*>(openssl_digest_name(hmac_digest::sha256)), 0),
         OSSL_PARAM_construct_end(),
     };
     return EVP_MAC_CTX_set_params(&mac, parameters) == 1;
 }
 
 [[nodiscard]] bool names_key(const std::optional<tls_session_ticket_key>& key, const unsigned char* name) noexcept {
-    return key.has_value() && CRYPTO_memcmp(key->name_.data(), name, key->name_.size()) == 0;
+    return key.has_value() && constant_time_bytes_equal(std::string_view(reinterpret_cast<const char*>(key->name_.data()), key->name_.size()), std::string_view(reinterpret_cast<const char*>(name), key->name_.size()));
 }
 
 }  // namespace
@@ -1006,7 +984,7 @@ int tls_session_ticket_key_set::protect_ticket(SSL* ssl, unsigned char* key_name
         const auto& key = *keys->current_;
         std::ranges::copy(key.name_, key_name);
         const int iv_size = EVP_CIPHER_get_iv_length(keys->aes_256_cbc_);
-        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || RAND_bytes(iv, iv_size) != 1 || EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 || !set_ticket_mac_key(*mac, key)) {
+        if (iv_size <= 0 || iv_size > EVP_MAX_IV_LENGTH || !fill_random_bytes(std::span<unsigned char>(iv, static_cast<std::size_t>(iv_size))) || EVP_EncryptInit_ex2(cipher, keys->aes_256_cbc_, key.aes_key_.data(), iv, nullptr) != 1 || !set_ticket_mac_key(*mac, key)) {
             return -1;
         }
         return 1;
@@ -1089,48 +1067,31 @@ void observe_quic_messages(int writing, int, int content_type, const void* bytes
     deliver_client_hello(writing, content_type, bytes, size, ssl);
 }
 
-int select_tcp_alpn(SSL* ssl, std::span<const unsigned char> protocols, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length) noexcept {
-    if (SSL_version(ssl) >= TLS1_2_VERSION) {
-        return SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols.data(), static_cast<unsigned int>(protocols.size()), in, in_length) == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_ALERT_FATAL;
-    }
-    // RFC 9113 §9.2: h2 cannot be selected on TLS 1.1, even when a raw
-    // connection listener explicitly lists it among its own protocols.
-    for (std::size_t offset = 0; offset < protocols.size();) {
-        const auto* protocol = protocols.data() + offset;
-        const auto length = protocol[0];
-        offset += static_cast<std::size_t>(length) + 1;
-        if (length == 2 && protocol[1] == 'h' && protocol[2] == '2') {
-            continue;
-        }
-        if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocol, static_cast<unsigned int>(length) + 1, in, in_length) == OPENSSL_NPN_NEGOTIATED) {
-            return SSL_TLSEXT_ERR_OK;
-        }
-    }
-    return SSL_TLSEXT_ERR_ALERT_FATAL;
+// Picks the first of `protocols` (ALPN wire format, server preference) that
+// the client offered.
+int select_server_alpn(std::span<const unsigned char> protocols, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length) noexcept {
+    return SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols.data(), static_cast<unsigned int>(protocols.size()), in, in_length) == OPENSSL_NPN_NEGOTIATED ? SSL_TLSEXT_ERR_OK : SSL_TLSEXT_ERR_ALERT_FATAL;
 }
 
 // Every HTTP version this server speaks over TLS on TCP, in preference order;
 // RFC 7301 §3.2 reserves the alert for offers naming none of them.
-int select_tcp_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void*) noexcept {
+int select_tcp_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void*) noexcept {
     static constexpr unsigned char protocols[] = {2, 'h', '2', 8, 'h', 't', 't', 'p', '/', '1', '.', '1', 8, 'h', 't', 't', 'p', '/', '1', '.', '0'};
-    return select_tcp_alpn(ssl, protocols, out, out_length, in, in_length);
+    return select_server_alpn(protocols, out, out_length, in, in_length);
 }
 
 // RFC 9114 §3.1: an HTTP/3 connection negotiates "h3", and RFC 9001 §8.1
 // requires the handshake to fail when ALPN agrees on nothing.
 int select_quic_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void*) noexcept {
     static constexpr unsigned char protocols[] = {2, 'h', '3'};
-    if (SSL_select_next_proto(const_cast<unsigned char**>(out), out_length, protocols, static_cast<unsigned int>(sizeof(protocols)), in, in_length) == OPENSSL_NPN_NEGOTIATED) {
-        return SSL_TLSEXT_ERR_OK;
-    }
-    return SSL_TLSEXT_ERR_ALERT_FATAL;
+    return select_server_alpn(protocols, out, out_length, in, in_length);
 }
 
 // A connection-dispatch listener offers its own protocols (tls_config::alpn_),
 // still in server preference and failing an offer that names none of them.
-int select_connection_alpn_protocol(SSL* ssl, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void* argument) noexcept {
+int select_connection_alpn_protocol(SSL*, const unsigned char** out, unsigned char* out_length, const unsigned char* in, unsigned int in_length, void* argument) noexcept {
     const auto& protocols = *static_cast<const std::string*>(argument);
-    return select_tcp_alpn(ssl, {reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()}, out, out_length, in, in_length);
+    return select_server_alpn({reinterpret_cast<const unsigned char*>(protocols.data()), protocols.size()}, out, out_length, in, in_length);
 }
 
 // RFC 6066 §3: a session never resumes under a server_name other than the one
@@ -1170,12 +1131,11 @@ int bind_session_to_server_name(SSL* ssl, int* alert, void* argument) noexcept {
             for (std::size_t i = 0; i < name_size; ++i) {
                 name[i] = http_ascii_to_lower(extension[5 + i]);
             }
-            unsigned int digest_size = 0;
-            if (EVP_Digest(name.data(), name_size, context.data(), &digest_size, EVP_sha256(), nullptr) != 1 || digest_size != context.size()) {
+            if (!compute_sha256(std::span<const unsigned char>(name.data(), name_size), context)) {
                 *alert = SSL_AD_INTERNAL_ERROR;
                 return SSL_CLIENT_HELLO_ERROR;
             }
-            context_size = digest_size;
+            context_size = sha256_digest_size;
         }
     }
     if (SSL_set_session_id_context(ssl, context.data(), static_cast<unsigned int>(context_size)) != 1) {
@@ -1381,9 +1341,8 @@ void configure_http3_server_tls_session(SSL& tls, const http3_quic_connection& c
     }
     const auto encoded_size = values.size() * sizeof(std::uint64_t) + *parameter_bytes;
     std::memcpy(encoded.data() + values.size() * sizeof(std::uint64_t), parameters.data(), *parameter_bytes);
-    unsigned int digest_size = 0;
     const auto index = quic_resumption_context_index();
-    if (index < 0 || EVP_Digest(encoded.data(), encoded_size, resumption_context.data(), &digest_size, EVP_sha256(), nullptr) != 1 || digest_size != resumption_context.size() || SSL_set_ex_data(&tls, index, &resumption_context) != 1 || SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
+    if (index < 0 || !compute_sha256(std::span<const unsigned char>(encoded.data(), encoded_size), resumption_context) || SSL_set_ex_data(&tls, index, &resumption_context) != 1 || SSL_set_quic_tls_early_data_enabled(&tls, early_data ? 1 : 0) != 1) {
         throw std::runtime_error("failed to bind QUIC TLS resumption settings");
     }
 }

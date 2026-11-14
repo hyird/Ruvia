@@ -996,49 +996,15 @@ TEST(Ruvia, tcp_client_tls_and_mutual_tls_authenticate_san_and_exchange_bytes) {
     }
 }
 
-TEST(Ruvia, tcp_client_tls11_exchanges_bytes_and_still_authenticates_san) {
-    for (const bool matching_san : {true, false}) {
-        ruvia::test::tls_identity server("server.example", matching_san ? "DNS:server.example" : "DNS:other.example");
-        auto* context = server.context_.native_handle();
-        ASSERT_EQ(SSL_CTX_set_min_proto_version(context, TLS1_1_VERSION), 1);
-        ASSERT_EQ(SSL_CTX_set_max_proto_version(context, TLS1_1_VERSION), 1);
-        ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
-        // Independent legacy peer only: production clients retain their shared
-        // security callback and certificate/key-strength checks.
-        SSL_CTX_set_security_level(context, 0);
-        byte_peer peer(10000, &server.context_);
-        auto config = peer.config();
-        config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
-        config.tls_.ca_file_ = server.ca_file_;
-        config.tls_.server_name_.emplace("server.example");
-        ruvia::event_loop_pool pool({.loop_count_ = 1});
-        pool.start();
-        if (matching_san) {
-            pool.loop(0).start(byte_exchange(pool.loop(0), config)).get();
-            EXPECT_EQ(peer.tls_version(), TLS1_1_VERSION);
-            EXPECT_EQ(peer.received_bytes(), 10000U);
-        } else {
-            ruvia::tcp_client client(pool.loop(0), config);
-            EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
-            pool.loop(0).start(client.shutdown()).get();
-        }
-        pool.join();
-    }
-}
-
 TEST(Ruvia, tcp_client_minimum_tls_version_rejects_downgrade_before_application_bytes) {
     for (const auto minimum : {ruvia::tls_version::tls_1_2, ruvia::tls_version::tls_1_3}) {
-        for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
+        for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
             SCOPED_TRACE(static_cast<int>(minimum));
             SCOPED_TRACE(version);
             ruvia::test::tls_identity server("server.example");
             auto* context = server.context_.native_handle();
             ASSERT_EQ(SSL_CTX_set_min_proto_version(context, version), 1);
             ASSERT_EQ(SSL_CTX_set_max_proto_version(context, version), 1);
-            if (version == TLS1_1_VERSION) {
-                ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
-                SSL_CTX_set_security_level(context, 0);
-            }
             byte_peer peer(10000, &server.context_);
             auto config = peer.config();
             config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
@@ -1064,48 +1030,37 @@ TEST(Ruvia, tcp_client_minimum_tls_version_rejects_downgrade_before_application_
 
 TEST(Ruvia, tcp_client_rejects_invalid_tls_minimum_configuration) {
     ruvia::event_loop_pool pool({.loop_count_ = 1});
-    ruvia::tcp_client_config config{.host_ = "127.0.0.1", .port_ = 443};
-    config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
-    config.tls_.minimum_version_ = static_cast<ruvia::tls_version>(0x0301);
-    EXPECT_THROW(ruvia::tcp_client(pool.loop(0), config), std::invalid_argument);
+    for (const std::uint16_t version : {0x0301, 0x0302}) {
+        ruvia::tcp_client_config config{.host_ = "127.0.0.1", .port_ = 443};
+        config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
+        config.tls_.minimum_version_ = static_cast<ruvia::tls_version>(version);
+        EXPECT_THROW(ruvia::tcp_client(pool.loop(0), config), std::invalid_argument);
+    }
 }
 
-TEST(Ruvia, tcp_client_rejects_tls10_and_h2_below_tls12_before_application_bytes) {
+// RFC 8996 §2-3: neither TLS 1.0 nor TLS 1.1 is negotiated, so no byte reaches
+// a peer that offers only those versions.
+TEST(Ruvia, tcp_client_rejects_tls10_and_tls11_before_application_bytes) {
     for (const int version : {TLS1_VERSION, TLS1_1_VERSION}) {
-        for (const bool h2_only : {false, true}) {
-            ruvia::test::tls_identity server("server.example");
-            auto* context = server.context_.native_handle();
-            ASSERT_EQ(SSL_CTX_set_min_proto_version(context, version), 1);
-            ASSERT_EQ(SSL_CTX_set_max_proto_version(context, version), 1);
-            ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
-            SSL_CTX_set_security_level(context, 0);
-            SSL_CTX_set_alpn_select_cb(context, [](SSL*, const unsigned char** selected, unsigned char* size, const unsigned char*, unsigned int, void*) -> int {
-                static constexpr unsigned char h2[] = {'h', '2'};
-                *selected = h2;
-                *size = sizeof(h2);
-                return SSL_TLSEXT_ERR_OK;
-            }, nullptr);
-            byte_peer peer(4, &server.context_);
-            auto config = peer.config();
-            config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
-            config.tls_.ca_file_ = server.ca_file_;
-            config.tls_.server_name_.emplace("server.example");
-            config.alpn_.emplace_back("h2");
-            if (!h2_only) {
-                config.alpn_.emplace_back("http/1.1");
-            }
-            ruvia::event_loop_pool pool({.loop_count_ = 1});
-            ruvia::tcp_client client(pool.loop(0), config);
-            pool.start();
-            EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
-            pool.loop(0).start(client.shutdown()).get();
-            pool.join();
-            peer.finish();
-            if (version == TLS1_1_VERSION && !h2_only) {
-                EXPECT_EQ(peer.tls_version(), TLS1_1_VERSION);
-            }
-            EXPECT_EQ(peer.received_bytes(), 0U);
-        }
+        ruvia::test::tls_identity server("server.example");
+        auto* context = server.context_.native_handle();
+        ASSERT_EQ(SSL_CTX_set_min_proto_version(context, version), 1);
+        ASSERT_EQ(SSL_CTX_set_max_proto_version(context, version), 1);
+        ASSERT_EQ(SSL_CTX_set_cipher_list(context, "ECDHE-RSA-AES128-SHA"), 1);
+        SSL_CTX_set_security_level(context, 0);
+        byte_peer peer(4, &server.context_);
+        auto config = peer.config();
+        config.tls_.mode_ = ruvia::client_tls_mode::verify_identity;
+        config.tls_.ca_file_ = server.ca_file_;
+        config.tls_.server_name_.emplace("server.example");
+        ruvia::event_loop_pool pool({.loop_count_ = 1});
+        ruvia::tcp_client client(pool.loop(0), config);
+        pool.start();
+        EXPECT_THROW(pool.loop(0).start(client.connect()).get(), std::system_error);
+        pool.loop(0).start(client.shutdown()).get();
+        pool.join();
+        peer.finish();
+        EXPECT_EQ(peer.received_bytes(), 0U);
     }
 }
 

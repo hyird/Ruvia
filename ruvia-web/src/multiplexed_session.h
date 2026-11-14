@@ -717,7 +717,7 @@ private:
         return {resolve_request_stream_route(method == http_known_method::connect), request_body_mode::stream};
     }
     const auto path = target_path.substr(0, target_path.find('?'));
-    const auto extended_protocol = http_ascii_equals_ignore_case(protocol, "websocket") ? std::string_view("websocket") : protocol;
+    const auto extended_protocol = http_canonical_extended_connect_protocol(protocol);
     auto resolution = routes.resolve(route_request_view{method, method_token, path, authority, extended_protocol});
     auto body_mode = request_body_mode::buffered;
     if (const auto* resolved = resolution.resolved()) {

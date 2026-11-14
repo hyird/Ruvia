@@ -428,49 +428,31 @@ std::string_view percent_encode_uri_reference(borrowed_text text, std::string& s
 
 std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode) {
     const auto input = text.view();
-    std::string staged;
-    std::string* target = nullptr;
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
-        std::size_t advance = 0;
-        bool transformed = false;
-        if (mode == url_decode_mode::form && c == '+') {
-            c = ' ';
-            transformed = true;
-        } else if (c == '%') {
-            if (const auto byte = http_try_decode_percent_byte(input, i)) {
-                c = static_cast<char>(*byte);
-                advance = 2;
-                transformed = true;
-            } else if (mode != url_decode_mode::form) {
-                if (target == &storage) {
-                    storage.clear();
-                }
-                return std::nullopt;
-            }
+    // The literal prefix before the first byte decoding transforms or rejects
+    // is copied, not decoded; without such a byte the input is the result.
+    std::size_t first = 0;
+    for (; first < input.size(); ++first) {
+        const char c = input[first];
+        if ((c == '+' && mode == url_decode_mode::form) || (c == '%' && (mode != url_decode_mode::form || http_try_decode_percent_byte(input, first)))) {
+            break;
         }
-        if (!transformed) {
-            if (target != nullptr) {
-                target->push_back(c);
-            }
-            continue;
-        }
-        if (target == nullptr) {
-            const bool can_write_in_place = (mode == url_decode_mode::form || storage.empty()) && !detail::http_text_aliases_string(input, storage);
-            target = can_write_in_place ? &storage : &staged;
-            target->reserve(input.size() - advance);
-            target->clear();
-            if (i != 0) {
-                target->append(input.data(), i);
-            }
-        }
-        target->push_back(c);
-        i += advance;
     }
-    if (target == nullptr) {
+    if (first == input.size()) {
         return input;
     }
-    if (target == &staged) {
+    // Only a mode that cannot fail may overwrite existing storage contents.
+    const bool can_write_in_place = (mode == url_decode_mode::form || storage.empty()) && !detail::http_text_aliases_string(input, storage);
+    std::string staged;
+    auto& target = can_write_in_place ? storage : staged;
+    target.resize(input.size());
+    input.copy(target.data(), first);
+    const auto size = decode_url_bytes(input.substr(first), target.data() + first, mode);
+    if (!size) {
+        target.clear();
+        return std::nullopt;
+    }
+    target.resize(first + *size);
+    if (&target == &staged) {
         storage = std::move(staged);
     }
     return std::string_view(storage);
@@ -505,7 +487,7 @@ inline constexpr std::array<bool, 256> reg_name_char_table = [] {
     std::array<bool, 256> table_value{};
     for (std::size_t value = 0; value < table_value.size(); ++value) {
         const auto byte = static_cast<unsigned char>(value);
-        table_value[value] = is_unreserved_byte(byte) || is_uri_sub_delimiter(byte);
+        table_value[value] = is_uri_unreserved_byte(byte) || is_uri_sub_delimiter(byte);
     }
     return table_value;
 }();

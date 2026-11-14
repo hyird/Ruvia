@@ -449,7 +449,7 @@ struct operation_scope::drain_guard final {
         }
         registration_.phase_ = detail::scoped_operation_registration::phase::expired;
         scope->unlink(registration_);
-        // Join may retire this scope's owner inline. No further scope access.
+        // The joiner may retire this scope's owner once resumed. No further scope access.
         scope->resume_joiner();
     }
 
@@ -551,8 +551,22 @@ void operation_scope::resume_joiner() noexcept {
         return;
     }
     auto continuation = std::exchange(join_continuation_, {});
+    // The bound worker_ref outlives the scope, so the borrowed pointer stays a
+    // valid stack snapshot even after the joiner retires the scope.
+    const auto* bound_worker = worker_;
     expire_capabilities();
     join_complete_ = true;
+    // The last operation completes from its frame's final suspend; waking the
+    // joiner in a later loop turn keeps that frame off the joiner's stack. The
+    // deferred callable holds only the handle, never this scope.
+    const auto resume = [continuation] {
+        continuation.resume();
+    };
+    if (bound_worker != nullptr ? bound_worker->defer_completion(resume) : detail::worker_ref_access::current().defer_completion(resume)) {
+        return;
+    }
+    // No attached event loop owns this thread (or its context has detached):
+    // no later turn exists, so resuming inline is the only way to finish the join.
     continuation.resume();
 }
 
@@ -789,6 +803,7 @@ void scoped_operation_registration::complete() noexcept {
     if (scope_ != nullptr) {
         auto* scope = scope_;
         scope->unlink(*this);
+        // The joiner may retire the owner once resumed; no further registration access.
         scope->resume_joiner();
     }
 }
@@ -809,7 +824,7 @@ void scoped_operation_registration::retire_frame() noexcept {
     if (scope_ != nullptr) {
         auto* scope = scope_;
         scope->unlink(*this);
-        // Join may retire the owner inline; no further registration access.
+        // The joiner may retire the owner once resumed; no further registration access.
         scope->resume_joiner();
     }
 }

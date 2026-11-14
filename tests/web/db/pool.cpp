@@ -1014,7 +1014,7 @@ private:
     std::thread thread_;
 };
 
-bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name, const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0, bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr, ruvia::tls_version minimum = ruvia::tls_version::tls_1_1) {
+bool sends_startup(ruvia::db_driver driver, const char* reference, const char* common_name, const char* san, std::uint64_t record_limit = std::uint64_t{1} << 23, int version = 0, bool elliptic_curve = false, bool mutual_tls = false, const char* cipher = nullptr, ruvia::tls_version minimum = ruvia::tls_version::tls_1_2) {
     ruvia::test::tls_identity identity(common_name, san, elliptic_curve);
     auto* const context = identity.context_.native_handle();
     if (version != 0) {
@@ -1065,12 +1065,14 @@ void checks_protocol_floor(ruvia::db_driver driver) {
     constexpr auto limit = std::uint64_t{1} << 23;
     for (const bool elliptic_curve : {false, true}) {
         SCOPED_TRACE(elliptic_curve ? "ECDSA" : "RSA");
-        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "127.0.0.1", "", limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2", limit, TLS1_1_VERSION, elliptic_curve));
-        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_2_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "127.0.0.1", "", limit, TLS1_2_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.2", limit, TLS1_2_VERSION, elliptic_curve));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", 1, TLS1_2_VERSION, elliptic_curve));
+        // RFC 8996 §2-3: TLS 1.0 and 1.1 are never negotiated.
         EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_VERSION, elliptic_curve));
-        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_1_VERSION, elliptic_curve, true));
+        EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_1_VERSION, elliptic_curve));
+        EXPECT_TRUE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_2_VERSION, elliptic_curve, true));
         const auto* const cbc = elliptic_curve ? "ECDHE-ECDSA-AES128-SHA" : "ECDHE-RSA-AES128-SHA";
         EXPECT_FALSE(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", limit, TLS1_2_VERSION, elliptic_curve, false, cbc));
     }
@@ -1078,7 +1080,7 @@ void checks_protocol_floor(ruvia::db_driver driver) {
 
 void checks_configured_protocol_floor(ruvia::db_driver driver) {
     for (const auto minimum : {ruvia::tls_version::tls_1_2, ruvia::tls_version::tls_1_3}) {
-        for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
+        for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
             SCOPED_TRACE(static_cast<int>(minimum));
             SCOPED_TRACE(version);
             EXPECT_EQ(sends_startup(driver, "127.0.0.1", "other.test", "IP:127.0.0.1", std::uint64_t{1} << 23, version, false, false, nullptr, minimum), version >= static_cast<int>(minimum));

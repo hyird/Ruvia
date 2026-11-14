@@ -28,10 +28,11 @@ namespace ruvia::detail {
     return is_uri_lower_alpha(byte) || (byte >= 'A' && byte <= 'Z');
 }
 
-// RFC 3986 section 2.3 unreserved. Percent-encoding one of these octets is
-// equivalent to spelling it literally, which host comparison relies on.
-[[nodiscard]] inline constexpr bool is_unreserved_byte(unsigned char byte) noexcept {
-    return (byte >= '0' && byte <= '9') || is_uri_alpha(byte) || byte == '-' || byte == '.' || byte == '_' || byte == '~';
+// `host` is a proper subdomain of `domain`: it ends with '.' and then
+// `domain`, compared ASCII case-insensitively (cookie domain-match, RFC 6265
+// section 5.1.3, and CORS subdomain origin rules).
+[[nodiscard]] constexpr bool is_dns_subdomain_of(std::string_view host, std::string_view domain) noexcept {
+    return host.size() > domain.size() && host[host.size() - domain.size() - 1] == '.' && http_ascii_ends_with_ignore_case(host, domain);
 }
 
 // Literal pchar bytes. The caller validates percent-encoded triplets separately.

@@ -102,12 +102,15 @@ public:
     worker_stop_chain(worker_stop_chain&&) = delete;
     worker_stop_chain& operator=(worker_stop_chain&&) = delete;
 
-    // Once, before the chain is published or stopped.
+    // Once, before the chain is published or stopped; nothing else touches
+    // the hooks yet, so they move in without the chain mutex.
     void configure(hooks_type hooks) noexcept;
     void request_stop() noexcept;
     // The first call wins; it also requests stop.
     void finalize() noexcept;
-    // Cold-path owner control. Returns false once the work guard is released.
+    // Cold-path owner control. Returns false once the work guard is released;
+    // an accepted control is queued while the guard still keeps the context
+    // running, but moves into the queue without the chain mutex.
     [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept;
     // The context is shutting down and will run no further handler: cancels
     // timers and releases the work guard without finalize_.
@@ -117,6 +120,9 @@ private:
     using work_guard_type = asio::executor_work_guard<asio::io_context::executor_type>;
 
     void defer_stop_control_locked() noexcept;
+    // Refuses further controls, waits out accepted ones still being queued,
+    // and hands the work guard to the caller to release unlocked.
+    void release_work_locked(std::unique_lock<std::mutex>& lock, std::optional<work_guard_type>& work) noexcept;
     void apply_stop() noexcept;
 
     worker_runtime_context& context_;
@@ -129,6 +135,9 @@ private:
     bool stop_control_ran_{};
     bool finalization_requested_{};
     bool work_released_{};
+    // Accepted post_control() calls still queuing their control unlocked.
+    std::size_t control_posts_{};
+    std::condition_variable control_posts_drained_;
     // Owner thread only.
     bool stop_applied_{};
 };
@@ -142,14 +151,33 @@ class event_loop_retirement final {
 public:
     event_loop_retirement() = default;
 
+    // At most once. The callable moves in after the slot is reserved and is
+    // claimed here when the gate sealed and drained in between.
     [[nodiscard]] bool begin_stop(move_only_function<void()> finalize) noexcept {
         {
             const std::lock_guard lock(mutex_);
             root_admission_closed_ = true;
-            if (sealed_ || finalized_) {
+            if (sealed_ || finalized_ || finalize_slot_ != finalize_slot_type::empty) {
                 return false;
             }
-            std::swap(finalize_, finalize);
+            finalize_slot_ = finalize_slot_type::installing;
+        }
+        // The reservation keeps every other thread off finalize_ until it is
+        // published, so the callable's move runs without the gate mutex.
+        finalize_ = std::move(finalize);
+        bool abandoned = false;
+        bool claimed = false;
+        {
+            const std::lock_guard lock(mutex_);
+            finalize_slot_ = finalize_slot_type::installed;
+            abandoned = finalized_;
+            claimed = !abandoned && claim_finalize_locked();
+        }
+        if (abandoned) {
+            // close_admission() ran while the slot was reserved.
+            finalize_ = nullptr;
+        } else if (claimed) {
+            run_claimed_finalize();
         }
         return true;
     }
@@ -196,17 +224,17 @@ public:
     }
 
     void finish() noexcept {
-        move_only_function<void()> finalize;
+        bool claimed = false;
         {
             const std::lock_guard lock(mutex_);
             if (pending_ == 0) {
                 std::terminate();
             }
             --pending_;
-            take_finalize_locked(finalize);
+            claimed = claim_finalize_locked();
         }
-        if (finalize) {
-            finalize();
+        if (claimed) {
+            run_claimed_finalize();
         }
     }
 
@@ -216,35 +244,57 @@ public:
     }
 
     void close_admission() noexcept {
-        move_only_function<void()> abandoned;
+        bool abandoned = false;
         {
             const std::lock_guard lock(mutex_);
             root_admission_closed_ = true;
             sealed_ = true;
+            // An installing begin_stop() observes finalized_ and drops its own
+            // callable; a claimed one already belongs to its claimer.
+            abandoned = !finalized_ && finalize_slot_ == finalize_slot_type::installed;
             finalized_ = true;
-            std::swap(abandoned, finalize_);
+        }
+        if (abandoned) {
+            finalize_ = nullptr;
         }
     }
 
     void seal() noexcept {
-        move_only_function<void()> finalize;
+        bool claimed = false;
         {
             const std::lock_guard lock(mutex_);
             sealed_ = true;
-            take_finalize_locked(finalize);
+            claimed = claim_finalize_locked();
         }
-        if (finalize) {
-            finalize();
+        if (claimed) {
+            run_claimed_finalize();
         }
     }
 
 private:
-    // Both drain and seal claim finalization under the gate mutex; the caller
-    // invokes the claimed callback only after releasing that mutex.
-    void take_finalize_locked(move_only_function<void()>& finalize) noexcept {
-        if (sealed_ && pending_ == 0 && !finalized_) {
-            finalized_ = true;
-            finalize = std::move(finalize_);
+    enum class finalize_slot_type : unsigned char {
+        empty,
+        // Reserved by begin_stop(), which moves the callable in unlocked.
+        installing,
+        installed,
+    };
+
+    // Drain, seal, and a publishing begin_stop() claim finalization under the
+    // gate mutex; a slot still being installed is claimed by its installer.
+    [[nodiscard]] bool claim_finalize_locked() noexcept {
+        if (!sealed_ || pending_ != 0 || finalized_ || finalize_slot_ == finalize_slot_type::installing) {
+            return false;
+        }
+        finalized_ = true;
+        return true;
+    }
+
+    // The claim (or the abandonment) makes the caller the only thread that
+    // touches finalize_, so it is moved and invoked without the gate mutex.
+    void run_claimed_finalize() noexcept {
+        auto finalize = std::move(finalize_);
+        if (finalize) {
+            finalize();
         }
     }
 
@@ -260,6 +310,7 @@ private:
     bool root_admission_closed_{false};
     bool sealed_{false};
     bool finalized_{false};
+    finalize_slot_type finalize_slot_{finalize_slot_type::empty};
     move_only_function<void()> finalize_;
 };
 
@@ -364,9 +415,9 @@ inline event_loop_retirement::lease_token_type::~lease_token_type() {
     owner_->retirement_.finish();
 }
 
-// The dispatcher's state, declared here because two translation units own parts
-// of it: worker_dispatcher.cpp runs the queue and the worker's lifecycle, while
-// worker_timers.cpp runs the timer heap that shares its mutex.
+// The dispatcher's state, declared ahead of it: the dispatcher queue and the
+// worker's lifecycle, and the timer heap that shares its mutex, all live in
+// this translation unit.
 inline constexpr std::size_t no_timer_slot = static_cast<std::size_t>(-1);
 
 // One pending deadline in the heap. `slot` and `generation` identify the
@@ -421,8 +472,8 @@ public:
     [[nodiscard]] post_result_type post(move_only_function<void()> task);
     [[nodiscard]] post_status post_factory(move_only_function<move_only_function<void()>()> factory);
     // Queues `task` on the io_context; false, dropping it, once the context
-    // was detached. Off the worker the mutex orders the post before
-    // detach_context(), after which the context may be destroyed.
+    // was detached. Off the worker an admitted defer delays detach_context(),
+    // after which the context may be destroyed, until it is queued.
     [[nodiscard]] bool defer_if_attached(move_only_function<void()> task);
     // On this worker's own run_context() thread the callable goes straight to
     // the io_context without the dispatcher mutex or type erasure; elsewhere it
@@ -553,6 +604,7 @@ private:
     void publish(std::size_t index);
     void release_abandoned_node(std::size_t index) noexcept;
     void release_abandoned_chain(std::size_t index) noexcept;
+    void finish_defer() noexcept;
     void drain();
     void arm_timer();
     void fire_timers();
@@ -585,6 +637,9 @@ private:
     std::size_t ready_count_{0};
     std::size_t pending_count_{0};
     std::size_t active_count_{0};
+    // Off-worker defers admitted while attached that are still queuing into
+    // the context without the mutex; detach_context() waits for zero.
+    std::size_t defer_count_{0};
     waiter_list_type idle_waiters_{};
     worker_id_type worker_id_{0};
     std::atomic_bool accepting_{true};
@@ -1366,10 +1421,7 @@ worker_stop_chain::worker_stop_chain(worker_runtime_context& context) :
     work_(asio::make_work_guard(context.io_context())) {}
 
 void worker_stop_chain::configure(hooks_type hooks) noexcept {
-    {
-        const std::lock_guard lock(mutex_);
-        std::swap(hooks_, hooks);
-    }
+    hooks_ = std::move(hooks);
 }
 
 void worker_stop_chain::request_stop() noexcept {
@@ -1408,23 +1460,43 @@ void worker_stop_chain::finalize() noexcept {
 }
 
 bool worker_stop_chain::post_control(move_only_function<void()> control) noexcept {
-    const std::lock_guard lock(mutex_);
-    if (work_released_) {
-        return false;
+    {
+        const std::lock_guard lock(mutex_);
+        if (work_released_) {
+            return false;
+        }
+        ++control_posts_;
     }
+    // Both guard releases wait for this count, so the context keeps running
+    // until the control is queued.
     worker_ref_access::defer_or_terminate(context_.worker(), std::move(control));
+    // Notified under the mutex: a released guard lets finalize_ destroy the
+    // chain as soon as the waiter reacquires it.
+    const std::lock_guard lock(mutex_);
+    if (--control_posts_ == 0 && work_released_) {
+        control_posts_drained_.notify_all();
+    }
     return true;
 }
 
 void worker_stop_chain::abandon() noexcept {
     std::optional<work_guard_type> work;
     {
-        const std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         stop_requested_ = true;
-        work_released_ = true;
-        work.emplace(std::move(work_));
+        if (!work_released_) {
+            release_work_locked(lock, work);
+        }
     }
     context_.stop_timers();
+}
+
+void worker_stop_chain::release_work_locked(std::unique_lock<std::mutex>& lock, std::optional<work_guard_type>& work) noexcept {
+    work_released_ = true;
+    control_posts_drained_.wait(lock, [this] {
+        return control_posts_ == 0;
+    });
+    work.emplace(std::move(work_));
 }
 
 void worker_stop_chain::defer_stop_control_locked() noexcept {
@@ -1451,13 +1523,12 @@ void worker_stop_chain::apply_stop() noexcept {
     std::optional<work_guard_type> work;
     move_only_function<void()> finalize_hook;
     {
-        const std::lock_guard lock(mutex_);
+        std::unique_lock lock(mutex_);
         stop_control_ran_ = true;
         if (!finalization_requested_ || work_released_) {
             return;
         }
-        work_released_ = true;
-        work.emplace(std::move(work_));
+        release_work_locked(lock, work);
     }
     // Only this finalizer owns the hook after work_released_ is published.
     // Its target's move/destructor may reenter finalize(), so move it unlocked.
@@ -2714,14 +2785,32 @@ bool worker_dispatcher::defer_if_attached(move_only_function<void()> task_value)
         asio::post(io_context_, std::move(task_value));
         return true;
     }
-    // Off the worker, the mutex orders this post before detach_context(),
-    // after which the context may be destroyed.
-    std::lock_guard lock(mutex_);
-    if (!context_attached_) {
-        return false;
+    // Off the worker, admission under the mutex orders this defer before
+    // detach_context(), which waits for admitted defers before the context
+    // may be destroyed. The task's move into the context runs unlocked, since
+    // its move constructor may reenter this worker (see post()).
+    {
+        std::lock_guard lock(mutex_);
+        if (!context_attached_) {
+            return false;
+        }
+        ++defer_count_;
     }
-    asio::post(io_context_, std::move(task_value));
+    try {
+        asio::post(io_context_, std::move(task_value));
+    } catch (...) {
+        finish_defer();
+        throw;
+    }
+    finish_defer();
     return true;
+}
+
+void worker_dispatcher::finish_defer() noexcept {
+    std::lock_guard lock(mutex_);
+    if (--defer_count_ == 0 && !context_attached_) {
+        pending_changed_.notify_all();
+    }
 }
 
 worker_registration_status worker_dispatcher::register_shutdown(worker_shutdown_registration& hook, std::weak_ptr<void> owner, const worker_shutdown_operations_type& operations) {
@@ -2894,15 +2983,25 @@ void worker_dispatcher::close() noexcept {
 void worker_dispatcher::detach_context() noexcept {
     std::vector<timer_entry> abandoned_timers;
     std::unique_ptr<asio::steady_timer> detached_timer;
+    bool detaching = false;
     {
-        std::lock_guard lock(mutex_);
-        if (!context_attached_) {
-            return;
+        std::unique_lock lock(mutex_);
+        if (context_attached_) {
+            accepting_ = false;
+            context_attached_ = false;
+            abandon_drain_ = true;
+            detached_timer = std::move(timer_);
+            detaching = true;
         }
-        accepting_ = false;
-        context_attached_ = false;
-        abandon_drain_ = true;
-        detached_timer = std::move(timer_);
+        // Every return lets the caller destroy the context, so defers admitted
+        // before the detach must have queued into it first, a concurrent
+        // second detach included.
+        pending_changed_.wait(lock, [this] {
+            return defer_count_ == 0;
+        });
+    }
+    if (!detaching) {
+        return;
     }
     {
         // Detached hooks are never notified; their destructors find them

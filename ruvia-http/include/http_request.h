@@ -66,6 +66,12 @@ private:
 static_assert(std::is_trivially_copyable_v<http_content_length>);
 static_assert(sizeof(http_content_length) == sizeof(std::uint64_t));
 
+// A received Content-Length field value (RFC 9110 section 8.6): a comma list
+// of decimal lengths, as left by combining repeated field lines, that must all
+// agree. An empty member, a non-digit, overflow or disagreeing lengths yield
+// no value. Every protocol version frames messages with this same rule.
+[[nodiscard]] std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept;
+
 // RFC 9110 sender requirements when a request carries content. Explicit
 // zero-length framing does not create content; recipients frame it separately.
 enum class http_request_content_semantics : std::uint8_t {
@@ -261,18 +267,13 @@ private:
 
 namespace detail {
 
-[[nodiscard]] constexpr std::size_t saturating_add_size(std::size_t left, std::size_t right) noexcept {
-    constexpr auto maximum = (std::numeric_limits<std::size_t>::max)();
-    return left > maximum - right ? maximum : left + right;
-}
-
 template <typename field_span_type>
 [[nodiscard]] constexpr std::size_t estimate_http1_fields_bytes_impl(const field_span_type& fields, bool include_terminating_crlf) noexcept {
     std::size_t total = include_terminating_crlf ? 2U : 0U;
     for (const auto& field : fields) {
-        total = saturating_add_size(total, field.name().size());
-        total = saturating_add_size(total, field.value().size());
-        total = saturating_add_size(total, http_field_line_overhead);
+        total = saturating_add(total, field.name().size());
+        total = saturating_add(total, field.value().size());
+        total = saturating_add(total, http_field_line_overhead);
     }
     return total;
 }
@@ -293,12 +294,12 @@ template <typename field_span_type>
 // <reason>\r\n"), all header field lines, and the terminating CRLF.
 [[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(http_status_code status, std::span<const http_header> headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return saturating_add(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
 [[nodiscard]] constexpr std::size_t estimate_http1_response_head_bytes(http_status_code status, std::span<const http_header_view> headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return saturating_add(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
 }
 
 [[nodiscard]] std::size_t estimate_http1_response_head_bytes(http_status_code status, const http_response_headers& headers) noexcept;
@@ -914,6 +915,14 @@ private:
 };
 
 }  // namespace detail
+
+// RFC 9110 section 7.8 matches protocol names case-insensitively, while RFC
+// 8441 section 4 and RFC 9220 section 3 register the lowercase "websocket"
+// :protocol token. Any spelling of websocket maps to that token; other
+// protocols are returned as is, borrowing `protocol`.
+[[nodiscard]] constexpr std::string_view http_canonical_extended_connect_protocol(borrowed_text protocol) noexcept {
+    return http_ascii_equals_ignore_case(protocol.view(), "websocket") ? std::string_view("websocket") : protocol.view();
+}
 
 class http_request final {
 public:

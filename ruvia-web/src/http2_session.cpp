@@ -920,7 +920,7 @@ namespace {
 constexpr std::chrono::milliseconds http2_drain_round_trip_bound{std::chrono::seconds(1)};
 
 // Streaming request-body reader for the sans-I/O session; the body_reader facade wraps
-// it for handler consumption. Chunk-for-chunk port of the coroutine read_body_chunk.
+// it for handler consumption.
 // Admission always binds the runtime-owned signal before this facade can exist.
 class http2_sans_io_request_body_reader final : public multiplexed_request_body_reader_base<http2_sans_io_request_body_reader> {
 public:

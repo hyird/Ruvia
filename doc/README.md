@@ -24,7 +24,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 | `ruvia-http` | `ruvia::http` | `ruvia-http/include/*.h` | 独立 sans-I/O 协议实现：HTTP/1.0、HTTP/1.1、HTTP/2、HTTP/3、HPACK、QPACK、QUIC、WebSocket、内容压缩（gzip / deflate / br / zstd）、Multipart、SSE、RFC 9297 Datagram / Capsule 与 RFC 9298 `CONNECT-UDP`；HTTP/2 使用 nghttp2，HTTP/3 使用 nghttp3 与 ngtcp2 core，不依赖 `ruvia::core`、Asio、socket I/O 或 OpenSSL |
 | `ruvia-web` | `ruvia::web` | `ruvia-web/include/*.h` | Web 应用框架：服务器与路由、中间件、声明式 Model/校验、TLS/mTLS/SNI、出站 HTTP 客户端、SQL 数据库/ORM、Redis/RediSearch ORM 与 JWT；公开依赖 `ruvia::core` 与 `ruvia::http` |
 
-> **头文件使用原则**：只包含 `ruvia-{core,http,web}/include/` 下的非 `detail` 公开头文件，不直接引用任何 `detail/` 子目录下的内部头文件。
+> **头文件使用原则**：只包含 `ruvia-{core,http,web}/include/` 下平铺的公开头文件，不使用其中任何 `detail` 命名空间符号。
 
 从 `1.0.0` 起，同一主版本内保持非 `detail` 公开 API 的源码兼容，包括公开宏、配置类型、错误码及所有权和生命周期契约；新增能力以兼容方式加入，破坏性调整进入下一主版本。CMake 包兼容性在 `0.x` 要求主版本和次版本均相同，从 `1.x` 起要求主版本相同。此承诺适用于相同平台、工具链和功能开关组合；不承诺跨版本 ABI 兼容，升级后应重新编译下游程序。
 
@@ -52,7 +52,7 @@ Ruvia 由三个独立的静态库组成，所有公开类型、函数与概念�
 
 顶层构建在未指定 `CMAKE_TOOLCHAIN_FILE` 时从环境变量 `VCPKG_ROOT` 选择 vcpkg，并加载项目 triplet、按开关选择 manifest 特性。子项目由宿主提供工具链与依赖清单。未启用功能不编译对应源码，也不安装相应公开头文件。
 
-- **协议裁剪单一来源**：HTTP/2、HTTP/3 的源码与安装头共用协议路径选择规则，新增协议文件不再维护第二份安装排除名单。
+- **协议裁剪单一来源**：HTTP/2、HTTP/3 的源码与安装头共用同一套协议路径选择规则。
 
 依赖使用当前 vcpkg 端口；Core 要求 mimalloc 3.5+，HTTP/3 要求 ngtcp2 1.26.0+ 与 nghttp3 1.17+。非 Windows 静态 mimalloc 必须启用 `override`，不得叠加其他全局分配器替换。
 

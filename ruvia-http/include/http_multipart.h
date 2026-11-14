@@ -419,8 +419,8 @@ private:
     void reset_scan_cursors() noexcept;
     void compact_pending();
     [[nodiscard]] multipart_poll_result fail(multipart_parse_error error) noexcept;
-    [[nodiscard]] step_result_type process_boundary();
-    [[nodiscard]] step_result_type process_headers();
+    [[nodiscard]] step_result_type consume_boundary();
+    [[nodiscard]] step_result_type consume_headers();
     [[nodiscard]] multipart_stream_part make_part(std::string_view body, bool part_end);
     [[nodiscard]] multipart_poll_result read_body_chunk();
 

@@ -1429,7 +1429,7 @@ void ensure_request_query(const http_request& request, detail::context_request_s
             return input;
         }
         char* const out = decoded_bytes.data() + cursor;
-        const auto size = *detail::decode_url_bytes(input, out, url_decode_mode::form, false);
+        const auto size = *decode_url_bytes(input, out, url_decode_mode::form);
         cursor += size;
         return std::string_view(out, size);
     };
@@ -1485,7 +1485,7 @@ void ensure_route_params(const std::string_view* param_names, const std::string_
         std::string_view decoded_value = param_values[i];
         if (has_url_encoding(decoded_value, url_decode_mode::percent)) {
             char* const out = decoded_bytes.data() + cursor;
-            const auto size = detail::decode_url_bytes(decoded_value, out, url_decode_mode::percent, param_names[i] == "*");
+            const auto size = decode_url_bytes(decoded_value, out, param_names[i] == "*" ? url_decode_mode::path : url_decode_mode::percent);
             if (!size) {
                 decoded_bytes.clear();
                 request_storage.route_params_invalid_ = true;

@@ -24,11 +24,9 @@
 #include <utility>
 #include <vector>
 
-#include <openssl/evp.h>
-#include <openssl/sha.h>
-
 #include "borrowed_text.h"
 #include "connection_lifecycle.h"
+#include "crypto.h"
 #include "db.h"
 #include "db_query.h"
 #include "db_session.h"
@@ -57,92 +55,6 @@
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis.h"
 #endif
-
-namespace ruvia::detail {
-
-// SHA-256 over input fed in pieces, the one digest the database layer keys
-// statements, cache entries and migration history by. Input that fits the
-// inline buffer is digested in one call; longer input streams through an
-// OpenSSL context created once it overflows.
-class db_sha256 final {
-public:
-    static constexpr std::size_t digest_size = 32;
-    using digest_type = std::array<unsigned char, digest_size>;
-
-    db_sha256() noexcept = default;
-    static_assert(digest_size == SHA256_DIGEST_LENGTH);
-
-    ~db_sha256() {
-        if (context_ != nullptr) {
-            EVP_MD_CTX_free(context_);
-        }
-    }
-
-    db_sha256(const db_sha256&) = delete;
-    db_sha256& operator=(const db_sha256&) = delete;
-
-    void update(std::string_view bytes) {
-        if (bytes.empty()) {
-            return;
-        }
-        if (context_ == nullptr) {
-            if (bytes.size() <= buffer_.size() - buffered_) {
-                std::memcpy(buffer_.data() + buffered_, bytes.data(), bytes.size());
-                buffered_ += bytes.size();
-                return;
-            }
-            context_ = EVP_MD_CTX_new();
-            if (context_ == nullptr || EVP_DigestInit_ex(context_, EVP_sha256(), nullptr) != 1 || (buffered_ != 0 && EVP_DigestUpdate(context_, buffer_.data(), buffered_) != 1)) {
-                throw_digest_failure();
-            }
-        }
-        if (EVP_DigestUpdate(context_, bytes.data(), bytes.size()) != 1) {
-            throw_digest_failure();
-        }
-    }
-
-    // Eight little-endian bytes.
-    void update_u64_le(std::uint64_t value) {
-        std::array<char, 8> encoded;
-        for (unsigned index = 0; index < encoded.size(); ++index) {
-            encoded[index] = static_cast<char>((value >> (index * 8)) & 255);
-        }
-        update({encoded.data(), encoded.size()});
-    }
-
-    // Ends the digest; nothing may be fed afterwards.
-    [[nodiscard]] digest_type finish() {
-        digest_type digest;
-        if (context_ == nullptr) {
-            if (SHA256(buffer_.data(), buffered_, digest.data()) == nullptr) {
-                throw_digest_failure();
-            }
-            return digest;
-        }
-        unsigned int size = 0;
-        if (EVP_DigestFinal_ex(context_, digest.data(), &size) != 1 || size != digest.size()) {
-            throw_digest_failure();
-        }
-        return digest;
-    }
-
-private:
-    [[noreturn]] static void throw_digest_failure() {
-        throw std::runtime_error("database SHA-256 digest failed");
-    }
-
-    std::array<unsigned char, 512> buffer_;
-    std::size_t buffered_{0};
-    evp_md_ctx_st* context_{nullptr};
-};
-
-[[nodiscard]] inline db_sha256::digest_type db_sha256_of(std::string_view bytes) {
-    db_sha256 digest;
-    digest.update(bytes);
-    return digest.finish();
-}
-
-}  // namespace ruvia::detail
 
 // Execution of compiled db_query statements: one deadline and one chain for a
 // query, or a query and its count, run directly or through the result cache.
@@ -2178,7 +2090,7 @@ void abandon_mariadb_prepared(mariadb_prepared_run& run) noexcept;
 // caller did (not) ask for; null when it succeeded.
 [[nodiscard]] std::exception_ptr mariadb_statement_failure(const std::exception_ptr& failure, bool extra_row_set, const std::exception_ptr& output_failure, bool returns_rows, bool returned_rows);
 
-// MariaDB's part of statement pipelining (db_pipeline.h). A group's
+// MariaDB's part of statement pipelining (db_pipeline_state). A group's
 // statements are sent as separate COM_QUERY commands (mysql_send_query) and
 // their responses read in order (mysql_read_query_result and
 // mysql_store_result). A failed statement does not affect the ones after it:
@@ -2260,7 +2172,8 @@ enum class mariadb_operation : std::uint8_t {
     prepared,
 };
 
-// The pipeline hooks of MariaDB (see db_pipeline_impl.h).
+// The pipeline hooks of MariaDB (the io_type hooks listed before the
+// db_pipeline_state definitions).
 struct mariadb_pipeline_io final {
     using driver_type = mariadb_driver;
     using pool_type = db_pool<mariadb_driver>;
@@ -2338,7 +2251,7 @@ struct mariadb_session final {
 
 struct pg_conn;
 struct pg_result;
-// PostgreSQL's part of statement pipelining (db_pipeline.h): a group's
+// PostgreSQL's part of statement pipelining (db_pipeline_state): a group's
 // connection runs in libpq pipeline mode, and each statement sends its own
 // flight ending in its own Sync, so the server aborts no statement for another
 // one's failure. Flights are queued and flushed as they are sent; the reader
@@ -2447,7 +2360,8 @@ struct postgresql_flight_results final {
     bool parsed_{false};
 };
 
-// The pipeline hooks of PostgreSQL (see db_pipeline_impl.h).
+// The pipeline hooks of PostgreSQL (the io_type hooks listed before the
+// db_pipeline_state definitions).
 struct postgresql_pipeline_io final {
     using driver_type = postgresql_driver;
     using pool_type = db_pool<postgresql_driver>;
@@ -2566,7 +2480,7 @@ using db_stream_step = std::variant<db_row, db_stream_end>;
 // keeps the connection; any other failure closes it.
 //
 // Outside transactions, query() and execute() run through the driver's
-// pipeline (pipeline_io_type, db_pipeline.h), which shares connections between
+// pipeline (pipeline_io_type, db_pipeline_state), which shares connections between
 // callers; state_type is that pipeline's per-pool state and session_type keeps
 // the group of each connection. The state may keep a lease that release_slot()
 // gives back for a caller of its own (take_released_slot() returns true),
@@ -3177,8 +3091,8 @@ private:
 
 #endif
 
-// Definitions of db_pipeline.h, included after db_pool.h by the driver
-// translation units that instantiate a pipeline and by db_pool.cpp, which runs
+// Definitions of db_pipeline_member and db_pipeline_state, instantiated by the
+// driver translation units that run a pipeline and by db_pool.cpp, which runs
 // statements through it (run_pipelined).
 //
 // The io_type hooks, all static, each on a connected, leased slot of a group:

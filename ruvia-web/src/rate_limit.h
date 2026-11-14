@@ -1,5 +1,6 @@
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <charconv>
 #include <chrono>
@@ -21,21 +22,17 @@ namespace ruvia::detail {
 
 using ::ruvia::rate_limit_key_buffer_bytes;
 
-[[nodiscard]] inline std::string_view format_ipv4_octets(const std::uint8_t* bytes_value, std::span<char, 15> buffer) noexcept {
-    char* cursor_value = buffer.data();
-    char* const end = buffer.data() + buffer.size();
-    for (std::size_t i = 0; i < 4; ++i) {
-        if (i != 0) {
-            *cursor_value++ = '.';
-        }
-        cursor_value = std::to_chars(cursor_value, end, bytes_value[i]).ptr;
-    }
-    return std::string_view(buffer.data(), static_cast<std::size_t>(cursor_value - buffer.data()));
+// Dotted IPv4 text, at most 15 bytes, so it always fits the key buffer.
+[[nodiscard]] inline std::string_view format_ipv4_key(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
+    std::array<char, ip_address::max_text_size> text;
+    const auto formatted = address.normalized_ipv4().format_to(text);
+    std::copy(formatted.begin(), formatted.end(), buffer.begin());
+    return std::string_view(buffer.data(), formatted.size());
 }
 
 [[nodiscard]] inline std::string_view rate_limit_key_for(const ip_address& address, std::span<char, rate_limit_key_buffer_bytes> buffer) noexcept {
     if (address.family() == ip_address_family::ipv4) {
-        return format_ipv4_octets(address.bytes().data(), std::span<char, 15>(buffer.data(), 15));
+        return format_ipv4_key(address, buffer);
     }
     const auto raw = address.bytes();
     if (address.scope_id() != 0) {
@@ -49,7 +46,7 @@ using ::ruvia::rate_limit_key_buffer_bytes;
         return std::string_view(buffer.data(), static_cast<std::size_t>(end - buffer.data()));
     }
     if (address.is_ipv4_mapped()) {
-        return format_ipv4_octets(raw.data() + 12, std::span<char, 15>(buffer.data(), 15));
+        return format_ipv4_key(address, buffer);
     }
     buffer[0] = 'v';
     buffer[1] = '6';

@@ -225,9 +225,8 @@ bool sse_parser::append_value(std::string_view bytes) {
                 retry_valid_ = false;
                 break;
             }
-            const auto digit = static_cast<std::uint64_t>(byte - '0');
             retry_digits_ = true;
-            retry_value_ = retry_value_ > (max_retry - digit) / 10 ? max_retry : retry_value_ * 10 + digit;
+            retry_value_ = http_accumulate_decimal_digit(retry_value_, static_cast<unsigned>(byte - '0'), max_retry);
         }
         return true;
     }

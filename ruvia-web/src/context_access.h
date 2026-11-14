@@ -85,52 +85,6 @@ namespace ruvia::detail {
     throw http_error({.status_ = ruvia::http_status::forbidden, .code_ = "forbidden", .message_ = "invalid static file path"});
 }
 
-// Percent-decodes `input` in one pass into `output`, which holds at least
-// input.size() bytes, and returns the decoded size. Percent mode fails on a
-// malformed escape; form mode maps '+' to a space and keeps a '%' that starts
-// no valid escape as a literal byte (WHATWG percent-decode). With
-// `reject_encoded_separators`, an escape revealing '/' or '\\' fails too.
-[[nodiscard]] inline std::optional<std::size_t> decode_url_bytes(std::string_view input, char* output, url_decode_mode mode, bool reject_encoded_separators) noexcept {
-    std::size_t size = 0;
-    for (std::size_t i = 0; i < input.size(); ++i) {
-        char c = input[i];
-        if (mode == url_decode_mode::form && c == '+') {
-            c = ' ';
-        } else if (c == '%') {
-            if (const auto byte = http_try_decode_percent_byte(input, i)) {
-                if (reject_encoded_separators && (*byte == '/' || *byte == '\\')) {
-                    return std::nullopt;
-                }
-                c = static_cast<char>(*byte);
-                i += 2;
-            } else if (mode != url_decode_mode::form) {
-                return std::nullopt;
-            }
-        }
-        output[size++] = c;
-    }
-    return size;
-}
-
-// Percent-decodes an encoded request path, or a wildcard tail of one, exactly
-// once into the file path it names: the path itself when it holds no escape,
-// otherwise the decoded bytes in `storage`. Routing and path-scoped middleware
-// split request paths on raw '/' only, so an escape revealing '/' or '\\'
-// would forge a segment boundary they never saw; that, like a malformed
-// escape, yields nullopt.
-[[nodiscard]] inline std::optional<std::string_view> decode_request_path(std::string_view path, std::string& storage) {
-    if (!has_url_encoding(path, url_decode_mode::percent)) {
-        return path;
-    }
-    storage.resize(path.size());
-    const auto size = decode_url_bytes(path, storage.data(), url_decode_mode::percent, true);
-    if (!size) {
-        return std::nullopt;
-    }
-    storage.resize(*size);
-    return std::string_view(storage);
-}
-
 // Web static-file path policy: validate a decoded file path relative to the
 // configured document root. '/' and '\\' both separate segments; a "." or ".."
 // segment, an empty interior segment, a NUL, or an absolute or drive path is
@@ -1749,16 +1703,16 @@ struct session_unrecognized final {
 
 struct session_loaded final {
     std::string id_;
-    std::string data_;
+    std::string payload_;
 };
 
 struct session_persist_new final {
-    std::string data_;
+    std::string payload_;
 };
 
 struct session_rotate final {
     std::string old_id_;
-    std::string data_;
+    std::string payload_;
 };
 
 struct session_clear final {
@@ -1782,13 +1736,13 @@ public:
     void finish_commit() noexcept;
     void fail_commit(std::exception_ptr exception) noexcept;
     void observe_presented_id(std::string_view id);
-    void load_recognized(std::string_view data);
-    void set(std::string_view data);
+    void load_recognized(std::string_view payload);
+    void set(std::string_view payload);
     void clear();
     void regenerate();
 
-    [[nodiscard]] std::string_view data() const& noexcept;
-    [[nodiscard]] std::string_view data() const&& = delete;
+    [[nodiscard]] std::string_view payload() const& noexcept;
+    [[nodiscard]] std::string_view payload() const&& = delete;
 
     [[nodiscard]] const session_untouched* untouched() const& noexcept {
         return std::get_if<session_untouched>(&value_);
@@ -2891,7 +2845,7 @@ struct worker_failure_sink final {
 };
 
 // Fully normalized, worker-owned runtime options. Public callers configure application
-// with server_config.h values; only the Web runtime constructs this state.
+// with http_server.h values; only the Web runtime constructs this state.
 struct http_server_options final {
     // The application's document root: one app-scoped publisher shared by
     // every worker, plus this worker's current generation. Validated

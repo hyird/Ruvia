@@ -588,7 +588,7 @@ TEST(Ruvia, public_router_lends_borrowed_clients_and_state_to_session_middleware
             routes.add("GET", "/read", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
                 ++context.worker_state<visit_counter>().visits_;
                 auto value = context.session();
-                co_return context.text(value.data().empty() ? "empty" : value.data());
+                co_return context.text(value.payload().empty() ? "empty" : value.payload());
             });
             routes.add("GET", "/rotate", [](ruvia::context& context) -> ruvia::task<ruvia::http_response> {
                 context.session().regenerate();

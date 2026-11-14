@@ -125,9 +125,9 @@ enum class client_tls_mode : std::uint8_t {
     disabled,
 };
 
-// TLS wire ProtocolVersion values; older versions are deliberately unsupported.
+// TLS wire ProtocolVersion values. TLS 1.0 and 1.1 are not offered (RFC 8996
+// §2-3, RFC 9325 §3.1.1).
 enum class tls_version : std::uint16_t {
-    tls_1_1 = 0x0302,
     tls_1_2 = 0x0303,
     tls_1_3 = 0x0304,
 };
@@ -136,17 +136,17 @@ enum class tls_version : std::uint16_t {
 // authenticates the peer. Redis clients read the CA bundle and identity once,
 // when the registration is created, and share them across workers; database
 // drivers read the files when connecting and do not accept an encrypted
-// private key. Clients default to TLS 1.1 or newer for legacy compatibility;
-// minimum_version_ can require TLS 1.2 or 1.3. TLS 1.2 offers only ECDHE
-// with AEAD suites, and every version refuses renegotiation. Every client verifies
+// private key. Clients default to TLS 1.2 or newer; minimum_version_ can
+// require TLS 1.3. TLS 1.2 offers only ECDHE with AEAD suites, and every
+// version refuses renegotiation. Every client verifies
 // identities by subjectAltName type (RFC 9525): DNS names match DNS-ID entries,
 // IP literals match IP entries, the subject Common Name is never used, and DNS
 // wildcards cover only a complete left-most label.
 struct client_tls_config final {
     client_tls_mode mode_{client_tls_mode::verify_identity};
-    // Shared by HTTP, raw TCP, Redis and database clients. HTTP/2 and QUIC
-    // additionally enforce their own protocol minimum, never lowering this one.
-    tls_version minimum_version_{tls_version::tls_1_1};
+    // Shared by HTTP, raw TCP, Redis and database clients. QUIC additionally
+    // requires TLS 1.3, never lowering this one.
+    tls_version minimum_version_{tls_version::tls_1_2};
     // The CA bundle that authenticates the server; nullopt selects the system
     // or driver trust store.
     std::optional<std::filesystem::path> ca_file_{};
@@ -200,10 +200,10 @@ struct tls_local_address_config final {
     std::vector<std::byte> ocsp_response_{};
 };
 
-// One HTTPS listener's identities. The listener negotiates TLS 1.1, 1.2 or 1.3;
+// One HTTPS listener's identities. The listener negotiates TLS 1.2 or 1.3;
 // its TLS 1.2 suites are ECDHE with AEAD only, chosen by server preference;
-// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0, with HTTP/2
-// requiring TLS 1.2 or newer. The paired HTTP/3 service (listen_config::http3_)
+// renegotiation is refused; ALPN selects h2, http/1.1 or http/1.0. The paired
+// HTTP/3 service (listen_config::http3_)
 // uses the same identities over QUIC with TLS 1.3 only and ALPN h3 only.
 // Without certificate_store_, each handshake selects once, when its
 // ClientHello is processed: an exact sni_ host, else a

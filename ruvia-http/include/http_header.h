@@ -41,6 +41,23 @@ namespace ruvia {
     return true;
 }
 
+[[nodiscard]] constexpr bool http_ascii_starts_with_ignore_case(std::string_view text, std::string_view prefix) noexcept {
+    return text.size() >= prefix.size() && http_ascii_equals_ignore_case(text.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] constexpr bool http_ascii_ends_with_ignore_case(std::string_view text, std::string_view suffix) noexcept {
+    return text.size() >= suffix.size() && http_ascii_equals_ignore_case(text.substr(text.size() - suffix.size()), suffix);
+}
+
+// Owning copy of `text` with ASCII letters lowercased; other bytes are kept.
+[[nodiscard]] inline std::string http_ascii_lowercase(std::string_view text) {
+    std::string result(text);
+    for (auto& c : result) {
+        c = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(c)));
+    }
+    return result;
+}
+
 // The single owner of HTTP field-line syntax (RFC 9110 section 5): token and
 // field-content byte classes and the normalized field name/value predicates.
 // Field-specific grammars build on these; field-line OWS belongs to wire

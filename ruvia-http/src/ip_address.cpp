@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 
@@ -68,11 +69,9 @@ std::optional<ip_address> ip_address::parse(std::string_view text) noexcept {
     return ip_address::ipv6(bytes, scope_id);
 }
 
-std::string ip_address::to_string() const {
-    // "ffff:" * 7 + "ffff" + "%" + 10 zone digits.
-    std::array<char, 56> buffer;
-    char* const end = buffer.data() + buffer.size();
-    char* cursor = buffer.data();
+std::string_view ip_address::format_to(std::span<char, max_text_size> output) const noexcept {
+    char* const end = output.data() + output.size();
+    char* cursor = output.data();
     if (family_ == ip_address_family::ipv4) {
         cursor = append_ipv4(cursor, end, bytes_.data());
     } else {
@@ -127,7 +126,12 @@ std::string ip_address::to_string() const {
             cursor = std::to_chars(cursor, end, scope_id_).ptr;
         }
     }
-    return std::string(buffer.data(), static_cast<std::size_t>(cursor - buffer.data()));
+    return {output.data(), static_cast<std::size_t>(cursor - output.data())};
+}
+
+std::string ip_address::to_string() const {
+    std::array<char, max_text_size> buffer;
+    return std::string(format_to(buffer));
 }
 
 namespace {

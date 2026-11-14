@@ -103,7 +103,7 @@ public:
 
     ruvia::task<ruvia::http_response> read(ruvia::context& c) {
         auto value = c.session();
-        co_return c.text(value.data().empty() ? "empty" : value.data());
+        co_return c.text(value.payload().empty() ? "empty" : value.payload());
     }
 
     ruvia::task<ruvia::http_response> set(ruvia::context& c) {

@@ -966,11 +966,6 @@ enum class websocket_payload_storage : std::uint8_t {
     return websocket_termination::protocol_error;
 }
 
-void add_saturating(std::uint64_t& total, std::size_t bytes_value) noexcept {
-    const auto remaining = std::numeric_limits<std::uint64_t>::max() - total;
-    total += bytes_value < remaining ? bytes_value : remaining;
-}
-
 // Where a data frame sits in its message (RFC 6455 section 5.4): only the
 // first frame carries the opcode, only the last one sets FIN.
 enum class websocket_fragment_position : std::uint8_t {
@@ -1419,7 +1414,7 @@ std::optional<websocket_event> websocket_connection::next_event() & {
                 return protocol_failure_event(failure->error());
             }
 
-            add_saturating(impl_->bytes_received_, impl_->pending_consume_);
+            impl_->bytes_received_ = saturating_add<std::uint64_t>(impl_->bytes_received_, impl_->pending_consume_);
             const auto& frame = *read.frame();
             const auto inbound = impl_->assembler_.accept(frame, impl_->receive_message_limit_);
             if (const auto* failure = inbound.failure()) {
@@ -1534,7 +1529,7 @@ websocket_output_consume_status websocket_connection::consume_output(std::size_t
     if (bytes_value > owned && bytes_value - owned > impl_->borrowed_output_.size()) {
         return websocket_output_consume_status::out_of_range;
     }
-    add_saturating(impl_->bytes_sent_, bytes_value);
+    impl_->bytes_sent_ = saturating_add<std::uint64_t>(impl_->bytes_sent_, bytes_value);
     if (bytes_value < owned) {
         impl_->out_buffer_.consume(bytes_value);
         return websocket_output_consume_status::pending;

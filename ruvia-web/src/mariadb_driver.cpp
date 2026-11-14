@@ -927,11 +927,7 @@ task<void> mariadb_driver::connect(pool_type& pool, std::size_t index, const ope
         throw mysql_error(initialized, "configuring MariaDB authenticated TLS", db_error::code_type::connect_failed);
     }
     if (use_tls) {
-        const char* tls_versions = config.tls_.minimum_version_ == tls_version::tls_1_3
-            ? "TLSv1.3"
-            : config.tls_.minimum_version_ == tls_version::tls_1_2
-            ? "TLSv1.2,TLSv1.3"
-            : "TLSv1.1,TLSv1.2,TLSv1.3";
+        const char* tls_versions = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : "TLSv1.2,TLSv1.3";
         if (mysql_optionsv(&initialized, MYSQL_OPT_TLS_VERSION, tls_versions) != 0) {
             throw mysql_error(initialized, "configuring MariaDB TLS versions", db_error::code_type::connect_failed);
         }

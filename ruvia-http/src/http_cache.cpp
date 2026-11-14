@@ -28,37 +28,21 @@ namespace {
 // `"6\0"` is equivalent to `60`. Syntactically valid overflow saturates to the
 // greatest convenient representation; non-digit / empty input remains invalid.
 [[nodiscard]] std::optional<std::uint64_t> parse_delta_seconds(std::string_view value) noexcept {
+    if (value.empty() || value.front() != '"') {
+        return http_parse_saturating_decimal(value);
+    }
     std::uint64_t result_value = 0;
     bool any_digit = false;
-    const auto accumulate = [&result_value, &any_digit](unsigned char ch) noexcept {
+    http_quoted_string_cursor cursor(value);
+    unsigned char ch = 0;
+    while (cursor.next(ch)) {
         if (ch < '0' || ch > '9') {
-            return false;
-        }
-        constexpr auto maximum = (std::numeric_limits<std::uint64_t>::max)();
-        const auto digit = static_cast<std::uint64_t>(ch - '0');
-        result_value = result_value > (maximum - digit) / 10 ? maximum : result_value * 10 + digit;
-        any_digit = true;
-        return true;
-    };
-    if (!value.empty() && value.front() == '"') {
-        http_quoted_string_cursor cursor(value);
-        unsigned char ch = 0;
-        while (cursor.next(ch)) {
-            if (!accumulate(ch)) {
-                return std::nullopt;
-            }
-        }
-        if (!cursor.closed() || cursor.consumed() != value.size()) {
             return std::nullopt;
         }
-    } else {
-        for (const auto ch : value) {
-            if (!accumulate(static_cast<unsigned char>(ch))) {
-                return std::nullopt;
-            }
-        }
+        result_value = http_accumulate_decimal_digit(result_value, static_cast<unsigned>(ch - '0'));
+        any_digit = true;
     }
-    if (!any_digit) {
+    if (!cursor.closed() || cursor.consumed() != value.size() || !any_digit) {
         return std::nullopt;
     }
     return result_value;
@@ -721,10 +705,7 @@ void http_vary_spec::update(std::string_view field_value) {
         if (!is_valid_http_header_name(token)) {
             return true;
         }
-        std::string lower(token);
-        for (auto& ch : lower) {
-            ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
-        }
+        std::string lower = http_ascii_lowercase(token);
         const auto it = std::ranges::lower_bound(field_names_, lower);
         if (it == field_names_.end() || *it != lower) {
             field_names_.insert(it, std::move(lower));

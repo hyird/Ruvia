@@ -1199,7 +1199,7 @@ public:
     }
 
     [[nodiscard]] bool protocol_is_websocket() const noexcept {
-        return http_ascii_equals_ignore_case(request_protocol(), "websocket");
+        return http_canonical_extended_connect_protocol(request_protocol()) == "websocket";
     }
 
     void set_protocol(std::string_view value) {

@@ -17,7 +17,6 @@
 #include <mutex>
 #include <new>
 #include <optional>
-#include <random>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -103,48 +102,48 @@ void context_session_state::observe_presented_id(std::string_view id) {
     value_.template emplace<session_unrecognized>(std::string(id));
 }
 
-void context_session_state::load_recognized(std::string_view data) {
+void context_session_state::load_recognized(std::string_view payload) {
     require_mutable();
     auto* presented = std::get_if<session_unrecognized>(&value_);
     if (presented == nullptr) {
         throw std::logic_error("recognized session requires a presented id");
     }
-    auto data_copy = std::string(data);
+    auto payload_copy = std::string(payload);
     auto id = std::move(presented->id_);
-    value_.template emplace<session_loaded>(std::move(id), std::move(data_copy));
+    value_.template emplace<session_loaded>(std::move(id), std::move(payload_copy));
 }
 
-void context_session_state::set(std::string_view data) {
+void context_session_state::set(std::string_view payload) {
     require_mutable();
-    if (data.empty()) {
+    if (payload.empty()) {
         clear();
         return;
     }
     if (auto* loaded_state = std::get_if<session_loaded>(&value_)) {
-        auto data_copy = std::string(data);
+        auto payload_copy = std::string(payload);
         auto id = std::move(loaded_state->id_);
-        value_.template emplace<session_rotate>(std::move(id), std::move(data_copy));
+        value_.template emplace<session_rotate>(std::move(id), std::move(payload_copy));
         return;
     }
     if (auto* rotated = std::get_if<session_rotate>(&value_)) {
-        rotated->data_.assign(data);
+        rotated->payload_.assign(payload);
         return;
     }
     if (auto* fresh = std::get_if<session_persist_new>(&value_)) {
-        fresh->data_.assign(data);
+        fresh->payload_.assign(payload);
         return;
     }
     if (auto* cleared = std::get_if<session_clear>(&value_)) {
         if (!cleared->old_id_.has_value()) {
-            value_.template emplace<session_persist_new>(std::string(data));
+            value_.template emplace<session_persist_new>(std::string(payload));
             return;
         }
-        auto data_copy = std::string(data);
+        auto payload_copy = std::string(payload);
         auto old_id = std::move(*cleared->old_id_);
-        value_.template emplace<session_rotate>(std::move(old_id), std::move(data_copy));
+        value_.template emplace<session_rotate>(std::move(old_id), std::move(payload_copy));
         return;
     }
-    value_.template emplace<session_persist_new>(std::string(data));
+    value_.template emplace<session_persist_new>(std::string(payload));
 }
 
 void context_session_state::clear() {
@@ -172,35 +171,35 @@ void context_session_state::regenerate() {
         return;
     }
     auto old_id = std::move(loaded_state->id_);
-    auto data = std::move(loaded_state->data_);
-    if (data.empty()) {
+    auto payload = std::move(loaded_state->payload_);
+    if (payload.empty()) {
         value_.template emplace<session_clear>(std::optional<std::string>(std::move(old_id)));
     } else {
-        value_.template emplace<session_rotate>(std::move(old_id), std::move(data));
+        value_.template emplace<session_rotate>(std::move(old_id), std::move(payload));
     }
 }
 
-std::string_view context_session_state::data() const& noexcept {
+std::string_view context_session_state::payload() const& noexcept {
     if (const auto* state = std::get_if<session_loaded>(&value_)) {
-        return state->data_;
+        return state->payload_;
     }
     if (const auto* state = std::get_if<session_persist_new>(&value_)) {
-        return state->data_;
+        return state->payload_;
     }
     if (const auto* state = std::get_if<session_rotate>(&value_)) {
-        return state->data_;
+        return state->payload_;
     }
     return {};
 }
 
 }  // namespace detail
 
-std::string_view session::data() const& noexcept {
-    return state_->data();
+std::string_view session::payload() const& noexcept {
+    return state_->payload();
 }
 
-void session::set(std::string_view data) {
-    state_->set(data);
+void session::set(std::string_view payload) {
+    state_->set(payload);
 }
 
 void session::clear() {
@@ -325,13 +324,13 @@ task<void> session_middleware::commit(context& c) const {
         co_return;
     }
 
-    std::string_view data;
+    std::string_view payload;
     std::string_view old_id;
     if (const auto* rotated = state_value.rotate()) {
-        data = rotated->data_;
+        payload = rotated->payload_;
         old_id = rotated->old_id_;
     } else {
-        data = state_value.persist_new()->data_;
+        payload = state_value.persist_new()->payload_;
     }
 
     std::array<char, detail::secure_token_size> id_buffer;
@@ -347,7 +346,7 @@ task<void> session_middleware::commit(context& c) const {
             std::array<char, http_max_unsigned_decimal_size> ttl_buffer;
             const auto ttl = http_format_unsigned(ttl_buffer, static_cast<std::uint64_t>(ttl_.count()));
             const std::array<std::string_view, 2> keys{old_key.view(), key.view()};
-            const std::array<std::string_view, 2> args{data, ttl};
+            const std::array<std::string_view, 2> args{payload, ttl};
             // Redis executes the entire transition atomically. A stale request may
             // neither recreate a revoked identifier nor mint a successor from it.
             return c.redis(redis_alias_).eval(detail::session_rotation_script, keys, args);
@@ -362,7 +361,7 @@ task<void> session_middleware::commit(context& c) const {
             redis_set_options options;
             options.condition_ = redis_set_condition::if_absent;
             options.expiration_ = redis_set_expiration::expires_after(ttl_);
-            return c.redis(redis_alias_).set(key.view(), data, std::move(options));
+            return c.redis(redis_alias_).set(key.view(), payload, std::move(options));
         }();
         const auto result_value = co_await std::move(set_task);
         applied = result_value.applied();
@@ -386,10 +385,9 @@ constexpr rate_limit_scope default_scope{.route_ = 1};
 constexpr std::uintptr_t fallback_route_scope = 2;
 
 [[nodiscard]] rate_limit_hash_key random_hash_key() {
-    std::random_device source;
     rate_limit_hash_key key{};
-    for (auto& word : key) {
-        word = (std::uint64_t{source()} << 32) | source();
+    if (!detail::fill_random_bytes(std::span<unsigned char>(reinterpret_cast<unsigned char*>(key.data()), sizeof(key)))) {
+        throw std::runtime_error("rate limit hash key generation failed");
     }
     return key;
 }
@@ -469,11 +467,6 @@ struct siphash_state final {
     }
     const auto hash = siphash13(hash_key, std::span(message).first(16 + key.size()));
     return hash == empty_hash ? 1 : hash;
-}
-
-[[nodiscard]] std::uint64_t saturating_add(std::uint64_t left, std::uint64_t right) noexcept {
-    constexpr auto max_value = std::numeric_limits<std::uint64_t>::max();
-    return right > max_value - left ? max_value : left + right;
 }
 
 // An unsigned 128-bit value, high word first so the defaulted ordering is the
@@ -572,7 +565,7 @@ void roll_window(rate_limit_slot& slot, const rate_limit_rule& rule, std::chrono
     if (current >= limit) {
         // The next window opens with previous == limit and passes the test
         // once one millisecond of it has elapsed.
-        retry_after_ms = saturating_add(remaining_ms, 1);
+        retry_after_ms = saturating_add(remaining_ms, std::uint64_t{1});
     } else {
         // Refused with room left means previous * remaining >= room * window,
         // so previous > 0 and the largest passing remaining,

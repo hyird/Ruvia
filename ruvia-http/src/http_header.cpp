@@ -3,33 +3,32 @@
 #include <algorithm>
 #include <array>
 #include <bit>
-#include <cstddef>
-#include <limits>
-#include <optional>
-#include <string_view>
-#include <utility>
-
-#include "http_cache.h"
-#include "http_content_negotiation.h"
-#include "http_response.h"
-
-// Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
-// type/subtype and parameters, comparing parameter values across token and
-// quoted-string forms, and validating a Content-Type field. Matching a media
-// type against an Accept media-range lives in http_accept_match.cpp.
-
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
 #include <cstring>
 #include <ctime>
+#include <limits>
+#include <optional>
 #include <stdexcept>
+#include <string_view>
+#include <utility>
 #include <vector>
 
 #include "borrowed_text.h"
 #include "http1_server_response.h"
+#include "http_cache.h"
 #include "http_connection_fields.h"
+#include "http_content_negotiation.h"
 #include "http_request.h"
+#include "http_response.h"
 #include "http_uri_syntax.h"
+
+// Media-type syntax (RFC 9110 section 8.3.1): splitting a field value into
+// type/subtype and parameters, comparing parameter values across token and
+// quoted-string forms, and validating a Content-Type field. Matching a media
+// type against an Accept media-range (RFC 9110 section 12.5.1) builds on it
+// further down this file.
 
 namespace ruvia::detail {
 
@@ -393,11 +392,7 @@ void http_connection_nominated_fields::update(std::string_view connection_field_
         if (contains(token)) {
             return true;
         }
-        std::string lower(token);
-        for (auto& ch : lower) {
-            ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
-        }
-        tokens_.push_back(std::move(lower));
+        tokens_.push_back(http_ascii_lowercase(token));
         return true;
     });
 }

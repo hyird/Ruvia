@@ -747,7 +747,7 @@ struct http_content_encoder::impl_type final {
             return;
         }
         const auto remaining = max_encoded_bytes_ - produced_bytes_;
-        const auto output_cap = remaining > (std::numeric_limits<std::size_t>::max)() - before_size ? (std::numeric_limits<std::size_t>::max)() : before_size + remaining;
+        const auto output_cap = saturating_add(before_size, remaining);
         const bool ok = std::visit([&](auto& stream) {
             return encode_stream(stream, input, output, flush, finish_value, output_cap);
         }, *stream_);

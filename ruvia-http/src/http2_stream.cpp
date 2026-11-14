@@ -608,16 +608,8 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
         return http2_request_head_submit_error::peer_capability_unavailable;
     }
 
-    const bool websocket_value = http_ascii_equals_ignore_case(protocol, "websocket");
-    const auto default_port = http_uri_scheme_default_port(scheme);
-    const auto encoded_protocol = websocket_value ? std::string_view("websocket") : protocol;
-    binary_field_section_size section_size(max_http_header_bytes);
-    request_field_state fields{request_field_framing::binary};
-    if (!is_valid_http_header_name(protocol) || !is_valid_uri_scheme(scheme) || (websocket_value && default_port == 0) || !is_valid_binary_request_authority(scheme, authority) || !http_binary_is_valid_extended_connect_path(scheme, path) || !section_size.add(":method", "CONNECT") || !section_size.add(":protocol", encoded_protocol) || !section_size.add(":scheme", scheme) || !section_size.add(":authority", authority) || !section_size.add(":path", path) ||
-        !http_binary_are_valid_outbound_request_headers(authority, default_port, headers,
-            /*allow_host=*/!websocket_value,
-            /*allow_trailers=*/false, section_size, fields, source,
-            /*websocket_connect=*/websocket_value)) {
+    const auto encoded_protocol = http_binary_validate_extended_connect_request(protocol, scheme, authority, path, headers, source, max_http_header_bytes);
+    if (!encoded_protocol) {
         return http2_request_head_submit_error::invalid_message;
     }
 
@@ -625,16 +617,13 @@ std::variant<std::uint32_t, http2_request_head_submit_error> http2_connection::s
         (void)stream.begin_extended_connect();
         stream.assign_request_method("CONNECT");
         stream.assign_request_scheme(scheme);
-        stream.set_protocol(encoded_protocol);
+        stream.set_protocol(*encoded_protocol);
         stream.begin_local_content_forbidden();
         (void)stream.begin_local_connect_request();
         fields_.clear();
         fields_.reserve(headers.size() + 5);
         fields_.add(":method", "CONNECT");
-        // RFC 8441 registers and requires the lowercase `websocket` value. HTTP
-        // protocol-name matching is case-insensitive, so accept caller spelling but
-        // never put a non-canonical websocket token on the wire or in stream state.
-        fields_.add(":protocol", encoded_protocol);
+        fields_.add(":protocol", *encoded_protocol);
         fields_.add(":scheme", scheme);
         fields_.add(":authority", authority);
         fields_.add(":path", path);

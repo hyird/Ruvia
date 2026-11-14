@@ -449,7 +449,7 @@ task<result_type> run_cached_statement(postgresql_pool& pool, std::size_t index,
 // The digest covers the SQL, a NUL that SQL never contains, and every type
 // OID as four big-endian bytes, so no two keys share an encoding.
 postgresql_statement_name make_postgresql_statement_name(std::string_view sql, std::span<const unsigned int> types) {
-    db_sha256 key;
+    sha256 key;
     key.update(sql);
     key.update(std::string_view("\0", 1));
     for (const auto type : types) {
@@ -712,7 +712,7 @@ task<void> postgresql_driver::connect(pool_type& pool, std::size_t index, const 
     {
         const auto resolved_hosts = make_postgresql_resolved_host_list(tls_host, co_await pool.resolve_host(index, deadline_value));
         const auto port = format_db_port(config.port_);
-        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : (config.tls_.minimum_version_ == tls_version::tls_1_2 ? "TLSv1.2" : "TLSv1.1");
+        const char* minimum_tls = config.tls_.minimum_version_ == tls_version::tls_1_3 ? "TLSv1.3" : "TLSv1.2";
         const std::array<const char*, 14> keywords{"host", "hostaddr", "port", "user", "password", "dbname", "client_encoding", "sslmode", "sslrootcert", "sslcert", "sslkey", "gssencmode", "ssl_min_protocol_version", nullptr};
         const std::array<const char*, 14> values{resolved_hosts.hosts_.c_str(), resolved_hosts.addresses_.c_str(), port.data(), config.username_.c_str(), config.password_.c_str(), config.database_.c_str(), "UTF8", use_tls ? "verify-full" : "disable", root_certificate, identity.has_value() ? tls_file_name_c_str(identity->certificate_chain_file_) : "", identity.has_value() ? tls_file_name_c_str(identity->private_key_file_) : "", "disable", minimum_tls, nullptr};
         // PQconnectStartParams copies the parameter strings before returning.

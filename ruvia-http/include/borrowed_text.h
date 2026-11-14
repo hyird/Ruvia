@@ -474,9 +474,17 @@ public:
         return *this;
     }
 
+    // Longest text: eight four-digit groups, seven colons, then '%' and the
+    // ten digits of the largest zone.
+    static constexpr std::size_t max_text_size = 50;
+
     // RFC 5952 text: dotted decimal for IPv4; for IPv6 lowercase hex with the
     // longest zero run compressed, IPv4-mapped as "::ffff:a.b.c.d", and a zone
-    // as "%<scope>".
+    // as "%<scope>". Writes the text at the start of `output` and returns that
+    // prefix without allocating.
+    [[nodiscard]] std::string_view format_to(std::span<char, max_text_size> output) const noexcept;
+
+    // The format_to() text as an owning string.
     [[nodiscard]] std::string to_string() const;
 
     friend constexpr bool operator==(const ip_address&, const ip_address&) noexcept = default;
@@ -535,6 +543,38 @@ private:
 };
 
 static_assert(std::is_trivially_copyable_v<ip_cidr>);
+
+// The single saturating addition for sizes, counters and durations: the sum,
+// or the type's maximum when the sum would wrap.
+template <std::unsigned_integral value_type>
+[[nodiscard]] constexpr value_type saturating_add(value_type left, value_type right) noexcept {
+    constexpr auto maximum = (std::numeric_limits<value_type>::max)();
+    return left > maximum - right ? maximum : static_cast<value_type>(left + right);
+}
+
+// Appends one decimal digit (0-9) to `value`, which must not exceed
+// `maximum`; the result saturates at `maximum`. Streaming parsers that cannot
+// hand the whole number to http_parse_saturating_decimal() step with this.
+[[nodiscard]] constexpr std::uint64_t http_accumulate_decimal_digit(std::uint64_t value, unsigned digit, std::uint64_t maximum = (std::numeric_limits<std::uint64_t>::max)()) noexcept {
+    return digit > maximum || value > (maximum - digit) / 10 ? maximum : value * 10 + digit;
+}
+
+// The single parser for 1*DIGIT fields whose overflow clamps to a bound
+// (delta-seconds, Max-Forwards, byte-range positions): no value for empty
+// input or any non-digit byte, otherwise the number saturated at `maximum`.
+[[nodiscard]] constexpr std::optional<std::uint64_t> http_parse_saturating_decimal(std::string_view digits, std::uint64_t maximum = (std::numeric_limits<std::uint64_t>::max)()) noexcept {
+    if (digits.empty()) {
+        return std::nullopt;
+    }
+    std::uint64_t value = 0;
+    for (const char c : digits) {
+        if (c < '0' || c > '9') {
+            return std::nullopt;
+        }
+        value = http_accumulate_decimal_digit(value, static_cast<unsigned>(c - '0'), maximum);
+    }
+    return value;
+}
 
 // Maximum decimal digits of a std::uint64_t (18446744073709551615).
 inline constexpr std::size_t http_max_unsigned_decimal_size = 20;
@@ -936,10 +976,18 @@ inline void http_base64_encode(char* output, std::span<const std::uint8_t> input
     return out;
 }
 
+// percent: RFC 3986 pct-encoded decoding; '+' is literal and a malformed
+// escape fails.
+// path: percent decoding that also fails on an escape revealing '/' or '\\',
+// so decoded path text never gains a segment boundary that routing and
+// path-scoped middleware, which split on literal '/' only, never saw.
+// form: application/x-www-form-urlencoded; '+' is a space and, like the WHATWG
+// percent-decode algorithm, a '%' that starts no valid escape stays literal.
 enum class url_decode_mode : std::uint8_t { percent,
+    path,
     form };
 
-// Percent mode treats '+' literally; form mode decodes '+' as a space.
+// Percent and path modes treat '+' literally; form mode decodes '+' as a space.
 [[nodiscard]] inline bool has_url_encoding(std::string_view value, url_decode_mode mode) noexcept {
     // Keep short components and early escapes on the scalar path; library searches
     // can scan the remaining literal text in larger chunks.
@@ -976,6 +1024,13 @@ enum class url_decode_mode : std::uint8_t { percent,
         return std::nullopt;
     }
     return static_cast<unsigned char>((high << 4) | low);
+}
+
+// RFC 3986 section 2.3 unreserved: ALPHA / DIGIT / "-" / "." / "_" / "~".
+// Percent-encoding one of these octets is equivalent to spelling it literally
+// (section 6.2.2.2), so encoders keep them literal.
+[[nodiscard]] constexpr bool is_uri_unreserved_byte(unsigned char byte) noexcept {
+    return (byte >= '0' && byte <= '9') || (byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || byte == '-' || byte == '.' || byte == '_' || byte == '~';
 }
 
 // Appends the canonical uppercase pct-encoded triplet for byte. Callers own the
@@ -1029,15 +1084,39 @@ template <typename visitor_type>
     return true;
 }
 
-// Decodes one URL component. Returns `input` itself, without allocating, when
-// it holds nothing to decode; otherwise the decoded bytes replace `storage`'s
-// contents and the result views `storage`. Percent mode treats '+' literally
-// and returns no value for malformed percent encoding (RFC 3986 pct-encoded),
-// leaving `storage` unchanged. Form mode converts '+' to a space and, like the
-// WHATWG percent-decode algorithm used by application/x-www-form-urlencoded,
-// keeps a '%' that does not start a valid escape as a literal byte. `input`
-// may alias `storage`. Keep its owner alive until the result is consumed;
-// owning-string temporaries are rejected regardless of their contents.
+// The single URL decode loop: decodes `input` under `mode` in one pass into
+// `output`, which holds at least input.size() bytes and does not overlap
+// `input`, and returns the decoded size, or no value when `mode` rejects the
+// input. Callers that pack several decoded values into one buffer use this
+// directly.
+[[nodiscard]] constexpr std::optional<std::size_t> decode_url_bytes(std::string_view input, char* output, url_decode_mode mode) noexcept {
+    std::size_t size = 0;
+    for (std::size_t i = 0; i < input.size(); ++i) {
+        char c = input[i];
+        if (mode == url_decode_mode::form && c == '+') {
+            c = ' ';
+        } else if (c == '%') {
+            if (const auto byte = http_try_decode_percent_byte(input, i)) {
+                if (mode == url_decode_mode::path && (*byte == '/' || *byte == '\\')) {
+                    return std::nullopt;
+                }
+                c = static_cast<char>(*byte);
+                i += 2;
+            } else if (mode != url_decode_mode::form) {
+                return std::nullopt;
+            }
+        }
+        output[size++] = c;
+    }
+    return size;
+}
+
+// Decodes one URL component under `mode`. Returns `input` itself, without
+// allocating, when it holds nothing to decode; otherwise the decoded bytes
+// replace `storage`'s contents and the result views `storage`. Input `mode`
+// rejects returns no value and leaves `storage` unchanged. `input` may alias
+// `storage`. Keep its owner alive until the result is consumed; owning-string
+// temporaries are rejected regardless of their contents.
 [[nodiscard]] std::optional<std::string_view> decode_url_component(borrowed_text text, std::string& storage, url_decode_mode mode = url_decode_mode::percent);
 
 // Origin-form path identity, the one canonical form shared by route matching,

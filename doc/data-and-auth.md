@@ -185,11 +185,11 @@ auto report = co_await migrator.migrate(migrations);
 
 ### 2.1 `ruvia::db_query`（跨方言 SQL AST 构建器）
 
-`db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver, resource);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
+`db_query` 可脱离数据库连接独立构建并编译为目标方言的参数化语句（`auto stmt = query.compile(driver);`，再通过 `db.query(stmt.sql(), stmt.params())` 执行）：
 
-- **参数复制**：`db_value` 的拥有型文本副本沿用源 PMR，资源须覆盖副本寿命；借用型参数复制后仍借用原文，不隐式转为拥有型。
+- **参数复制**：`db_value` 的拥有型文本复制时复制存储；借用型参数复制后仍借用原文，不隐式转为拥有型。
 - **外部驱动绑定**：`db_statement::params()` 可直接读取 `db_value::type()`（`db_value_type`）及 `text()`、`signed_value()`、`unsigned_value()`、`double_value()`、`bool_value()`；不做隐式类型转换，读取错误分支抛 `std::bad_variant_access`。`null` 通过类型判别，无需取值。
-- **编译参数寿命**：语句拥有编译后的参数文本；`text()` 仅允许左值借用，视图不得超过语句及其 PMR 资源寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
+- **编译参数寿命**：语句拥有编译后的 SQL 与参数文本；`sql()`、`params()` 仅允许左值借用，视图不得超过语句寿命。外部项目可交给自己的数据库驱动，无须使用 Repository 或连接池。
 
 `db_source_options`、`db_cte_options`、`db_lock_options`、`db_window_options`、`db_conflict_options` 中的集合字段为 `borrowed_span<T>`；Repository 的 `db_find_options`、`db_upsert_options` 同样使用 `borrowed_span<T>` 借用集合及元素中的文本。请使用具名 `const std::array`、C 数组或左值容器保存元素；独立保存 options 时，数组和文本 owner 必须存活到调用入口同步复制或导入完成。同步导入型 API 的 `initializer_list` 参数不持久保存裸视图，可继续直接传入列表。
 
@@ -198,7 +198,7 @@ auto report = co_await migrator.migrate(migrations);
 - **变更子句**：`insert_into`、`values`、`insert_from`、`on_conflict`（Upsert；MariaDB 仅支持 `.any_unique_key_` 的 `ON DUPLICATE KEY UPDATE`，`excluded(col)` 编译为 `VALUES(col)`）、`update`、`set`、`update_from`、`delete_from`、`delete_using`、`returning`（MariaDB 需 ≥ 10.5，支持 `INSERT ... RETURNING` 与 `DELETE ... RETURNING`，`UPDATE ... RETURNING` 仅 PostgreSQL；`db_repository::save()` 依赖此能力）。
 - **表达式**：`column`、`value`、`excluded`、`call`、`coalesce`、`null_if`、`greatest`、`least`、`case_when`、`cast`、`aggregate`、`filter`、`over`（窗口函数）、`exists`、`subquery`。
 - **写入分类**：`has_writes()` 只依据当前语句及仍有效的 CTE / 集合操作；被替换的来源和未发布的失败追加快照不计入。含写入 CTE 的集合操作不能作为 `from`、`join`、表达式子查询或 `insert_from` 的只读来源；入口拒绝时不挂入该子查询，写入须保留在顶层 CTE。`clone()` 只复制当前语句可达的节点与子查询，不携带被替换子句、退役来源与废弃节点。
-- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载在实参与当前 Query 使用同一 PMR resource 时直接接管其 AST，否则复制。两种右值路径仅在成功提交后让实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
+- **组合与所有权**：`from`、`join`、`with`、`combine`、`insert_from`、`subquery`、`exists` 的 `const db_query&` 重载在返回前复制输入；对应的 `db_query&&` 重载直接接管实参 AST，实参变为 moved-from（传入当前 Query 自身时例外，按复制处理）。
 - **组合失败回滚**：校验或分配失败不消费源查询，也不改变目标原有 SQL 与参数；资源恢复后可重试。
 - **锁子句替换**：`lock()` 完整构造候选后才替换旧锁；失败保留原有模式、等待策略与表名。
 - **语句类型切换**：`insert_into`、`update`、`delete_from` 把 Query 切换到另一种语句时，只保留 `WHERE` 与 `WITH`；已有 `FROM` / `JOIN`、投影、`VALUES` / 赋值、`GROUP BY` / `HAVING`、`ORDER BY`、`LIMIT` / `OFFSET`、锁、集合操作或 `DISTINCT` 时抛出 `std::invalid_argument`，以免残留的 `FROM` 静默变成 `UPDATE ... FROM` / `DELETE ... USING` 扩大目标范围。需要关联来源时显式使用 `update_from` / `delete_using`；同类语句重新指定目标不受影响。
@@ -307,7 +307,7 @@ RUVIA_DB_PROJECTION(device_summary,
 - **表达式列表**：读 Builder 的 `group_by`、`add_group_by`、`distinct_on` 接受 `span<const db_expr>` 或 `initializer_list<db_expr>`，列名入口保留；`db_expression` 与类型化列引用隐式转为 `db_expr`。`order_by` / `add_order_by` 共用 `db_expr` 表达式入口。
 - **CTE 校验一致**：读 Builder 的 `with` 不按来源入口区分校验；只读 CTE 可与关系预加载并用，含写入的 CTE 统一要求平面结果映射。
 
-读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 或其 PMR resource 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载在同一 resource 下直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
+读写 Builder 统一提供 `const db_query& query() const&`：这是只读、零拷贝的 AST 借用，不是快照，不延长 Builder 的寿命。Builder 销毁或移动前必须结束借用；后续 Builder 修改会反映在视图中。直接在右值 Builder 上调用 `query()` 被拒绝，应先保存具名 Builder。`db_query::with()`、子查询 JOIN 等消费者在调用返回前克隆输入（右值重载直接接管），因此导入完成后源 Query / Builder 即可销毁，外层仍拥有完整 AST、文本和参数。
 
 读 Builder 的 `query()` 保留原组合视图语义：它只暴露平面查询，拒绝 relation hydration；**不会应用** `get_many()` / `get_query_and_parameters()` 等执行入口经 `effective_query()` 添加的软删除过滤。组合时若需要排除软删除行，应在源 Builder 显式添加相应条件。写 Builder 的视图先执行既有写安全校验（例如 UPDATE / DELETE 必须有条件），保留完整 INSERT / UPDATE / DELETE / `on_conflict()` 与 `RETURNING`；没有增加新的 SQL 生成路线。
 
@@ -426,7 +426,7 @@ ruvia::app()
 | Pub/Sub | `publish(channel, payload)`、`subscription()` |
 | RediSearch ORM | `repository<Entity>(redis_repository_config)` |
 
-- **SET 结果资源**：`redis_set_result` 复制与移动构造继承源 PMR，赋值保留目标 PMR；空结果仍保留资源绑定，资源须覆盖结果寿命。
+- **SET 结果所有权**：`redis_set_result` 复制时复制 `previous()` 文本，移动时转移存储；结果不借用回复缓冲。
 - **SET 结果语义**：赋值失败保持原结果；`previous()` 的 `std::nullopt` 与空字符串保持区分。
 
 `redis_scan_options::match_` 使用 `std::optional<borrowed_text>` 区分未指定与空模式：默认 `nullopt` 不发送 `MATCH`，`match_ = ""` 则发送 `MATCH ""`，只匹配空 key／字段／成员；普通模式如 `"user:*"` 仍按 Redis glob 规则筛选。清除过滤时设置 `match_ = std::nullopt` 或调用 `match_.reset()`。四种 scan 方法共享此契约，命令入口同步复制模式，保存 options 时仍须保持借用文本有效。依据 [Redis SCAN 的 MATCH 语义](https://redis.io/docs/latest/commands/scan/#the-match-option)。
@@ -596,5 +596,5 @@ if (bearer) {
 - 自定义声明的值可以是任意 JSON 值（RFC 7519 §2）。载荷整体仍校验 JSON 语法与声明名唯一性；字符串值经 `claims()` / `claim(name)` 暴露，数字、布尔、`null`、数组与对象等非字符串自定义声明按 RFC 7519 §4 忽略，不导致令牌被拒绝。注册声明（`iss` / `sub` / `aud` / `jti` / `exp` / `nbf` / `iat`）类型不符时仍拒绝。
 - 时间声明遵循 [RFC 7519 §2 NumericDate](https://www.rfc-editor.org/rfc/rfc7519#section-2)。`expires_at()`、`not_before()`、`issued_at()` 返回借用的 `const jwt_numeric_date*`，`nullptr` 表示声明缺失。`text()` 保留完整十进制数字（包括小数和指数），`to_time_point()` 仅在宿主时钟能精确表示其范围与精度时返回时间点，否则返回 `nullopt`，不会饱和、舍入或把亚 tick 的非零值当作零。
 - `exp` / `nbf` 验证直接比较精确 NumericDate 与当前时间及 `leeway_`，不经过宿主时间点转换；边界分别为 `exp == now - leeway` 已过期、`nbf == now + leeway` 已生效（[§4.1.4–4.1.5](https://www.rfc-editor.org/rfc/rfc7519#section-4.1.4)）。签发的正 `expires_in_` / `not_before_delay_` 向上取整到整秒，零偏移向下取整；超出宿主时钟范围的结果仍保留所请求的秒数。`leeway_` 只应补偿实际时钟偏差，通常不超过几分钟。
-- 载荷及 NumericDate 独立拥有解码内容，不借用输入 token；指定的 PMR resource 必须覆盖整个结果及其析构。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
+- 载荷及 NumericDate 独立拥有解码内容，不借用输入 token。时间指针、`text()` 和其他载荷视图不可跨越 payload 的移动或销毁；需要长期保留时复制文本。移出的源 NumericDate 表示数学零，不再代表原声明。
 - `jwt_decode_unverified` 在不校验签名与时间声明的前提下解码载荷，但仍按 RFC 7519 §7.2 校验三段式结构与 JOSE Header（要求合法的 Base64url/JSON 对象、唯一的键名、非空字符串 `"alg"`，并拒绝 `"crit"` 与 `"b64"` 扩展）。

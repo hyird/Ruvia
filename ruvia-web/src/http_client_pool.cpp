@@ -2023,13 +2023,6 @@ task<client_transport_result> client_tcp_transport::connect(const operation_dead
     });
     tls_duration_ = std::chrono::steady_clock::now() - tls_started;
     auto result_value = finish(read_, timeout, handshake.error_code(), 0, client_transport_status::tls_failed);
-    // RFC 9113 section 9.2: even a noncompliant peer selecting h2 over a
-    // legacy TLS connection must never cause HTTP/2 preface/application I/O.
-    // Enforce this here as raw TCP clients can also offer h2.
-    if (result_value.ok() && alpn() == "h2" && SSL_version(stream_.native_handle()) < TLS1_2_VERSION) {
-        result_value.status_ = client_transport_status::tls_failed;
-        result_value.error_ = make_client_tls_setup_error_code(client_tls_setup_error::protocol_failed);
-    }
     tls_close_ready_ = result_value.ok();
     co_return result_value;
 }
@@ -2189,8 +2182,6 @@ constexpr std::array<unsigned char, 12> negotiated_http_alpn = {2, 'h', '2', 8, 
             return "failed to configure TLS ALPN";
         case client_tls_setup_error::peer_identity_failed:
             return "failed to configure TLS peer identity";
-        case client_tls_setup_error::protocol_failed:
-            return "TLS protocol requirements were not met";
     }
     std::terminate();
 }
@@ -2299,12 +2290,6 @@ void configure_client_tls_context(SSL_CTX& context_value, const client_tls_confi
 client_tls_setup_error prepare_client_tls_stream(SSL& ssl, std::string_view host, std::span<const unsigned char> protocols) {
     if (SSL_clear(&ssl) != 1) {
         return client_tls_setup_error::reset_failed;
-    }
-    // Keep a stricter context minimum (in particular QUIC's TLS 1.3).
-    // Mixed ALPN offers may negotiate HTTP/1.1 over TLS 1.1; the shared TCP
-    // transport checks the selected protocol before exposing any byte I/O.
-    if (std::ranges::equal(protocols, http2_alpn) && SSL_get_min_proto_version(&ssl) < TLS1_2_VERSION && SSL_set_min_proto_version(&ssl, TLS1_2_VERSION) != 1) {
-        return client_tls_setup_error::protocol_failed;
     }
     if (const auto prepared = prepare_client_tls_session(ssl, host); prepared != client_tls_setup_error::none) {
         return prepared;

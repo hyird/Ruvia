@@ -244,7 +244,7 @@ namespace {
     bool decoded_any = false;
     for (std::size_t i = 0; i < host.size();) {
         if (host[i] == '%') {
-            if (const auto byte = http_try_decode_percent_byte(host, i); byte.has_value() && detail::is_unreserved_byte(*byte)) {
+            if (const auto byte = http_try_decode_percent_byte(host, i); byte.has_value() && is_uri_unreserved_byte(*byte)) {
                 if (size == decoded.size()) {
                     return http_target_origin::misdirected();
                 }
@@ -369,7 +369,15 @@ std::size_t estimate_http1_field_section_bytes(const http_response_headers& fiel
 
 std::size_t estimate_http1_response_head_bytes(http_status_code status, const http_response_headers& headers) noexcept {
     const std::size_t status_line_bytes = 15U + http_reason_phrase(status).size();
-    return detail::saturating_add_size(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+    return saturating_add(status_line_bytes, estimate_http1_field_section_bytes(headers, true));
+}
+
+std::optional<std::uint64_t> http_parse_content_length(std::string_view field_value) noexcept {
+    detail::http_content_length_state state;
+    if (state.parse_field(field_value) != detail::http_content_length_parse_status::ok) {
+        return std::nullopt;
+    }
+    return state.value();
 }
 
 std::string normalize_http_proxy_request_target(http_known_method method, std::string_view target) {
@@ -438,20 +446,7 @@ std::string http_max_forwards_result::format_decremented() const {
 }
 
 std::optional<std::uint64_t> parse_http_max_forwards_value(std::string_view field_value, std::uint64_t max_saturation) noexcept {
-    const auto trimmed = http_trim_ows(field_value);
-    if (trimmed.empty()) {
-        return std::nullopt;
-    }
-    std::uint64_t value = 0;
-    constexpr auto max_u64 = (std::numeric_limits<std::uint64_t>::max)();
-    for (const char ch : trimmed) {
-        if (ch < '0' || ch > '9') {
-            return std::nullopt;
-        }
-        const auto digit = static_cast<std::uint64_t>(ch - '0');
-        value = value > (max_u64 - digit) / 10U ? max_u64 : value * 10U + digit;
-    }
-    return (std::min)(value, max_saturation);
+    return http_parse_saturating_decimal(http_trim_ows(field_value), max_saturation);
 }
 
 http_max_forwards_result parse_http_max_forwards(std::string_view field_value, std::uint64_t max_saturation) noexcept {

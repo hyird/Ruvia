@@ -441,7 +441,7 @@ template <typename transport_type>
                     self.session_.abort();
                 }
             }
-        } deadline{session_value, steady_now_ms() + timeout.value().count(), {}};
+        } deadline{session_value, steady_deadline_ms(steady_stamp_ms(), timeout.value()), {}};
         scanner.register_periodic_check(deadline.registration_, &deadline, &drain_deadline::tick);
         try {
             co_await session_value.finish();
@@ -544,9 +544,8 @@ inline void restart_websocket_pong_window(websocket_liveness_state_type& state_v
 
 inline void resume_websocket_pong_deadline(const websocket_lifecycle_options& options, websocket_liveness_state_type& state_value, bool pong_observable) noexcept {
     if (const auto* pong = std::get_if<websocket_awaiting_pong>(&state_value); pong != nullptr && pong_observable && options.heartbeat_.pong_timeout_.has_value()) {
-        const auto now = steady_now_ms();
-        if (now - pong->sent_at_ms_ >= options.heartbeat_.pong_timeout_->value().count()) {
-            state_value = websocket_awaiting_pong{now, pong->challenge_};
+        if (steady_now_ms() - pong->sent_at_ms_ >= options.heartbeat_.pong_timeout_->value().count()) {
+            state_value = websocket_awaiting_pong{steady_stamp_ms(), pong->challenge_};
         }
     }
 }
@@ -1256,7 +1255,7 @@ template <typename stream_type>
 void websocket_session_connection<stream_type>::finish_write(bool restart_pong) noexcept {
     write_lane_.release();
     if (restart_pong && std::holds_alternative<websocket_awaiting_pong>(liveness_state_)) {
-        restart_websocket_pong_window(liveness_state_, steady_now_ms());
+        restart_websocket_pong_window(liveness_state_, steady_stamp_ms());
     }
     write_lane_.notify();
 }
@@ -1265,7 +1264,7 @@ template <typename stream_type>
 void websocket_session_connection<stream_type>::heartbeat_tick(std::int64_t now) noexcept {
     const bool observable = pong_observable();
     if (!observable) {
-        restart_websocket_pong_window(liveness_state_, now);
+        restart_websocket_pong_window(liveness_state_, steady_stamp_ms());
     }
     switch (evaluate_websocket_liveness(lifecycle_options_, protocol_.liveness_mode(), liveness_state_, write_lane_.write_in_progress(), observable, scanner_entry_.last_active_ms(), now)) {
         case websocket_liveness_decision::idle:
@@ -1310,7 +1309,7 @@ task<void> websocket_session_connection<stream_type>::write_heartbeat_ping() {
         // Ordinary I/O shares the scanner activity timestamp and may update it
         // while this coroutine is suspended. The Pong deadline belongs to this
         // completed heartbeat write, so use its own timestamp.
-        const auto ping_sent_at_ms = steady_now_ms();
+        const auto ping_sent_at_ms = steady_stamp_ms();
         if (protocol_.liveness_mode() == websocket_liveness_mode::open && std::holds_alternative<websocket_sending_ping>(liveness_state_)) {
             liveness_state_ = websocket_awaiting_pong{ping_sent_at_ms, challenge};
         }
@@ -1402,7 +1401,7 @@ task<std::optional<websocket_message>> websocket_session_connection<stream_type>
                             if (const auto* close_event = event->close()) {
                                 record_peer_close(*close_event);
                             }
-                            liveness_state_ = event->close() != nullptr ? websocket_liveness_state_type(websocket_awaiting_peer_close{steady_now_ms()}) : websocket_liveness_state_type(websocket_liveness_idle{});
+                            liveness_state_ = event->close() != nullptr ? websocket_liveness_state_type(websocket_awaiting_peer_close{steady_stamp_ms()}) : websocket_liveness_state_type(websocket_liveness_idle{});
                             write_guard.note_write();
                             co_await flush_protocol_output_now();
                         }
@@ -1616,7 +1615,7 @@ task<void> websocket_session_connection<stream_type>::close_owned(::ruvia::webso
                     case websocket_close_submit_status::accepted:
                         // The deadline covers the Close write too: a peer that stops
                         // reading must not hold the flush below open past the timeout.
-                        liveness_state_ = websocket_awaiting_peer_close{steady_now_ms()};
+                        liveness_state_ = websocket_awaiting_peer_close{steady_stamp_ms()};
                         flush_output = true;
                         break;
                     case websocket_close_submit_status::already_closing:

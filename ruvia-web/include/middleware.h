@@ -1151,7 +1151,7 @@ private:
 //
 // application::use<T>() instantiates the descriptor at the call site. Built-in
 // middleware headers already include that machinery. A custom middleware's
-// use<T>() call site needs router.h, controller.h, or testing.h.
+// use<T>() call site needs controller.h or app.h (test_app).
 // This header stays free of context so app.h does not pull it in.
 template <typename middleware_type>
 concept middleware = std::is_class_v<middleware_type> && std::is_final_v<middleware_type> && (requires { static_cast<task<void> (middleware_type::*)(context&, next&)>(&middleware_type::invoke); } || requires { static_cast<task<void> (middleware_type::*)(context&, next&) const>(&middleware_type::invoke); });
@@ -1751,20 +1751,20 @@ namespace ruvia {
 // context state and therefore cannot escape the request.
 // Changes are persisted automatically before the response head (including a
 // stream head or a websocket/CONNECT handshake) is sent. Once that commit
-// begins, set(), clear(), and regenerate() throw std::logic_error; data()
+// begins, set(), clear(), and regenerate() throw std::logic_error; payload()
 // remains readable.
 class session final {
 public:
-    [[nodiscard]] std::string_view data() const& noexcept;
-    std::string_view data() const&& = delete;
+    [[nodiscard]] std::string_view payload() const& noexcept;
+    std::string_view payload() const&& = delete;
     [[nodiscard]] bool empty() const noexcept {
-        return data().empty();
+        return payload().empty();
     }
     // Every non-empty write replaces an existing session identity at commit.
     // Repeated writes in one request publish one new ID; reads keep the ID.
-    void set(std::string_view data);
+    void set(std::string_view payload);
     void clear();
-    // Rotate without changing the data, for an authentication or privilege
+    // Rotate without changing the payload, for an authentication or privilege
     // transition that does not write the session. set() already requests rotation.
     // Replacing an expired or revoked session fails with HTTP 409.
     void regenerate();

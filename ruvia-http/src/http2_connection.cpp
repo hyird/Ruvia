@@ -606,18 +606,18 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
             finish_header_block(frame);
             break;
         case NGHTTP2_RST_STREAM:
-            process_rst_stream(frame);
+            on_rst_stream_frame(frame);
             break;
         case NGHTTP2_SETTINGS:
             if ((frame.hd.flags & NGHTTP2_FLAG_ACK) == 0) {
-                process_settings(frame);
+                on_settings_frame(frame);
             }
             break;
         case NGHTTP2_PING:
-            process_ping(frame);
+            on_ping_frame(frame);
             break;
         case NGHTTP2_GOAWAY:
-            process_goaway(frame);
+            on_goaway_frame(frame);
             break;
         case NGHTTP2_WINDOW_UPDATE:
             if (receive_frame_metadata_) {
@@ -625,12 +625,12 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
             }
             break;
         case NGHTTP2_PRIORITY_UPDATE:
-            process_priority_update(frame);
+            on_priority_update_frame(frame);
             break;
         case static_cast<std::uint8_t>(http2_frame_type::alternative_service):
         case static_cast<std::uint8_t>(http2_frame_type::origin):
             if (role_ == http2_role::client && (frame.hd.type == static_cast<std::uint8_t>(http2_frame_type::alternative_service) || receive_origin_advertisements_)) {
-                process_advertisement(frame.hd);
+                on_advertisement_frame(frame.hd);
             }
             break;
         default:
@@ -639,7 +639,7 @@ int http2_connection::on_frame_recv(const nghttp2_frame& frame) {
     return 0;
 }
 
-void http2_connection::process_settings(const nghttp2_frame& frame) {
+void http2_connection::on_settings_frame(const nghttp2_frame& frame) {
     received_peer_settings_ = true;
     if (!receive_frame_metadata_) {
         return;
@@ -653,7 +653,7 @@ void http2_connection::process_settings(const nghttp2_frame& frame) {
     publish_event(http2_event(settings));
 }
 
-void http2_connection::process_ping(const nghttp2_frame& frame) {
+void http2_connection::on_ping_frame(const nghttp2_frame& frame) {
     if ((frame.hd.flags & NGHTTP2_FLAG_ACK) == 0) {
         return;
     }
@@ -667,7 +667,7 @@ void http2_connection::process_ping(const nghttp2_frame& frame) {
     }
 }
 
-void http2_connection::process_goaway(const nghttp2_frame& frame) {
+void http2_connection::on_goaway_frame(const nghttp2_frame& frame) {
     const http2_goaway_event goaway(static_cast<std::uint32_t>(frame.goaway.last_stream_id), static_cast<http2_error_code>(frame.goaway.error_code));
     // A GOAWAY boundary can cover more live streams than the concurrency budget:
     // reserved push promises hold no concurrency slot (RFC 9113 §5.1.2, §8.4.2)
@@ -725,7 +725,7 @@ void http2_connection::process_goaway(const nghttp2_frame& frame) {
     }
 }
 
-void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
+void http2_connection::on_advertisement_frame(const nghttp2_frame_hd& header) {
     struct payload_guard final {
         std::string& payload_;
         ~payload_guard() {
@@ -760,7 +760,7 @@ void http2_connection::process_advertisement(const nghttp2_frame_hd& header) {
     }
 }
 
-void http2_connection::process_priority_update(const nghttp2_frame& frame) {
+void http2_connection::on_priority_update_frame(const nghttp2_frame& frame) {
     // nghttp2 accepts PRIORITY_UPDATE only on a server and already enforced its
     // push-stream and idle-stream rules; a Prioritized Stream ID of zero is left
     // to this layer (RFC 9218 §7.1).
@@ -805,7 +805,7 @@ void http2_connection::process_priority_update(const nghttp2_frame& frame) {
     publish_event(http2_event(http_priority_update{id, (id & 1U) == 0, fields}));
 }
 
-void http2_connection::process_rst_stream(const nghttp2_frame& frame) {
+void http2_connection::on_rst_stream_frame(const nghttp2_frame& frame) {
     const auto stream_id = static_cast<std::uint32_t>(frame.hd.stream_id);
     const auto error = static_cast<http2_error_code>(frame.rst_stream.error_code);
     auto* stream = streams_.find(stream_id);

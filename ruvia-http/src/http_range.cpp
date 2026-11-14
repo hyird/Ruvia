@@ -124,25 +124,10 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
         return result;
     }
     field_value = http_trim_ows(field_value);
-    constexpr std::string_view unit = "bytes";
-    if (field_value.size() <= unit.size() || field_value[unit.size()] != '=' || !http_ascii_equals_ignore_case(field_value.substr(0, unit.size()), unit)) {
+    constexpr std::string_view unit_prefix = "bytes=";
+    if (!http_ascii_starts_with_ignore_case(field_value, unit_prefix)) {
         return result;
     }
-
-    const auto parse_number = [](std::string_view digits, std::uint64_t& value) noexcept {
-        if (digits.empty()) {
-            return false;
-        }
-        const auto [end, error] = std::from_chars(digits.data(), digits.data() + digits.size(), value);
-        if (end != digits.data() + digits.size()) {
-            return false;
-        }
-        if (error == std::errc::result_out_of_range) {
-            value = (std::numeric_limits<std::uint64_t>::max)();
-            return true;
-        }
-        return error == std::errc{};
-    };
 
     const bool strict = options.strict_order_ || options.order_policy_ == http_byte_range_order_policy::strict_ascending_disjoint;
     const auto add_range = [&](std::uint64_t offset, std::uint64_t length) -> bool {
@@ -188,7 +173,7 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
         return true;
     };
 
-    auto specs = http_trim_ows(field_value.substr(unit.size() + 1));
+    auto specs = http_trim_ows(field_value.substr(unit_prefix.size()));
     if (specs.empty()) {
         return result;
     }
@@ -214,25 +199,27 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
         }
         const auto first = spec.substr(0, dash);
         const auto last = spec.substr(dash + 1);
-        std::uint64_t start{};
-        std::uint64_t end{};
         if (first.empty()) {
-            std::uint64_t suffix{};
-            if (!parse_number(last, suffix)) {
+            const auto suffix = http_parse_saturating_decimal(last);
+            if (!suffix) {
                 return http_byte_range_set{};
             }
-            if (suffix == 0 || representation_length == 0) {
+            if (*suffix == 0 || representation_length == 0) {
                 continue;
             }
-            const auto length = (std::min)(suffix, representation_length);
+            const auto length = (std::min)(*suffix, representation_length);
             if (!add_range(representation_length - length, length)) {
                 return http_byte_range_set{};
             }
             continue;
         }
-        if (!parse_number(first, start) || (!last.empty() && !parse_number(last, end))) {
+        const auto parsed_start = http_parse_saturating_decimal(first);
+        const auto parsed_end = http_parse_saturating_decimal(last);
+        if (!parsed_start || (!last.empty() && !parsed_end)) {
             return http_byte_range_set{};
         }
+        const auto start = *parsed_start;
+        const auto end = parsed_end.value_or(0);
         if (!last.empty()) {
             if (start > end) {
                 return http_byte_range_set{};
@@ -267,11 +254,11 @@ http_byte_range_set resolve_http_byte_range_set(std::string_view field_value, ht
 
 std::optional<http_content_range> parse_http_content_range(std::string_view field_value) noexcept {
     field_value = http_trim_ows(field_value);
-    constexpr std::string_view prefix = "bytes ";
-    if (field_value.size() <= prefix.size() || !http_ascii_equals_ignore_case(field_value.substr(0, 5), "bytes") || (field_value[5] != ' ' && field_value[5] != '\t')) {
+    constexpr std::string_view unit = "bytes";
+    if (!http_ascii_starts_with_ignore_case(field_value, unit) || field_value.size() == unit.size() || !is_http_ows_char(field_value[unit.size()])) {
         return std::nullopt;
     }
-    const auto spec = http_trim_ows(field_value.substr(5));
+    const auto spec = http_trim_ows(field_value.substr(unit.size()));
     const auto dash = spec.find('-');
     if (dash == std::string_view::npos) {
         return std::nullopt;

@@ -243,16 +243,10 @@ bool is_http_media_type_compressible(std::string_view content_type_value) noexce
     if (media_type.empty()) {
         return false;
     }
-    const auto starts_with = [&](std::string_view prefix) noexcept {
-        return media_type.size() >= prefix.size() && http_ascii_equals_ignore_case(media_type.substr(0, prefix.size()), prefix);
-    };
-    const auto ends_with = [&](std::string_view suffix) noexcept {
-        return media_type.size() >= suffix.size() && http_ascii_equals_ignore_case(media_type.substr(media_type.size() - suffix.size()), suffix);
-    };
-    if (ends_with("zip")) {
+    if (http_ascii_ends_with_ignore_case(media_type, "zip")) {
         return false;
     }
-    if (starts_with("text/") || ends_with("+json") || ends_with("+xml")) {
+    if (http_ascii_starts_with_ignore_case(media_type, "text/") || http_ascii_ends_with_ignore_case(media_type, "+json") || http_ascii_ends_with_ignore_case(media_type, "+xml")) {
         return true;
     }
     static constexpr std::array<std::string_view, 14> compressible_types{

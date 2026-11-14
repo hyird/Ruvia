@@ -153,10 +153,9 @@ private:
     constexpr http1_close_delimited_response_stream_head() noexcept = default;
 };
 
-// Final HTTP/1 head framing is an exclusive protocol value, not the old
-// "suppress automatic Content-Length" boolean. The body plan keeps method/status
-// content semantics attached to the exact wire-framing alternative selected by
-// the HTTP/1 planner.
+// Final HTTP/1 head framing is one exclusive protocol value. The body plan
+// keeps method/status content semantics attached to the exact wire-framing
+// alternative selected by the HTTP/1 planner.
 class http1_response_head_plan final {
 public:
     [[nodiscard]] constexpr const http1_buffered_response_head* buffered() const& noexcept {
@@ -260,15 +259,6 @@ static_assert(sizeof(http1_buffered_response_plan) == sizeof(http1_response_head
 [[nodiscard]] inline http1_buffered_response_plan get_http1_buffered_response_plan(http_buffered_response_write_plan write_plan, http1_request_connection_plan connection_plan) noexcept {
     return http1_buffered_response_plan(http1_response_head_plan(write_plan.body_plan(), connection_plan.protocol_version(), http1_response_head_plan::buffered_framing(write_plan.content_length())));
 }
-
-// Stable, non-detail entry points for HTTP response serialization plans. The
-// plan implementations remain shared with the HTTP/1 and HTTP/2 protocol code.
-namespace detail {
-
-[[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
-[[nodiscard]] bool is_forbidden_http_binary_response_field(std::string_view name) noexcept;
-
-}  // namespace detail
 
 class http_response_trailer_section;
 

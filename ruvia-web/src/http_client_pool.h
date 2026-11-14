@@ -500,7 +500,6 @@ inline void validate_client_tls_config(const client_tls_config& config) {
         throw std::invalid_argument("invalid client TLS mode");
     }
     switch (config.minimum_version_) {
-        case tls_version::tls_1_1:
         case tls_version::tls_1_2:
         case tls_version::tls_1_3:
             break;
@@ -576,7 +575,6 @@ enum class client_tls_setup_error : std::uint8_t {
     sni_failed,
     alpn_failed,
     peer_identity_failed,
-    protocol_failed,
 };
 
 // The ALPN offer of one client protocol. HTTP/1 and WebSocket offer
@@ -589,7 +587,7 @@ enum class client_alpn : std::uint8_t {
 };
 [[nodiscard]] std::span<const unsigned char> client_alpn_bytes(client_alpn mode) noexcept;
 
-// Startup-only. Applies the shared TLS protocol policy (tls_protocol_policy.h);
+// Startup-only. Applies the shared TLS protocol policy (apply_tls_protocol_policy, tls.h);
 // trust and client identity loading have one implementation; the ALPN offer is
 // installed per connection by the TCP transport.
 // The storage must come from a validated client_tls_config with TLS enabled.
@@ -2819,7 +2817,7 @@ public:
     void throw_if_aborted() const;
 
 #ifdef RUVIA_ENABLE_HTTP2
-    // HTTP/2 (http2/http_client_http2.cpp). False when the multiplexed session
+    // HTTP/2 (http2_client.cpp). False when the multiplexed session
     // had ended (or the peer required HTTP/1.1, RFC 9113 section 7) and its
     // replacement connection speaks HTTP/1.1 instead: nothing was sent, and
     // the caller runs the request as an HTTP/1 exchange on that connection.

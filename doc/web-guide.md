@@ -180,13 +180,12 @@ ruvia::app().listen({
   - **异步发布**：每个业务 worker 在自身线程采用新集合，调用协程挂起至全部完成。此后的 ClientHello 使用新集合；既有连接与已越过 ClientHello 的握手保留原身份。每 worker 每协议族的持久 `SSL_CTX`、会话缓存与票据密钥不替换，会话仍只在原 SNI 名称下恢复。
   - **线程与生命周期**：在显式 `caller` 所属 worker 上 `co_await`，允许业务 worker 发起；应用未运行（含启动钩子与停机期间）抛出 `std::logic_error`。与停机竞争时等待已投递控制及其负载退出，再传播失败，不提前销毁运行时；未成功提交的监听定义保留原集合。已采用新集合的 worker 只可能将其用于与停机竞争的握手，这些连接随停机关闭。
   - **持久化**：成功替换同时更新监听器定义，应用停止后再次 `run()` 继续使用新集合；停止期间仍用 `listen()` 整体替换监听配置。并发调用按发布顺序生效。
-- **TCP TLS 版本**：入站服务、出站 HTTP/原始 TCP、Redis 与数据库最低为 TLS 1.1，仍拒绝 TLS 1.0、压缩与重协商。TLS 1.1 仅使用 ECDHE + AES-128/256-CBC-SHA；TLS 1.2 保持 ECDHE + AEAD（AES-128-GCM 优先），TLS 1.3 使用 OpenSSL 默认 AEAD 套件。
-- **出站 TLS 下限**：`client_tls_config::minimum_version_` 接受 `tls_version::tls_1_1`、`tls_1_2`、`tls_1_3`，覆盖 HTTP、原始 TCP、Redis 与数据库客户端；默认保持 TLS 1.1 兼容行为。回源禁止旧版时显式设为 `tls_1_2`；协议自身的更高下限不被配置降低。
-- **旧版兼容例外**：TLS 1.1 已被 [RFC 8996 §3](https://www.rfc-editor.org/rfc/rfc8996.html#section-3) 禁止协商，此处按明确兼容需求保留，并非现代安全基线。仅豁免该版本与其必需的旧握手签名；证书链、SAN、密钥强度及 TLS 1.2/1.3 的检查仍委托原 [OpenSSL 安全回调](https://docs.openssl.org/3.0/man3/SSL_CTX_set_security_level/)，不全局设置 `SECLEVEL=0`。
-- **HTTP 协议下限**：HTTP/2 至少 TLS 1.2，HTTP/3 / QUIC 仅 TLS 1.3。`routes` 与 `request_stream` 的 ALPN 按 `h2`、`http/1.1`、`http/1.0` 选择，TLS 1.1 跳过 `h2`；没有共同协议时以 `no_application_protocol` 告警失败。原始连接的自定义 ALPN 同样不能在 TLS 1.1 选择 `h2`。
+- **TCP TLS 版本**：入站服务、出站 HTTP/原始 TCP、Redis 与数据库最低为 TLS 1.2，按 [RFC 8996 §2-3](https://www.rfc-editor.org/rfc/rfc8996.html#section-2) 与 [RFC 9325 §3.1.1](https://www.rfc-editor.org/rfc/rfc9325.html#section-3.1.1) 拒绝更早版本，并拒绝压缩与重协商。TLS 1.2 仅使用 ECDHE + AEAD（AES-128-GCM 优先），TLS 1.3 使用 OpenSSL 默认 AEAD 套件；证书链、SAN 与密钥强度检查仍委托原 [OpenSSL 安全回调](https://docs.openssl.org/3.0/man3/SSL_CTX_set_security_level/)。
+- **出站 TLS 下限**：`client_tls_config::minimum_version_` 接受 `tls_version::tls_1_2`（默认）与 `tls_1_3`，覆盖 HTTP、原始 TCP、Redis 与数据库客户端；协议自身的更高下限不被配置降低。
+- **HTTP 协议下限**：HTTP/3 / QUIC 仅 TLS 1.3。`routes` 与 `request_stream` 的 ALPN 按 `h2`、`http/1.1`、`http/1.0` 选择；没有共同协议时以 `no_application_protocol` 告警失败。
 - `tls_.alpn_` 只用于 `listener_dispatch::connection` 的 HTTPS 服务：按服务器偏好顺序提供的 ALPN 协议名（每个 1..255 字节，为空时依次为 `h2`、`http/1.1`）；客户端提供的 ALPN 均不在列表中时以 `no_application_protocol` 告警失败（RFC 7301 §3.2），未提供 ALPN 时握手照常完成且不选协议。`routes` 与 `request_stream` 监听器设置非空列表、名称长度越界或无 `https_` 时 `listen()` 抛 `std::invalid_argument`。
 - `tls_.max_outgoing_records_`（默认 `2^23`，范围 `1..2^23`）限制每条连接发出的全部 TLS 记录，计入握手与 KeyUpdate 且更新密钥不重置；到达上限时终止连接，以低于 RFC 9846 §5.5 的 AES-GCM 单密钥用量上限。
-- 会话可在同一监听器的任意 worker 上恢复；TLS 1.1、1.2 与 1.3 会话都只在与建立时相同的 SNI 名称（ASCII 不区分大小写）下恢复（RFC 6066 §3；RFC 9846 §4.6.1 允许拒绝不同 SNI 的 PSK），否则完整握手。会话票据密钥每 2 小时（会话有效期）轮换一次，旧密钥再保留一个周期用于解密，随后销毁（RFC 9325 §3.4）；某个 worker 复制密钥失败时约 5 秒后重试，而不是等到下一次轮换。
+- 会话可在同一监听器的任意 worker 上恢复；TLS 1.2 与 1.3 会话都只在与建立时相同的 SNI 名称（ASCII 不区分大小写）下恢复（RFC 6066 §3；RFC 9846 §4.6.1 允许拒绝不同 SNI 的 PSK），否则完整握手。会话票据密钥每 2 小时（会话有效期）轮换一次，旧密钥再保留一个周期用于解密，随后销毁（RFC 9325 §3.4）；某个 worker 复制密钥失败时约 5 秒后重试，而不是等到下一次轮换。
 - 目标源校验（RFC 9110 §7.4 / §15.5.20）：目标为 `https` 资源的请求（HTTPS 连接上的 origin-form / asterisk-form，或显式 `https` 绝对形式目标 / HTTP/2 `:scheme https`），只有当本连接握手出示的证书在 subjectAltName 的 DNS 或 IP 条目中覆盖目标主机（`:authority`，否则 `Host`；通配符只匹配完整的最左标签，不使用主题 CN）时才处理，否则回 `421 Misdirected Request`；HTTP/2 只拒绝该流，连接保留。证书匹配而非 SNI 匹配，因此证书覆盖的其他名称仍可复用连接（RFC 9113 §9.1.1）。明文监听器收到 `https` 目标同样回 `421`。`http` 目标、CONNECT 隧道目标与空 authority 的请求不受影响；来自 `trusted_proxy_config` 网段的对端豁免两项检查。每个连接缓存最近 4 个主机的判定，不对每个请求重复扫描证书。
 - **监听 socket 接管（`inherited_sockets_`）**：`ruvia::listener_sockets` 以 `http_`、`https_`（监听中的 TCP socket）与 `http3_`（已绑定的 UDP socket）三组 `ruvia::native_socket`（POSIX 文件描述符，Windows `SOCKET`）代替绑定对应服务；空向量照常绑定。
   - **同端口句柄**：明文与 TLS 共用端口时，唯一 TCP 句柄组放在 `https_`；`http_` 必须为空，导出也使用 `https_`。
@@ -289,9 +288,9 @@ ruvia::app().listen({
 
 - **抛出或构造业务错误**：
   - 在路由或中间件中可抛出 `ruvia::http_error({.status_ = ruvia::http_status::bad_request, .code_ = "bad_input", .message_ = "..."})`，或直接 `co_return c.error({...});`。`http_error` 是唯一的拥有型应用错误：status / code / message / status_text 以及 `.validation_issues_` 全部深拷贝持有，`info()` 返回携带 issues 的 `http_error_info`。
-- **错误资源归属**：`http_error` 复制或移动赋值保留目标资源对象，包含嵌套诊断文本；不同资源对象即使 `is_equal()` 为真，也先在目标资源完整重建再提交，分配失败保留原值。
-- **独立校验诊断**：`validation_issue` 复制构造沿用源 PMR，赋值保留目标 PMR；保留诊断副本时须同步保留资源所有者。
-- **诊断赋值提交**：全部字段准备成功后才替换旧值；分配失败保留两端诊断，资源等价的移动不分配。
+- **错误赋值提交**：`http_error` 复制赋值先完整复制全部字段（包含嵌套诊断文本）再提交，分配失败保留原值；移动赋值转移存储、不分配。
+- **独立校验诊断**：`validation_issue` 复制独立拥有字段文本，副本不依赖源诊断寿命。
+- **诊断赋值提交**：复制赋值先构造完整副本再交换，分配失败保留原值；移动赋值不分配，源诊断字段清空。
 - **全局与前缀级错误/404 处理器**：
   - `on_error` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c, ruvia::http_error_info error)`。处理器内再次抛出 `http_error`（含校验 issues）会按该错误生成默认响应，不会变成 500；协议层错误的 `error.code()` 为具体机器码（如 `missing_host`、`conflicting_content_length`），而非按状态派生的 `bad_request`。内置中间件的拒绝同样经过 `on_error`：全局与路由级限流为 `429` / `too_many_requests`（处理器返回的响应之后会追加 `Retry-After` 与 `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset`），CSRF 校验失败为 `403` / `csrf_token_mismatch`，会话冲突为 `409` / `session_conflict`。
   - `on_not_found` 回调签名：`ruvia::task<ruvia::http_response>(ruvia::context& c)`。
@@ -896,11 +895,11 @@ const auto& user = c.request_state<current_user>();
 
 | 组件 / 头文件 | 用法与说明 |
 | --- | --- |
-| `ruvia::body_limit<MaxBytes>` (`"controller.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
+| `ruvia::body_limit<MaxBytes>` (`"middleware.h"`) | 仅用于控制器或单条路由（如 `RUVIA_POST("/upload", upload, ruvia::body_limit<65536>)`），收紧该路由允许的最大请求体字节数 |
 | `ruvia::rate_limit<MaxReqs, WindowMs>` / `ruvia::sliding_window_rate_limiter` (`"middleware.h"`) | 控制器或路由级滑动窗口限流中间件（按 `c.conn().client().address()` 在当前 worker 内计数），以及可独立用于 `request_stream` / `server_connection` 或自定义维度的 `sliding_window_rate_limiter`、`rate_limit_decision`、`format_rate_limit_address_key`、`apply_rate_limit_headers` |
 | `ruvia::security_headers_middleware` (`"middleware.h"`) | 不依赖 Session 或 Redis；注入 `X-Content-Type-Options`、`X-Frame-Options`、`Content-Security-Policy`、`Referrer-Policy`、`Permissions-Policy` 等安全响应头，对 404 同样生效；`Strict-Transport-Security` 仅在 HTTPS 下发出 |
 | `ruvia::csrf_protection` (`"middleware.h"`) | 基于 Double-Submit Cookie（默认 Cookie `"XSRF-TOKEN"` 与请求头 `"X-XSRF-TOKEN"`）的无状态 CSRF 防护中间件；校验失败抛出 `http_error`（`403` / `csrf_token_mismatch`），经 `on_error` 应答 |
-| `ruvia::session_middleware` (`"middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().data()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
+| `ruvia::session_middleware` (`"middleware.h"`, 需 `RUVIA_ENABLE_REDIS`) | 基于 Redis 的服务端会话中间件；路由中通过 `c.session().payload()`、`c.session().set(...)`、`c.session().regenerate()`、`c.session().clear()` 管理会话；`redis_alias_` 经 `c.redis(alias)` 解析，应用宿主取 `application::redis()` 注册，独立宿主取 `router::bind_redis()` 借入 |
 | `ruvia::make_health_response` / `make_readiness_response` (`"context.h"`) | 生成标准健康检查（`200 OK`）与就绪探针响应（`readiness_state::ready` 返回 `200`，`unavailable` 返回 `503`） |
 
 两级限流使用相同的地址身份规则：IPv4-mapped IPv6 与对应 IPv4 共用配额；不带 scope 的 IPv6 按 `/64` 网络前缀计数；带 scope 的 IPv6 按完整 128 位地址及数值 scope 计数，压缩、展开和大小写形式不会产生独立配额。不同 scope 保持隔离。地址仍由可信代理配置决定，限流计数仍归当前 worker。

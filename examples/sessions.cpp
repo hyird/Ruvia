@@ -35,9 +35,9 @@ public:
 private:
     ruvia::task<ruvia::http_response> read(ruvia::context& c) {
         const auto session_value = c.session();
-        // A read leaves the existing ID unchanged. The handle and data view
+        // A read leaves the existing ID unchanged. The handle and payload view
         // borrow context and must never be retained by background work.
-        co_return c.text(session_value.data().empty() ? "no preference\n" : session_value.data());
+        co_return c.text(session_value.payload().empty() ? "no preference\n" : session_value.payload());
     }
 
     ruvia::task<ruvia::http_response> write(ruvia::context& c) {

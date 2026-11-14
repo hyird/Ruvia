@@ -100,12 +100,8 @@ namespace {
         digest[i * 4 + 3] = static_cast<std::uint8_t>((words[i] >> 24U) & 0xffU);
     }
 
-    static constexpr char hex_digits[] = "0123456789abcdef";
     std::array<char, 32> out{};
-    for (std::size_t i = 0; i < 16; ++i) {
-        out[i * 2] = hex_digits[(digest[i] >> 4U) & 0x0fU];
-        out[i * 2 + 1] = hex_digits[digest[i] & 0x0fU];
-    }
+    http_encode_lower_hex(out.data(), digest);
     return out;
 }
 
@@ -181,16 +177,14 @@ namespace {
         process_block(tail.data() + 64);
     }
 
-    static constexpr char hex_digits[] = "0123456789abcdef";
-    std::array<char, 64> out{};
+    std::array<std::uint8_t, 32> digest{};
     for (std::size_t i = 0; i < 8; ++i) {
         for (std::size_t b = 0; b < 4; ++b) {
-            const auto byte = static_cast<std::uint8_t>((state[i] >> ((3U - b) * 8U)) & 0xffU);
-            const std::size_t pos = (i * 4 + b) * 2;
-            out[pos] = hex_digits[(byte >> 4U) & 0x0fU];
-            out[pos + 1] = hex_digits[byte & 0x0fU];
+            digest[i * 4 + b] = static_cast<std::uint8_t>((state[i] >> ((3U - b) * 8U)) & 0xffU);
         }
     }
+    std::array<char, 64> out{};
+    http_encode_lower_hex(out.data(), digest);
     return out;
 }
 
@@ -205,11 +199,8 @@ void append_decimal_list(std::string& out, std::span<const int_type> items) {
 }
 
 void append_hex_u16(std::string& out, std::uint16_t value) {
-    static constexpr char hex_digits[] = "0123456789abcdef";
-    out.push_back(hex_digits[(value >> 12U) & 0x0fU]);
-    out.push_back(hex_digits[(value >> 8U) & 0x0fU]);
-    out.push_back(hex_digits[(value >> 4U) & 0x0fU]);
-    out.push_back(hex_digits[value & 0x0fU]);
+    const char digits[]{http_lower_hex_digit(value >> 12U), http_lower_hex_digit(value >> 8U), http_lower_hex_digit(value >> 4U), http_lower_hex_digit(value)};
+    out.append(digits, sizeof(digits));
 }
 
 [[nodiscard]] std::string_view ja4_version_code(std::uint16_t version) noexcept {
@@ -304,10 +295,7 @@ std::string tls_client_hello_info::ja4(bool quic) const {
             out.push_back(first_char);
             out.push_back(last_char);
         } else {
-            static constexpr char hex_digits[] = "0123456789abcdef";
-            const auto first_byte = static_cast<unsigned char>(first_char);
-            out.push_back(hex_digits[(first_byte >> 4U) & 0x0fU]);
-            out.push_back(hex_digits[first_byte & 0x0fU]);
+            http_append_lower_hex(out, first_alpn.substr(0, 1));
         }
     }
     out.push_back('_');

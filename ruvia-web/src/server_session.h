@@ -1108,7 +1108,8 @@ struct app_state final {
     app_lifecycle lifecycle_;
     // Controls never hold a mutex across suspension. The synchronous run()
     // owner keeps the published runtime and frozen configuration alive until
-    // every admitted control (including its blocking preparation) has joined.
+    // every admitted control (including its blocking preparation) and every
+    // startup stop rollback in progress has released its count.
     runtime_control_gate runtime_control_gate_;
     std::size_t runtime_controls_{};
 };
@@ -1129,8 +1130,10 @@ application& mutate_stopped_app(application& app, app_state& state_value, const 
 
 void run_app(application& app, app_state& state_value);
 // The one stop chain for a published runtime: closes admission on the acceptor
-// and every worker. The caller holds state_value.mutex_; run_app owns retirement.
-void request_runtime_stop(app_state& state_value) noexcept;
+// and every worker, synchronously running their stop callbacks on the calling
+// thread. The caller must not hold app_state::mutex_ and must pin `runtime`
+// through app_state::runtime_controls_; run_app owns retirement.
+void request_runtime_stop(app_runtime_graph& runtime) noexcept;
 
 struct env_variable final {
     std::string name_;

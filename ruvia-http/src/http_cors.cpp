@@ -18,20 +18,13 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "http_uri_syntax.h"
 
 namespace ruvia {
 namespace {
 
 [[nodiscard]] bool is_valid_cors_origin_value(std::string_view origin) noexcept {
     return origin == "null" || is_valid_http_serialized_origin(origin);
-}
-
-[[nodiscard]] std::string to_lower_copy(std::string_view text) {
-    std::string result(text);
-    for (auto& ch : result) {
-        ch = static_cast<char>(http_ascii_to_lower(static_cast<unsigned char>(ch)));
-    }
-    return result;
 }
 
 [[nodiscard]] std::string join_tokens(std::span<const std::string> items) {
@@ -191,7 +184,7 @@ http_cors_policy::http_cors_policy(const http_cors_policy_config& config) :
             if (!http_ascii_equals_ignore_case(scheme, "http") && !http_ascii_equals_ignore_case(scheme, "https")) {
                 throw std::invalid_argument("CORS origin suffix scheme must be http or https");
             }
-            rule.scheme_ = to_lower_copy(scheme);
+            rule.scheme_ = http_ascii_lowercase(scheme);
             rest = rest.substr(scheme_pos + 3U);
         }
         if (rest.starts_with("*.")) {
@@ -205,7 +198,7 @@ http_cors_policy::http_cors_policy(const http_cors_policy_config& config) :
         if (!authority || authority->host().empty() || authority->port_kind() == http_authority_port_kind::empty || authority->host().starts_with('[') || is_valid_http_ipv4_literal(authority->host()) || authority->host().front() == '.' || authority->host().back() == '.') {
             throw std::invalid_argument("CORS origin suffix must name a valid domain");
         }
-        rule.host_suffix_ = to_lower_copy(authority->host());
+        rule.host_suffix_ = http_ascii_lowercase(authority->host());
         rule.port_ = authority->port();
         suffix_rules_.push_back(std::move(rule));
     };
@@ -334,7 +327,7 @@ bool http_cors_policy::allows_origin(std::string_view origin) const noexcept {
         if (!rule.subdomain_only_ && http_ascii_equals_ignore_case(host, suffix)) {
             return true;
         }
-        if (host.size() > suffix.size() && host[host.size() - suffix.size() - 1U] == '.' && http_ascii_equals_ignore_case(host.substr(host.size() - suffix.size()), suffix)) {
+        if (detail::is_dns_subdomain_of(host, suffix)) {
             return true;
         }
     }

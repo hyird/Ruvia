@@ -843,8 +843,8 @@ private:
     void unregister_connection_ids() noexcept;
 
     // Connection events.
-    void process_events() noexcept;
-    void drain_events();
+    void drain_events() noexcept;
+    void dispatch_events();
     void start_application();
     void on_request_head(http3_request_head_event& event);
     void on_data(http3_data_event& event);

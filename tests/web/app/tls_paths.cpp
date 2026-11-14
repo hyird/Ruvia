@@ -159,8 +159,8 @@ bool throws_system_error(fn_type&& fn) {
     }
 }
 
-// The peer deliberately permits legacy algorithms so TLS 1.0 rejection and
-// TLS 1.1 success exercise the listener, not the test client's defaults.
+// The peer deliberately permits legacy algorithms so TLS 1.0 and 1.1 rejection
+// exercises the listener, not the test client's defaults.
 void configure_client_version(asio::ssl::context& context, int version) {
     if (version == 0) {
         return;
@@ -402,8 +402,8 @@ using namespace tls_paths_test;
 // Startup prepares the staged credentials off-worker and cleanses its password
 // copy; the same listener must serve HTTPS on a second run without listen().
 // Each run also negotiates ALPN: any HTTP version the server speaks when
-// offered (RFC 7301 §3.2), a fatal alert otherwise. TLS 1.1 negotiates RSA/ECDSA
-// ECDHE+AES-CBC and HTTP/1.x only; TLS 1.0 is refused. TLS 1.2 stays ECDHE+AEAD
+// offered (RFC 7301 §3.2), a fatal alert otherwise. TLS 1.0 and 1.1 are refused
+// (RFC 8996 §2-3). TLS 1.2 stays ECDHE+AEAD
 // in the server's order (RFC 9325 §4.1-4.2.1). Every supported version enforces
 // the outgoing record budget and isolates resumed sessions by server_name.
 TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
@@ -482,19 +482,11 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
         if (ready) {
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true)));
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "sni.test", false)));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls", nullptr, TLS1_1_VERSION)));
-            EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, elliptic_identity.ca_file_, "ecdsa.test", true, "/tls", nullptr, TLS1_1_VERSION)));
-            EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA", TLS1_VERSION).empty());
-            for (const char* cipher : {"ECDHE-RSA-AES128-SHA", "ECDHE-RSA-AES256-SHA"}) {
-                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION), std::string(cipher));
+            EXPECT_FALSE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls", nullptr, TLS1_1_VERSION)));
+            for (const int version : {TLS1_VERSION, TLS1_1_VERSION}) {
+                EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA", version).empty());
+                EXPECT_TRUE(selected_cipher(io, endpoint, "ECDHE-ECDSA-AES128-SHA", version, "ecdsa.test").empty());
             }
-            for (const char* cipher : {"ECDHE-ECDSA-AES128-SHA", "ECDHE-ECDSA-AES256-SHA"}) {
-                EXPECT_EQ(selected_cipher(io, endpoint, cipher, TLS1_1_VERSION, "ecdsa.test"), std::string(cipher));
-            }
-            const auto legacy_alpn = negotiate_alpn(io, endpoint, "\x02h2\x08http/1.1", TLS1_1_VERSION);
-            EXPECT_FALSE(legacy_alpn.error_);
-            EXPECT_EQ(legacy_alpn.selected_, std::string("http/1.1"));
-            EXPECT_TRUE(refuses_with_no_application_protocol(negotiate_alpn(io, endpoint, "\x02h2", TLS1_1_VERSION)));
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer"), "absent"));
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer", identity.context_.native_handle()), "CN=localhost"));
             EXPECT_TRUE(serves_secure_body(https_get(io, endpoint, identity.ca_file_, "localhost", true, "/tls-peer", empty_client.native_handle()), "present-empty"));
@@ -512,7 +504,7 @@ TEST(Ruvia, https_serves_credentials_from_non_ascii_paths_across_runs) {
             EXPECT_EQ(selected_cipher(io, endpoint, "AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES128-SHA:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
             EXPECT_EQ(selected_cipher(io, endpoint, "ECDHE-RSA-AES256-GCM-SHA384:ECDHE-RSA-AES128-GCM-SHA256"), std::string("ECDHE-RSA-AES128-GCM-SHA256"));
-            for (const int version : {TLS1_1_VERSION, TLS1_2_VERSION, TLS1_3_VERSION}) {
+            for (const int version : {TLS1_2_VERSION, TLS1_3_VERSION}) {
                 EXPECT_TRUE(bounded_tls_connection_ends(io, endpoint, version));
                 EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "localhost", "localhost"));
                 EXPECT_TRUE(resumes_tls_session_under(io, endpoint, version, "sni.test", "SNI.test"));

@@ -513,19 +513,25 @@ blocking_submit_result blocking_pool::submit(move_only_function<void()> task_val
     const auto owner_ptr = impl_;
     auto& owner = *owner_ptr;
     impl_type::node_type* node = nullptr;
+    std::optional<blocking_submit_status> refused;
     {
         std::lock_guard lock(owner.mutex_);
         if (owner.stopping_) {
             ++owner.discarded_;
-            return detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::pool_stopped, std::move(task_value));
-        }
-        if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
+            refused = blocking_submit_status::pool_stopped;
+        } else if (owner.queued_ + owner.reserved_ >= owner.queue_capacity_) {
             ++owner.rejected_;
-            return detail::worker_delivery_access::reject<blocking_submit_result>(blocking_submit_status::queue_full, std::move(task_value));
+            refused = blocking_submit_status::queue_full;
+        } else {
+            node = owner.free_head_;
+            owner.free_head_ = node->next_;
+            ++owner.reserved_;
         }
-        node = owner.free_head_;
-        owner.free_head_ = node->next_;
-        ++owner.reserved_;
+    }
+    // The refused task moves back to the caller outside the lock: its move
+    // constructor may reenter the pool.
+    if (refused) {
+        return detail::worker_delivery_access::reject<blocking_submit_result>(*refused, std::move(task_value));
     }
     node->task_ = std::move(task_value);
     bool stopped = false;
@@ -1029,9 +1035,8 @@ enum class native_wake_signal : std::uint8_t {
 };
 
 // The platform wake channel: a nonblocking sender and the receiver descriptor that
-// the worker adopts into its Asio stream. Implemented by
-// worker_notification_win32.cpp (named pipe) and worker_notification_posix.cpp
-// (Linux eventfd or a POSIX self-pipe).
+// the worker adopts into its Asio stream: a named pipe on Windows, an eventfd on
+// Linux, a self-pipe on other POSIX systems.
 struct native_wake_pair final {
     native_wake_descriptor sender_{invalid_native_wake_descriptor};
     native_wake_descriptor receiver_{invalid_native_wake_descriptor};
@@ -1335,7 +1340,7 @@ public:
         if (now >= deadline_value) {
             return 0;
         }
-        const auto remaining = std::chrono::ceil<std::chrono::milliseconds>(deadline_value - now).count();
+        const auto remaining = ceil_milliseconds(deadline_value - now).count();
         return static_cast<DWORD>(std::clamp<std::int64_t>(remaining, 1, 60'000));
     }
 

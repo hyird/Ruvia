@@ -33,6 +33,7 @@
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_server_response.h"
+#include "http_cache.h"
 #include "http_client.h"
 #include "http_client_pool.h"
 #include "http_client_redirect.h"
@@ -737,7 +738,7 @@ void http_client_request_storage::resolve_route(const http_client_config_storage
 namespace {
 void append_query_component(std::string& output, std::string_view value) {
     for (const unsigned char byte : value) {
-        if ((byte >= 'a' && byte <= 'z') || (byte >= 'A' && byte <= 'Z') || (byte >= '0' && byte <= '9') || byte == '-' || byte == '.' || byte == '_' || byte == '~') {
+        if (is_uri_unreserved_byte(byte)) {
             output.push_back(static_cast<char>(byte));
         } else {
             http_append_percent_byte(output, byte);
@@ -757,37 +758,6 @@ void replace_field(std::vector<http_header>& fields, std::string_view name, std:
     }
 }
 
-bool hop_field(std::string_view name) noexcept {
-    return http_ascii_equals_ignore_case(name, "connection") || http_ascii_equals_ignore_case(name, "keep-alive") || http_ascii_equals_ignore_case(name, "proxy-connection") || http_ascii_equals_ignore_case(name, "transfer-encoding") || http_ascii_equals_ignore_case(name, "proxy-authenticate") || http_ascii_equals_ignore_case(name, "proxy-authorization") || http_ascii_equals_ignore_case(name, "te") || http_ascii_equals_ignore_case(name, "trailer") || http_ascii_equals_ignore_case(name, "upgrade");
-}
-
-bool connection_named_field(std::span<const http_header> fields, std::string_view name) {
-    for (const auto& field : fields) {
-        if (!http_ascii_equals_ignore_case(field.name(), "connection")) {
-            continue;
-        }
-        auto tokens = field.value();
-        while (!tokens.empty()) {
-            const auto comma = tokens.find(',');
-            auto token = tokens.substr(0, comma);
-            while (!token.empty() && (token.front() == ' ' || token.front() == '\t')) {
-                token.remove_prefix(1);
-            }
-            while (!token.empty() && (token.back() == ' ' || token.back() == '\t')) {
-                token.remove_suffix(1);
-            }
-            if (http_ascii_equals_ignore_case(token, name)) {
-                return true;
-            }
-            if (comma == std::string_view::npos) {
-                break;
-            }
-            tokens.remove_prefix(comma + 1);
-        }
-    }
-    return false;
-}
-
 // One bound for the whole forward: commit, body and end share the deadline
 // started here and the caller's stop token.
 task<void> pipe_response(http_client_response response, detail::http_client_response_state& state, response_stream_writer& output, operation_options operation) {
@@ -805,8 +775,9 @@ task<void> pipe_response(http_client_response response, detail::http_client_resp
         co_await state.consume_body<void>(state.downstream_step(steps), &output);
         std::vector<http_header_view> trailers;
         trailers.reserve(response.trailers().size());
+        const auto nominated = parse_http_connection_nominated_fields(response.headers());
         for (const auto& field : response.trailers()) {
-            if (!hop_field(field.name()) && !connection_named_field(response.headers(), field.name())) {
+            if (!is_http_hop_by_hop_trailer_field(field.name(), nominated)) {
                 trailers.emplace_back(field.name(), field.value());
             }
         }
@@ -1325,8 +1296,9 @@ task<void> http_client_response::pipe_to_destination(context_response_editor dra
     }
     draft.status(status());
     const auto fields = headers();
+    const auto nominated = parse_http_connection_nominated_fields(fields);
     for (auto field = fields.begin(); field != fields.end(); ++field) {
-        if (!hop_field(field->name()) && !connection_named_field(fields, field->name()) && !http_ascii_equals_ignore_case(field->name(), "content-length")) {
+        if (!is_http_hop_by_hop_or_nominated_field(field->name(), nominated) && !http_ascii_equals_ignore_case(field->name(), "content-length")) {
             const bool repeated = std::any_of(fields.begin(), field, [&](const http_header& previous) {
                 return http_ascii_equals_ignore_case(previous.name(), field->name());
             });

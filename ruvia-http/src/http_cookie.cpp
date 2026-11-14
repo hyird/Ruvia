@@ -336,13 +336,10 @@ bool is_valid_cookie_value(std::string_view value) noexcept {
 }
 
 std::optional<cookie_prefix> cookie_name_prefix(std::string_view name) noexcept {
-    const auto starts_with_ignore_case = [name](std::string_view prefix) noexcept {
-        return name.size() >= prefix.size() && http_ascii_equals_ignore_case(name.substr(0, prefix.size()), prefix);
-    };
-    if (starts_with_ignore_case("__Host-")) {
+    if (http_ascii_starts_with_ignore_case(name, "__Host-")) {
         return cookie_prefix::host;
     }
-    if (starts_with_ignore_case("__Secure-")) {
+    if (http_ascii_starts_with_ignore_case(name, "__Secure-")) {
         return cookie_prefix::secure;
     }
     return std::nullopt;
@@ -417,7 +414,7 @@ bool http_cookie_jar::cookie_domain_matches(std::string_view host, std::string_v
     if (is_cookie_ip_host(host)) {
         return false;
     }
-    return host.size() > domain.size() && host[host.size() - domain.size() - 1] == '.' && http_ascii_equals_ignore_case(host.substr(host.size() - domain.size()), domain);
+    return detail::is_dns_subdomain_of(host, domain);
 }
 
 bool http_cookie_jar::cookie_path_matches(std::string_view request_path, std::string_view cookie_path) noexcept {
@@ -446,10 +443,7 @@ std::string_view http_cookie_jar::default_cookie_path(std::string_view target) n
 std::size_t http_cookie_jar::entry_storage_bytes(std::string_view name, std::string_view value, std::string_view path, std::string_view domain) noexcept {
     std::size_t total = 0;
     for (const auto field : {name, value, path, domain}) {
-        if (field.size() > (std::numeric_limits<std::size_t>::max)() - total) {
-            return (std::numeric_limits<std::size_t>::max)();
-        }
-        total += field.size();
+        total = saturating_add(total, field.size());
     }
     return total;
 }

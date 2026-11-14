@@ -628,7 +628,7 @@ struct http3_connection_options;
 namespace ruvia::detail {
 
 // Builds one worker's TLS contexts of a listener at startup, from its loaded
-// definition: the TCP context (TLS 1.1..1.3, h2 only with TLS >= 1.2,
+// definition: the TCP context (TLS 1.2..1.3, ALPN h2,
 // http/1.1, http/1.0, or connection dispatch's custom ALPN) and, with an
 // HTTP/3 service, the QUIC context (TLS 1.3 only, ALPN h3 only, opt-in early
 // data). Neither carries an identity: each

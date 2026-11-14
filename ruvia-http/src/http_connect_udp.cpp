@@ -153,7 +153,7 @@ std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(h
     }
     std::size_t encoded_host_size = 0;
     for (const unsigned char c : target.host_.view()) {
-        encoded_host_size += detail::is_unreserved_byte(c) ? 1U : 3U;
+        encoded_host_size += is_uri_unreserved_byte(c) ? 1U : 3U;
     }
     std::array<char, http_max_unsigned_decimal_size> port_buffer{};
     const auto port_digits = http_format_unsigned(port_buffer, target.port_.value());
@@ -161,7 +161,7 @@ std::variant<std::string, http_connect_udp_error> encode_http_connect_udp_path(h
     result_value.reserve(masque_udp_prefix.size() + encoded_host_size + 1U + port_digits.size() + 1U);
     result_value.append(masque_udp_prefix);
     for (const unsigned char c : target.host_.view()) {
-        if (detail::is_unreserved_byte(c)) {
+        if (is_uri_unreserved_byte(c)) {
             result_value.push_back(static_cast<char>(c));
         } else {
             http_append_percent_byte(result_value, c);

@@ -3243,26 +3243,7 @@ namespace {
 
 std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
     const auto field = response.header("Content-Length");
-    if (!field.has_value()) {
-        return std::nullopt;
-    }
-    std::optional<std::uint64_t> declared;
-    bool valid = true;
-    http_visit_comma_separated_quoted_field_items(*field, [&](std::string_view item) noexcept {
-        if (item.empty()) {
-            valid = false;
-            return false;
-        }
-        std::uint64_t parsed = 0;
-        const auto [ptr, ec] = std::from_chars(item.data(), item.data() + item.size(), parsed);
-        if (ec != std::errc{} || ptr != item.data() + item.size() || (declared.has_value() && *declared != parsed)) {
-            valid = false;
-            return false;
-        }
-        declared = parsed;
-        return true;
-    });
-    return valid ? declared : std::nullopt;
+    return field.has_value() ? http_parse_content_length(*field) : std::nullopt;
 }
 
 bool declared_length_permits_encoding(const http_response_coding_selection& selection, const compression_config& options, std::uint64_t declared) noexcept {
@@ -3402,16 +3383,6 @@ namespace {
     return timeout.has_value() && inactive_ms >= timeout->value().count();
 }
 
-[[nodiscard]] std::int64_t close_deadline_after(std::int64_t now, std::chrono::milliseconds delay) noexcept {
-    const auto maximum = (std::numeric_limits<std::int64_t>::max)();
-    return now > maximum - delay.count() ? maximum : now + delay.count();
-}
-
-[[nodiscard]] std::int64_t activity_now_ms() noexcept {
-    // 向上取整活动时间，避免毫秒截断让超时提前；扫描时钟仍向下取整。
-    return std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
 }  // namespace
 
 connection_scanner::periodic_check_registration::~periodic_check_registration() noexcept {
@@ -3428,12 +3399,12 @@ connection_scanner::entry::~entry() noexcept {
 }
 void connection_scanner::entry::touch() noexcept {
     if (scanner_ != nullptr) {
-        last_active_ms_ = activity_now_ms();
+        last_active_ms_ = steady_stamp_ms();
     }
 }
 void connection_scanner::entry::note_write_progress() noexcept {
     if (scanner_ != nullptr) {
-        last_active_ms_ = activity_now_ms();
+        last_active_ms_ = steady_stamp_ms();
         write_progress_ms_ = last_active_ms_;
     }
 }
@@ -3591,24 +3562,25 @@ connection_scanner::impl_type::impl_type(connection_scanner* owner_value, worker
     reusable_sentinel_.reusable_prev_ = reusable_sentinel_.reusable_next_ = &reusable_sentinel_;
 }
 bool connection_scanner::impl_type::retire() noexcept {
-    // scanning_ is worker-local; only the worker thread may observe it. On that
-    // thread a set flag means this call is nested inside the scan callback,
-    // which already holds the timer mutex.
     const bool on_worker = worker_.is_current();
-    const bool nested_in_scan = on_worker && scanning_;
-    if (nested_in_scan) {
-        stop();
-        timer_state_->owner_ = nullptr;
-        release_after_scan_ = true;
-    } else if (on_worker) {
-        stop();
-        timer_state_->owner_ = nullptr;
-    } else {
-        // Another thread may be scanning; wait for that callback to finish.
-        std::lock_guard lock(timer_state_->mutex_);
-        stop();
+    bool nested_in_scan = false;
+    {
+        std::unique_lock lock(timer_state_->mutex_);
+        if (on_worker) {
+            // Rounds run only on the worker, so a running one is this call's own
+            // caller further up the stack; waiting for it would never end.
+            nested_in_scan = timer_state_->scanning_;
+        } else {
+            timer_state_->scan_ended_.wait(lock, [this] {
+                return !timer_state_->scanning_;
+            });
+        }
         timer_state_->owner_ = nullptr;
     }
+    // Outside the lock: cancelling destroys the pending completion. An expiry
+    // in between finds no owner and starts no round.
+    stop();
+    release_after_scan_ = nested_in_scan;
     // Unregistration keeps the scan cursors consistent, so a nested scan ends
     // without visiting any detached node.
     while (sentinel_.next_ != &sentinel_) {
@@ -3737,50 +3709,72 @@ void connection_scanner::impl_type::schedule() {
         if (outcome == worker_timer_outcome::cancelled) {
             return;
         }
-        impl_type* destroy_after_lock = nullptr;
+        impl_type* scanner = nullptr;
         {
             std::lock_guard lock(timer_state->mutex_);
-            auto* scanner = timer_state->owner_;
+            scanner = timer_state->owner_;
             if (scanner == nullptr || !scanner->running_) {
                 return;
             }
-            // Expiry has consumed this timer. Release its token before callbacks,
-            // which may stop, restart, or destroy the scanner.
-            scanner->timer_.cancel();
-            // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
-            const auto interval_start = scanner->cached_now_ms_;
-            scanner->cached_now_ms_ = steady_now_ms();
-            scanner->scanning_ = true;
-            const bool idle = scanner->scan(interval_start);
-            scanner->scanning_ = false;
-            if (scanner->release_after_scan_) {
-                // A callback destroyed the scanner; its teardown already ran.
-                destroy_after_lock = scanner;
-            } else {
-                // Never during an exchange or a burst: only after a whole interval
-                // in which no entry carried a request exchange and none had activity
-                // (I/O, registration or retirement), once per such quiet period. The
-                // timer runs on the worker, whose thread heap this collects.
-                if (idle && scanner->retired_activity_ms_ < interval_start) {
-                    if (!scanner->quiet_trimmed_) {
-                        collect_thread_heap();
-                        scanner->quiet_trimmed_ = true;
-                    }
-                } else {
-                    scanner->quiet_trimmed_ = false;
-                }
-                // With no entry left and the quiet period trimmed, nothing remains to
-                // time: park until register_entry() re-arms the scan.
-                const bool parked = scanner->quiet_trimmed_ && scanner->sentinel_.next_ == &scanner->sentinel_;
-                if (!parked && !scanner->timer_.registered()) {
-                    scanner->schedule();
-                }
-            }
+            // The flag, not the mutex, holds off retire() on other threads, so
+            // the round's callbacks, closes and heap collection run unlocked.
+            timer_state->scanning_ = true;
         }
-        if (destroy_after_lock != nullptr) {
-            delete destroy_after_lock;
+        // Ends the round even when its re-arm throws, so a waiting retire()
+        // always resumes.
+        struct round_end_guard final {
+            timer_state_type& state_;
+            ~round_end_guard() noexcept {
+                {
+                    std::lock_guard lock(state_.mutex_);
+                    state_.scanning_ = false;
+                }
+                state_.scan_ended_.notify_all();
+            }
+        };
+        bool retired = false;
+        {
+            const round_end_guard round_end{*timer_state};
+            retired = scanner->scan_round();
+        }
+        // Past the round's end a retire() on another thread may free the
+        // scanner; only one its own callback retired is still ours to free.
+        if (retired) {
+            delete scanner;
         }
     });
+}
+bool connection_scanner::impl_type::scan_round() {
+    // Expiry has consumed this timer. Release its token before callbacks,
+    // which may stop, restart, or destroy the scanner.
+    timer_.cancel();
+    // 每轮采样一次比较时钟，供超时、协议检查和跨轮空闲判断共用。
+    const auto interval_start = cached_now_ms_;
+    cached_now_ms_ = steady_now_ms();
+    const bool idle = scan(interval_start);
+    if (release_after_scan_) {
+        // A callback destroyed the scanner; its teardown already ran.
+        return true;
+    }
+    // Never during an exchange or a burst: only after a whole interval in
+    // which no entry carried a request exchange and none had activity (I/O,
+    // registration or retirement), once per such quiet period. The timer runs
+    // on the worker, whose thread heap this collects.
+    if (idle && retired_activity_ms_ < interval_start) {
+        if (!quiet_trimmed_) {
+            collect_thread_heap();
+            quiet_trimmed_ = true;
+        }
+    } else {
+        quiet_trimmed_ = false;
+    }
+    // With no entry left and the quiet period trimmed, nothing remains to
+    // time: park until register_entry() re-arms the scan.
+    const bool parked = quiet_trimmed_ && sentinel_.next_ == &sentinel_;
+    if (!parked && !timer_.registered()) {
+        schedule();
+    }
+    return false;
 }
 bool connection_scanner::impl_type::scan(std::int64_t interval_start) noexcept {
     const auto now = cached_now_ms_;
@@ -3821,14 +3815,14 @@ void connection_scanner::impl_type::expire(entry& entry_value) noexcept {
     if (!entry_value.close_requested_) {
         const auto now = cached_now_ms_;
         if (entry_value.reading_request_head_) {
-            request_close(entry_value, close_deadline_after(now, options_.scan_interval_.value()));
+            request_close(entry_value, steady_deadline_ms(now, options_.scan_interval_.value()));
             return;
         }
         // A stalled write cannot carry a graceful end (GOAWAY, close alert);
         // a write still progressing is followed by the drain's own output.
         if (entry_value.phase_ != phase::writing && !write_stalled(entry_value, now) && entry_value.has_drain_check()) {
             // The callback may retire the entry; record the request first.
-            record_close_request(entry_value, close_deadline_after(now, connection_close_grace));
+            record_close_request(entry_value, steady_deadline_ms(now, connection_close_grace));
             entry_value.notify_drain();
             return;
         }

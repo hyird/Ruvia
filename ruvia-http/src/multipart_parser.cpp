@@ -636,7 +636,7 @@ multipart_poll_result multipart_parser::poll() {
         compact_pending();
         switch (std::get<0>(state_)) {
             case progress_state_type::boundary: {
-                const auto step = process_boundary();
+                const auto step = consume_boundary();
                 if ((step.index() != 0)) {
                     return fail(std::get<1>(step));
                 }
@@ -653,7 +653,7 @@ multipart_poll_result multipart_parser::poll() {
                 break;
             }
             case progress_state_type::headers: {
-                const auto step = process_headers();
+                const auto step = consume_headers();
                 if ((step.index() != 0)) {
                     return fail(std::get<1>(step));
                 }
@@ -679,7 +679,7 @@ multipart_poll_result multipart_parser::poll() {
     }
 }
 
-multipart_parser::step_result_type multipart_parser::process_boundary() {
+multipart_parser::step_result_type multipart_parser::consume_boundary() {
     // RFC 2046 section 5.1.1: the first boundary may be preceded by a preamble that
     // is ignored. Skip it once, reusing the buffered parser's boundary finder so
     // the streaming and buffered paths accept exactly the same bodies.
@@ -749,7 +749,7 @@ multipart_parser::step_result_type multipart_parser::process_boundary() {
     return multipart_parse_error::invalid_delimiter;
 }
 
-multipart_parser::step_result_type multipart_parser::process_headers() {
+multipart_parser::step_result_type multipart_parser::consume_headers() {
     // Cap on a single part's header block, mirroring the 64KB request-header limit.
     const auto buffer = buffer_view();
     const auto headers_end = buffer.find("\r\n\r\n", header_scan_offset_);

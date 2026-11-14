@@ -567,15 +567,15 @@ void http3_session::receive(std::span<const std::byte> datagram, const asio::ip:
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
         connection_->close(http3_error_code::internal_error);
     }
-    process_events();
+    drain_events();
     // Acknowledgements may have freed stream output budget.
     wake_output_waiters();
     wake_writer();
 }
 
-void http3_session::process_events() noexcept {
+void http3_session::drain_events() noexcept {
     try {
-        drain_events();
+        dispatch_events();
     } catch (...) {
         // Only allocation fails here; the connection cannot keep its streams
         // consistent without the event it lost.
@@ -585,7 +585,7 @@ void http3_session::process_events() noexcept {
     }
 }
 
-void http3_session::drain_events() {
+void http3_session::dispatch_events() {
     start_application();
     while (auto event = connection_->next_event()) {
         if (auto* head = event->request_head()) {
@@ -1190,7 +1190,7 @@ task<void> http3_session::flush() {
     while (lifecycle_ == lifecycle_type::open) {
         const auto result = connection_->next_datagram(http3_max_datagram_bytes, now(), datagram_);
         // Writing can close streams (an acknowledged final frame).
-        process_events();
+        drain_events();
         if (result.status_ == http3_quic_status::accepted && !datagram_.bytes_.empty()) {
             co_await send_datagram();
             wake_output_waiters();
@@ -1304,7 +1304,7 @@ void http3_session::timer_fired(worker_timer_outcome outcome) noexcept {
         services_.options_.connection_failure_.invoke(remote_address_, std::current_exception());
         connection_->close(http3_error_code::internal_error);
     }
-    process_events();
+    drain_events();
     wake_output_waiters();
     wake_writer();
 }
@@ -2091,10 +2091,8 @@ void http3_endpoint::accept(std::span<const std::byte> bytes, const asio::ip::ud
         } else {
             const auto& server = services_.options_.server_;
             const auto timeout_ms = server.header_completion_timeout_.has_value() ? server.header_completion_timeout_ : server.request_header_timeout_;
-            constexpr auto max_milliseconds = static_cast<std::int64_t>(UINT64_MAX / NGTCP2_MILLISECONDS);
-            const auto milliseconds = timeout_ms.has_value() ? (std::max)(timeout_ms->value().count(), std::int64_t{1}) : std::int64_t{0};
-            const ngtcp2_duration token_lifetime = timeout_ms.has_value() ? (milliseconds >= max_milliseconds ? UINT64_MAX : static_cast<ngtcp2_duration>(milliseconds) * NGTCP2_MILLISECONDS) : 10 * NGTCP2_SECONDS;
-            const auto timestamp = static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+            const ngtcp2_duration token_lifetime = timeout_ms.has_value() ? (std::max)(http3_quic_duration(*timeout_ms), ngtcp2_duration{NGTCP2_MILLISECONDS}) : 10 * NGTCP2_SECONDS;
+            const auto timestamp = http3_quic_now();
             const int verified = ngtcp2_crypto_verify_retry_token2(&original_dcid, header.token, header.tokenlen, secret().data(), secret().size(), header.version, reinterpret_cast<const ngtcp2_sockaddr*>(remote.data()), static_cast<ngtcp2_socklen>(remote.size()), &header.dcid, token_lifetime, timestamp);
             if (verified != 0) {
                 if (verified == NGTCP2_CRYPTO_ERR_VERIFY_TOKEN || require_retry || header.dcid.datalen < NGTCP2_MIN_INITIAL_DCIDLEN) {
@@ -2177,7 +2175,7 @@ void http3_endpoint::send_retry(const ngtcp2_pkt_hd& header, const asio::ip::udp
         return;
     }
     std::array<std::uint8_t, NGTCP2_CRYPTO_MAX_RETRY_TOKENLEN2> token{};
-    const auto timestamp = static_cast<ngtcp2_tstamp>(std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+    const auto timestamp = http3_quic_now();
     const auto token_len = ngtcp2_crypto_generate_retry_token2(token.data(), secret().data(), secret().size(), header.version, reinterpret_cast<const ngtcp2_sockaddr*>(remote.data()), static_cast<ngtcp2_socklen>(remote.size()), &retry_scid, &header.dcid, timestamp);
     if (token_len < 0) {
         return;

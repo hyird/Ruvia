@@ -2,6 +2,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -28,6 +29,19 @@ class connection_lifecycle;
 // other, never with wall-clock time.
 [[nodiscard]] inline std::int64_t steady_now_ms() noexcept {
     return std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// A stamp that starts a deadline rounds up, so millisecond truncation never
+// fires it early against the floored steady_now_ms().
+[[nodiscard]] inline std::int64_t steady_stamp_ms() noexcept {
+    return std::chrono::ceil<std::chrono::milliseconds>(std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+// `now` plus a non-negative `delay`, saturating so an unbounded configured
+// timeout never wraps into the past.
+[[nodiscard]] inline std::int64_t steady_deadline_ms(std::int64_t now, std::chrono::milliseconds delay) noexcept {
+    const auto maximum = (std::numeric_limits<std::int64_t>::max)();
+    return now > maximum - delay.count() ? maximum : now + delay.count();
 }
 
 // Worker-owned connection activity tracking options, copied from the server
@@ -349,6 +363,8 @@ struct connection_scanner::impl_type final {
     // Detaches every entry and registration and disarms the timer. Returns true
     // when called from inside this scanner's own scan callback: that scan still
     // runs on this stack and takes ownership of the impl, freeing it on return.
+    // On another thread it first waits for a running round to end; no round
+    // starts after it returns.
     [[nodiscard]] bool retire() noexcept;
 
     void start();
@@ -360,6 +376,10 @@ struct connection_scanner::impl_type final {
     // tracked and the quiet period's trim has run; the next registration
     // re-arms it, so an idle worker holds no scanner timer work.
     void schedule();
+    // One timer expiry on the worker: scans, collects the thread heap after a
+    // quiet period and re-arms. Returns true when a callback retired the
+    // scanner; the caller then frees the impl.
+    [[nodiscard]] bool scan_round();
     // Visits every entry; returns whether none was in a request exchange or
     // active since `interval_start`.
     [[nodiscard]] bool scan(std::int64_t interval_start) noexcept;
@@ -379,8 +399,14 @@ struct connection_scanner::impl_type final {
     struct timer_state_type final {
         explicit timer_state_type(impl_type* owner_value) noexcept :
             owner_(owner_value) {}
+        // Guards owner_ and scanning_ only; a round runs callbacks unlocked.
         std::mutex mutex_;
+        // Signalled when scanning_ clears, for a retire() on another thread.
+        std::condition_variable scan_ended_;
+        // Detached by retire(); an expiry finding none starts no round.
         impl_type* owner_;
+        // A round is running on the worker.
+        bool scanning_{false};
     };
 
     connection_scanner* owner_;
@@ -397,8 +423,8 @@ struct connection_scanner::impl_type final {
     entry* scan_current_{nullptr};
     entry* scan_next_{nullptr};
     std::atomic_bool running_{false};
-    // Worker-local: set only by the timer callback while scan() runs callbacks.
-    bool scanning_{false};
+    // Worker-local: a callback retired the scanner during the running round,
+    // which frees the impl once it ends.
     bool release_after_scan_{false};
     // Worker-local: the current quiet period has been trimmed.
     bool quiet_trimmed_{false};
