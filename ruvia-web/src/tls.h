@@ -90,6 +90,12 @@ private:
     return byte >= '0' && byte <= '9';
 }
 
+// An unbracketed IP literal peer, verified against an iPAddress SAN and never
+// sent as SNI (RFC 6066 §3); any other host is a DNS name.
+[[nodiscard]] inline bool is_client_ip_address(std::string_view host) noexcept {
+    return ::ruvia::is_valid_http_ipv4_literal(host) || ::ruvia::is_valid_http_ipv6_literal(host);
+}
+
 // Validates an ASCII transport hostname with an optional root dot. This is
 // intentionally narrower than a DNS owner name or URI reg-name; the
 // four-numeric-label exclusion is lexical and does not parse IPv4 addresses.

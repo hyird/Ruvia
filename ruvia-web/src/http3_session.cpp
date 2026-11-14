@@ -34,6 +34,7 @@
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http3_quic_connection.h"
+#include "http3_server.h"
 #include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_response.h"
