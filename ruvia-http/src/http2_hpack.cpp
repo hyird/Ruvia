@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "http2_connection.h"
+#include "http_c_library_memory.h"
 #include "http_connection_fields.h"
 
 namespace ruvia {

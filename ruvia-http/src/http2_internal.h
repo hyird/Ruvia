@@ -26,6 +26,7 @@
 #include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http2_stream_state.h"
+#include "http_c_library_memory.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"

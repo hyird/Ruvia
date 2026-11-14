@@ -19,6 +19,7 @@
 
 #include "borrowed_text.h"
 #include "http1_server_response.h"
+#include "http_codec.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"

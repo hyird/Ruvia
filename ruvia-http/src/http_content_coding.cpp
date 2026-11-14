@@ -14,6 +14,7 @@
 #include <utility>
 #include <vector>
 
+#include "http_codec.h"
 #include "http_connection_fields.h"
 #define ZSTD_STATIC_LINKING_ONLY
 #include <zstd.h>
