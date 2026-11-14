@@ -11,7 +11,11 @@ set(ruvia_http_sources
     src/websocket_handshake.cpp
 )
 if(RUVIA_ENABLE_HTTP2)
-    list(APPEND ruvia_http_sources src/http2_connection.cpp)
+    list(APPEND ruvia_http_sources
+        src/http2_connection.cpp
+        src/http2_hpack.cpp
+        src/http2_stream.cpp
+    )
 endif()
 if(RUVIA_ENABLE_HTTP3)
     list(APPEND ruvia_http_sources src/http3_connection.cpp)
