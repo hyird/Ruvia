@@ -1,6 +1,9 @@
 set(ruvia_http_sources
+    src/http1_chunked_body.cpp
     src/http1_client_request.cpp
     src/http1_client_response.cpp
+    src/http1_server_request.cpp
+    src/http1_server_response.cpp
     src/http_cache.cpp
     src/http_c_library_memory.cpp
     src/http_client_ip.cpp
@@ -17,7 +20,7 @@ set(ruvia_http_sources
     src/http_representation.cpp
     src/http_response.cpp
     src/http_response_headers.cpp
-    src/http_response_server.cpp
+    src/http_transfer_coding.cpp
     src/ip_address.cpp
     src/multipart_parser.cpp
     src/proxy_protocol.cpp
