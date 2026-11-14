@@ -11,6 +11,7 @@
 
 #include "http2_connection.h"
 #include "http_connection_fields.h"
+#include "http_structured_field.h"
 
 namespace ruvia {
 

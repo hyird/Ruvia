@@ -18,6 +18,7 @@
 #include "http_date.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "http_structured_field.h"
 
 namespace ruvia {
 namespace {
