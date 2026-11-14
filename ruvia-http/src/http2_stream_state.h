@@ -22,13 +22,13 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_client_protocol.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "http_response_server.h"
 
 namespace ruvia::detail {
 

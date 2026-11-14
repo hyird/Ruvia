@@ -26,13 +26,14 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http1_server_response.h"
 #include "http_c_library_memory.h"
 #include "http_client_protocol.h"
+#include "http_connect_udp.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "http_response_server.h"
 #include "websocket_handshake.h"
 
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)

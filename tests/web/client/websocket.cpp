@@ -33,9 +33,9 @@
 #include <openssl/x509.h>
 
 #include "event_loop.h"
+#include "http1_server_response.h"
 #include "http_client.h"
 #include "http_request.h"
-#include "http_response_server.h"
 #include "http_server_fixture.h"
 #include "task_scope.h"
 #include "websocket_handshake.h"

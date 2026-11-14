@@ -754,9 +754,10 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
 #include <variant>
 #include <vector>
 
+#include "http1_server_response.h"
 #include "http_client_protocol.h"
+#include "http_connect_udp.h"
 #include "http_header.h"
-#include "http_response_server.h"
 namespace {
 
 using ruvia::http_parse_error;

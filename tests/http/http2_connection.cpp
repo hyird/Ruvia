@@ -19,8 +19,8 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_server_response.h"
 #include "http_response.h"
-#include "http_response_server.h"
 
 namespace {
 

@@ -17,11 +17,11 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_client_protocol.h"
 #include "http_header.h"
 #include "http_response.h"
-#include "http_response_server.h"
 namespace {
 
 void submit_buffered_response(ruvia::http2_connection& server, std::uint32_t stream_id, const ruvia::http_response& response) {

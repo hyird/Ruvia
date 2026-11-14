@@ -1,3 +1,5 @@
+#include "http_transfer_coding.h"
+
 #include <zlib.h>
 
 #include <algorithm>
@@ -12,7 +14,6 @@
 #include <variant>
 
 #include "http_connection_fields.h"
-#include "http_response_server.h"
 
 namespace ruvia {
 

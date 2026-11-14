@@ -12,11 +12,12 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "http1_server_response.h"
 #include "http_client_protocol.h"
+#include "http_connect_udp.h"
 #include "http_connection_fields.h"
 #include "http_header.h"
 #include "http_request.h"
-#include "http_response_server.h"
 #include "websocket_handshake.h"
 
 // What a caller-supplied request header section must satisfy before the writer

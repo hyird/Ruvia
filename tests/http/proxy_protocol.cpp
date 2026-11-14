@@ -21,6 +21,7 @@
 
 #include "borrowed_text.h"
 #include "content_decoding_fixture.h"
+#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http3_connection.h"
 #include "http_cache.h"
@@ -29,7 +30,6 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "http_response_server.h"
 
 namespace {
 

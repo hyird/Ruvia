@@ -24,7 +24,7 @@
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
-#include "http_response_server.h"
+#include "http1_server_response.h"
 #include "http_server_fixture.h"
 #include "streaming.h"
 #include "task_scope.h"

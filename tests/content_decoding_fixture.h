@@ -23,11 +23,11 @@
 #include <utility>
 #include <variant>
 
+#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_client_protocol.h"
 #include "http_content_coding.h"
 #include "http_header.h"
-#include "http_response_server.h"
 namespace ruvia::test {
 #ifndef RUVIA_TEST_THROWS_ON_DEFINED
 #define RUVIA_TEST_THROWS_ON_DEFINED

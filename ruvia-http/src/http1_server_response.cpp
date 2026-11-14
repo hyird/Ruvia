@@ -1,3 +1,5 @@
+#include "http1_server_response.h"
+
 #include <algorithm>
 #include <array>
 #include <cstddef>
@@ -16,7 +18,6 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "http_response_server.h"
 
 namespace ruvia::detail {
 

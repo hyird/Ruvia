@@ -18,12 +18,12 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_server_response.h"
 #include "http_cache.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
-#include "http_response_server.h"
 
 namespace {
 

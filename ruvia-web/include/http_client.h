@@ -15,9 +15,10 @@
 #include <vector>
 
 #include "event_loop.h"
+#include "http1_server_response.h"
 #include "http_client_types.h"
+#include "http_connect_udp.h"
 #include "http_header.h"
-#include "http_response_server.h"
 #include "model.h"
 #include "stop_token.h"
 #include "streaming.h"

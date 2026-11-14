@@ -9,7 +9,7 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "http_response_server.h"
+#include "http1_server_response.h"
 
 namespace ruvia {
 namespace {

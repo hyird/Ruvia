@@ -14,9 +14,9 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http1_server_response.h"
 #include "http_header.h"
 #include "http_request.h"
-#include "http_response_server.h"
 namespace ruvia::detail {
 struct http_client_response_head_access;
 }  // namespace ruvia::detail
