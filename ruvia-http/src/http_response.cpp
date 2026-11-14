@@ -20,6 +20,8 @@
 #include "http_header.h"
 #include "http_multipart.h"
 #include "http_request.h"
+#include "http_wire_writer.h"
+
 namespace ruvia {
 
 // Owns only newly staged descriptors, never copies the existing header block.
