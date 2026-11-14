@@ -12,10 +12,26 @@
 #include "db_query.h"
 #include "db_schema.h"
 #include "db_session.h"
+#include "db_sql_scan.h"
 #include "decimal_text.h"
 #include "utf8.h"
 
 namespace ruvia::detail {
+
+// The index of the next `wanted` byte at statement level at or after `from`, or
+// npos. Bytes inside literals, quoted identifiers and comments are data and are
+// skipped whole. A byte that opens one of those constructs is that construct
+// and is never reported as syntax.
+[[nodiscard]] constexpr std::size_t find_sql_syntax_byte(std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
+    for (auto index = from; index < sql.size();) {
+        const auto next_value = skip_sql_atom(sql, index, backslash_escapes);
+        if (next_value == index + 1 && sql[index] == wanted) {
+            return index;
+        }
+        index = next_value;
+    }
+    return std::string_view::npos;
+}
 
 inline void require_db_dialect(db_driver driver) {
     if (driver != db_driver::postgresql && driver != db_driver::mariadb) {

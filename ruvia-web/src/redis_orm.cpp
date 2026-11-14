@@ -20,9 +20,18 @@
 #include "http_client_pool.h"
 #include "http_header.h"
 #include "redis.h"
+#include "redis_codec.h"
 #include "redis_pool.h"
 
 namespace ruvia::detail {
+
+struct redis_predicate_access final {
+    // Null for an empty predicate.
+    static const redis_predicate_storage* storage(const redis_predicate& predicate) noexcept {
+        return predicate.storage_.get();
+    }
+};
+
 namespace {
 
 // ARGV: mode, ttl policy, milliseconds, required count, required names,
@@ -717,6 +726,26 @@ void append_delete(redis_orm_arguments_type& args, field_type&& field) {
     args.emplace_back();
 }
 
+[[nodiscard]] std::string redis_entity_storage_prefix(std::string_view prefix) {
+    std::string result;
+    result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U);
+    result.append(redis_entity_key_root);
+    http_append_lower_hex(result, prefix);
+    result.push_back(':');
+    return result;
+}
+
+// A TAG value is kept in a shadow hash field. The leading x makes an empty
+// value distinct from a missing field, and hexadecimal encoding keeps every
+// byte outside RediSearch's TAG grammar.
+[[nodiscard]] std::string encode_redis_tag(std::string_view value) {
+    std::string encoded;
+    encoded.reserve(value.size() * 2U + 1U);
+    encoded.push_back('x');
+    http_append_lower_hex(encoded, value);
+    return encoded;
+}
+
 }  // namespace
 
 redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix, const redis_repository_config& config) {
@@ -753,14 +782,6 @@ redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns
         column_index_kind = index.kind_;
     }
     return result_value;
-}
-
-std::string encode_redis_tag(std::string_view value) {
-    std::string encoded;
-    encoded.reserve(value.size() * 2U + 1U);
-    encoded.push_back('x');
-    http_append_lower_hex(encoded, value);
-    return encoded;
 }
 
 }  // namespace ruvia::detail

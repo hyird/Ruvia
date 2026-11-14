@@ -25,6 +25,7 @@
 #include "http_server.h"
 #include "middleware.h"
 #include "request_stream.h"
+#include "route_table.h"
 #include "runtime_control.h"
 #include "server_connection.h"
 #include "server_options.h"

@@ -31,6 +31,7 @@
 #include "blocking_pool.h"
 #include "content_decoding_fixture.h"
 #include "event_loop.h"
+#include "http1_chunked_body.h"
 #include "http1_server_response.h"
 #include "http_client.h"
 #include "http_client_fixture.h"

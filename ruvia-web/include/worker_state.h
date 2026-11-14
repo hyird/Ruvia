@@ -131,20 +131,6 @@ private:
     destroy_instance_type destroy_instance_{nullptr};
 };
 
-// The single startup validation point for worker state recipes: the registry
-// only ever receives definitions that passed through here.
-inline void append_worker_state_definition(std::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
-    if (!definition.valid()) {
-        throw std::invalid_argument("worker state definition is invalid");
-    }
-    for (const auto& existing : definitions) {
-        if (existing.type_key() == definition.type_key()) {
-            throw std::invalid_argument("worker state type is already registered");
-        }
-    }
-    definitions.push_back(std::move(definition));
-}
-
 // The per-worker instances. worker_capabilities::start()/stop() initialize and
 // destroy the registry on its worker; a throwing factory fails startup before
 // the worker dispatches callbacks or requests.

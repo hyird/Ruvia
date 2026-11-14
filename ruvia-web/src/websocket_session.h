@@ -41,6 +41,13 @@
 #include "worker_wait.h"
 namespace ruvia::detail {
 
+// Whether a write submits a whole message or one fragment of one.
+enum class websocket_write_extent : std::uint8_t {
+    message,
+    fragment,
+    final_fragment,
+};
+
 // The one lifecycle check of server routes and clients.
 inline void validate_websocket_lifecycle_options(const websocket_lifecycle_options& options) {
     const auto positive = [](const std::optional<timeout_duration>& timeout) {

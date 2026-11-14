@@ -14,7 +14,6 @@
 
 #include "borrowed_text.h"
 #include "http_request.h"
-#include "http_status.h"
 
 namespace ruvia {
 

@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "decimal_text.h"
+#include "http_field_text.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_request.h"

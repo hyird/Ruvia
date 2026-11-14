@@ -34,6 +34,20 @@
 namespace ruvia {
 namespace detail {
 namespace {
+// PostgreSQL adds dollar-quoted strings to the generic opaque constructs. This
+// variant is used by migration statement validation; the MariaDB parameter
+// binder intentionally continues to use find_sql_syntax_byte().
+[[nodiscard]] constexpr std::size_t find_postgresql_syntax_byte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
+    for (auto index = from; index < sql.size();) {
+        const auto next_value = skip_postgresql_sql_atom(sql, index);
+        if (next_value == index + 1 && sql[index] == wanted) {
+            return index;
+        }
+        index = next_value;
+    }
+    return std::string_view::npos;
+}
+
 // PostgreSQL's lock_timeout is an int32 millisecond setting. Keep the
 // backend range check before connecting rather than narrowing or silently
 // shortening a configured migration lock wait.

@@ -47,6 +47,7 @@
 #include "borrowed_text.h"
 #include "callback_ref.h"
 #include "event_loop.h"
+#include "move_only_function.h"
 #include "task.h"
 #include "task_scope.h"
 #include "worker_ref.h"
@@ -74,6 +75,7 @@
 #include "websocket.h"
 #include "websocket_handshake.h"
 #include "websocket_session.h"
+#include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db_pool.h"
 #endif
@@ -82,6 +84,9 @@
 #endif
 
 namespace ruvia::detail {
+
+enum class request_body_mode : std::uint8_t { buffered,
+    stream };
 
 class router;
 
@@ -948,6 +953,35 @@ class app_configuration;
 // `configuration` applies the app-wide fallbacks and middleware. Route
 // conflicts and invalid registrations throw here, before any worker starts.
 [[nodiscard]] compiled_route_plan_ptr_type compile_route_plan(std::span<const controller_registrar> registrars, const controller_store& controllers, const app_configuration& configuration);
+
+// Static controller discovery is complete before main. The first application/test_app
+// build seals this registry; loading a controller-bearing module afterwards is
+// a startup contract error instead of silently changing only later workers.
+[[nodiscard]] std::vector<controller_registrar> seal_controller_registrars();
+
+// Pin configured callables before entering the application lock: publication
+// only swaps owning pointers, and router views borrow an address-stable owner.
+template <typename signature_type>
+[[nodiscard]] callback_registration<move_only_function<signature_type>> own_callback(move_only_function<signature_type>&& callback) {
+    if (!callback) {
+        return {};
+    }
+    return std::make_unique<move_only_function<signature_type>>(std::move(callback));
+}
+
+// The single startup validation point for worker state recipes: the registry
+// only ever receives definitions that passed through here.
+inline void append_worker_state_definition(std::vector<worker_state_definition>& definitions, worker_state_definition&& definition) {
+    if (!definition.valid()) {
+        throw std::invalid_argument("worker state definition is invalid");
+    }
+    for (const auto& existing : definitions) {
+        if (existing.type_key() == definition.type_key()) {
+            throw std::invalid_argument("worker state type is already registered");
+        }
+    }
+    definitions.push_back(std::move(definition));
+}
 
 // Startup builder shared by controller declarations and owned public routes.
 class router final {

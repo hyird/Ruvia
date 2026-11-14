@@ -8,6 +8,7 @@
 #include "http_client_request_view.h"
 #include "http_content_negotiation.h"
 #include "http_field_kind.h"
+#include "http_field_text.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_message_framing_fields.h"
@@ -18,6 +19,22 @@
 
 namespace ruvia::detail {
 namespace {
+
+template <typename forbidden_name_type>
+[[nodiscard]] bool is_valid_http_trailer_field_value(std::string_view value, http_field_list_role role, forbidden_name_type&& forbidden_name) noexcept {
+    // RFC 9110 section 5.6.1.1: senders must not generate empty list elements,
+    // but `#field-name` itself can represent an empty list.
+    const auto list_role = http_trim_ows(value).empty() ? http_field_list_role::recipient : role;
+    return http_visit_token_list(value, list_role, [&forbidden_name](std::string_view name) noexcept {
+        return !forbidden_name(name);
+    }) == http_field_list_parse_status::ok;
+}
+
+[[nodiscard]] bool is_valid_http_request_trailer_field_value(std::string_view value, http_field_list_role role) noexcept {
+    return is_valid_http_trailer_field_value(value, role, [](std::string_view name) noexcept {
+        return is_forbidden_http_request_trailer_name(name);
+    });
+}
 
 [[nodiscard]] bool is_valid_http_cors_request_header_names(std::string_view value) noexcept {
     http_field_name_list names(value);
@@ -205,7 +222,11 @@ bool is_forbidden_http_response_trailer_field_name(std::string_view field_name) 
 }  // namespace ruvia
 
 namespace ruvia::detail {
+namespace {
 
+// Shared request/response restrictions (RFC 9110 section 6.5.1): fields that
+// control framing, routing, authentication or representation interpretation.
+// Direction-specific permissions are composed below and by response policy.
 bool is_forbidden_common_trailer_name(std::string_view name, http_field_kind kind) noexcept {
     switch (kind) {
         case http_field_kind::host:
@@ -260,6 +281,8 @@ bool is_forbidden_common_trailer_name(std::string_view name, http_field_kind kin
             return false;
     }
 }
+
+}  // namespace
 
 bool is_forbidden_http_request_trailer_name(std::string_view name) noexcept {
     const auto kind = classify_http_field(name);

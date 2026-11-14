@@ -15,6 +15,7 @@
 
 #include "decimal_text.h"
 #include "http_date.h"
+#include "http_field_text.h"
 #include "http_header.h"
 #include "http_proxy_forwarding.h"
 #include "http_response.h"

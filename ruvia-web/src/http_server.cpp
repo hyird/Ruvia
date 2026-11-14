@@ -31,6 +31,7 @@
 #include <asio/ssl/verify_mode.hpp>
 
 #include "blocking_pool.h"
+#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "controller.h"
 #include "crypto.h"

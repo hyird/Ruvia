@@ -360,6 +360,12 @@ namespace {
     return redis_types_access::scan_cursor(cursor_value);
 }
 
+void throw_if_redis_error(const redis_value& value) {
+    if (value.kind() == redis_value::kind_type::error) {
+        throw redis_error(redis_error::code_type::command_error, value.error());
+    }
+}
+
 }  // namespace
 
 std::string_view redis_value_string(const redis_value& value) {
@@ -405,12 +411,6 @@ std::span<const redis_value> redis_value_array(const redis_value& value) {
 std::span<redis_value> redis_value_array(redis_value& value) {
     (void)redis_value_array(std::as_const(value));
     return redis_types_access::elements(value);
-}
-
-void throw_if_redis_error(const redis_value& value) {
-    if (value.kind() == redis_value::kind_type::error) {
-        throw redis_error(redis_error::code_type::command_error, value.error());
-    }
 }
 
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index) {

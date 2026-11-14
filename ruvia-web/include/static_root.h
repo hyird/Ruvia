@@ -71,7 +71,6 @@ struct static_root_options final {
 namespace detail {
 
 class static_root_access;
-struct static_root_config_storage;
 struct static_root_state;
 
 }  // namespace detail

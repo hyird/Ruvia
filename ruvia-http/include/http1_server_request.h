@@ -9,7 +9,6 @@
 
 #include "borrowed_text.h"
 #include "http1_connection_plan.h"
-#include "http_message.h"
 #include "http_protocol.h"
 #include "http_request.h"
 #include "http_transfer_coding.h"

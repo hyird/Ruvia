@@ -1,9 +1,7 @@
 #pragma once
 
-#include <array>
 #include <compare>
 #include <concepts>
-#include <cstddef>
 #include <cstdint>
 #include <optional>
 #include <stdexcept>
@@ -85,24 +83,6 @@ private:
 
 static_assert(std::is_trivially_copyable_v<http_status_code>);
 static_assert(sizeof(http_status_code) == sizeof(std::uint16_t));
-
-namespace detail {
-
-inline constexpr std::size_t http_status_code_token_size = 3;
-using http_status_code_token_type = std::array<char, http_status_code_token_size>;
-
-[[nodiscard]] inline constexpr http_status_code_token_type http_status_code_token(http_status_code status) noexcept {
-    const auto value = status.value();
-    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10), static_cast<char>('0' + value % 10)};
-}
-
-[[nodiscard]] inline constexpr std::string_view http_status_code_token_view(const http_status_code_token_type& token) noexcept {
-    return std::string_view(token.data(), token.size());
-}
-
-[[nodiscard]] std::string_view http_status_code_token_view(http_status_code_token_type&&) = delete;
-
-}  // namespace detail
 
 // Stable RFC-assigned names are defined once here. Unknown extension codes and
 // temporary draft registrations remain available through from_value() and
@@ -377,16 +357,5 @@ static_assert(std::is_trivially_copyable_v<http_received_status>);
 [[nodiscard]] inline constexpr bool is_http_redirect_status(http_status_code status) noexcept {
     return status == http_status::moved_permanently || status == http_status::found || status == http_status::see_other || status == http_status::temporary_redirect || status == http_status::permanent_redirect;
 }
-
-namespace detail {
-
-// 101 is a protocol transition rather than an interim progress head. It is
-// intentionally owned by a dedicated Upgrade driver instead of either generic
-// response-head type.
-[[nodiscard]] inline constexpr bool http_interim_status_code_valid(http_status_code status) noexcept {
-    return status.is_informational() && status != http_status::switching_protocols;
-}
-
-}  // namespace detail
 
 }  // namespace ruvia

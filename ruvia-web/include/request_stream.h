@@ -58,7 +58,6 @@ using request_stream_tunnel_accept = callback_ref<task<http_tunnel*>(http_status
 // Negotiates against a validated endpoint the caller keeps alive until the
 // returned task completes.
 using request_stream_websocket_accept = callback_ref<task<websocket_accept_result>(const websocket_route_endpoint&)>;
-using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 }  // namespace detail
 
 // One HTTP request a listener_dispatch::request_stream listener received over

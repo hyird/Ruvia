@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <optional>
 #include <string_view>
 
 #include "borrowed_text.h"
@@ -9,6 +10,7 @@
 #include "http_client_request_view.h"
 #include "http_field_kind.h"
 #include "http_header.h"
+#include "http_request.h"
 
 namespace ruvia::detail {
 
@@ -89,6 +91,27 @@ private:
 [[nodiscard]] response_field_status validate_response_field(http_field_kind kind, std::string_view value, response_field_state& state) noexcept;
 
 [[nodiscard]] bool is_forbidden_response_trailer_name(std::string_view name) noexcept;
+
+// Trailer advertisements and actual request sections use the same policy.
+// Accept-Ranges is permitted in response trailers, not request trailers.
+[[nodiscard]] bool is_forbidden_http_request_trailer_name(std::string_view name) noexcept;
+
+// The single rule for one generated request trailer field: valid field syntax
+// (RFC 9110 section 5), a name a sender may place in request trailers (RFC 9110
+// section 6.5.1), and a charge to the section `budget`, which is unchanged on
+// failure.
+[[nodiscard]] inline std::optional<http_request_trailer_error> charge_http_request_trailer_field(http_field_section_budget& budget, std::string_view name, std::string_view value) noexcept {
+    if (!is_valid_http_header_name(name) || !is_valid_http_header_value(value)) {
+        return http_request_trailer_error::invalid_field;
+    }
+    if (is_forbidden_http_request_trailer_name(name)) {
+        return http_request_trailer_error::forbidden_field;
+    }
+    if (!budget.add_field(name, value)) {
+        return http_request_trailer_error::section_too_large;
+    }
+    return std::nullopt;
+}
 
 enum class http_interim_response_header_validation_status : std::uint8_t {
     ok,

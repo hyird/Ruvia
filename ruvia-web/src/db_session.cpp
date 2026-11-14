@@ -32,6 +32,15 @@ task<void> discard_rows_task(task<db_rows> rows_task) {
     (void)co_await std::move(rows_task);
 }
 
+[[nodiscard]] constexpr bool has_sql_non_whitespace(std::string_view sql) noexcept {
+    for (const auto character : sql) {
+        if (!detail::is_sql_whitespace(character)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 db_session::db_session(detail::db_pool_ref_type client, ::ruvia::operation_scope& operation_scope, detail::request_io_metrics* io_metrics, detail::db_query_cache_state* cache) noexcept :
@@ -201,7 +210,7 @@ db_session db_session::bind_caller_scope(::ruvia::operation_scope& scope, detail
 namespace ruvia {
 
 void validate_db_sql_text(std::string_view sql) {
-    if (!detail::has_sql_non_whitespace(sql)) {
+    if (!has_sql_non_whitespace(sql)) {
         throw std::invalid_argument("SQL must not be empty");
     }
     if (sql.find('\0') != std::string_view::npos) {

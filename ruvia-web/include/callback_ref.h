@@ -113,14 +113,4 @@ static_assert(std::is_trivially_copyable_v<callback_ref<void()>>);
 template <typename callback_type>
 using callback_registration = std::unique_ptr<callback_type>;
 
-// Pin configured callables before entering the application lock: publication
-// only swaps owning pointers, and router views borrow an address-stable owner.
-template <typename signature_type>
-[[nodiscard]] callback_registration<move_only_function<signature_type>> own_callback(move_only_function<signature_type>&& callback) {
-    if (!callback) {
-        return {};
-    }
-    return std::make_unique<move_only_function<signature_type>>(std::move(callback));
-}
-
 }  // namespace ruvia::detail

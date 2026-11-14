@@ -43,15 +43,6 @@ namespace ruvia::detail {
     return byte <= 0x20 || byte == 0x7f;
 }
 
-[[nodiscard]] inline constexpr bool has_sql_non_whitespace(std::string_view sql) noexcept {
-    for (const auto character : sql) {
-        if (!is_sql_whitespace(character)) {
-            return true;
-        }
-    }
-    return false;
-}
-
 [[nodiscard]] constexpr std::size_t skip_sql_quoted_run(std::string_view sql, std::size_t index, char terminator, bool backslash_escapes) noexcept {
     const auto size = sql.size();
     if (index >= size) {
@@ -255,35 +246,6 @@ namespace ruvia::detail {
         default:
             return index + 1;
     }
-}
-
-// The index of the next `wanted` byte at statement level at or after `from`, or
-// npos. Bytes inside literals, quoted identifiers and comments are data and are
-// skipped whole. A byte that opens one of those constructs is that construct
-// and is never reported as syntax.
-[[nodiscard]] constexpr std::size_t find_sql_syntax_byte(std::string_view sql, char wanted, bool backslash_escapes, std::size_t from = 0) noexcept {
-    for (auto index = from; index < sql.size();) {
-        const auto next_value = skip_sql_atom(sql, index, backslash_escapes);
-        if (next_value == index + 1 && sql[index] == wanted) {
-            return index;
-        }
-        index = next_value;
-    }
-    return std::string_view::npos;
-}
-
-// PostgreSQL adds dollar-quoted strings to the generic opaque constructs. This
-// variant is used by migration statement validation; the MariaDB parameter
-// binder intentionally continues to use find_sql_syntax_byte().
-[[nodiscard]] constexpr std::size_t find_postgresql_syntax_byte(std::string_view sql, char wanted, std::size_t from = 0) noexcept {
-    for (auto index = from; index < sql.size();) {
-        const auto next_value = skip_postgresql_sql_atom(sql, index);
-        if (next_value == index + 1 && sql[index] == wanted) {
-            return index;
-        }
-        index = next_value;
-    }
-    return std::string_view::npos;
 }
 
 }  // namespace ruvia::detail

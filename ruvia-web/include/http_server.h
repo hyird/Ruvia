@@ -19,7 +19,6 @@
 #include "http_client_ip.h"
 #include "http_client_types.h"
 #include "http_cors.h"
-#include "http_message.h"
 #include "http_protocol.h"
 #include "ip_address.h"
 #include "move_only_function.h"

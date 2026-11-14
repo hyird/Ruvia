@@ -10,11 +10,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 
 #include "borrowed_text.h"
 #include "http_header.h"
-#include "http_message.h"
 #include "http_request.h"
 
 namespace ruvia {

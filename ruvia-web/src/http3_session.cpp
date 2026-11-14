@@ -31,6 +31,7 @@
 #include <asio/socket_base.hpp>
 #include <openssl/ssl.h>
 
+#include "callback_ref.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
 #include "context_access.h"

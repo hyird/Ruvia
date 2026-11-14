@@ -36,7 +36,6 @@
 #include "model.h"
 #include "stop_token.h"
 #include "task.h"
-#include "task_scope.h"
 #include "worker_ref.h"
 #include "worker_state.h"
 namespace ruvia {

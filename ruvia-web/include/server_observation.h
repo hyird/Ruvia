@@ -9,7 +9,6 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "http_message.h"
 #include "http_status.h"
 #include "ip_address.h"
@@ -129,10 +128,6 @@ private:
     http_protocol_version protocol_version_;
 };
 
-namespace detail {
-using access_log_callback_ref = callback_ref<void(const access_log_record&) noexcept>;
-}  // namespace detail
-
 // application-owned access-log listener. Request dispatch receives only an internal,
 // allocation-free callback_ref and never participates in this owner's lifetime.
 // 空函数指针构造空回调；未配置时不得调用。所有权与退役语义同 move_only_function。
@@ -172,10 +167,6 @@ private:
     ip_address remote_address_{};
     std::exception_ptr exception_;
 };
-
-namespace detail {
-using connection_failure_callback_ref = callback_ref<void(const connection_failure_record&) noexcept>;
-}  // namespace detail
 
 // application-owned connection-failure listener. The listener must not throw: it runs on the last
 // line of defense for a connection, where a second failure would have nowhere
@@ -233,12 +224,6 @@ struct connection_close_info final {
     // New HTTP request heads, once per request; raw connections remain zero.
     std::uint64_t requests_{};
 };
-
-namespace detail {
-using connection_admission_callback_ref = callback_ref<bool(const connection_event&) noexcept>;
-using connection_open_callback_ref = callback_ref<std::shared_ptr<void>(const connection_event&)>;
-using connection_close_callback_ref = callback_ref<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
-}  // namespace detail
 
 // Synchronous worker callbacks; targets must support concurrent workers. False
 // admission silently rejects before creating TLS or protocol session resources.
@@ -427,19 +412,6 @@ private:
     const http3_field_metadata& metadata_;
 };
 #endif
-
-namespace detail {
-using tls_client_hello_callback_ref = callback_ref<void(const tls_client_hello_record&) noexcept>;
-using http2_input_callback_ref = callback_ref<void(const http2_input_record&) noexcept>;
-#if defined(RUVIA_ENABLE_HTTP2)
-using http2_frame_callback_ref = callback_ref<void(const http2_frame_record&) noexcept>;
-using http2_headers_callback_ref = callback_ref<void(const http2_headers_record&) noexcept>;
-#endif
-#if defined(RUVIA_ENABLE_HTTP3)
-using http3_frame_callback_ref = callback_ref<void(const http3_frame_record&) noexcept>;
-using http3_field_callback_ref = callback_ref<void(const http3_field_record&) noexcept>;
-#endif
-}  // namespace detail
 
 // application-owned observers, invoked synchronously on the worker thread that
 // owns the connection; workers call the same target concurrently, so it must

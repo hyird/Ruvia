@@ -10,7 +10,6 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "http_response.h"
 #include "http_status.h"
 #include "move_only_function.h"
@@ -25,7 +24,6 @@ class validator;
 inline constexpr std::size_t max_validation_text_bytes = 1024;
 
 namespace detail {
-struct validation_issue_access;
 
 [[nodiscard]] inline std::string_view bounded_validation_text(std::string_view value) noexcept {
     auto count = std::min(value.size(), max_validation_text_bytes);
@@ -67,7 +65,6 @@ public:
 
 private:
     friend class validator;
-    friend struct detail::validation_issue_access;
 
     void swap(validation_issue& other) noexcept;
 
@@ -188,11 +185,6 @@ private:
 // what(), a non-standard exception a fixed description, and null an empty
 // string.
 [[nodiscard]] std::string exception_text(const std::exception_ptr& exception);
-
-namespace detail {
-using http_error_handler_ref = callback_ref<task<http_response>(context&, http_error_info)>;
-using http_not_found_handler_ref = callback_ref<task<http_response>(context&)>;
-}  // namespace detail
 
 // Answers a request that failed. Accepts a plain function -- on_error(&handler)
 // -- and equally a lambda or any other callable, including one that captures

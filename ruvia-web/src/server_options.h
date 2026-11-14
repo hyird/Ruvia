@@ -5,10 +5,12 @@
 #include <cstddef>
 #include <cstdint>
 #include <exception>
+#include <memory>
 #include <optional>
 #include <span>
 #include <string_view>
 
+#include "callback_ref.h"
 #include "http_client_ip.h"
 #include "http_cors.h"
 #include "http_server.h"
@@ -18,6 +20,7 @@
 #include "server_connection.h"
 #include "server_observation.h"
 #include "static_root_index.h"
+#include "task.h"
 
 namespace ruvia {
 class env;
@@ -28,6 +31,24 @@ namespace ruvia::detail {
 class document_root_publisher;
 class inbound_buffer_budget;
 class worker_codecs;
+
+using access_log_callback_ref = callback_ref<void(const access_log_record&) noexcept>;
+using connection_failure_callback_ref = callback_ref<void(const connection_failure_record&) noexcept>;
+using connection_admission_callback_ref = callback_ref<bool(const connection_event&) noexcept>;
+using connection_open_callback_ref = callback_ref<std::shared_ptr<void>(const connection_event&)>;
+using connection_close_callback_ref = callback_ref<void(const connection_event&, const std::shared_ptr<void>&, const connection_close_info&) noexcept>;
+using tls_client_hello_callback_ref = callback_ref<void(const tls_client_hello_record&) noexcept>;
+using http2_input_callback_ref = callback_ref<void(const http2_input_record&) noexcept>;
+#if defined(RUVIA_ENABLE_HTTP2)
+using http2_frame_callback_ref = callback_ref<void(const http2_frame_record&) noexcept>;
+using http2_headers_callback_ref = callback_ref<void(const http2_headers_record&) noexcept>;
+#endif
+#if defined(RUVIA_ENABLE_HTTP3)
+using http3_frame_callback_ref = callback_ref<void(const http3_frame_record&) noexcept>;
+using http3_field_callback_ref = callback_ref<void(const http3_field_record&) noexcept>;
+#endif
+using connection_callback_ref = callback_ref<task<void>(server_connection&)>;
+using request_stream_callback_ref = callback_ref<task<void>(request_stream&)>;
 
 struct access_log_sink final {
     access_log_callback_ref callback_;

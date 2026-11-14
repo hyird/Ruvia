@@ -292,6 +292,7 @@ struct redis_types_access final {
 // Moves the reply's string storage out after checking it is a string reply.
 // Never returns a borrow into the discarded reply.
 [[nodiscard]] std::string take_redis_string(redis_value&& value);
+[[nodiscard]] std::int64_t redis_value_integer(const redis_value& value);
 [[nodiscard]] bool redis_value_integer_bool(const redis_value& value);
 [[nodiscard]] std::span<redis_value> redis_value_array(redis_value& value);
 void throw_if_redis_transaction_reply_error(const redis_value& value, std::size_t index);

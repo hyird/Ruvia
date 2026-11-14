@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "callback_ref.h"
+#include "context_access.h"
 #include "controller.h"
 #include "http_error.h"
 #include "http_message.h"

@@ -18,6 +18,7 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_chunked_body.h"
 #include "http_authority.h"
 #include "http_cache.h"
 #include "http_content_coding.h"

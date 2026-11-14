@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "content_decoding_fixture.h"
+#include "http1_chunked_body.h"
 #include "http1_connection_plan.h"
 #include "http1_server_response.h"
 #include "http_authority.h"

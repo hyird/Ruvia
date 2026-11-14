@@ -22,7 +22,6 @@
 #include "http_tunnel.h"
 #include "middleware.h"
 #include "model.h"
-#include "stop_token.h"
 #include "task.h"
 #include "websocket.h"
 #include "worker_state.h"
@@ -272,10 +271,6 @@ private:
 };
 
 [[nodiscard]] bool add_controller_registrar(controller_registrar registrar_value);
-// Static controller discovery is complete before main. The first application/test_app
-// build seals this registry; loading a controller-bearing module afterwards is
-// a startup contract error instead of silently changing only later workers.
-[[nodiscard]] std::vector<controller_registrar> seal_controller_registrars();
 
 template <typename controller_type>
 void* create_controller(controller_store& controllers) {

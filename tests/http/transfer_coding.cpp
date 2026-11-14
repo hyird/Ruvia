@@ -9,6 +9,7 @@
 #include <string_view>
 
 #include "content_decoding_fixture.h"
+#include "http1_chunked_body.h"
 #include "http_request.h"
 #include "http_request_body_failure.h"
 #include "http_transfer_coding.h"

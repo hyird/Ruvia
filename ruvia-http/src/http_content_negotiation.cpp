@@ -15,6 +15,7 @@
 
 #include "borrowed_text.h"
 #include "http_field_kind.h"
+#include "http_field_text.h"
 #include "http_field_validation.h"
 #include "http_header.h"
 #include "http_message_access.h"

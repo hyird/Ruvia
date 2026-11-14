@@ -27,7 +27,6 @@
 #include "model.h"
 #include "stop_token.h"
 #include "task.h"
-#include "task_scope.h"
 
 namespace ruvia {
 

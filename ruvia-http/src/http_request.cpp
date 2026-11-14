@@ -24,6 +24,7 @@
 #include "http_cache.h"
 #include "http_cookie.h"
 #include "http_field_kind.h"
+#include "http_field_validation.h"
 #include "http_header.h"
 #include "http_message_access.h"
 #include "http_message_framing_fields.h"

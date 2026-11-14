@@ -23,6 +23,7 @@
 #include <utility>
 #include <variant>
 
+#include "http1_chunked_body.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_connection_plan.h"

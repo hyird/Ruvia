@@ -7,7 +7,6 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
@@ -84,12 +83,6 @@ template <typename connection_type>
 [[nodiscard]] websocket make_websocket_facade(connection_type& connection);
 struct websocket_accept_access;
 class websocket_state;
-// Whether a write submits a whole message or one fragment of one.
-enum class websocket_write_extent : std::uint8_t {
-    message,
-    fragment,
-    final_fragment,
-};
 }  // namespace detail
 
 class websocket_message_writer;

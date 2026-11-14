@@ -11,6 +11,7 @@
 
 #include "borrowed_text.h"
 #include "http_content_coding.h"
+#include "http_field_text.h"
 #include "http_field_validation.h"
 #include "http_header.h"
 #include "http_transfer_coding.h"
@@ -132,6 +133,13 @@ private:
 
     std::optional<std::uint64_t> value_;
 };
+
+// RFC 9112 section 7 transfer-parameter: `token BWS "=" BWS ( token / quoted-string )`.
+// `part` is one OWS-trimmed segment as produced by http_all_parameters.
+[[nodiscard]] inline bool is_valid_http_transfer_parameter(std::string_view part) noexcept {
+    const auto equals = part.find('=');
+    return equals != std::string_view::npos && is_valid_http_header_name(http_trim_ows(part.substr(0, equals))) && is_http_token_or_quoted_string(http_trim_ows(part.substr(equals + 1)));
+}
 
 [[nodiscard]] inline bool http_parse_transfer_coding_syntax(std::string_view item, std::string_view& coding, bool& has_parameters) noexcept {
     const auto first_semicolon = http_find_unquoted_delimiter(item, 0, ';');

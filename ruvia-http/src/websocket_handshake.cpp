@@ -16,6 +16,7 @@
 #include "http1_server_request.h"
 #include "http_connection_fields.h"
 #include "http_field_kind.h"
+#include "http_field_text.h"
 #include "http_field_validation.h"
 #include "http_header.h"
 #include "http_message.h"

@@ -8,11 +8,9 @@
 #include <memory>
 #include <optional>
 #include <span>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <system_error>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -30,15 +28,14 @@
 #include "request_stream.h"
 #include "server_connection.h"
 #include "server_observation.h"
-#include "stop_token.h"
 #include "task.h"
 #include "worker_ref.h"
 #include "worker_state.h"
 #ifdef RUVIA_ENABLE_DATABASE
-#include "db.h"
+#include "db_session.h"
 #endif
 #ifdef RUVIA_ENABLE_REDIS
-#include "redis.h"
+#include "redis_session.h"
 #endif
 
 namespace ruvia {

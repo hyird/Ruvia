@@ -35,6 +35,13 @@ namespace ruvia::detail {
 
 namespace {
 
+// 101 is a protocol transition rather than an interim progress head. It is
+// intentionally owned by a dedicated Upgrade driver instead of either generic
+// response-head type.
+[[nodiscard]] constexpr bool http_interim_status_code_valid(http_status_code status) noexcept {
+    return status.is_informational() && status != http_status::switching_protocols;
+}
+
 inline constexpr std::string_view chunked_transfer_encoding_header = "Transfer-Encoding: chunked\r\n";
 
 inline constexpr std::string_view content_length_name = "Content-Length";

@@ -31,8 +31,6 @@
 #include "model.h"
 #include "operation_options.h"
 #include "stop_token.h"
-#include "streaming.h"
-#include "task_scope.h"
 #include "websocket.h"
 #include "websocket_connection.h"
 namespace ruvia {

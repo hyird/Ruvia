@@ -20,6 +20,7 @@ struct redisReader;
 #include <asio/ssl/context.hpp>
 
 #include "http_client_pool.h"
+#include "redis.h"
 #include "redis_session.h"
 #include "slot_pool.h"
 #include "startup_config.h"
@@ -454,6 +455,11 @@ private:
     redis_pool blocking_;
     redis_subscription_set subscriptions_;
 };
+
+// Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
+// through EVAL once within the same operation. `io_metrics` is the request's
+// counter block, or null outside a request.
+[[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script, redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
 
 }  // namespace ruvia::detail
 

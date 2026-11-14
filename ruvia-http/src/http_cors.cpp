@@ -16,6 +16,7 @@
 #include "borrowed_text.h"
 #include "decimal_text.h"
 #include "http_authority.h"
+#include "http_field_text.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"

@@ -9,6 +9,7 @@
 #include <utility>
 
 #include "content_decoding_fixture.h"
+#include "http1_chunked_body.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
 #include "http1_client_response_body.h"

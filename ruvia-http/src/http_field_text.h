@@ -16,6 +16,7 @@
 #include <utility>
 
 #include "http_header.h"
+#include "http_status.h"
 
 namespace ruvia::detail {
 
@@ -239,5 +240,93 @@ inline void copy_unfolded_field_lines(std::string_view input, std::size_t first_
     }
     storage.append(input.substr(segment_begin));
 }
+
+// Plain comma-delimited token scan for fields whose grammar never permits
+// quoted-string (such as Connection and Vary). Empty segments are skipped.
+template <typename visitor_type>
+inline void http_visit_comma_separated_tokens(std::string_view value, visitor_type&& visitor) {
+    for (;;) {
+        const auto comma = value.find(',');
+        const auto item = http_trim_ows(value.substr(0, comma));
+        if (!item.empty() && !visitor(item)) {
+            return;
+        }
+        if (comma == std::string_view::npos) {
+            return;
+        }
+        value.remove_prefix(comma + 1);
+    }
+}
+
+// True when `predicate` accepts every ';'-separated parameter that follows a
+// field value's leading token — the media type, coding or extension name, which
+// carries no '=' and is never a parameter itself. The scan is quote-aware, so a
+// ';' inside a quoted parameter value does not split, and each parameter reaches
+// the predicate with its surrounding whitespace trimmed. A value with no ';' has
+// no parameters and trivially satisfies the predicate.
+//
+// Unlike http_visit_semicolon_parameters_quoted_field this reports rejection: a predicate
+// that returns false stops the walk and fails the whole field value. Use it
+// where a malformed parameter must invalidate the field rather than be skipped.
+template <typename predicate_type>
+[[nodiscard]] inline bool http_all_parameters(std::string_view value, predicate_type&& predicate) {
+    auto start = http_find_unquoted_delimiter(value, 0, ';');
+    if (start >= value.size()) {
+        return true;
+    }
+    ++start;
+    while (start <= value.size()) {
+        const auto end = start + http_find_unquoted_delimiter(value.substr(start), 0, ';');
+        if (!predicate(http_trim_ows(value.substr(start, end - start)))) {
+            return false;
+        }
+        if (end >= value.size()) {
+            return true;
+        }
+        start = end + 1;
+    }
+    return true;
+}
+
+[[nodiscard]] inline bool http_has_token(std::string_view value, std::string_view expected) noexcept {
+    if (expected.empty()) {
+        return false;
+    }
+    const auto expected_first = http_ascii_to_lower(static_cast<unsigned char>(expected.front()));
+    return !http_find_header_token(value, [expected, expected_first](std::string_view token) noexcept {
+        return token.size() == expected.size() && http_ascii_to_lower(static_cast<unsigned char>(token.front())) == expected_first && http_ascii_equals_ignore_case(token, expected);
+    }).empty();
+}
+
+[[nodiscard]] inline bool is_http_token_or_quoted_string(std::string_view value) noexcept {
+    if (value.empty()) {
+        return false;
+    }
+    return value.front() == '"' ? http_is_quoted_string(value) : is_valid_http_header_name(value);
+}
+
+[[nodiscard]] inline std::string_view http_header_token_before_parameters(std::string_view value) noexcept {
+    const auto semicolon = value.find(';');
+    return http_trim_ows(semicolon == std::string_view::npos ? value : value.substr(0, semicolon));
+}
+
+template <http_temporary_owning_char_string value_type>
+std::string_view http_header_token_before_parameters(value_type&&) = delete;
+
+// The three status-code digits shared by the HTTP/1 status-line and the
+// HTTP/2 and HTTP/3 `:status` pseudo-field.
+inline constexpr std::size_t http_status_code_token_size = 3;
+using http_status_code_token_type = std::array<char, http_status_code_token_size>;
+
+[[nodiscard]] inline constexpr http_status_code_token_type http_status_code_token(http_status_code status) noexcept {
+    const auto value = status.value();
+    return {static_cast<char>('0' + value / 100), static_cast<char>('0' + (value / 10) % 10), static_cast<char>('0' + value % 10)};
+}
+
+[[nodiscard]] inline constexpr std::string_view http_status_code_token_view(const http_status_code_token_type& token) noexcept {
+    return std::string_view(token.data(), token.size());
+}
+
+[[nodiscard]] std::string_view http_status_code_token_view(http_status_code_token_type&&) = delete;
 
 }  // namespace ruvia::detail

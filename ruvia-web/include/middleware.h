@@ -31,9 +31,6 @@ class next;
 
 namespace detail {
 
-enum class request_body_mode : std::uint8_t { buffered,
-    stream };
-
 using route_handler = callback_ref<task<http_response>(context&)>;
 using route_stream_handler = callback_ref<task<void>(context&)>;
 using route_middleware = callback_ref<task<void>(context&, next&)>;

@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "callback_ref.h"
 #include "context.h"
 #include "ip_address.h"
 #include "move_only_function.h"
@@ -166,10 +165,6 @@ private:
     bool send_ended_{false};
     ::ruvia::operation_scope operations_;
 };
-
-namespace detail {
-using connection_callback_ref = callback_ref<task<void>(server_connection&)>;
-}  // namespace detail
 
 // Host-owned handler of every listener_dispatch::connection listener.
 // application may share one target across workers; http_server_group builds

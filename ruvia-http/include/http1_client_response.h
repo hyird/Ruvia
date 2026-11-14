@@ -11,9 +11,7 @@
 #include "http1_client_request.h"
 #include "http1_connection_plan.h"
 #include "http_client_response_head.h"
-#include "http_header.h"
 #include "http_message.h"
-#include "http_protocol.h"
 #include "http_status.h"
 #include "http_transfer_coding.h"
 

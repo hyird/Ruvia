@@ -46,9 +46,7 @@ namespace ruvia::detail {
 // redis_error(protocol_error) rather than the raw accessors' std::logic_error,
 // and an error reply throws redis_error(command_error).
 [[nodiscard]] std::string_view redis_value_string(const redis_value& value);
-[[nodiscard]] std::int64_t redis_value_integer(const redis_value& value);
 [[nodiscard]] std::span<const redis_value> redis_value_array(const redis_value& value);
-void throw_if_redis_error(const redis_value& value);
 
 // Redis hash fields support owning scalar values and one string/integer key.
 // Character types are text units, not numbers, so they are not Redis numbers.
@@ -177,15 +175,6 @@ template <typename t_type>
 
 // Every ORM entity key is `redis_entity_key_root + lower-hex(prefix) + ':' + id`.
 inline constexpr std::string_view redis_entity_key_root = "ruvia:orm:";
-
-[[nodiscard]] inline std::string redis_entity_storage_prefix(std::string_view prefix) {
-    std::string result;
-    result.reserve(redis_entity_key_root.size() + prefix.size() * 2U + 1U);
-    result.append(redis_entity_key_root);
-    http_append_lower_hex(result, prefix);
-    result.push_back(':');
-    return result;
-}
 
 [[nodiscard]] inline std::string redis_entity_key(std::string_view storage_prefix, std::string_view id) {
     if (id.empty()) {
@@ -390,10 +379,6 @@ struct redis_orm_script final {
 // Both argument lists start with EVALSHA and the script digest.
 [[nodiscard]] redis_orm_arguments_type redis_orm_write_arguments(std::string_view storage_prefix, std::string_view id, std::string_view mode, redis_write_options options, std::size_t extra_arguments);
 [[nodiscard]] redis_orm_arguments_type redis_orm_delete_arguments(std::string_view storage_prefix, std::string_view id);
-// Runs an EVALSHA argument list for `script`; a NOSCRIPT reply loads the body
-// through EVAL once within the same operation. `io_metrics` is the request's
-// counter block, or null outside a request.
-[[nodiscard]] task<redis_value> execute_redis_orm_script(redis_pool& pool, const redis_orm_script& script, redis_orm_arguments_type args, request_io_metrics* io_metrics, operation_options options);
 [[nodiscard]] redis_write_result redis_orm_exec_result(redis_value&& reply);
 [[nodiscard]] redis_write_result redis_orm_delete_result(redis_value&& reply);
 void redis_orm_status_result(redis_value&& reply);
@@ -461,11 +446,6 @@ struct redis_mapping final {
 
 // `columns` must be the entity's static descriptor table.
 [[nodiscard]] redis_mapping normalize_redis_mapping(std::span<const redis_column_info> columns, std::string_view entity_prefix, const redis_repository_config& config);
-
-// A TAG value is kept in a shadow hash field. The leading x makes an empty
-// value distinct from a missing field, and hexadecimal encoding keeps every
-// byte outside RediSearch's TAG grammar.
-[[nodiscard]] std::string encode_redis_tag(std::string_view value);
 
 // The canonical ID when the predicate is exactly `primary key == literal`.
 [[nodiscard]] std::optional<std::string_view> redis_primary_key(const redis_mapping& mapping, const redis_predicate& predicate, std::span<char, redis_scalar_scratch_size> scratch);
@@ -760,12 +740,6 @@ concept redis_entity_schema = requires(const entity& value) {
     requires std::same_as<entity, typename entity::redis_entity_type>;
     requires redis_columns<typename entity::columns_type>;
     { entity::prefix() } -> std::convertible_to<std::string_view>;
-};
-struct redis_predicate_access final {
-    // Null for an empty predicate.
-    static const redis_predicate_storage* storage(const redis_predicate& predicate) noexcept {
-        return predicate.storage_.get();
-    }
 };
 }  // namespace detail
 

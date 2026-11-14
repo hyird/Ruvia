@@ -51,6 +51,7 @@
 #include "http_server.h"
 #include "io_operation.h"
 #include "server_observation.h"
+#include "server_options.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"

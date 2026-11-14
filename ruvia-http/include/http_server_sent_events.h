@@ -5,12 +5,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 
 #include "borrowed_text.h"
-#include "http_header.h"
 #include "http_protocol.h"
 
 namespace ruvia {
