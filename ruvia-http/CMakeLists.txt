@@ -11,7 +11,9 @@ set(ruvia_http_sources
     src/http_header.cpp
     src/http_io_buffer.cpp
     src/http_request.cpp
+    src/http_representation.cpp
     src/http_response.cpp
+    src/http_response_headers.cpp
     src/http_response_server.cpp
     src/ip_address.cpp
     src/multipart_parser.cpp
