@@ -18,7 +18,10 @@ if(RUVIA_ENABLE_HTTP2)
     )
 endif()
 if(RUVIA_ENABLE_HTTP3)
-    list(APPEND ruvia_http_sources src/http3_connection.cpp)
+    list(APPEND ruvia_http_sources
+        src/http3_connection.cpp
+        src/http3_quic_connection.cpp
+    )
 endif()
 add_library(ruvia-http STATIC ${ruvia_http_sources})
 
