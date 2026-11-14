@@ -13,8 +13,7 @@
 #include <utility>
 #include <variant>
 
-#include "http_codec.h"
-#include "http_connection_fields.h"
+#include "http_compression_codec.h"
 
 namespace ruvia {
 

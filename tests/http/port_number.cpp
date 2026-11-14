@@ -8,6 +8,7 @@
 
 #include "borrowed_text.h"
 #include "http1_client_request.h"
+#include "http_authority.h"
 #include "http_request.h"
 
 TEST(Ruvia, port_number_rejects_wide_inputs_without_changing_an_existing_origin) {

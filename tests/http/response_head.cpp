@@ -22,10 +22,12 @@
 #include "content_decoding_fixture.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
+#include "http1_connection_plan.h"
 #include "http1_server_response.h"
 #include "http_cookie.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "http_response_stream.h"
 
 namespace {
 

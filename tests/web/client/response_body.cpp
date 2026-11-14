@@ -45,14 +45,18 @@
 #include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_client.h"
+#include "http_client_request_view.h"
 #include "http_client_types.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_response_stream.h"
 #include "http_server_fixture.h"
 #include "model.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 namespace {
 class test_worker final {

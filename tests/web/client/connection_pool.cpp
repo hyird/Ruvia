@@ -34,6 +34,7 @@
 #include "http1_server_response.h"
 #include "http_client.h"
 #include "http_client_fixture.h"
+#include "http_client_request_view.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
 #include "http_header.h"
@@ -43,6 +44,7 @@
 #include "streaming.h"
 #include "task.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace {

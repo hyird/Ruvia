@@ -23,6 +23,7 @@
 #include "backend_client_fixture.h"
 #include "blocking_pool.h"
 #include "db.h"
+#include "db_migration.h"
 #include "db_query.h"
 #include "db_session.h"
 #include "event_loop.h"

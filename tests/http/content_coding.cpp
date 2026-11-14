@@ -12,8 +12,10 @@
 
 #include "content_decoding_fixture.h"
 #include "http_cache.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
+#include "http_content_transcoder.h"
 
 using namespace ruvia::test;
 
@@ -28,9 +30,10 @@ using ruvia::http_content_encoder;
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http1_chunked_body.h"
 #include "http_header.h"
+#include "http_request_body_failure.h"
 #include "http_response.h"
+#include "url_encoding.h"
 
 namespace {
 

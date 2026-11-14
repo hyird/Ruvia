@@ -1,0 +1,758 @@
+#pragma once
+
+#include <array>
+#include <chrono>
+#include <cstddef>
+#include <exception>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <type_traits>
+#include <utility>
+#include <variant>
+
+#include <asio/buffer.hpp>
+#include <asio/write.hpp>
+
+#include "asio_bridge.h"
+#include "borrowed_text.h"
+#include "callback_ref.h"
+#include "connection_lifecycle.h"
+#include "connection_scanner.h"
+#include "context.h"
+#include "context_access.h"
+#include "http1_server_response.h"
+#include "http_connect_udp.h"
+#include "http_header.h"
+#include "http_message.h"
+#include "http_protocol.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_tunnel.h"
+#include "http_tunnel_session.h"
+#include "inbound_buffer.h"
+#include "inline_storage.h"
+#include "request_stream.h"
+#include "route_table.h"
+#include "server_options.h"
+#include "server_socket_stream.h"
+#include "stop_token.h"
+#include "streaming.h"
+#include "task.h"
+#include "transport_stream_end.h"
+#include "websocket.h"
+#include "websocket_connection.h"
+#include "websocket_handshake.h"
+#include "websocket_session.h"
+#include "worker_timer.h"
+
+namespace ruvia {
+class context;  // only used as context* in a type-erased bind thunk; web supplies the definition
+}
+
+namespace ruvia::detail {
+
+// A normal response writer may reject a tunnel but may never establish one.
+// Establishment transfers ownership through the protocol's acceptance driver.
+inline void validate_response_stream_status(const http_request& request, const http_response& response) {
+    if (request.known_method() == http_known_method::connect && response.status().is_successful()) {
+        throw std::logic_error("a 2xx response to CONNECT establishes the tunnel; use accept_tunnel()");
+    }
+    if (response.status() == http_status::switching_protocols) {
+        throw std::logic_error("a 101 response requires accept_tunnel() or accept_websocket()");
+    }
+}
+
+// Plain forwarding functions, not coroutines: each returns the sink's own task,
+// so a streamed chunk costs exactly the sink's frame and no wrapper frame.
+template <typename sink>
+task<stream_commit_result> response_stream_commit_thunk(void* target) {
+    return static_cast<sink*>(target)->commit();
+}
+
+template <typename sink>
+task<void> response_stream_write_thunk(void* target, std::string_view chunk) {
+    return static_cast<sink*>(target)->write(chunk);
+}
+
+template <typename sink>
+task<void> response_stream_end_thunk(void* target, std::span<const http_header_view> trailers) {
+    return static_cast<sink*>(target)->end(trailers);
+}
+
+template <typename sink>
+task<timer_sleep_result> response_stream_sleep_thunk(void* target, std::chrono::milliseconds duration, const stop_token& stop_token_value) {
+    return static_cast<sink*>(target)->sleep(duration, stop_token_value);
+}
+
+template <typename sink>
+bool response_stream_aborted_thunk(void* target) noexcept {
+    return static_cast<sink*>(target)->aborted();
+}
+
+template <typename sink>
+void response_stream_bind_context_thunk(void* target, context* context_value) {
+    static_cast<sink*>(target)->bind_context(context_value);
+}
+
+template <typename sink>
+void response_stream_release_context_thunk(void* target) noexcept {
+    static_cast<sink*>(target)->release_context();
+}
+
+template <typename sink>
+bool response_stream_committed_thunk(void* target) noexcept {
+    return static_cast<sink*>(target)->committed();
+}
+
+template <typename sink>
+[[nodiscard]] response_stream_writer make_response_stream_writer(sink& sink_value) noexcept {
+    return streaming_access::make_response_stream_writer(&sink_value, sink_value.output_interrupts(), &response_stream_commit_thunk<sink>, &response_stream_write_thunk<sink>, &response_stream_end_thunk<sink>, &response_stream_sleep_thunk<sink>, &response_stream_bind_context_thunk<sink>, &response_stream_release_context_thunk<sink>, &response_stream_committed_thunk<sink>, &response_stream_aborted_thunk<sink>);
+}
+
+class response_stream_completed final {
+public:
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+
+    explicit constexpr response_stream_completed(http_status_code status) noexcept :
+        status_(status) {}
+
+    http_status_code status_;
+};
+
+class response_stream_aborted_before_commit final {
+private:
+    friend class response_stream_dispatch_result;
+    constexpr response_stream_aborted_before_commit() noexcept = default;
+};
+
+class response_stream_aborted_after_commit final {
+public:
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_;
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+    explicit constexpr response_stream_aborted_after_commit(http_status_code status) noexcept :
+        status_(status) {}
+    http_status_code status_;
+};
+
+// The handler failed after its head was already on the wire. The status is what
+// the peer was told; the exception is why it will never receive the rest. The
+// status alone cannot be reported to anyone -- it says 200 -- so the exception
+// travels with it to the transport, which is the last owner able to report it.
+class response_stream_failed_after_commit final {
+public:
+    [[nodiscard]] constexpr http_status_code status() const noexcept {
+        return status_;
+    }
+
+    // Never null.
+    [[nodiscard]] std::exception_ptr exception() const noexcept {
+        return exception_;
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+
+    response_stream_failed_after_commit(http_status_code status, std::exception_ptr exception) noexcept :
+        status_(status),
+        exception_(std::move(exception)) {}
+
+    http_status_code status_;
+    std::exception_ptr exception_;
+};
+
+class response_stream_route_response final {
+public:
+    [[nodiscard]] http_response take_response() && noexcept {
+        return std::move(response_);
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+
+    explicit response_stream_route_response(http_response response) noexcept :
+        response_(std::move(response)) {}
+
+    http_response response_;
+};
+
+class response_stream_recovered_failure final {
+public:
+    [[nodiscard]] http_response take_response() && noexcept {
+        return std::move(response_);
+    }
+
+private:
+    friend class response_stream_dispatch_result;
+
+    explicit response_stream_recovered_failure(http_response response) noexcept :
+        response_(std::move(response)) {}
+
+    http_response response_;
+};
+
+// Each route terminal is one alternative. Commit-bearing alternatives own the
+// exact wire status; response-bearing alternatives own the movable response.
+// No separate outcome discriminator is needed.
+class response_stream_dispatch_result final {
+public:
+    [[nodiscard]] static response_stream_dispatch_result make_completed(http_status_code status) noexcept {
+        return response_stream_dispatch_result(response_stream_completed(status));
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_aborted_before_commit() noexcept {
+        return response_stream_dispatch_result(response_stream_aborted_before_commit{});
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_aborted_after_commit(http_status_code status) noexcept {
+        return response_stream_dispatch_result(response_stream_aborted_after_commit(status));
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_failed_after_commit(http_status_code status, std::exception_ptr exception) noexcept {
+        return response_stream_dispatch_result(response_stream_failed_after_commit(status, std::move(exception)));
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_route_response(http_response response) noexcept {
+        return response_stream_dispatch_result(response_stream_route_response(std::move(response)));
+    }
+
+    [[nodiscard]] static response_stream_dispatch_result make_recovered_failure(http_response response) noexcept {
+        return response_stream_dispatch_result(response_stream_recovered_failure(std::move(response)));
+    }
+
+    [[nodiscard]] const response_stream_completed* completed() const& noexcept {
+        return std::get_if<response_stream_completed>(&value_);
+    }
+    const response_stream_completed* completed() const&& = delete;
+
+    [[nodiscard]] const response_stream_aborted_before_commit* aborted_before_commit() const& noexcept {
+        return std::get_if<response_stream_aborted_before_commit>(&value_);
+    }
+    const response_stream_aborted_before_commit* aborted_before_commit() const&& = delete;
+
+    [[nodiscard]] const response_stream_aborted_after_commit* aborted_after_commit() const& noexcept {
+        return std::get_if<response_stream_aborted_after_commit>(&value_);
+    }
+    const response_stream_aborted_after_commit* aborted_after_commit() const&& = delete;
+
+    [[nodiscard]] const response_stream_failed_after_commit* failed_after_commit() const& noexcept {
+        return std::get_if<response_stream_failed_after_commit>(&value_);
+    }
+    const response_stream_failed_after_commit* failed_after_commit() const&& = delete;
+
+    [[nodiscard]] response_stream_route_response* route_response() & noexcept {
+        return std::get_if<response_stream_route_response>(&value_);
+    }
+    response_stream_route_response* route_response() && = delete;
+
+    [[nodiscard]] response_stream_recovered_failure* recovered_failure() & noexcept {
+        return std::get_if<response_stream_recovered_failure>(&value_);
+    }
+    response_stream_recovered_failure* recovered_failure() && = delete;
+
+    [[nodiscard]] std::optional<http_status_code> committed_status() const noexcept {
+        if (const auto* value = completed()) {
+            return value->status();
+        }
+        if (const auto* value = aborted_after_commit()) {
+            return value->status();
+        }
+        if (const auto* value = failed_after_commit()) {
+            return value->status();
+        }
+        return std::nullopt;
+    }
+
+private:
+    using value_type = std::variant<response_stream_completed, response_stream_aborted_before_commit, response_stream_aborted_after_commit, response_stream_failed_after_commit, response_stream_route_response, response_stream_recovered_failure>;
+
+    template <typename alternative_type>
+    explicit response_stream_dispatch_result(alternative_type alternative) noexcept :
+        value_(std::move(alternative)) {}
+
+    value_type value_;
+};
+
+// Only called once sink_value.committed() holds.
+template <typename sink>
+[[nodiscard]] http_status_code committed_response_stream_status(const sink& sink_value) {
+    return sink_value.commit_plan()->response_status();
+}
+
+struct response_stream_no_peer_abort final {
+    [[nodiscard]] constexpr bool operator()() const noexcept {
+        return false;
+    }
+};
+
+// Drives a response-stream route over an already-constructed sink. Connection
+// persistence remains a transport concern when a buffered response is returned.
+template <typename sink, typename peer_aborted_type = response_stream_no_peer_abort>
+task<response_stream_dispatch_result> dispatch_response_stream_with(sink& sink_value, const route_table& routes_value, const http_request& request, const resolved_route& route, const context_services& services, peer_aborted_type peer_aborted = {}) {
+    auto response_stream = make_response_stream_writer(sink_value);
+
+    std::exception_ptr exception;
+    try {
+        auto result_value = co_await routes_value.dispatch_response_stream(request, route, response_stream, services);
+        if (services.connection_aborted() || services.request_reset() || peer_aborted()) {
+            if (!sink_value.committed()) {
+                co_return response_stream_dispatch_result::make_aborted_before_commit();
+            }
+            co_return response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value));
+        }
+        if (!result_value.has_value()) {
+            if (!sink_value.committed()) {
+                throw std::logic_error("handled response stream has no committed protocol plan");
+            }
+            co_return response_stream_dispatch_result::make_completed(committed_response_stream_status(sink_value));
+        }
+        if (sink_value.committed()) {
+            throw std::logic_error("buffered stream result followed a committed response head");
+        }
+        co_return response_stream_dispatch_result::make_route_response(std::move(*result_value));
+    } catch (const inbound_transport_error&) {
+        if (!services.request_reset() && (services.connection_aborted() || peer_aborted())) {
+            if (!sink_value.committed()) {
+                co_return response_stream_dispatch_result::make_aborted_before_commit();
+            }
+            co_return response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value));
+        }
+        exception = std::current_exception();
+    } catch (...) {
+        exception = std::current_exception();
+    }
+    if (services.connection_aborted() || services.request_reset()) {
+        auto result = sink_value.committed() ? response_stream_dispatch_result::make_aborted_after_commit(committed_response_stream_status(sink_value)) : response_stream_dispatch_result::make_aborted_before_commit();
+        // The transport is already closed, but a real callback failure still
+        // belongs to its configured outlet. Snapshot before invoking user code.
+        const auto failure = services.connection_failure();
+        const auto remote = services.remote_address();
+        failure.invoke(remote, exception);
+        co_return result;
+    }
+
+    if (sink_value.committed()) {
+        // Past the point of no return: the status cannot be changed and no
+        // error body can be appended, so the exception is handed to the
+        // transport rather than dropped with the connection.
+        co_return response_stream_dispatch_result::make_failed_after_commit(committed_response_stream_status(sink_value), std::move(exception));
+    }
+    auto response = co_await routes_value.respond_exception(request, exception, services);
+    co_return response_stream_dispatch_result::make_recovered_failure(std::move(response));
+}
+
+// listener_dispatch::request_stream: what a request stream connection resolves
+// every request to in place of the route table, and the one run of the
+// application's request_stream callback every transport reaches through it.
+
+// A request stream route runs no middleware and declares no body limit. A
+// tunnel request -- CONNECT, extended CONNECT, or an HTTP/1.1 Upgrade without
+// content -- resolves to an upgrade route whose callback commits the tunnel
+// itself (accept_tunnel()); any other request to a response stream route with
+// a streamed body.
+[[nodiscard]] route_resolution resolve_request_stream_route(bool tunnel) noexcept;
+
+// Whether `route` is the tunnel route resolve_request_stream_route() yields.
+[[nodiscard]] bool is_request_stream_tunnel_route(const route_entry& route) noexcept;
+
+// Whether an HTTP/1 request of a request stream connection is a tunnel
+// request; `content` is whether it carries request content.
+[[nodiscard]] bool http1_request_stream_tunnel(const http_request& request, bool content) noexcept;
+
+// Runs the connection's callback for a tunnel request in the context its
+// upgrade route built. `accept` commits the success head and establishes the
+// tunnel; a refusal writes through the protocol's ordinary response stream,
+// which the upgrade driver must bind before dispatching this context.
+[[nodiscard]] task<void> serve_request_stream_tunnel(context& context_value, const request_stream_tunnel_accept& accept, const request_stream_websocket_accept* accept_websocket = nullptr);
+
+// The single writer of every HTTP/1 final head that hands the connection to
+// another protocol: a WebSocket or CONNECT-UDP 101 and a CONNECT 2xx. RFC 9110
+// section 7.8: when the head is 101 (Switching Protocols) and the request
+// carried Expect: 100-continue, the HTTP-owned
+// http_request_expectations::continue_before_switching_protocols() decision
+// puts a 100 (Continue) head before it in the same write, even when no content
+// follows. Any other status is written alone. `head` is the complete encoded
+// final head; it must stay valid until the returned task completes.
+template <typename stream_type>
+[[nodiscard]] task<std::error_code> write_http1_upgrade_response_head(stream_type& stream, const http_request_expectations& expectations, http_status_code status, std::string_view head, connection_scanner::entry& scanner_entry) {
+    constexpr std::size_t continue_head_capacity = 64;
+    std::array<char, continue_head_capacity> continue_bytes;
+    std::string_view continue_head;
+    if (status == http_status::switching_protocols && expectations.continue_before_switching_protocols()) {
+        const auto prepared = prepare_http1_interim_response_head(http_interim_response_head(http_status::continue_value), std::span<char>(continue_bytes));
+        const auto* prepared_head = std::get_if<prepared_http1_interim_response>(&prepared);
+        if (prepared_head == nullptr) {
+            throw std::logic_error("cannot prepare HTTP/1 100 Continue head");
+        }
+        continue_head = prepared_head->head();
+    }
+    const std::array<asio::const_buffer, 2> buffers{asio::buffer(continue_head), asio::buffer(head)};
+    const connection_scanner::entry::write_scope write_stall_clock(scanner_entry);
+    const auto written = co_await ruvia::async_asio<std::size_t>([&stream, &buffers, &scanner_entry](auto handler) {
+        asio::async_write(stream, buffers, connection_write_progress(scanner_entry), std::move(handler));
+    });
+    co_return written.error_code();
+}
+
+// The context retains header storage through handshake construction. The
+// protocol plan copies the views before this temporary pointer table is freed.
+[[nodiscard]] inline inline_http_header_views<> websocket_response_headers(context& context_value) {
+    return inline_http_header_views<>(context_access::handshake_headers(context_value));
+}
+
+// Flush the exact HTTP-owned 101 handshake prepared by the route. Negotiation is
+// not recomputed and no compression bool is returned through a side channel.
+// The shared HTTP/1 upgrade-head writer applies the request `expectations`
+// (100 Continue before 101, RFC 9110 section 7.8).
+template <typename stream_type>
+task<std::error_code> write_websocket_handshake(stream_type& stream, const websocket_server_handshake& handshake, const http_request_expectations& expectations, connection_scanner::entry& scanner_entry) {
+    http_response_head_buffer head;
+    handshake.for_each_response_part([&](std::string_view part) {
+        head.append(part);
+    });
+    co_return co_await write_http1_upgrade_response_head(stream, expectations, http_status::switching_protocols, head.view(), scanner_entry);
+}
+
+// The shared shape of every upgrade-capable route (CONNECT / CONNECT-UDP
+// tunnels and WebSocket upgrades) across HTTP/1 and HTTP/2: run the
+// application chain with a terminal that commits the upgrade and
+// owns the resulting session; once a session exists it is always finished,
+// otherwise a handler failure propagates and an uncommitted response falls
+// back to the ordinary buffered tail.
+[[nodiscard]] inline websocket_connection_options make_websocket_session_connection_options(const http_server_options& options, websocket_compression negotiated, const websocket_deflate_config& deflate, protocol_byte_limit receive_limit) noexcept {
+    // Directions without context takeover borrow the worker's codecs, which
+    // outlive every connection, so they allocate no codec state here.
+    return websocket_connection_options{
+        .receive_message_limit_ = receive_limit,
+        .compression_ = negotiated,
+        .deflater_ = deflate.deflater_,
+        .shared_deflate_ = &options.codecs_->websocket_deflate(),
+    };
+}
+
+// Selects the refusal response the server sends after the callback returns.
+[[nodiscard]] inline websocket_rejection reject_request_stream_websocket(context& context_value, const websocket_handshake_failure& failure) {
+    const auto error = failure.protocol_error();
+    auto response = context_value.error(copy_http_protocol_error_info(error));
+    failure.apply_required_response_headers(response);
+    const websocket_rejection rejection{response.status(), error.code()};
+    context_access::set_response(context_value, std::move(response));
+    return rejection;
+}
+
+struct websocket_accept_access final {
+    [[nodiscard]] static websocket_accept_result accepted(websocket& session) noexcept {
+        return websocket_accept_result(session);
+    }
+    [[nodiscard]] static websocket_accept_result rejected(websocket_rejection rejection) noexcept {
+        return websocket_accept_result(rejection);
+    }
+};
+
+// `datagrams` is the route's http_tunnel_route_config::datagrams_, which
+// CONNECT-UDP (`udp`) always sets.
+[[nodiscard]] inline http_response prepare_tunnel_upgrade_response_head(context& context_value, http_protocol_version version, bool udp, bool datagrams) {
+    auto head_response = context_access::streaming_head(context_value);
+    if (udp) {
+        auto negotiated = prepare_http_connect_udp_response(std::move(head_response), version);
+        if (negotiated.index() != 0) {
+            throw std::invalid_argument("invalid CONNECT-UDP response metadata");
+        }
+        head_response = std::move(std::get<0>(negotiated));
+    } else if (datagrams && head_response.status().is_successful()) {
+        // RFC 9297 section 3.4: the route's protocol uses the Capsule Protocol,
+        // so its successful response says so with exactly one ?1.
+        head_response.header_stable_view("Capsule-Protocol", "?1");
+    }
+    return head_response;
+}
+
+// `establish(context&) -> task<void>` commits the upgrade response head,
+// emplaces `session` and runs the route's stream handler on it.
+// `finish(session_type&, std::exception_ptr) -> task<void>` closes an
+// established session and reports a handler failure; it always runs once a
+// session exists, before any handler exception is surfaced.
+// Returns a buffered response only when the application answered without
+// upgrading; an established or abandoned upgrade returns std::nullopt.
+template <typename session_type, typename establish_type, typename finish_type>
+[[nodiscard]] task<std::optional<http_response>> run_http_upgrade_route(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, std::optional<session_type>& session, establish_type& establish, finish_type& finish) {
+    const auto terminal = callback_access::bind<task<void>(context&)>(establish);
+    std::optional<http_response> buffered;
+    std::exception_ptr failure;
+    try {
+        buffered = co_await routes.dispatch_upgrade(request, resolved, terminal, services);
+    } catch (...) {
+        failure = std::current_exception();
+    }
+    if (session.has_value()) {
+        co_await finish(*session, failure);
+        co_return std::nullopt;
+    }
+    if (failure != nullptr) {
+        std::rethrow_exception(failure);
+    }
+    co_return buffered;
+}
+
+template <typename stream_type>
+class websocket_upgrade_commit final {
+public:
+    static constexpr bool native_stream = websocket_session_connection<stream_type>::native_stream;
+    using stream_argument_type = typename websocket_session_connection<stream_type>::stream_argument_type;
+
+    websocket_upgrade_commit(stream_argument_type stream, websocket_compression compression, std::string_view subprotocol) :
+        stream_(hold_stream(std::forward<stream_argument_type>(stream))),
+        compression_(compression) {
+        try {
+            subprotocol_.assign(subprotocol);
+        } catch (...) {
+            abort();
+            throw;
+        }
+    }
+    [[nodiscard]] stream_argument_type release_stream() noexcept {
+        if constexpr (native_stream) {
+            return *stream_;
+        } else {
+            return std::move(stream_);
+        }
+    }
+
+    [[nodiscard]] websocket_compression compression() const noexcept {
+        return compression_;
+    }
+
+    [[nodiscard]] std::string_view subprotocol() const& noexcept RUVIA_LIFETIMEBOUND {
+        return subprotocol_;
+    }
+    std::string_view subprotocol() const&& = delete;
+
+    [[nodiscard]] std::string&& release_subprotocol() noexcept {
+        return std::move(subprotocol_);
+    }
+
+    void abort() noexcept {
+        if constexpr (native_stream) {
+            websocket_session_connection<stream_type>::close_stream(*stream_);
+        } else {
+            stream_.abort();
+        }
+    }
+
+private:
+    using held_stream_type = std::conditional_t<native_stream, stream_type*, stream_type>;
+
+    [[nodiscard]] static held_stream_type hold_stream(stream_argument_type stream) noexcept(native_stream) {
+        if constexpr (native_stream) {
+            return &stream;
+        } else {
+            return std::move(stream);
+        }
+    }
+
+    held_stream_type stream_;
+    websocket_compression compression_{};
+    std::string subprotocol_;
+};
+
+// A committed upgrade, or the refusal its handshake check selected.
+template <typename stream_type>
+using websocket_upgrade_attempt = std::variant<websocket_upgrade_commit<stream_type>, websocket_rejection>;
+
+template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
+struct tunnel_upgrade_session_operation final {
+    using session_type = http_tunnel_session<transport_type>;
+
+    const http_request& request_;
+    const resolved_route& resolved_;
+    const tunnel_route_endpoint& endpoint_;
+    const context_services& services_;
+    const http_server_options& options_;
+    connection_scanner::entry& scanner_entry_;
+    inbound_buffer_account& inbound_;
+    bool udp_;
+    std::string_view pending_;
+    commit_upgrade_type& commit_upgrade_;
+    commit_websocket_type& commit_websocket_;
+    std::optional<session_type>& session_;
+    http_tunnel_route_config config_{endpoint_.config()};
+    std::optional<websocket_session_connection<transport_type>> websocket_session_{};
+    struct websocket_borrow final {
+        explicit websocket_borrow(websocket_session_connection<transport_type>& connection) :
+            value_(make_websocket_facade(connection)) {}
+        websocket value_;
+    };
+    std::optional<websocket_borrow> websocket_{};
+
+    // Commits the upgrade head the context's draft describes and opens the
+    // session over the transport that head hands over.
+    [[nodiscard]] task<void> establish(context& context_value) {
+        auto head_response = prepare_tunnel_upgrade_response_head(context_value, request_.protocol_version(), udp_, config_.datagrams_);
+        std::optional<transport_type> transport;
+        if constexpr (requires { commit_upgrade_(context_value, head_response).operator co_await(); }) {
+            transport.emplace(co_await commit_upgrade_(context_value, head_response));
+        } else {
+            transport.emplace(commit_upgrade_(context_value, head_response));
+        }
+        try {
+            session_.emplace(std::move(*transport), services_.worker(), &inbound_, config_.datagrams_, pending_);
+        } catch (...) {
+            transport->abort();
+            throw;
+        }
+        session_->watch_idle(scanner_entry_, config_.idle_timeout_);
+        // A synchronous commit leaves no co_await in this instantiation;
+        // co_return keeps the body a coroutine for every transport.
+        co_return;
+    }
+
+    [[nodiscard]] task<http_tunnel*> accept_request_stream_tunnel(context& context_value, http_tunnel_route_config config) {
+        config_ = route_endpoint::validate_tunnel_config(!request_.protocol().empty() || request_.known_method() != http_known_method::connect, udp_, config);
+        co_await establish(context_value);
+        scanner_entry_.enter_long_lived();
+        co_return &session_->tunnel();
+    }
+
+    [[nodiscard]] task<websocket_accept_result> accept_request_stream_websocket(context& context_value, const websocket_route_endpoint& websocket_endpoint) {
+        const auto headers = websocket_response_headers(context_value);
+        auto attempt = co_await commit_websocket_(context_value, websocket_endpoint, headers);
+        if (const auto* rejection = std::get_if<websocket_rejection>(&attempt)) {
+            co_return websocket_accept_access::rejected(*rejection);
+        }
+        auto* committed = std::get_if<websocket_upgrade_commit<transport_type>>(&attempt);
+        try {
+            websocket_session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint.deflate(), websocket_endpoint.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
+        } catch (...) {
+            committed->abort();
+            throw;
+        }
+        websocket_.emplace(*websocket_session_);
+        scanner_entry_.enter_long_lived();
+        co_return websocket_accept_access::accepted(websocket_->value_);
+    }
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        if (is_request_stream_tunnel_route(resolved_.route())) {
+            auto accept = [this, &context_value](http_status_code, http_tunnel_route_config config) {
+                return accept_request_stream_tunnel(context_value, config);
+            };
+            const auto accept_ref = callback_access::bind<task<http_tunnel*>(http_status_code, http_tunnel_route_config)>(accept);
+            auto accept_websocket = [this, &context_value](const websocket_route_endpoint& endpoint) {
+                return accept_request_stream_websocket(context_value, endpoint);
+            };
+            const auto websocket_accept_ref = callback_access::bind<task<websocket_accept_result>(const websocket_route_endpoint&)>(accept_websocket);
+            std::exception_ptr failure;
+            try {
+                co_await serve_request_stream_tunnel(context_value, accept_ref, &websocket_accept_ref);
+            } catch (...) {
+                failure = std::current_exception();
+            }
+            // Retire borrowed operations before draining the owned connection,
+            // exactly as the route handler's stack facade does.
+            websocket_.reset();
+            if (websocket_session_) {
+                co_await finish_websocket_session(*websocket_session_, failure, options_.connection_failure_, services_.remote_address());
+            } else if (failure) {
+                std::rethrow_exception(failure);
+            }
+            co_return;
+        }
+        co_await establish(context_value);
+        co_await invoke_tunnel_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
+    }
+
+    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
+        return finish_tunnel_session(session_value, std::move(failure), options_.connection_failure_, services_.remote_address(), scanner_entry_, config_.peer_transport_fin_timeout_);
+    }
+};
+
+template <typename transport_type, typename commit_upgrade_type, typename commit_websocket_type>
+[[nodiscard]] task<std::optional<http_response>> execute_tunnel_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, bool udp, std::string_view pending, commit_upgrade_type commit_upgrade, commit_websocket_type commit_websocket) {
+    const auto& endpoint = *resolved.route().endpoint().tunnel();
+    using operation_type = tunnel_upgrade_session_operation<transport_type, commit_upgrade_type, commit_websocket_type>;
+    std::optional<typename operation_type::session_type> session;
+    operation_type operation{
+        .request_ = request,
+        .resolved_ = resolved,
+        .endpoint_ = endpoint,
+        .services_ = services,
+        .options_ = options,
+        .scanner_entry_ = scanner_entry,
+        .inbound_ = inbound,
+        .udp_ = udp,
+        .pending_ = pending,
+        .commit_upgrade_ = commit_upgrade,
+        .commit_websocket_ = commit_websocket,
+        .session_ = session,
+    };
+    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
+}
+
+template <typename stream_type, typename commit_upgrade_type>
+struct websocket_upgrade_session_operation final {
+    using session_type = websocket_session_connection<stream_type>;
+
+    const resolved_route& resolved_;
+    const websocket_route_endpoint& websocket_endpoint_;
+    const context_services& services_;
+    const http_server_options& options_;
+    connection_scanner::entry& scanner_entry_;
+    inbound_buffer_account& inbound_;
+    std::string_view pending_frames_;
+    commit_upgrade_type& commit_upgrade_;
+    std::optional<session_type>& session_;
+
+    [[nodiscard]] task<void> operator()(context& context_value) {
+        const auto response_headers_value = websocket_response_headers(context_value);
+        std::optional<websocket_upgrade_commit<stream_type>> committed;
+        if constexpr (requires { commit_upgrade_(context_value, response_headers_value).operator co_await(); }) {
+            committed.emplace(co_await commit_upgrade_(context_value, response_headers_value));
+        } else {
+            committed.emplace(commit_upgrade_(context_value, response_headers_value));
+        }
+        try {
+            session_.emplace(committed->release_stream(), services_.worker(), scanner_entry_, websocket_endpoint_.lifecycle(), protocol_byte_limit::limited(options_.server_.max_websocket_message_bytes_), pending_frames_, make_websocket_session_connection_options(options_, committed->compression(), websocket_endpoint_.deflate(), websocket_endpoint_.message_limit(options_.server_.max_websocket_message_bytes_)), committed->release_subprotocol(), &inbound_);
+        } catch (...) {
+            committed->abort();
+            throw;
+        }
+        co_await invoke_websocket_handler(*session_, scanner_entry_, resolved_.stream_handler(), context_value);
+    }
+
+    [[nodiscard]] task<void> operator()(session_type& session_value, std::exception_ptr failure) const {
+        return finish_websocket_session(session_value, std::move(failure), options_.connection_failure_, services_.remote_address());
+    }
+};
+
+template <typename stream_type, typename commit_upgrade_type>
+[[nodiscard]] task<std::optional<http_response>> execute_websocket_upgrade_session(const route_table& routes, const http_request& request, const resolved_route& resolved, const context_services& services, const http_server_options& options, connection_scanner::entry& scanner_entry, inbound_buffer_account& inbound, std::string_view pending_frames, commit_upgrade_type commit_upgrade) {
+    const auto& websocket_endpoint = *resolved.route().endpoint().websocket();
+    using operation_type = websocket_upgrade_session_operation<stream_type, commit_upgrade_type>;
+    std::optional<typename operation_type::session_type> session;
+    operation_type operation{
+        .resolved_ = resolved,
+        .websocket_endpoint_ = websocket_endpoint,
+        .services_ = services,
+        .options_ = options,
+        .scanner_entry_ = scanner_entry,
+        .inbound_ = inbound,
+        .pending_frames_ = pending_frames,
+        .commit_upgrade_ = commit_upgrade,
+        .session_ = session,
+    };
+    co_return co_await run_http_upgrade_route(routes, request, resolved, services, session, operation, operation);
+}
+
+}  // namespace ruvia::detail

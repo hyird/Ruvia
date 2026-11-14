@@ -1,0 +1,210 @@
+#include "response_coding_policy.h"
+
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <limits>
+#include <optional>
+#include <string>
+#include <string_view>
+#include <utility>
+
+#include "blocking_pool.h"
+#include "failure_report.h"
+#include "http_cache.h"
+#include "http_content_codec.h"
+#include "http_content_coding.h"
+#include "http_content_negotiation.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_response.h"
+#include "http_response_body.h"
+#include "stop_token.h"
+#include "task.h"
+#include "worker_ref.h"
+
+namespace ruvia::detail {
+
+namespace {
+
+// A coded representation is worth sending only when strictly smaller than
+// the identity bytes; the encoder stops at this cap instead of finishing.
+// When the client refuses identity (RFC 9110 §12.5.3), any acceptable coding
+// beats a 406, so the cap is lifted.
+[[nodiscard]] http_content_encode_options compressed_body_options(std::string_view plain, bool identity_accepted) noexcept {
+    if (!identity_accepted) {
+        return {.max_encoded_bytes_ = (std::numeric_limits<std::size_t>::max)()};
+    }
+    return {.max_encoded_bytes_ = plain.empty() ? 0 : plain.size() - 1};
+}
+
+// Publishes an encoder result as the response representation. The commit
+// stages every affected header before publishing the owned body, so a
+// request-resource failure leaves the identity response usable for the typed
+// 500 path instead of exposing a mixed body/metadata state.
+[[nodiscard]] http_response_compression_status commit_compressed_body(http_response& response, http_content_coding coding, std::optional<std::string>&& encoding) {
+    if (!encoding.has_value()) {
+        return http_response_compression_status::not_applicable;
+    }
+    response.replace_body_with_content_encoding(std::move(*encoding), http_content_coding_token(coding));
+    return http_response_compression_status::compressed;
+}
+
+[[nodiscard]] bool response_headers_skip_compression(const http_response& response) noexcept {
+    if (response.header("Content-Range").has_value()) {
+        return true;
+    }
+    if (const auto content_type = response.header("Content-Type"); !content_type.has_value() || !is_http_media_type_compressible(*content_type)) {
+        return true;
+    }
+    const bool has_cache_control = response.header("Cache-Control").has_value();
+    cache_control_field_parser cache_parser;
+    for (const auto& header : response.headers()) {
+        const auto name = header.name();
+        switch (name.size()) {
+            case 11U:
+                if (http_ascii_equals_ignore_case(name, "Repr-Digest") || http_ascii_equals_ignore_case(name, "Content-MD5")) {
+                    return true;
+                }
+                break;
+            case 13U:
+                if (http_ascii_equals_ignore_case(name, "Cache-Control")) {
+                    cache_parser.update(header.value());
+                }
+                break;
+            case 14U:
+                if ((name[8] | 0x20) == 'd' && http_ascii_equals_ignore_case(name, "Content-Digest")) {
+                    return true;
+                }
+                break;
+            default:
+                break;
+        }
+    }
+    return has_cache_control && cache_parser.finish().has(cache_control_directive::no_transform);
+}
+
+}  // namespace
+
+std::optional<std::uint64_t> declared_content_length(const http_response& response) noexcept {
+    const auto field = response.header("Content-Length");
+    return field.has_value() ? http_parse_content_length(*field) : std::nullopt;
+}
+
+bool declared_length_permits_encoding(const http_response_coding_selection& selection, const compression_config& options, std::uint64_t declared) noexcept {
+    // min_bytes_ only says when encoding stops paying off; a client that
+    // refuses identity is served a coding at any size instead of a 406.
+    return !(((declared == 0 || declared < options.min_bytes_) && selection.identity_accepted()) || declared > options.max_bytes_);
+}
+
+namespace {
+
+// An empty HEAD body is a HEAD handler describing the GET representation
+// without producing it. Encoding those zero bytes would publish the coded
+// length of nothing (RFC 9110 §8.6). Apply the coding GET would select, sized
+// by the declared Content-Length, and drop that length: the coded size is
+// unknown and §8.6 allows omitting it.
+[[nodiscard]] http_buffered_compression_step apply_head_content_encoding(const http_response_coding_selection& selection, http_response& response, const compression_config& options, std::optional<std::uint64_t> declared) {
+    const bool encode = declared.has_value() ? declared_length_permits_encoding(selection, options, *declared) : !selection.identity_accepted();
+    if (!encode) {
+        return {http_response_compression_status::not_applicable, false};
+    }
+    response.apply_content_encoding(http_content_coding_token(selection.coding()));
+    return {http_response_compression_status::compressed, false};
+}
+
+}  // namespace
+
+http_response_compression_decision prepare_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, http_response_compression_source source_value, http_response_coding_availability availability) {
+    // A file's bytes are served as the representation their validators and
+    // HEAD response describe, whether the transport reads the file or the
+    // context already carries them in memory.
+    if (source_value == http_response_compression_source::buffered && response.has_file_representation()) {
+        return http_response_compression_decision::fixed_representation;
+    }
+    if (!plan_http_response_body(request_method, response.status()).status_allows_body()) {
+        return http_response_compression_decision::fixed_representation;
+    }
+    // An application-encoded body is kept, but whether it is sent (200) or
+    // refused (406) still depends on Accept-Encoding, so caches must key on it
+    // (RFC 9110 §12.5.5; Pingora depends_on_accept_encoding).
+    if (response.header("Content-Encoding").has_value()) {
+        response.add_vary_token("Accept-Encoding");
+        return http_response_compression_decision::fixed_representation;
+    }
+    // Integrity fields describe the content or the selected representation,
+    // both of which include the content coding (RFC 9530 §1, §2, §3; legacy
+    // Content-MD5 likewise covered the sent content). Encoding here would
+    // leave them describing bytes that are not sent.
+    if (availability == http_response_coding_availability::identity_only || response.status() == http_status::partial_content || response_headers_skip_compression(response)) {
+        return http_response_compression_decision::fixed_representation;
+    }
+
+    response.add_vary_token("Accept-Encoding");
+    if (selection.coding() == http_content_coding::identity) {
+        return http_response_compression_decision::negotiated_identity;
+    }
+    return http_response_compression_decision::encode;
+}
+
+http_buffered_compression_step apply_response_compression(const http_response_coding_selection& selection, http_known_method request_method, http_response& response, const compression_config& options, worker_codecs& codecs, bool offload_available) {
+    constexpr http_buffered_compression_step not_applicable{http_response_compression_status::not_applicable, false};
+    const auto body = response.body_bytes();
+
+    const auto decision = prepare_response_compression(selection, request_method, response, http_response_compression_source::buffered, http_response_coding_availability::identity_and_compression);
+    // Negotiation errors above still propagate; only encoding and publication
+    // failures become a typed compression result.
+    try {
+        if (decision == http_response_compression_decision::encode && request_method == http_known_method::head && body.empty() && (response.has_head_metadata_body() || response.header("Content-Length").has_value())) {
+            const auto declared = declared_content_length(response);
+            if (declared != std::uint64_t{0}) {
+                return apply_head_content_encoding(selection, response, options, declared);
+            }
+        }
+        if (decision != http_response_compression_decision::encode || !declared_length_permits_encoding(selection, options, body.size())) {
+            return not_applicable;
+        }
+        // sync_bytes_ is the inline ceiling. Larger bodies encode on the blocking
+        // pool; without one they stay identity (or 406 when identity is refused)
+        // rather than stall the event loop.
+        if (body.size() > options.sync_bytes_) {
+            return {http_response_compression_status::not_applicable, offload_available};
+        }
+
+        const auto coding = selection.coding();
+        auto encoding = codecs.encoder(coding).encode(body, compressed_body_options(body, selection.identity_accepted()));
+        return {commit_compressed_body(response, coding, std::move(encoding)), false};
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        return {http_response_compression_status::failed, false};
+    }
+}
+
+task<http_response_compression_status> compress_response_offloaded(http_response_coding_selection selection, http_response& response, const worker_ref& worker_value, const stop_token& stop_token_value) {
+    try {
+        const auto coding = selection.coding();
+        const bool identity_accepted = selection.identity_accepted();
+        std::string plain(response.body_bytes());
+        auto result_value = co_await run_blocking(worker_value, {.stop_token_ = stop_token_value}, [coding, identity_accepted, plain = std::move(plain)]() {
+            return encode_http_content(coding, plain, compressed_body_options(plain, identity_accepted));
+        });
+        if (result_value.failed()) {
+            ruvia::report_unhandled_failure("response compression", result_value.error());
+            co_return http_response_compression_status::failed;
+        }
+        if (!result_value.completed()) {
+            // Queue saturation and shutdown are overload/lifecycle outcomes,
+            // not broken encoders. Preserve the identity representation when
+            // identity is acceptable; otherwise report 503 Service Unavailable.
+            co_return http_response_compression_status::unavailable;
+        }
+        co_return commit_compressed_body(response, coding, std::move(result_value).take_value());
+    } catch (...) {
+        ruvia::report_unhandled_failure("response compression", std::current_exception());
+        // Input ownership, encoder execution and representation publication
+        // leave the original identity body intact on failure.
+        co_return http_response_compression_status::failed;
+    }
+}
+
+}  // namespace ruvia::detail

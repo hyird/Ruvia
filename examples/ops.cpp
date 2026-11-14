@@ -18,6 +18,7 @@
 #include "context.h"
 #include "controller.h"
 #include "middleware.h"
+#include "security_middleware.h"
 #include "streaming.h"
 class ops_controller final {
 public:

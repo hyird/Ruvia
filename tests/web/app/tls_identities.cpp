@@ -40,8 +40,10 @@
 #include "controller.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
+#include "http1_client_response_body.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
 #include "task_scope.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include <asio/ip/udp.hpp>

@@ -29,7 +29,13 @@
 #include <asio/error.hpp>
 #include <asio/io_context.hpp>
 
+#include "asio_bridge.h"
+#include "asio_ip_address.h"
+#include "byte_view.h"
 #include "event_loop.h"
+#include "failure_report.h"
+#include "move_only_function.h"
+#include "operation_options.h"
 #include "task.h"
 
 namespace stop_token_test {

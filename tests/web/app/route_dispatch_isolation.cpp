@@ -19,6 +19,8 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "request_stream.h"
+#include "server_connection.h"
 namespace route_dispatch_isolation_test {
 
 using namespace std::chrono_literals;

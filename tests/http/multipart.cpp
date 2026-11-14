@@ -728,6 +728,7 @@ TEST(Ruvia, multipart_unfolding_preserves_wire_limits_and_field_validation) {
 
 #include "http1_client_request.h"
 #include "http1_server_response.h"
+#include "http_capsule.h"
 #include "http_connect_udp.h"
 #include "http_header.h"
 namespace {

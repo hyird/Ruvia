@@ -25,6 +25,7 @@
 #include "event_loop.h"
 #include "stop_token.h"
 #include "worker_task_fixture.h"
+#include "worker_timer.h"
 
 namespace ruvia::test::task_scope_tests {
 

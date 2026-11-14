@@ -12,6 +12,7 @@
 
 #include "app.h"
 #include "controller.h"
+#include "test_app.h"
 
 RUVIA_MODEL(note_request, RUVIA_OPTIONAL_FIELD(text, ruvia::string));
 

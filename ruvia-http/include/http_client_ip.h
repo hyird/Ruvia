@@ -7,9 +7,9 @@
 #include <string_view>
 #include <vector>
 
-#include "borrowed_text.h"
 #include "http_header.h"
 #include "http_message.h"
+#include "ip_address.h"
 
 namespace ruvia {
 

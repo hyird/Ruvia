@@ -1,0 +1,412 @@
+#include "operation_scope.h"
+
+#include <coroutine>
+#include <exception>
+#include <stdexcept>
+#include <utility>
+
+#include "task.h"
+#include "worker_ref.h"
+
+namespace ruvia {
+
+// Keeps a reentrant join from publishing retirement during frame/capability
+// cleanup. Its registration is a value, not a frame-owner base class.
+struct operation_scope::drain_guard final {
+    explicit drain_guard(operation_scope& scope) noexcept {
+        scope.link(registration_);
+        registration_.phase_ = detail::scoped_operation_registration::phase::retiring;
+    }
+
+    ~drain_guard() {
+        auto* scope = registration_.scope_;
+        // Keep the drain registered while capability callbacks run: a join
+        // started by one of them must not publish retirement prematurely.
+        if (scope->head_ == &registration_ && registration_.next_ == nullptr && scope->join_continuation_ == nullptr) {
+            scope->expire_capabilities();
+        }
+        registration_.phase_ = detail::scoped_operation_registration::phase::expired;
+        scope->unlink(registration_);
+        // The joiner may retire this scope's owner once resumed. No further scope access.
+        scope->resume_joiner();
+    }
+
+    detail::scoped_operation_registration registration_;
+};
+
+struct operation_scope::join_awaiter final {
+    explicit join_awaiter(operation_scope& scope) noexcept :
+        owner_(scope) {}
+
+    [[nodiscard]] bool await_ready() const noexcept {
+        return owner_.head_ == nullptr;
+    }
+
+    bool await_suspend(std::coroutine_handle<> continuation) noexcept {
+        if (owner_.head_ == nullptr || owner_.join_continuation_ != nullptr) {
+            std::terminate();
+        }
+        owner_.join_continuation_ = continuation;
+        return true;
+    }
+
+    void await_resume() const noexcept {}
+
+    operation_scope& owner_;
+};
+
+void operation_scope::close() noexcept {
+    if (expiring_capabilities_ || (!active_ && head_ == nullptr && capability_head_ == nullptr)) {
+        return;
+    }
+    for (auto* operation = head_; operation != nullptr; operation = operation->next_) {
+        if (operation->phase_ == detail::scoped_operation_registration::phase::running || operation->phase_ == detail::scoped_operation_registration::phase::completing || (active_ && operation->phase_ == detail::scoped_operation_registration::phase::retiring)) {
+            std::terminate();
+        }
+    }
+    // An inactive scope already has a drain owner. Reentrant cold-frame
+    // cleanup may observe its retiring entries, but never unfinished work.
+    if (!active_) {
+        return;
+    }
+    expire_for_join();
+}
+
+void operation_scope::expire() noexcept {
+    if (expiring_capabilities_ || !active_) {
+        return;
+    }
+    expire_for_join();
+}
+
+task<void> operation_scope::close_and_join() & {
+    if (join_started_) {
+        if (!join_complete_) {
+            throw std::logic_error("scoped operation scope can only be joined once");
+        }
+        co_return;
+    }
+    join_started_ = true;
+    expire_for_join();
+    if (head_ == nullptr) {
+        expire_capabilities();
+        join_complete_ = true;
+        co_return;
+    }
+    co_await join_awaiter(*this);
+}
+
+void operation_scope::retire_cold_operations() noexcept {
+    for (;;) {
+        auto* operation = head_;
+        while (operation != nullptr && operation->phase_ != detail::scoped_operation_registration::phase::cold) {
+            operation = operation->next_;
+        }
+        if (operation == nullptr) {
+            return;
+        }
+        operation->retire_frame();
+        // Cleanup may remove sibling cold frames; search the live chain again.
+    }
+}
+
+void operation_scope::expire_for_join() noexcept {
+    drain_guard drain(*this);
+    active_ = false;
+    retire_cold_operations();
+}
+
+void operation_scope::expire_capabilities() noexcept {
+    expiring_capabilities_ = true;
+    while (capability_head_ != nullptr) {
+        capability_head_->expire();
+    }
+    expiring_capabilities_ = false;
+}
+
+void operation_scope::resume_joiner() noexcept {
+    if (head_ != nullptr || join_continuation_ == nullptr) {
+        return;
+    }
+    auto continuation = std::exchange(join_continuation_, {});
+    // The bound worker_ref outlives the scope, so the borrowed pointer stays a
+    // valid stack snapshot even after the joiner retires the scope.
+    const auto* bound_worker = worker_;
+    expire_capabilities();
+    join_complete_ = true;
+    // The last operation completes from its frame's final suspend; waking the
+    // joiner in a later loop turn keeps that frame off the joiner's stack. The
+    // deferred callable holds only the handle, never this scope.
+    const auto resume = [continuation] {
+        continuation.resume();
+    };
+    if (bound_worker != nullptr ? bound_worker->defer_completion(resume) : detail::worker_ref_access::current().defer_completion(resume)) {
+        return;
+    }
+    // No attached event loop owns this thread (or its context has detached):
+    // no later turn exists, so resuming inline is the only way to finish the join.
+    continuation.resume();
+}
+
+void operation_scope::check_worker() const noexcept {
+    if (worker_ != nullptr && !worker_->is_current()) {
+        std::terminate();
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept :
+    target_(target),
+    cleanup_(cleanup),
+    active_(scope.active()) {
+    if (active_) {
+        link(scope);
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(const scoped_capability_registration& other, void* target) noexcept :
+    target_(target),
+    cleanup_(other.cleanup_),
+    active_(other.active_) {
+    if (active_ && other.scope_ != nullptr) {
+        link(*other.scope_);
+    }
+}
+
+scoped_capability_registration::scoped_capability_registration(scoped_capability_registration&& other, void* target) noexcept :
+    scope_(other.scope_),
+    previous_(other.previous_),
+    next_(other.next_),
+    target_(target),
+    cleanup_(other.cleanup_),
+    active_(other.active_) {
+    if (scope_ != nullptr) {
+        if (previous_ != nullptr) {
+            previous_->next_ = this;
+        } else {
+            scope_->capability_head_ = this;
+        }
+        if (next_ != nullptr) {
+            next_->previous_ = this;
+        }
+    }
+    other.scope_ = nullptr;
+    other.previous_ = nullptr;
+    other.next_ = nullptr;
+    other.target_ = nullptr;
+    other.cleanup_ = nullptr;
+    other.active_ = false;
+}
+
+scoped_capability_registration::~scoped_capability_registration() {
+    unlink();
+}
+
+void scoped_capability_registration::require_active() const {
+    if (!active_) {
+        throw std::logic_error("scoped capability lifetime has expired");
+    }
+}
+
+operation_scope& scoped_capability_registration::scope() const {
+    require_active();
+    return *scope_;
+}
+
+void scoped_capability_registration::bind(operation_scope& scope, void* target, void (*cleanup)(void*) noexcept) noexcept {
+    if (scope_ != nullptr || active_) {
+        std::terminate();
+    }
+    target_ = target;
+    cleanup_ = cleanup;
+    active_ = scope.active();
+    if (active_) {
+        link(scope);
+    }
+}
+
+void scoped_capability_registration::link(operation_scope& scope) noexcept {
+    scope_ = &scope;
+    next_ = scope.capability_head_;
+    if (next_ != nullptr) {
+        next_->previous_ = this;
+    }
+    scope.capability_head_ = this;
+}
+
+void scoped_capability_registration::unlink() noexcept {
+    if (scope_ == nullptr) {
+        return;
+    }
+    if (previous_ != nullptr) {
+        previous_->next_ = next_;
+    } else {
+        scope_->capability_head_ = next_;
+    }
+    if (next_ != nullptr) {
+        next_->previous_ = previous_;
+    }
+    scope_ = nullptr;
+    previous_ = nullptr;
+    next_ = nullptr;
+}
+
+void scoped_capability_registration::expire() noexcept {
+    const auto cleanup = cleanup_;
+    auto* target = target_;
+    active_ = false;
+    unlink();
+    // Cleanup may destroy this registration or remove sibling capabilities.
+    // Never access the registration after calling its typed owner.
+    if (cleanup != nullptr) {
+        cleanup(target);
+    }
+}
+
+void operation_scope::link(detail::scoped_operation_registration& operation) noexcept {
+    operation.scope_ = this;
+    operation.next_ = head_;
+    if (head_ != nullptr) {
+        head_->previous_ = &operation;
+    }
+    head_ = &operation;
+}
+
+void operation_scope::unlink(detail::scoped_operation_registration& operation) noexcept {
+    if (operation.previous_ != nullptr) {
+        operation.previous_->next_ = operation.next_;
+    } else if (head_ == &operation) {
+        head_ = operation.next_;
+    }
+    if (operation.next_ != nullptr) {
+        operation.next_->previous_ = operation.previous_;
+    }
+    operation.scope_ = nullptr;
+    operation.previous_ = nullptr;
+    operation.next_ = nullptr;
+}
+
+namespace detail {
+
+scoped_operation_registration::scoped_operation_registration(scoped_operation_registration&& other, void* new_frame_target) noexcept {
+    if (other.phase_ == phase::running || other.phase_ == phase::retiring) {
+        std::terminate();
+    }
+    if (other.phase_ == phase::unscoped) {
+        return;
+    }
+    scope_ = other.scope_;
+    previous_ = other.previous_;
+    next_ = other.next_;
+    phase_ = other.phase_;
+    frame_target_ = other.frame_target_ != nullptr ? new_frame_target : nullptr;
+    retire_cold_ = other.retire_cold_;
+    if (scope_ != nullptr) {
+        if (previous_ != nullptr) {
+            previous_->next_ = this;
+        } else {
+            scope_->head_ = this;
+        }
+        if (next_ != nullptr) {
+            next_->previous_ = this;
+        }
+    }
+    other.scope_ = nullptr;
+    other.previous_ = nullptr;
+    other.next_ = nullptr;
+    other.phase_ = phase::unscoped;
+    other.clear_frame_binding();
+}
+
+scoped_operation_registration::~scoped_operation_registration() {
+    if (scope_ != nullptr || phase_ == phase::running || phase_ == phase::retiring) {
+        std::terminate();
+    }
+}
+
+void scoped_operation_registration::bind(operation_scope& scope, void* target, void (*retire_cold)(void*) noexcept) noexcept {
+    if (phase_ != phase::unscoped || retire_cold == nullptr || retire_cold_ != nullptr) {
+        std::terminate();
+    }
+    if (!scope.active()) {
+        scope.check_worker();
+        phase_ = phase::retiring;
+        retire_cold(target);
+        phase_ = phase::expired;
+        return;
+    }
+    phase_ = phase::cold;
+    frame_target_ = target;
+    retire_cold_ = retire_cold;
+    scope.link(*this);
+}
+
+void scoped_operation_registration::clear_frame_binding() noexcept {
+    frame_target_ = nullptr;
+    retire_cold_ = nullptr;
+}
+
+void scoped_operation_registration::prepare_start() const {
+    if (phase_ == phase::expired) {
+        throw std::logic_error("capability operation scope has expired");
+    }
+    if (phase_ != phase::cold) {
+        throw std::logic_error("capability operation can only be awaited once");
+    }
+    scope_->check_worker();
+}
+
+void scoped_operation_registration::start() noexcept {
+    if (phase_ != phase::cold) {
+        std::terminate();
+    }
+    phase_ = phase::running;
+}
+
+void scoped_operation_registration::prepare_completion() noexcept {
+    if (phase_ != phase::running) {
+        std::terminate();
+    }
+    scope_->check_worker();
+    // The final suspend point permits owner relocation, not early retirement:
+    // the registration stays linked until the frame has been destroyed.
+    phase_ = phase::completing;
+}
+
+void scoped_operation_registration::complete() noexcept {
+    if (phase_ != phase::completing) {
+        std::terminate();
+    }
+    phase_ = phase::complete;
+    clear_frame_binding();
+    if (scope_ != nullptr) {
+        auto* scope = scope_;
+        scope->unlink(*this);
+        // The joiner may retire the owner once resumed; no further registration access.
+        scope->resume_joiner();
+    }
+}
+
+void scoped_operation_registration::retire_frame() noexcept {
+    if (phase_ == phase::running || phase_ == phase::completing || phase_ == phase::retiring) {
+        std::terminate();
+    }
+    if (phase_ == phase::cold) {
+        scope_->check_worker();
+        phase_ = phase::retiring;
+        const auto retire_cold = retire_cold_;
+        auto* target = frame_target_;
+        clear_frame_binding();
+        retire_cold(target);
+    }
+    phase_ = phase::expired;
+    if (scope_ != nullptr) {
+        auto* scope = scope_;
+        scope->unlink(*this);
+        // The joiner may retire the owner once resumed; no further registration access.
+        scope->resume_joiner();
+    }
+}
+
+}  // namespace detail
+
+}  // namespace ruvia

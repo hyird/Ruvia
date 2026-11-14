@@ -1,3 +1,5 @@
+#include "ip_address.h"
+
 #include <algorithm>
 #include <array>
 #include <charconv>
@@ -8,8 +10,6 @@
 #include <string>
 #include <string_view>
 
-#include "borrowed_text.h"
-#include "http_connection_fields.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {

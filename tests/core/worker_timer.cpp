@@ -1,3 +1,5 @@
+#include "worker_timer.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -26,10 +28,18 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
+#include "asio_bridge.h"
+#include "channel.h"
 #include "event_loop.h"
+#include "move_only_function.h"
+#include "one_shot.h"
+#include "operation_options.h"
+#include "pool_lease.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "timeout_duration.h"
+#include "worker_result.h"
 #include "worker_task_fixture.h"
 #include "worker_wait.h"
 

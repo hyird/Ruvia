@@ -11,6 +11,10 @@
 #include <string_view>
 #include <vector>
 
+#include "binary_text_encoding.h"
+#include "decimal_text.h"
+#include "ip_address.h"
+
 namespace ruvia {
 namespace {
 

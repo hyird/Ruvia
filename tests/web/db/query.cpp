@@ -14,6 +14,7 @@
 #include <variant>
 #include <vector>
 
+#include "db_entity.h"
 #include "db_query.h"
 #include "worker_task_fixture.h"
 

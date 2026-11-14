@@ -12,6 +12,7 @@
 #include <string_view>
 
 #include "http_cookie.h"
+#include "http_cookie_jar.h"
 #include "http_date.h"
 
 namespace {

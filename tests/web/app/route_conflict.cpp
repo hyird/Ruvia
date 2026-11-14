@@ -7,6 +7,7 @@
 #include "app.h"
 #include "context.h"
 #include "controller.h"
+#include "test_app.h"
 
 // Each invalid or conflicting route registration makes every application in its
 // executable fail startup, so each case compiles into its own test executable

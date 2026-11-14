@@ -12,7 +12,8 @@
 #include <utility>
 
 #include "borrowed_text.h"
-#include "http_connection_fields.h"
+#include "http_date_parts.h"
+#include "http_header.h"
 
 namespace ruvia::detail {
 

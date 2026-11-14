@@ -9,10 +9,10 @@
 #include <vector>
 
 #include "borrowed_text.h"
-#include "http_binary_message.h"
-#include "http_connection_fields.h"
+#include "http_advertisement_payload.h"
+#include "http_authority.h"
+#include "http_field_text.h"
 #include "http_header.h"
-#include "http_request.h"
 
 namespace ruvia {
 

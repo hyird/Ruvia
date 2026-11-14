@@ -31,10 +31,12 @@
 #include "context.h"
 #include "controller.h"
 #include "event_loop.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "request_stream.h"
 namespace {
 
 template <typename fn_type>

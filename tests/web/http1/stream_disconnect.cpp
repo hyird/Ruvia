@@ -30,6 +30,7 @@
 #include "context.h"
 #include "controller.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server_fixture.h"
 #include "streaming.h"
 #include "task_scope.h"

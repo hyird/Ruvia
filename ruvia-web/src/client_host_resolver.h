@@ -1,0 +1,68 @@
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <stdexcept>
+#include <string_view>
+#include <system_error>
+#include <variant>
+
+#include <asio/ip/tcp.hpp>
+
+#include "host_name_syntax.h"
+#include "operation_options.h"
+#include "startup_config.h"
+#include "stop_token.h"
+#include "task.h"
+#include "worker_ref.h"
+
+namespace ruvia::detail {
+
+struct client_resolve_result final {
+    asio::ip::tcp::resolver::results_type addresses_{};
+    // Numeric hosts do not need a heap-backed resolver result.
+    std::optional<asio::ip::tcp::endpoint> literal_{};
+    std::error_code error_{};
+};
+
+using client_resolve_operation = std::variant<client_resolve_result, task<client_resolve_result>>;
+
+// False for an IP literal, which connects without a lookup.
+[[nodiscard]] bool client_host_needs_lookup(std::string_view host);
+
+// A DNS host is looked up on the blocking pool of the client's event loop;
+// without one the client cannot connect, so it is rejected at construction.
+void require_client_host_lookup(std::string_view host, const worker_ref& worker);
+
+// HTTP、WebSocket、Redis 和数据库共用的系统名称查询。系统 getaddrinfo 不可
+// 抢占；查询卸载到客户端事件循环借用的有界阻塞池，只携带自有输入，取消或停机先
+// 释放等待者，再丢弃迟到结果。IP 字面量不查询，也不需要池。
+class client_host_resolver final {
+public:
+    explicit client_host_resolver(const worker_ref& worker) noexcept :
+        worker_(&worker) {}
+    client_host_resolver(const client_host_resolver&) = delete;
+    client_host_resolver& operator=(const client_host_resolver&) = delete;
+    client_host_resolver(client_host_resolver&& other) noexcept;
+    client_host_resolver& operator=(client_host_resolver&& other) noexcept;
+
+    [[nodiscard]] client_resolve_operation resolve(std::string_view host, std::uint16_t port, const operation_deadline& timeout, stop_token stop = {});
+    void cancel() noexcept;
+
+private:
+    struct query;
+    [[nodiscard]] task<client_resolve_result> resolve_query(query input, operation_deadline timeout, stop_token stop);
+    const worker_ref* worker_;
+    std::optional<stop_source> stop_;
+};
+
+// A client transport host, also used for TLS SNI and peer verification: an
+// unbracketed IP literal or an ASCII DNS host name.
+inline void validate_client_origin_host(std::string_view host, const char* empty_message, const char* invalid_message) {
+    ensure_config_host(host, empty_message, invalid_message);
+    if (!is_client_ip_address(host) && !is_valid_dns_host(host)) {
+        throw std::invalid_argument(invalid_message);
+    }
+}
+
+}  // namespace ruvia::detail

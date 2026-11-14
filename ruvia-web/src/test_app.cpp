@@ -1,0 +1,299 @@
+#include "test_app.h"
+
+#include <chrono>
+#include <cstddef>
+#include <exception>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <utility>
+
+#include "blocking_pool.h"
+#include "callback_ref.h"
+#include "context_access.h"
+#include "controller.h"
+#include "env.h"
+#include "event_loop.h"
+#include "http_content_negotiation.h"
+#include "http_header.h"
+#include "http_request.h"
+#include "http_request_admission.h"
+#include "http_response.h"
+#include "inline_storage.h"
+#include "ip_address.h"
+#include "response_coding_policy.h"
+#include "response_file.h"
+#include "route_table.h"
+#include "server_options.h"
+#include "stop_token.h"
+#include "task.h"
+#include "worker_capabilities.h"
+#include "worker_ref.h"
+
+namespace ruvia {
+
+// test_app drives the production worker bring-up (worker_capabilities
+// start/stop) and the production per-request chain (admission, dispatch, the
+// response tail) on one core event loop. Only the transport is absent.
+struct test_app::impl_type final {
+    enum class lifecycle_type { configuring,
+        initializing,
+        ready,
+        failed };
+
+    detail::app_configuration configuration_;
+    detail::controller_store controllers_;
+    detail::compiled_route_plan_ptr_type route_plan_;
+    std::optional<detail::route_table> routes_;
+    env env_;
+    detail::worker_codecs codecs_;
+    // The defaults a server starts from: no listener-specific policy applies.
+    detail::http_server_options options_{};
+    // The pool the in-memory worker's event loop borrows, created with the loop.
+    blocking_pool blocking_pool_{{.thread_count_ = 1}};
+    event_loop_pool event_loop_pool_{{.loop_count_ = 1, .blocking_pool_ = &blocking_pool_}};
+    event_loop event_loop_{event_loop_pool_.loop(0)};
+    worker_ref worker_{event_loop_.worker()};
+    stop_source stop_source_;
+    stop_token stop_token_{stop_source_.token()};
+    std::optional<detail::worker_capabilities> capabilities_;
+    lifecycle_type lifecycle_{lifecycle_type::configuring};
+    std::exception_ptr startup_failure_{};
+
+    impl_type() {
+        options_.codecs_ = &codecs_;
+    }
+
+    ~impl_type() {
+        if (lifecycle_ == lifecycle_type::ready) {
+            stop_source_.request_stop();
+            try {
+                event_loop_.start(capabilities_->stop()).get();
+            } catch (...) {
+                std::terminate();
+            }
+        }
+        blocking_pool_.stop();
+        event_loop_pool_.stop();
+        event_loop_pool_.join();
+        blocking_pool_.join();
+    }
+
+    void require_configurable() const {
+        if (lifecycle_ != lifecycle_type::configuring) {
+            throw std::logic_error("test_app must be configured before its first request()");
+        }
+    }
+
+    void finalize() {
+        if (lifecycle_ == lifecycle_type::ready) {
+            return;
+        }
+        if (lifecycle_ == lifecycle_type::initializing) {
+            throw std::logic_error("test_app request() cannot be reentered during startup");
+        }
+        if (lifecycle_ == lifecycle_type::failed) {
+            std::rethrow_exception(startup_failure_);
+        }
+        lifecycle_ = lifecycle_type::initializing;
+
+        try {
+            const auto controller_registrars = detail::seal_controller_registrars();
+            controllers_ = detail::controller_store(controller_registrars);
+            route_plan_ = detail::compile_route_plan(controller_registrars, controllers_, configuration_);
+            routes_.emplace(*route_plan_, controllers_);
+
+            capabilities_.emplace(event_loop_.io_context(), worker_, detail::worker_capability_definitions{.worker_states_ = configuration_.worker_states()},
+                detail::worker_capability_options{
+                    .default_rate_limit_ = options_.default_rate_limit_per_worker_,
+                    .route_rate_limits_ = routes_->has_route_rate_limit() ? detail::route_rate_limit_presence::present : detail::route_rate_limit_presence::absent,
+                    .rate_limit_capacity_ = options_.rate_limit_capacity_per_worker_,
+                    .max_decoded_body_bytes_ = options_.server_.max_buffered_body_bytes_,
+                    .http_client_worker_ = options_.server_.http_client_worker_,
+                    .env_ = &env_,
+                    .trusted_proxies_ = options_.trusted_proxies_.empty() ? nullptr : &options_.trusted_proxies_,
+                    .precompressed_static_files_ = options_.compression_.has_value(),
+                    .file_io_timeout_ = options_.server_.write_timeout_,
+                    .connection_failure_ = &options_.connection_failure_,
+                });
+            event_loop_pool_.start();
+            event_loop_.start(capabilities_->start()).get();
+            lifecycle_ = lifecycle_type::ready;
+        } catch (...) {
+            startup_failure_ = std::current_exception();
+            lifecycle_ = lifecycle_type::failed;
+            throw;
+        }
+    }
+
+    [[nodiscard]] task<dispatch_response> execute_request(const test_request& request) {
+        const auto request_start = std::chrono::steady_clock::now();
+        detail::inline_http_header_views<16> active_headers(request.headers_.size() + (!request.cookies_.empty() ? 1U : 0U));
+        for (const auto& [name, value] : request.headers_) {
+            active_headers.push_back(http_header_view(name, value));
+        }
+        if (!request.cookies_.empty()) {
+            active_headers.push_back(http_header_view("Cookie", request.cookies_));
+        }
+        std::optional<http_protocol_error> parse_error;
+        auto parsed_value = [&]() {
+            try {
+                return make_parsed_http_request(request.method_, request.target_, active_headers.view(), std::as_bytes(std::span(request.body_.data(), request.body_.size())));
+            } catch (const http_protocol_error& error) {
+                parse_error = error;
+                return make_parsed_http_request("GET", "/", {}, {});
+            }
+        }();
+
+        const auto& routes_value = *routes_;
+        const auto resolution = routes_value.resolve(parsed_value);
+        // A test request has no transport connection, hence connection id zero.
+        const auto services = capabilities_->make_context_services(stop_token_).with_plain_transport(0, request.remote_address_, request.remote_port_);
+
+        // A malformed request is rejected before admission, with no coding
+        // promise, exactly as a server answers a malformed head.
+        std::optional<detail::http_request_admission> admission;
+        http_response response;
+        if (parse_error.has_value()) {
+            const auto rejection = detail::http_request_rejection::error(detail::copy_http_protocol_error_info(*parse_error));
+            response = co_await detail::respond_http_request_rejection(routes_value, parsed_value, rejection, services);
+        } else {
+            // These borrowed arguments must remain in the coroutine frame across
+            // suspension. MSVC cannot tail-transfer this call with braced temporaries.
+            const detail::http_request_admission_input input{
+                .request_ = parsed_value,
+                .resolution_ = resolution,
+                .coding_ = http_response_coding_selection_for(parsed_value),
+                .start_ = request_start,
+                .pinned_arrival_ = request.arrival_,
+            };
+            const auto policy = detail::http_request_admission_policy::server(options_);
+            auto admitted = co_await detail::admit_and_dispatch_buffered_request(routes_value, input, policy, services, response);
+            admission.emplace(std::move(admitted));
+        }
+        const auto& request_services = admission ? admission->services() : services;
+        const auto remote_ip = ip_address::parse(request.remote_address_).value_or(ip_address{});
+        const auto tail = admission ? admission->tail() : detail::http_response_tail(parsed_value, detail::http_response_coding_policy::disabled(), remote_ip, remote_ip, request_start);
+        const auto prepared = co_await tail.prepare_or_finish(response, options_, worker_, routes_value, request_services);
+
+        dispatch_response result_value;
+        result_value.copy_head_from(response);
+        // On the wire, HEAD responses and content-forbidden statuses carry no
+        // body, so the facade must not surface one
+        // either. Writer-synthesized fields (Content-Length, Date, Connection)
+        // are framing concerns and stay absent here.
+        if (!prepared.write_plan_.body_plan().body_suppressed()) {
+            if (response.file_body() || response.has_multipart_file_body()) {
+                detail::response_file_source source(response, {.worker_ = worker_, .stop_ = stop_token_, .timeout_ = options_.server_.write_timeout_});
+                for (;;) {
+                    const auto chunk = co_await source.next();
+                    if (chunk.kind() == detail::response_body_chunk::kind_type::end) {
+                        break;
+                    }
+                    if (chunk.kind() == detail::response_body_chunk::kind_type::failed) {
+                        throw std::runtime_error("failed to read file response in test_app");
+                    }
+                    result_value.body_.append(chunk.bytes());
+                }
+            } else {
+                const auto body = response.body_bytes();
+                result_value.body_.assign(reinterpret_cast<const char*>(body.data()), body.size());
+            }
+        }
+        co_return result_value;
+    }
+};
+
+test_app::test_app() :
+    impl_(std::make_unique<impl_type>()) {}
+
+test_app::~test_app() = default;
+
+test_app& test_app::server(server_config config) {
+    impl_->require_configurable();
+    impl_->options_.set_server(config);
+    return *this;
+}
+
+test_app& test_app::rate_limit(rate_limit_config config) {
+    impl_->require_configurable();
+    impl_->options_.set_rate_limit(config);
+    return *this;
+}
+
+test_app& test_app::rate_limit(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.clear_rate_limit();
+    return *this;
+}
+
+test_app& test_app::trusted_proxies(trusted_proxy_config config) {
+    impl_->require_configurable();
+    impl_->options_.set_trusted_proxies(config);
+    return *this;
+}
+
+test_app& test_app::trusted_proxies(std::nullptr_t) {
+    impl_->require_configurable();
+    impl_->options_.clear_trusted_proxies();
+    return *this;
+}
+
+test_app& test_app::on_error(http_error_handler handler) {
+    impl_->require_configurable();
+    impl_->configuration_.on_error(detail::own_callback(std::move(handler)));
+    return *this;
+}
+
+test_app& test_app::on_not_found(http_not_found_handler handler) {
+    impl_->require_configurable();
+    impl_->configuration_.on_not_found(detail::own_callback(std::move(handler)));
+    return *this;
+}
+
+test_app& test_app::on_error(std::nullptr_t) {
+    impl_->require_configurable();
+    // test_app holds no configuration lock, so the old handler may die here.
+    (void)impl_->configuration_.on_error(nullptr);
+    return *this;
+}
+
+test_app& test_app::on_not_found(std::nullptr_t) {
+    impl_->require_configurable();
+    (void)impl_->configuration_.on_not_found(nullptr);
+    return *this;
+}
+
+test_app& test_app::on_error(scoped_error_handler_options options) {
+    impl_->require_configurable();
+    impl_->configuration_.on_error(options.prefix_, detail::own_callback(std::move(options.handler_)));
+    return *this;
+}
+
+test_app& test_app::on_not_found(scoped_not_found_handler_options options) {
+    impl_->require_configurable();
+    impl_->configuration_.on_not_found(options.prefix_, detail::own_callback(std::move(options.handler_)));
+    return *this;
+}
+
+test_app& test_app::use_middleware(detail::owned_middleware_descriptor descriptor) {
+    impl_->require_configurable();
+    impl_->configuration_.add_middleware(std::move(descriptor));
+    return *this;
+}
+
+test_app& test_app::use_worker_state_definition(detail::worker_state_definition definition) {
+    impl_->require_configurable();
+    impl_->configuration_.add_worker_state(std::move(definition));
+    return *this;
+}
+
+dispatch_response test_app::request(const test_request& request) {
+    impl_->finalize();
+
+    return impl_->event_loop_.start(impl_->execute_request(request)).get();
+}
+
+}  // namespace ruvia

@@ -43,8 +43,11 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "security_middleware.h"
 #include "task.h"
 #include "task_scope.h"
+#include "test_app.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 namespace security_header_test {
 

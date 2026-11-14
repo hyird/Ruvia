@@ -1,3 +1,5 @@
+#include "http_io_buffer.h"
+
 #include <algorithm>
 #include <cstddef>
 #include <cstring>
@@ -8,8 +10,7 @@
 #include <string_view>
 #include <utility>
 
-#include "borrowed_text.h"
-#include "http_connection_fields.h"
+#include "http_field_text.h"
 
 namespace ruvia {
 namespace {

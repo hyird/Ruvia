@@ -1,3 +1,5 @@
+#include "session.h"
+
 #include <gtest/gtest.h>
 
 #include <array>
@@ -32,6 +34,8 @@
 #include "controller.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "security_middleware.h"
+#include "test_app.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_REDIS
 

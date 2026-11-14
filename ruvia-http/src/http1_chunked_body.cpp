@@ -11,7 +11,9 @@
 #include <utility>
 #include <variant>
 
-#include "http_connection_fields.h"
+#include "binary_text_encoding.h"
+#include "http_field_text.h"
+#include "http_field_validation.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"

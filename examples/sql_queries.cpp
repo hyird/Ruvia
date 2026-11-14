@@ -11,6 +11,7 @@
 
 #include "db.h"
 #include "db_query.h"
+#include "db_schema.h"
 #include "middleware.h"
 namespace {
 

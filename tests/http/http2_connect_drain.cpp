@@ -21,6 +21,7 @@
 
 #include "content_decoding_fixture.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_response.h"
 
 namespace {

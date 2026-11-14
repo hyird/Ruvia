@@ -17,6 +17,8 @@
 #include "backend_config.h"
 #include "controller.h"
 #include "middleware.h"
+#include "security_middleware.h"
+#include "session.h"
 
 namespace {
 

@@ -1,0 +1,436 @@
+#pragma once
+
+#include <algorithm>
+#include <array>
+#include <charconv>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <system_error>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+
+#include "db_entity.h"
+#include "db_session.h"
+#include "entity_storage.h"
+#include "model.h"
+
+namespace ruvia::detail {
+
+[[noreturn]] inline void throw_invalid_postgresql_array() {
+    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "malformed one-dimensional PostgreSQL array");
+}
+
+struct postgresql_array_text final {
+    std::string_view contents_;
+    std::optional<std::size_t> elements_;
+};
+
+// PostgreSQL emits a dimension prefix only when the lower bound differs from
+// one. A vector keeps the element sequence rather than the database subscripts.
+[[nodiscard]] inline postgresql_array_text parse_postgresql_array_text(std::string_view source) {
+    std::optional<std::size_t> elements;
+    if (source.starts_with('[')) {
+        std::int32_t lower{};
+        std::int32_t upper{};
+        const auto* const last = source.data() + source.size();
+        const auto [lower_end, lower_error] = std::from_chars(source.data() + 1, last, lower);
+        if (lower_error != std::errc{} || lower_end == last || *lower_end != ':') {
+            throw_invalid_postgresql_array();
+        }
+        const auto [upper_end, upper_error] = std::from_chars(lower_end + 1, last, upper);
+        if (upper_error != std::errc{} || upper_end == last || *upper_end != ']') {
+            throw_invalid_postgresql_array();
+        }
+        // The server requires upper + 1 and the dimension length to fit int32.
+        const auto length = std::int64_t{upper} - lower + 1;
+        if (length <= 0 || length > (std::numeric_limits<std::int32_t>::max)() || upper == (std::numeric_limits<std::int32_t>::max)() || upper_end + 1 == last || upper_end[1] != '=') {
+            throw_invalid_postgresql_array();
+        }
+        elements = static_cast<std::size_t>(length);
+        source.remove_prefix(static_cast<std::size_t>(upper_end + 2 - source.data()));
+    }
+    if (source.size() < 2 || source.front() != '{' || source.back() != '}') {
+        throw_invalid_postgresql_array();
+    }
+    return {source, elements};
+}
+
+template <typename visitor_type, typename reserve_type = void (*)(std::size_t)>
+void for_each_postgresql_array_element(std::string_view source, visitor_type&& visit, reserve_type&& reserve = +[](std::size_t) noexcept {}) {
+    const auto array = parse_postgresql_array_text(source);
+    const auto contents = array.contents_;
+    if (array.elements_) {
+        // Every element occupies at least one byte plus a separator inside the
+        // braces, so the arrived text bounds the declared length before reserve.
+        if (*array.elements_ > (contents.size() - 1) / 2) {
+            throw_invalid_postgresql_array();
+        }
+        reserve(*array.elements_);
+    }
+    std::string escaped_token;
+    std::size_t element_count = 0;
+    std::size_t token_start = 1;
+    std::size_t chunk_start = 1;
+    std::size_t token_end = 1;
+    bool quoted = false;
+    bool quoted_token = false;
+    bool quote_closed = false;
+    bool escaped = false;
+    bool has_escapes = false;
+    auto append = [&](std::size_t default_end) {
+        const std::size_t end = quote_closed ? token_end : default_end;
+        if (quoted || escaped || (end == token_start && !quoted_token) || (array.elements_ && element_count >= *array.elements_)) {
+            throw_invalid_postgresql_array();
+        }
+        std::string_view token;
+        if (has_escapes) {
+            if (end > chunk_start) {
+                escaped_token.append(contents.data() + chunk_start, end - chunk_start);
+            }
+            token = escaped_token;
+        } else {
+            token = contents.substr(token_start, end - token_start);
+        }
+        ++element_count;
+        if (token == "NULL" && !quoted_token) {
+            visit(std::optional<std::string_view>{});
+        } else {
+            visit(std::optional<std::string_view>{token});
+        }
+        token_start = default_end + 1;
+        chunk_start = token_start;
+        token_end = token_start;
+        quoted = false;
+        quoted_token = false;
+        quote_closed = false;
+        has_escapes = false;
+    };
+    for (std::size_t i = 1; i + 1 < contents.size(); ++i) {
+        const char ch = contents[i];
+        if (escaped) {
+            chunk_start = i;
+            escaped = false;
+        } else if (ch == '\\') {
+            if (quote_closed) {
+                throw_invalid_postgresql_array();
+            }
+            if (!has_escapes) {
+                has_escapes = true;
+                escaped_token.clear();
+            }
+            if (i > chunk_start) {
+                escaped_token.append(contents.data() + chunk_start, i - chunk_start);
+            }
+            escaped = true;
+            quoted_token = true;
+        } else if (ch == '"') {
+            if (quoted) {
+                quoted = false;
+                quote_closed = true;
+                token_end = i;
+            } else {
+                if (i != token_start || quoted_token || quote_closed) {
+                    throw_invalid_postgresql_array();
+                }
+                quoted = true;
+                quoted_token = true;
+                token_start = i + 1;
+                chunk_start = i + 1;
+            }
+        } else if (ch == ',' && !quoted) {
+            append(i);
+        } else {
+            if (quote_closed || (!quoted && (ch == '{' || ch == '}'))) {
+                throw_invalid_postgresql_array();
+            }
+        }
+    }
+    if (contents.size() > 2) {
+        append(contents.size() - 1);
+    }
+    if (array.elements_ && element_count != *array.elements_) {
+        throw_invalid_postgresql_array();
+    }
+}
+
+template <db_mapped_value t_type>
+[[nodiscard]] t_type decode_array_element(std::string_view text) {
+    if constexpr (is_optional<t_type>::value) {
+        using v_type = typename is_optional<t_type>::value_type;
+        return decode_array_element<v_type>(text);
+    } else {
+        return convert_db_text<t_type>(text);
+    }
+}
+
+template <db_mapped_value t_type>
+void decode_db_field(const db_field& field, t_type& out) {
+    using u_type = std::remove_cv_t<t_type>;
+    if constexpr (is_optional<u_type>::value) {
+        using v_type = typename is_optional<u_type>::value_type;
+        if (!field.value()) {
+            out.reset();
+            return;
+        }
+        auto& inner = out.emplace(entity_value_slot<v_type>::make_value());
+        decode_db_field(field, inner);
+    } else if constexpr (is_std_vector<u_type>::value) {
+        using v_type = typename is_std_vector<u_type>::value_type;
+        const auto source_value = field.value();
+        if (!source_value) {
+            throw_invalid_postgresql_array();
+        }
+        out.clear();
+        for_each_postgresql_array_element(*source_value, [&out](std::optional<std::string_view> element) {
+            if (!element) {
+                if constexpr (is_optional<v_type>::value) {
+                    out.emplace_back(std::nullopt);
+                } else {
+                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "NULL array element");
+                }
+            } else {
+                out.push_back(decode_array_element<v_type>(*element));
+            }
+        }, [&out](std::size_t count) {
+            out.reserve(count);
+        });
+    } else if constexpr (std::is_same_v<u_type, std::string>) {
+        if (auto value = field.as<std::string_view>()) {
+            out.assign(*value);
+        } else {
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+        }
+    } else if constexpr (std::is_same_v<u_type, string>) {
+        if (auto value = field.as<std::string_view>()) {
+            out.assign_owned(*value);
+        } else {
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+        }
+    } else {
+        if (auto value = field.as<u_type>()) {
+            out = *value;
+        } else {
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable entity column");
+        }
+    }
+}
+
+template <typename e_type, typename c_type>
+void decode_entity_field(e_type& entity, const db_field& field) {
+    const auto raw = field.value();
+    if (!raw) {
+        if constexpr (c_type::options.nullable_) {
+            entity.template set_null<c_type::name>();
+            return;
+        } else {
+            throw db_conversion_error(db_conversion_error::code_type::unexpected_null, "NULL in non-nullable database entity column");
+        }
+    }
+    using value_type = typename c_type::value_type;
+    if constexpr (std::is_same_v<value_type, std::string> || std::is_same_v<value_type, string>) {
+        entity.template set<c_type::name>(*raw);
+    } else {
+        auto value = entity_value_slot<value_type>::make_value();
+        decode_db_field(field, value);
+        entity.template set<c_type::name>(std::move(value));
+    }
+}
+
+// SQL permits repeated result names; a mapped column must name exactly one.
+struct db_result_column_lookup final {
+    unique_lookup_status state_{unique_lookup_status::absent};
+    std::size_t index_{0};
+};
+
+[[nodiscard]] inline db_result_column_lookup find_unique_db_result_column(std::span<const std::string> names, std::string_view name) noexcept {
+    db_result_column_lookup result;
+    for (std::size_t index = 0; index < names.size(); ++index) {
+        if (names[index] == name) {
+            if (result.state_ == unique_lookup_status::found) {
+                return {unique_lookup_status::repeated, index};
+            }
+            result = {unique_lookup_status::found, index};
+        }
+    }
+    return result;
+}
+
+template <typename e_type>
+class db_entity_row_decoder final {
+    using columns_type = typename e_type::columns_type;
+    static constexpr auto column_count = std::tuple_size_v<columns_type>;
+    static constexpr auto missing_column = (std::numeric_limits<std::size_t>::max)();
+
+public:
+    explicit db_entity_row_decoder(const std::array<bool, column_count>& selected, bool wildcard = false) :
+        selected_(selected),
+        wildcard_(wildcard) {}
+
+    e_type decode(const db_row& row) {
+        const auto names = row.column_names();
+        if (!schema_ || schema_->data() != names.data() || schema_->size() != names.size()) {
+            // Entity column names are unique, so a result naming exactly the
+            // entity columns in declaration order cannot repeat a name.
+            bool ordered = names.size() == column_count;
+            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                ordered = ordered && names[i] == column_type::name.view();
+            });
+            for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+                if (ordered) {
+                    indices_[i] = i;
+                    return;
+                }
+                if (!selected_[i] && !wildcard_) {
+                    indices_[i] = missing_column;
+                    return;
+                }
+                const auto lookup = find_unique_db_result_column(names, column_type::name.view());
+                if (lookup.state_ == unique_lookup_status::repeated) {
+                    throw db_conversion_error(db_conversion_error::code_type::invalid_format, "database result has ambiguous mapped column names");
+                }
+                indices_[i] = lookup.state_ == unique_lookup_status::found ? lookup.index_ : missing_column;
+            });
+            schema_ = names;
+        }
+        e_type result;
+        for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+            if (!selected_[i] && (!wildcard_ || indices_[i] == missing_column)) {
+                return;
+            }
+            if (indices_[i] == missing_column) {
+                throw db_conversion_error(db_conversion_error::code_type::missing_column, "database result has no such column");
+            }
+            decode_entity_field<e_type, column_type>(result, row[indices_[i]]);
+        });
+        return result;
+    }
+
+private:
+    std::array<bool, column_count> selected_{};
+    std::array<std::size_t, column_count> indices_;
+    bool wildcard_{false};
+    // Used only while synchronously mapping a live, immutable db_rows result.
+    std::optional<std::span<const std::string>> schema_{};
+};
+
+template <typename t_type>
+void append_entity_array_value(std::string& output, const t_type& value) {
+    if constexpr (is_optional<t_type>::value) {
+        if (value) {
+            append_entity_array_value(output, *value);
+        } else {
+            output += "NULL";
+        }
+    } else if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
+        output.push_back('"');
+        auto remaining = std::string_view(value);
+        while (!remaining.empty()) {
+            const auto next_value = std::ranges::find_if(remaining, [](char ch) noexcept {
+                return ch == '"' || ch == '\\' || ch == '\0';
+            });
+            if (next_value == remaining.end()) {
+                output.append(remaining);
+                break;
+            }
+            const auto special = static_cast<std::size_t>(next_value - remaining.begin());
+            if (special != 0) {
+                output.append(remaining.data(), special);
+            }
+            auto escaped_end = special;
+            do {
+                const char ch = remaining[escaped_end];
+                if (ch == '\0') {
+                    throw std::invalid_argument("PostgreSQL array text cannot contain NUL");
+                }
+                output.push_back('\\');
+                output.push_back(ch);
+                ++escaped_end;
+            } while (escaped_end < remaining.size() && (remaining[escaped_end] == '"' || remaining[escaped_end] == '\\' || remaining[escaped_end] == '\0'));
+            remaining.remove_prefix(escaped_end);
+        }
+        output.push_back('"');
+    } else if constexpr (std::is_same_v<t_type, bool>) {
+        output += value ? "t" : "f";
+    } else if constexpr (std::is_floating_point_v<t_type>) {
+        append_db_number(output, value);
+    } else if constexpr (std::is_signed_v<t_type>) {
+        append_db_number(output, static_cast<std::int64_t>(value));
+    } else {
+        append_db_number(output, static_cast<std::uint64_t>(value));
+    }
+}
+
+template <typename t_type>
+db_value entity_db_value(const t_type& value) {
+    if constexpr (std::is_same_v<t_type, std::string> || std::is_same_v<t_type, string>) {
+        return db_value(std::string_view(value));
+    } else if constexpr (std::is_same_v<t_type, bool> || std::is_arithmetic_v<t_type>) {
+        return db_value(value);
+    } else if constexpr (is_std_vector<t_type>::value) {
+        std::string encoded;
+        encoded.reserve(2U + value.size() * 4U);
+        encoded.push_back('{');
+        bool first = true;
+        for (const auto& item : value) {
+            if (!first) {
+                encoded.push_back(',');
+            }
+            first = false;
+            if constexpr (std::is_same_v<typename is_std_vector<t_type>::value_type, bool>) {
+                append_entity_array_value(encoded, static_cast<bool>(item));
+            } else {
+                append_entity_array_value(encoded, item);
+            }
+        }
+        encoded.push_back('}');
+        return db_value_access::owned_string(std::move(encoded));
+    } else {
+        static_assert(std::is_same_v<t_type, void>, "unsupported entity value type");
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+// Decoding owns every text/array element independently of db_rows. SQL NULL
+// requires an optional destination; malformed values keep db_conversion_error.
+template <db_mapped_value value_type>
+[[nodiscard]] value_type decode_db_field(const db_field& field) {
+    auto result = detail::entity_value_slot<value_type>::make_value();
+    detail::decode_db_field(field, result);
+    return result;
+}
+
+// A projection describes a subset of columns. Every declared column is required
+// and must be unique in the result; unrelated result columns are ignored.
+template <typename entity_type>
+    requires(sql_entity<entity_type> || sql_projection<entity_type>)
+[[nodiscard]] entity_type decode_db_row(const db_row& row) {
+    std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected;
+    selected.fill(true);
+    detail::db_entity_row_decoder<entity_type> decoder(selected);
+    return decoder.decode(row);
+}
+
+template <typename entity_type>
+    requires(sql_entity<entity_type> || sql_projection<entity_type>)
+[[nodiscard]] entity_rows<entity_type> decode_db_rows(const db_rows& rows) {
+    auto result = detail::db_result_access::make_entity_rows<entity_type>(rows.size());
+    std::array<bool, std::tuple_size_v<typename entity_type::columns_type>> selected;
+    selected.fill(true);
+    detail::db_entity_row_decoder<entity_type> decoder(selected);
+    for (const auto& row : rows) {
+        result.push_back(decoder.decode(row));
+    }
+    return result;
+}
+
+}  // namespace ruvia

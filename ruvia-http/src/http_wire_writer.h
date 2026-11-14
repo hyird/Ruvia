@@ -11,8 +11,10 @@
 #include <string_view>
 
 #include "borrowed_text.h"
-#include "http_connection_fields.h"
+#include "decimal_text.h"
+#include "http_field_text.h"
 #include "http_header.h"
+#include "http_protocol.h"
 #include "http_status.h"
 
 namespace ruvia::detail {

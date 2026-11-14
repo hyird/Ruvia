@@ -17,6 +17,8 @@
 #include "event_loop.h"
 #include "http1_server_response.h"
 #include "http2_push.h"
+#include "http_capsule.h"
+#include "http_client_request_view.h"
 #include "http_client_types.h"
 #include "http_connect_udp.h"
 #include "http_connection_advertisement.h"
@@ -25,10 +27,14 @@
 #include "http_priority.h"
 #include "http_protocol.h"
 #include "http_status.h"
+#include "http_tunnel.h"
 #include "model.h"
+#include "operation_options.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "websocket.h"
+#include "websocket_connection.h"
 namespace ruvia {
 
 class context;

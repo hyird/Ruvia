@@ -1,3 +1,5 @@
+#include "request_stream.h"
+
 #include <gtest/gtest.h>
 
 #include <algorithm>
@@ -37,6 +39,7 @@
 #include "http_server_fixture.h"
 #include "middleware.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_connection.h"
@@ -44,6 +47,7 @@
 #endif
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server_fixture.h"
 #endif
 

@@ -4,7 +4,6 @@
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
-#include <initializer_list>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -15,11 +14,13 @@
 
 #include "borrowed_text.h"
 #include "http1_chunked_body.h"
+#include "http1_connection_plan.h"
 #include "http1_server_request.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "http_response_stream.h"
 #include "http_status.h"
 
 namespace ruvia {
@@ -292,28 +293,6 @@ static_assert(sizeof(http1_buffered_response_plan) == sizeof(http1_response_head
     return http1_buffered_response_plan(http1_response_head_plan(write_plan.body_plan(), connection_plan.protocol_version(), http1_response_head_plan::buffered_framing(write_plan.content_length())));
 }
 
-class http_response_trailer_section;
-
-// Borrowed proof that the complete terminal section passed the shared response-
-// trailer rules. The source span must outlive its synchronous consumption.
-class http_response_trailer_section final {
-public:
-    [[nodiscard]] std::span<const http_header_view> fields() const noexcept {
-        return fields_;
-    }
-
-    [[nodiscard]] bool empty() const noexcept {
-        return fields_.empty();
-    }
-
-private:
-    friend http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view>);
-    explicit http_response_trailer_section(std::span<const http_header_view> fields_value) noexcept :
-        fields_(fields_value) {}
-
-    std::span<const http_header_view> fields_;
-};
-
 // Serialize a finalized HTTP/1 response head into caller-owned reusable scratch.
 // The plan must describe the same response representation.
 // Canonical Content-Length is measured and emitted from the same decimal token.
@@ -328,14 +307,6 @@ void append_http1_response_head(const http_response& response, http_response_hea
 // Append only field lines; chunk delimiters belong to the caller. Inputs may
 // alias output. Allocation failure leaves the existing output bytes unchanged.
 void append_http1_response_trailers(std::string& output, const http_response_trailer_section& trailers);
-
-// Validate a complete response trailer section and return a borrowed proof for
-// synchronous protocol submission. The input storage must outlive its use.
-[[nodiscard]] http_response_trailer_section validate_http_response_trailers(std::span<const http_header_view> trailers);
-
-template <detail::http_temporary_owning_range<http_header_view> headers_type>
-http_response_trailer_section validate_http_response_trailers(headers_type&&) = delete;
-http_response_trailer_section validate_http_response_trailers(std::initializer_list<http_header_view>) = delete;
 
 // Immutable, bodyless response-head view for 1xx progress messages that precede
 // a final response. 101 is deliberately excluded: switching protocols transfers
@@ -413,135 +384,6 @@ private:
 // represented by http_interim_response_head.
 [[nodiscard]] std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer);
 
-enum class http_response_stream_framing : std::uint8_t {
-    http1_chunked,
-    // RFC 9112 6.1: a server MUST NOT send Transfer-Encoding to a client that did
-    // not indicate HTTP/1.1. An HTTP/1.0 stream therefore carries no chunk framing;
-    // the body is delimited by the connection close (RFC 9112 6.3), so it also
-    // announces Connection: close and the session shuts the socket afterwards.
-    http1_close_delimited,
-    // RFC 9112 6.3: a valid Content-Length the response itself declares, with
-    // no Transfer-Encoding, delimits the stream on HTTP/1.1 and HTTP/1.0 alike,
-    // so the connection stays reusable. Selected at head commit, never planned.
-    http1_length_delimited,
-    http2_frames,
-    // RFC 9114 §4.1: HTTP/3 delimits content with DATA frames and carries a
-    // trailer section in a trailing HEADERS frame, exactly like HTTP/2.
-    http3_frames
-};
-// A trailer section is terminal message metadata, not an independently queued
-// side channel. The caller declares whether this head commit is reserving a
-// terminal trailer section. Trailers are optional metadata a recipient may
-// discard (RFC 9110 6.5), so framing that cannot carry them (HTTP/1.0
-// close-delimited, known length, or a suppressed body) drops them; only a
-// status that can never carry content rejects the intent before the head.
-enum class http_response_trailer_intent : std::uint8_t { none,
-    present };
-
-// Whether a validated trailer section commits the response to sending trailers.
-// An empty section is not "no decision": it is the decision to send none, which
-// the head must state before any body byte goes out.
-[[nodiscard]] inline http_response_trailer_intent response_trailer_intent(const http_response_trailer_section& section) noexcept {
-    return section.empty() ? http_response_trailer_intent::none : http_response_trailer_intent::present;
-}
-
-// Authoritative phase immediately after the initial response head is submitted.
-// Body-suppressed responses (HEAD / 304) complete at the initial head
-// (message_ended) and discard trailers.
-enum class http_response_stream_head_disposition : std::uint8_t { body_open,
-    message_ended };
-
-class http_response_stream_commit_plan final {
-public:
-    [[nodiscard]] http_status_code response_status() const noexcept {
-        return body_plan_.response_status();
-    }
-
-    [[nodiscard]] http_response_stream_framing framing() const noexcept {
-        return framing_;
-    }
-
-    [[nodiscard]] http_response_body_plan body_plan() const noexcept {
-        return body_plan_;
-    }
-
-    // HTTP/1.1 requires chunked framing for trailers (RFC 9112 7.1.2).
-    // HTTP/2 and HTTP/3 carry them in a trailing field section. A body-suppressed
-    // response (HEAD / 304) ends at its initial head and discards trailers.
-    [[nodiscard]] bool trailers_available() const noexcept {
-        return !body_plan_.body_suppressed() && (framing_ == http_response_stream_framing::http1_chunked || framing_ == http_response_stream_framing::http2_frames || framing_ == http_response_stream_framing::http3_frames);
-    }
-
-    [[nodiscard]] http_response_stream_head_disposition head_disposition() const noexcept {
-        return body_plan_.body_suppressed() ? http_response_stream_head_disposition::message_ended : http_response_stream_head_disposition::body_open;
-    }
-
-    // A status that can never carry content (1xx/204/205/304) has no message
-    // body to terminate with a trailer section; asking for one is a handler
-    // error. Every other unavailable framing discards the trailers instead.
-    [[nodiscard]] bool status_permits_trailers() const noexcept {
-        return body_plan_.status_allows_body();
-    }
-
-    [[nodiscard]] bool trailer_intent_allowed() const noexcept {
-        return !trailer_intent_present_ || status_permits_trailers();
-    }
-
-private:
-    friend http_response_stream_commit_plan plan_http_response_stream_commit(http_response_stream_framing, http_known_method, http_status_code, http_response_trailer_intent) noexcept;
-
-    http_response_stream_commit_plan(http_response_stream_framing framing, http_response_body_plan body_plan, bool trailer_intent_present) noexcept :
-        framing_(framing),
-        body_plan_(body_plan),
-        trailer_intent_present_(trailer_intent_present) {}
-
-    http_response_stream_framing framing_{http_response_stream_framing::http1_chunked};
-    http_response_body_plan body_plan_;
-    bool trailer_intent_present_{false};
-};
-
-[[nodiscard]] inline http_response_stream_commit_plan plan_http_response_stream_commit(http_response_stream_framing framing, http_known_method request_method, http_status_code response_status, http_response_trailer_intent trailer_intent) noexcept {
-    const auto body_plan = plan_http_response_body(request_method, response_status);
-    return http_response_stream_commit_plan(framing, body_plan, trailer_intent == http_response_trailer_intent::present);
-}
-
-// Preparation normalizes the initial response metadata to the supplied commit
-// plan. Mutating the response afterward can invalidate that relationship; this
-// object is not a permanent proof over a mutable response.
-class http_response_stream_head final {
-public:
-    [[nodiscard]] http_response& response() & noexcept {
-        return response_;
-    }
-    [[nodiscard]] http_response& response() && = delete;
-
-    [[nodiscard]] const http_response& response() const& noexcept {
-        return response_;
-    }
-    [[nodiscard]] const http_response& response() const&& = delete;
-
-    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const& noexcept {
-        return commit_plan_;
-    }
-    [[nodiscard]] const http_response_stream_commit_plan& commit_plan() const&& = delete;
-
-private:
-    friend http_response_stream_head prepare_http_response_stream_head(http_response, http_response_stream_commit_plan);
-
-    http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) :
-        response_(std::move(response)),
-        commit_plan_(commit_plan) {}
-
-    http_response response_;
-    http_response_stream_commit_plan commit_plan_;
-};
-
-// An application Transfer-Encoding must be exactly the `chunked` coding (OWS
-// and ASCII case aside): it is a hint the framework's writer replaces with its
-// own framing. Any other value throws http1_response_head_error for an HTTP/1
-// framing and std::invalid_argument for HTTP/2 or HTTP/3 before the response
-// changes.
-[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan);
 class http1_response_stream_plan final {
 public:
     [[nodiscard]] http_response_stream_framing framing() const noexcept {

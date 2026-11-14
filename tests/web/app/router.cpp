@@ -1,3 +1,5 @@
+#include "router.h"
+
 #include <gtest/gtest.h>
 
 #include <chrono>
@@ -23,9 +25,12 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "request_stream.h"
+#include "session.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #ifdef RUVIA_ENABLE_REDIS
 #include "redis.h"
 #endif

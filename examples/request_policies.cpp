@@ -16,6 +16,7 @@
 #include "context.h"
 #include "controller.h"
 #include "middleware.h"
+#include "security_middleware.h"
 namespace {
 
 struct request_label final {

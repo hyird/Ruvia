@@ -39,6 +39,7 @@
 #include "http_server_fixture.h"
 #include "task_scope.h"
 #include "websocket_handshake.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 namespace websocket_client_test {
 

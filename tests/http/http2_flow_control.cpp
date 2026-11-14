@@ -19,8 +19,11 @@
 #include "content_decoding_fixture.h"
 #include "http1_server_response.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
+#include "http_client_request_view.h"
 #include "http_connect_udp.h"
 #include "http_response.h"
+#include "http_response_stream.h"
 
 namespace {
 

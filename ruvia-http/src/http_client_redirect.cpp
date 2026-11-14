@@ -5,7 +5,6 @@
 #include <cstdint>
 #include <cstring>
 #include <optional>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -13,34 +12,16 @@
 
 #include "borrowed_text.h"
 #include "http1_client_request.h"
-#include "http1_client_response.h"
-#include "http_connection_fields.h"
+#include "http_authority.h"
+#include "http_client_request_view.h"
+#include "http_client_response_head.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_target.h"
 #include "http_uri_syntax.h"
 
 namespace ruvia {
 namespace {
-
-[[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
-    return origin.port() == detail::http_scheme_default_port(origin.scheme());
-}
-
-void validate_origin_host(std::string_view host) {
-    if (host.empty()) {
-        throw std::invalid_argument("HTTP origin host must not be empty");
-    }
-    if (!detail::is_valid_http_host(host)) {
-        throw std::invalid_argument("HTTP origin host is invalid");
-    }
-}
-
-std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
-    if (options.port_.has_value()) {
-        return options.port_->value();
-    }
-    return detail::http_scheme_default_port(scheme);
-}
 
 void remove_http_client_last_path_segment(std::string& path) noexcept {
     const auto slash = path.rfind('/');
@@ -194,31 +175,6 @@ struct http_client_redirect_authority final {
 }
 
 }  // namespace
-
-http_origin_view http_origin_view::http(http_origin_options options) {
-    const auto host = options.host_.view();
-    validate_origin_host(host);
-    return http_origin_view(http_scheme::http, host, resolved_origin_port(http_scheme::http, options));
-}
-
-http_origin_view http_origin_view::https(http_origin_options options) {
-    const auto host = options.host_.view();
-    validate_origin_host(host);
-    return http_origin_view(http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
-}
-
-std::string make_http_origin_authority(const http_origin_view& origin) {
-    const auto host = origin.host();
-    const bool include_port = !http_origin_uses_default_port(origin);
-    std::string authority;
-    authority.reserve(host.size() + (include_port ? 6 : 0));
-    authority.append(host);
-    if (include_port) {
-        authority.push_back(':');
-        http_append_unsigned(authority, origin.port());
-    }
-    return authority;
-}
 
 http_client_response_header_lookup lookup_unique_http_client_response_header(const http_client_response_head& head, std::string_view name) noexcept {
     std::string_view found;

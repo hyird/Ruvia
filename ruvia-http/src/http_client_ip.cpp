@@ -11,8 +11,8 @@
 #include <utility>
 #include <vector>
 
-#include "http_connection_fields.h"
 #include "http_request.h"
+#include "ip_address.h"
 
 namespace ruvia {
 namespace {

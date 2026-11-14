@@ -1,3 +1,5 @@
+#include "server_connection.h"
+
 #include <gtest/gtest.h>
 
 #include <array>

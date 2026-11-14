@@ -31,10 +31,6 @@
 #include <vector>
 
 #include <asio.hpp>
-#include <asio/associated_allocator.hpp>
-#include <asio/associated_cancellation_slot.hpp>
-#include <asio/associated_executor.hpp>
-#include <asio/bind_cancellation_slot.hpp>
 #include <asio/buffer.hpp>
 #include <asio/cancellation_signal.hpp>
 #include <asio/completion_condition.hpp>
@@ -42,26 +38,25 @@
 #include <asio/error.hpp>
 #include <asio/ip/address.hpp>
 #include <asio/ip/tcp.hpp>
-#include <asio/post.hpp>
-#include <asio/ssl/error.hpp>
-#include <asio/ssl/stream.hpp>
 
 #include "blocking_pool.h"
 #include "borrowed_text.h"
 #include "connection_scanner.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
-#include "http_client_types.h"
+#include "http_error.h"
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "http_server.h"
-#include "middleware.h"
+#include "io_operation.h"
+#include "server_observation.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "transport_stream_end.h"
 #include "worker_ref.h"
-#include "worker_wait.h"
+#include "worker_signal.h"
 
 #if defined(_WIN32)
 #include <winerror.h>
@@ -78,273 +73,6 @@
 
 namespace ruvia::detail {
 
-// A failed claim leaves the lane untouched; the caller supplies its domain error.
-class operation_lane_lease final {
-public:
-    explicit operation_lane_lease(bool& active) noexcept :
-        active_(active ? nullptr : &active) {
-        if (active_ != nullptr) {
-            *active_ = true;
-        }
-    }
-
-    operation_lane_lease(const operation_lane_lease&) = delete;
-    operation_lane_lease& operator=(const operation_lane_lease&) = delete;
-    operation_lane_lease(operation_lane_lease&& other) noexcept :
-        active_(std::exchange(other.active_, nullptr)) {}
-    operation_lane_lease& operator=(operation_lane_lease&&) = delete;
-
-    ~operation_lane_lease() noexcept {
-        if (active_ != nullptr) {
-            *active_ = false;
-        }
-    }
-
-    [[nodiscard]] explicit operator bool() const noexcept {
-        return active_ != nullptr;
-    }
-
-private:
-    bool* active_;
-};
-
-[[nodiscard]] inline operation_lane_lease claim_operation_lane(bool& active, const char* in_progress_message) {
-    operation_lane_lease lease(active);
-    if (!lease) {
-        throw std::logic_error(in_progress_message);
-    }
-    return lease;
-}
-
-struct request_io_metrics final {
-    std::uint64_t db_count_{0};
-    std::uint64_t db_duration_micros_{0};
-    std::uint64_t redis_count_{0};
-    std::uint64_t redis_duration_micros_{0};
-};
-
-enum class request_io_kind : std::uint8_t {
-    db = 0,
-    redis = 1,
-};
-
-class scoped_request_io_timer final {
-public:
-    // `metrics` is the request's counter block, or null outside a request
-    // (worker callbacks, standalone clients); null disables timing.
-    scoped_request_io_timer(request_io_metrics* metrics, request_io_kind kind) noexcept :
-        metrics_(metrics),
-        kind_(kind),
-        started_at_(metrics_ != nullptr ? std::chrono::steady_clock::now() : std::chrono::steady_clock::time_point{}) {}
-
-    ~scoped_request_io_timer() {
-        if (metrics_ == nullptr) {
-            return;
-        }
-        const auto elapsed = std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - started_at_).count();
-        const auto micros = elapsed < 0 ? std::uint64_t{0} : static_cast<std::uint64_t>(elapsed);
-        if (kind_ == request_io_kind::db) {
-            ++metrics_->db_count_;
-            metrics_->db_duration_micros_ += micros;
-        } else {
-            ++metrics_->redis_count_;
-            metrics_->redis_duration_micros_ += micros;
-        }
-    }
-
-    scoped_request_io_timer(const scoped_request_io_timer&) = delete;
-    scoped_request_io_timer& operator=(const scoped_request_io_timer&) = delete;
-
-private:
-    request_io_metrics* metrics_{nullptr};
-    request_io_kind kind_{request_io_kind::db};
-    std::chrono::steady_clock::time_point started_at_{};
-};
-
-class operation_interrupt;
-
-// Routes stop requests to the running operations of one I/O owner on its
-// worker. The owner keeps it at a stable address until those operations have
-// completed. The first stoppable operation creates the shared target; it is
-// detached on destruction, so a stop delivered later reaches no owner.
-class operation_interrupt_source final {
-public:
-    operation_interrupt_source() noexcept = default;
-    operation_interrupt_source(const operation_interrupt_source&) = delete;
-    operation_interrupt_source& operator=(const operation_interrupt_source&) = delete;
-    ~operation_interrupt_source() {
-        if (target_) {
-            target_->detach(*this);
-        }
-    }
-
-    void cancel_operation_by_id(std::uint64_t id) noexcept;
-
-private:
-    friend class operation_interrupt;
-
-    std::shared_ptr<worker_cancellation_target<operation_interrupt_source>> target_;
-    operation_interrupt* running_{};
-};
-
-enum class operation_interrupt_cause : std::uint8_t { cancelled,
-    timed_out };
-
-// The deadline and stop token of one running operation. Both are delivered on
-// the operation's worker, where the first records its cause and calls
-// `interrupt(target)` once: a read wakes its wait and keeps buffered input, an
-// output operation aborts its stream. A stop requested before construction
-// throws operation_canceled before anything is armed, so the operation has no
-// effect. Construct it before the operation's first wait and keep it until
-// that operation completes.
-class operation_interrupt final {
-public:
-    using interrupt_type = void (*)(void*) noexcept;
-
-    operation_interrupt(operation_interrupt_source& source, const worker_ref& worker_value, const operation_options& options, void* target, interrupt_type interrupt, const char* operation_name) :
-        source_(source),
-        target_(target),
-        interrupt_(interrupt),
-        operation_name_(operation_name) {
-        if (options.stop_token_.stop_requested()) {
-            throw_cause(operation_interrupt_cause::cancelled, operation_name_);
-        }
-        if (options.stop_token_.stoppable() && !source_.target_) {
-            source_.target_ = make_worker_cancellation_target(source_, worker_value);
-        }
-        if (options.timeout_.has_value()) {
-            (void)worker_value.schedule_timer(timer_, options.timeout_->deadline_from(std::chrono::steady_clock::now()), [this](worker_timer_outcome outcome) noexcept {
-                if (outcome == worker_timer_outcome::expired) {
-                    fire(operation_interrupt_cause::timed_out);
-                }
-            });
-        }
-        // Linked before arming: a stop requested meanwhile is delivered inline.
-        next_ = source_.running_;
-        source_.running_ = this;
-        if (options.stop_token_.stoppable()) {
-            try {
-                cancellation_.emplace(source_.target_, id_);
-                cancellation_->arm(options.stop_token_);
-            } catch (...) {
-                cancellation_.reset();
-                unlink();
-                throw;
-            }
-        }
-    }
-
-    operation_interrupt(const operation_interrupt&) = delete;
-    operation_interrupt& operator=(const operation_interrupt&) = delete;
-
-    ~operation_interrupt() {
-        // Joins a stop callback before this operation leaves the source.
-        cancellation_.reset();
-        unlink();
-    }
-
-    [[nodiscard]] bool interrupted() const noexcept {
-        return cause_.has_value();
-    }
-
-    [[nodiscard]] std::optional<operation_interrupt_cause> cause() const noexcept {
-        return cause_;
-    }
-
-    // Throws std::system_error (timed_out or operation_canceled) once interrupted.
-    void throw_if_interrupted() const {
-        if (cause_.has_value()) {
-            throw_cause(*cause_, operation_name_);
-        }
-    }
-
-    [[noreturn]] static void throw_cause(operation_interrupt_cause cause, const char* operation_name) {
-        throw std::system_error(std::make_error_code(cause == operation_interrupt_cause::timed_out ? std::errc::timed_out : std::errc::operation_canceled), operation_name);
-    }
-
-private:
-    friend class operation_interrupt_source;
-
-    void unlink() noexcept {
-        for (auto** link = &source_.running_; *link != nullptr; link = &(*link)->next_) {
-            if (*link == this) {
-                *link = next_;
-                return;
-            }
-        }
-    }
-
-    void fire(operation_interrupt_cause cause) noexcept {
-        if (cause_.has_value()) {
-            return;
-        }
-        cause_ = cause;
-        interrupt_(target_);
-    }
-
-    operation_interrupt_source& source_;
-    void* target_;
-    interrupt_type interrupt_;
-    const char* operation_name_;
-    std::optional<operation_interrupt_cause> cause_;
-    operation_interrupt* next_{};
-    std::uint64_t id_{};
-    worker_timer_registration timer_;
-    // Declared last: its reset joins a pending stop callback first.
-    std::optional<worker_cancellation_registration<worker_cancellation_target<operation_interrupt_source>>> cancellation_;
-};
-
-inline void operation_interrupt_source::cancel_operation_by_id(std::uint64_t id) noexcept {
-    for (auto* running = running_; running != nullptr; running = running->next_) {
-        if (id != 0 && running->id_ == id) {
-            running->fire(operation_interrupt_cause::cancelled);
-            return;
-        }
-    }
-}
-
-// One operation made of several interruptible steps: each step runs with the
-// time left and the same stop token, and a step's interruption is recognized
-// as this operation's own.
-class operation_steps final {
-public:
-    explicit operation_steps(operation_options operation) noexcept :
-        deadline_(operation.timeout_),
-        stop_(std::move(operation.stop_token_)) {}
-
-    // The time left and the same stop token for the next step; std::nullopt
-    // once the deadline has passed.
-    [[nodiscard]] std::optional<operation_options> try_next() const {
-        if (deadline_.expired()) {
-            return std::nullopt;
-        }
-        return operation_options{.timeout_ = deadline_.timeout(), .stop_token_ = stop_};
-    }
-
-    // Throws std::system_error (timed_out) once the deadline has passed.
-    [[nodiscard]] operation_options next(const char* operation_name) const {
-        auto step = try_next();
-        if (!step.has_value()) {
-            operation_interrupt::throw_cause(operation_interrupt_cause::timed_out, operation_name);
-        }
-        return std::move(*step);
-    }
-
-    // Whether this operation's own deadline or stop token accounts for `cause`.
-    [[nodiscard]] bool interrupted_by(operation_interrupt_cause cause) const noexcept {
-        return cause == operation_interrupt_cause::timed_out ? deadline_.expired() : stop_.stop_requested();
-    }
-
-    // Whether `error` is a step interrupted by this operation's deadline or stop token.
-    [[nodiscard]] bool interrupted(const std::system_error& error) const noexcept {
-        return (error.code() == std::errc::timed_out && interrupted_by(operation_interrupt_cause::timed_out)) || (error.code() == std::errc::operation_canceled && interrupted_by(operation_interrupt_cause::cancelled));
-    }
-
-private:
-    operation_deadline deadline_;
-    stop_token stop_;
-};
-
 inline constexpr std::size_t http_body_buffer_bytes = std::size_t{8} * 1024;
 // The smallest capacity a buffered known-length body grows to while it is read
 // straight into its own storage. It matches the WebSocket read window: a peer
@@ -358,42 +86,6 @@ inline constexpr std::size_t known_length_min_read_bytes = std::size_t{64} * 102
     return http_error_info({.status_ = error.status(), .code_ = error.code(), .message_ = std::string_view(error.what())});
 }
 http_error_info copy_http_protocol_error_info(const http_protocol_error&&) = delete;
-
-enum class http_stream_end : std::uint8_t { keep_open,
-    end };
-
-// Whether a read error marks the end of input rather than a read failure: a
-// TCP FIN or TLS close_notify (eof), or a TLS peer that closed TCP without
-// close_notify (stream_truncated). Message-delimited protocols above the
-// stream still detect a truncated message themselves; the transport only
-// reports that no more bytes follow.
-[[nodiscard]] inline bool is_stream_read_end(const std::error_code& error) noexcept {
-    return error == asio::error::eof || error == asio::ssl::error::stream_truncated;
-}
-
-// A failed I/O operation on the inbound connection's own transport: the socket
-// or TLS stream this server accepted. The type carries the failure's
-// provenance, so connection_failure_sink can tell a connection that ended (the
-// peer reset it, or this server cancelled its I/O) from a handler or upstream
-// failure that happens to carry the same error code. Handlers still observe it
-// as a std::system_error.
-class inbound_transport_error final : public std::system_error {
-public:
-    inbound_transport_error(std::error_code code, const char* what_arg) :
-        std::system_error(code, what_arg) {}
-};
-
-// Errors with which an inbound connection ends without any fault on this side:
-// the peer closed it (including a TLS peer that closed TCP without
-// close_notify), reset or aborted it, the network gave up on a vanished peer,
-// or this server ended the I/O itself. Cancellation may carry Asio's native
-// operation_aborted code or the generic operation_canceled condition used by
-// the TLS output pump; bad_descriptor is I/O started after our own close
-// (stop, drain, or a timeout). Only this server closes an inbound socket, so
-// these codes cannot come from anything else on the inbound transport.
-[[nodiscard]] inline bool is_inbound_connection_end(const std::error_code& error) noexcept {
-    return is_stream_read_end(error) || error == asio::error::connection_reset || error == asio::error::connection_aborted || error == asio::error::broken_pipe || error == asio::error::operation_aborted || error == std::errc::operation_canceled || error == asio::error::bad_descriptor || error == asio::error::timed_out || error == asio::error::not_connected || error == asio::error::shut_down;
-}
 
 // Owner-thread phase of one server worker:
 // - running: admits connections and requests;
@@ -575,33 +267,6 @@ private:
     inline static std::atomic<std::uint64_t> next_{1};
 };
 
-[[nodiscard]] inline ip_address to_ip_address(const asio::ip::address& address) noexcept {
-    if (address.is_v4()) {
-        return ip_address::ipv4(address.to_v4().to_bytes());
-    }
-    const auto v6 = address.to_v6();
-    return ip_address::ipv6(v6.to_bytes(), static_cast<std::uint32_t>(v6.scope_id()));
-}
-
-[[nodiscard]] inline asio::ip::address to_asio_address(const ip_address& address) noexcept {
-    if (address.family() == ip_address_family::ipv4) {
-        asio::ip::address_v4::bytes_type bytes{};
-        std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
-        return asio::ip::address_v4(bytes);
-    }
-    asio::ip::address_v6::bytes_type bytes{};
-    std::copy(address.bytes().begin(), address.bytes().end(), bytes.begin());
-    return asio::ip::address_v6(bytes, address.scope_id());
-}
-
-// The peer address a connection's services name, shared by TCP and QUIC
-// sessions: dotted IPv4, also for an IPv4-mapped IPv6 peer, otherwise the
-// RFC 5952 IPv6 text.
-inline void assign_peer_address(std::string& output, const asio::ip::address& address) {
-    std::array<char, ip_address::max_text_size> buffer;
-    output.assign(to_ip_address(address).normalized_ipv4().format_to(buffer));
-}
-
 enum class accept_error_action : std::uint8_t { retry,
     report_and_retry,
     fail };
@@ -625,38 +290,6 @@ enum class accept_error_action : std::uint8_t { retry,
     }
 #endif
     return accept_error_action::fail;
-}
-
-inline void validate_client_tcp_config(const client_tcp_config& config) {
-    switch (config.no_delay_) {
-        case tcp_no_delay_policy::system_default:
-        case tcp_no_delay_policy::enable:
-            break;
-        default:
-            throw std::invalid_argument("TCP no-delay policy is invalid");
-    }
-    switch (config.keep_alive_) {
-        case tcp_keep_alive_policy::system_default:
-        case tcp_keep_alive_policy::enable:
-            break;
-        default:
-            throw std::invalid_argument("TCP keepalive policy is invalid");
-    }
-}
-
-// Returns the error of the first enabled policy that cannot be applied.
-[[nodiscard]] inline std::error_code apply_tcp_socket_policies(asio::ip::tcp::socket& socket, const client_tcp_config& config) noexcept {
-    std::error_code error;
-    if (config.no_delay_ == tcp_no_delay_policy::enable) {
-        socket.set_option(asio::ip::tcp::no_delay(true), error);
-        if (error) {
-            return error;
-        }
-    }
-    if (config.keep_alive_ == tcp_keep_alive_policy::enable) {
-        socket.set_option(asio::socket_base::keep_alive(true), error);
-    }
-    return error;
 }
 
 // Intrusive, worker-affine registry. No lock is held while invoking user code
@@ -903,195 +536,5 @@ inline void connection_registry::close_listener(const void* listener) noexcept {
         }
     }
 }
-
-// The caller owns the socket and the already-read prefix until all I/O joins.
-// Prefix delivery is asynchronous, like socket reads, and never reads a byte twice.
-class inbound_socket_stream final {
-public:
-    using executor_type = asio::ip::tcp::socket::executor_type;
-    using lowest_layer_type = asio::ip::tcp::socket;
-
-    explicit inbound_socket_stream(asio::ip::tcp::socket& socket, std::span<const std::byte> prefix = {}, connection_lifecycle* lifecycle = nullptr) noexcept :
-        socket_(socket),
-        prefix_(prefix),
-        lifecycle_(lifecycle) {}
-
-    executor_type get_executor() noexcept {
-        return socket_.get_executor();
-    }
-    lowest_layer_type& lowest_layer() noexcept {
-        return socket_;
-    }
-    const lowest_layer_type& lowest_layer() const noexcept {
-        return socket_;
-    }
-    auto native_handle() {
-        return socket_.native_handle();
-    }
-    bool non_blocking() const {
-        return socket_.non_blocking();
-    }
-    void shutdown(asio::ip::tcp::socket::shutdown_type what, std::error_code& error) {
-        socket_.shutdown(what, error);
-    }
-    template <typename buffers_type>
-    std::size_t send(const buffers_type& buffers, asio::socket_base::message_flags flags, std::error_code& error) {
-        const auto bytes = socket_.send(buffers, flags, error);
-        if (lifecycle_ != nullptr) {
-            lifecycle_->note_write(bytes);
-            lifecycle_->note_error(error);
-        }
-        return bytes;
-    }
-
-    template <typename buffers_type>
-    std::size_t read_some(const buffers_type& buffers, std::error_code& error) {
-        if (!prefix_.empty()) {
-            error.clear();
-            return consume_prefix(buffers);
-        }
-        const auto bytes = socket_.read_some(buffers, error);
-        if (lifecycle_ != nullptr) {
-            lifecycle_->note_read(bytes);
-            lifecycle_->note_error(error);
-        }
-        return bytes;
-    }
-
-    template <typename buffers_type, typename handler_type>
-    void async_read_some(const buffers_type& buffers, handler_type&& handler) {
-        if (prefix_.empty()) {
-            socket_.async_read_some(buffers, completion<std::decay_t<handler_type>, false>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
-            return;
-        }
-        const auto bytes = consume_prefix(buffers);
-        asio::post(socket_.get_executor(), [handler = std::forward<handler_type>(handler), bytes]() mutable {
-            std::move(handler)(std::error_code{}, bytes);
-        });
-    }
-
-    template <typename buffers_type, typename handler_type>
-    void async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        socket_.async_write_some(buffers, completion<std::decay_t<handler_type>, true>{std::forward<handler_type>(handler), socket_.get_executor(), lifecycle_});
-    }
-
-private:
-    template <typename handler_type, bool writing>
-    struct completion final {
-        handler_type handler_;
-        inbound_socket_stream::executor_type fallback_executor_;
-        connection_lifecycle* lifecycle_;
-        using executor_type = asio::associated_executor_t<handler_type, inbound_socket_stream::executor_type>;
-        using allocator_type = asio::associated_allocator_t<handler_type>;
-        using cancellation_slot_type = asio::associated_cancellation_slot_t<handler_type>;
-        [[nodiscard]] executor_type get_executor() const noexcept {
-            return asio::get_associated_executor(handler_, fallback_executor_);
-        }
-        [[nodiscard]] allocator_type get_allocator() const noexcept {
-            return asio::get_associated_allocator(handler_);
-        }
-        [[nodiscard]] cancellation_slot_type get_cancellation_slot() const noexcept {
-            return asio::get_associated_cancellation_slot(handler_);
-        }
-        void operator()(const std::error_code& error, std::size_t bytes) {
-            if (lifecycle_ != nullptr) {
-                if constexpr (writing) {
-                    lifecycle_->note_write(bytes);
-                } else {
-                    lifecycle_->note_read(bytes);
-                }
-                // Protocol drivers also cancel reads for a successful drain.
-                // Timeout, shutdown and explicit abort record their cause first.
-                if (error != asio::error::operation_aborted && error != asio::error::bad_descriptor) {
-                    lifecycle_->note_error(error);
-                }
-            }
-            std::move(handler_)(error, bytes);
-        }
-    };
-    template <typename buffers_type>
-    std::size_t consume_prefix(const buffers_type& buffers) noexcept {
-        const auto bytes = asio::buffer_copy(buffers, asio::buffer(prefix_.data(), prefix_.size()));
-        prefix_ = prefix_.subspan(bytes);
-        return bytes;
-    }
-    asio::ip::tcp::socket& socket_;
-    std::span<const std::byte> prefix_;
-    connection_lifecycle* lifecycle_;
-};
-
-// SSL 的读操作也可能发送 KeyUpdate 等控制记录。取消读允许保留已接收的
-// 密文字节，但不能截断已从 SSL BIO 取出的输出，否则后续复用会丢失记录。
-// 屏蔽单操作的写取消；socket 关闭和既有连接超时仍能终止底层写入。
-class tls_socket_transport final {
-public:
-    using executor_type = asio::ip::tcp::socket::executor_type;
-    using lowest_layer_type = asio::ip::tcp::socket;
-
-    explicit tls_socket_transport(inbound_socket_stream& socket) noexcept :
-        socket_(socket) {}
-
-    [[nodiscard]] executor_type get_executor() noexcept {
-        return socket_.get_executor();
-    }
-
-    [[nodiscard]] lowest_layer_type& lowest_layer() noexcept {
-        return socket_.lowest_layer();
-    }
-
-    [[nodiscard]] const lowest_layer_type& lowest_layer() const noexcept {
-        return socket_.lowest_layer();
-    }
-
-    template <typename buffers_type, typename handler_type>
-    auto async_read_some(const buffers_type& buffers, handler_type&& handler) {
-        return socket_.async_read_some(buffers, std::forward<handler_type>(handler));
-    }
-
-    template <typename buffers_type, typename handler_type>
-    auto async_write_some(const buffers_type& buffers, handler_type&& handler) {
-        return socket_.async_write_some(buffers, asio::bind_cancellation_slot(asio::cancellation_slot{}, std::forward<handler_type>(handler)));
-    }
-
-private:
-    inbound_socket_stream& socket_;
-};
-
-using server_tls_stream = asio::ssl::stream<tls_socket_transport>;
-
-// How a TCP connection session ended, which decides how its socket closes.
-// A stopping worker closes every connection immediately, whatever its mode.
-enum class http_connection_close : std::uint8_t {
-    // Transport failure, a stalled transfer, or a vanished peer: close at once.
-    abort,
-    // No further peer input is expected: the peer ended its input (FIN or TLS
-    // close_notify), or this side ended a wait for a request head (timeout or
-    // drain). TLS sends close_notify first (RFC 9112 §9.8, RFC 9846 §6.1).
-    notify,
-    // This side ended the connection while peer input may still arrive: after
-    // the final HTTP/1 response, or after HTTP/2 GOAWAY. Lingering close
-    // (RFC 9112 §9.6): TLS close_notify, TCP send shutdown, then peer input is
-    // read and discarded until its end, a deadline or a byte budget, so unread
-    // input cannot make TCP reset the connection and destroy the last response.
-    linger,
-};
-
-// Half-closes plain TCP after the final response. The session's close still
-// lingers and closes the socket.
-inline void shutdown_http_connection_send(asio::ip::tcp::socket& socket) noexcept {
-    std::error_code ignored;
-    socket.shutdown(asio::ip::tcp::socket::shutdown_send, ignored);
-}
-
-// The lingering close of a plain connection, short of the final TCP close.
-// The caller closes TCP after completion and must not start this operation
-// once the worker is stopping; scanner close_all, a fixed deadline and the
-// worker scanner bound it. The task borrows its arguments until completion.
-[[nodiscard]] task<void> linger_http_connection(asio::ip::tcp::socket& socket, connection_scanner& scanner, const worker_ref& worker_value);
-
-// Sends TLS close_notify for a non-aborted session without waiting for the
-// peer's alert, then lingers like linger_http_connection() when `mode` is
-// http_connection_close::linger. Same bounds and caller duties as above.
-[[nodiscard]] task<void> close_http_connection_gracefully(server_tls_stream& stream, http_connection_close mode, connection_scanner& scanner, const worker_ref& worker_value);
 
 }  // namespace ruvia::detail

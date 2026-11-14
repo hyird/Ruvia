@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "ip_address.h"
 #include "stop_token.h"
 
 // Startup-only configuration checks and the named worker capability

@@ -24,6 +24,7 @@
 #include "context.h"
 #include "controller.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server_fixture.h"
 #include "streaming.h"
 namespace http2_request_limit_test {

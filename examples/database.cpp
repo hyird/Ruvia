@@ -27,6 +27,7 @@
 #include "borrowed_text.h"
 #include "controller.h"
 #include "db.h"
+#include "db_migration.h"
 #include "middleware.h"
 
 namespace {

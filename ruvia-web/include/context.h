@@ -23,26 +23,30 @@
 #include "http1_server_response.h"
 #include "http2_push.h"
 #include "http_cookie.h"
+#include "http_error.h"
 #include "http_header.h"
 #include "http_message.h"
 #include "http_priority.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "http_status.h"
+#include "integer_parse.h"
+#include "ip_address.h"
 #include "middleware.h"
 #include "model.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
 #include "worker_ref.h"
+#include "worker_state.h"
 namespace ruvia {
 
 class context;
 class env;
 class static_root;
 // Capabilities a handler reaches through context; include the defining header
-// where they are used: http_client.h, streaming.h (websocket, http_tunnel,
-// multipart_reader) and middleware.h (session).
+// where they are used: http_client.h, websocket.h (websocket), http_tunnel.h
+// (http_tunnel), streaming.h (multipart_reader) and session.h (session).
 class http_client_ref;
 class http_client_response;
 class websocket;

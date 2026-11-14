@@ -14,41 +14,25 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "http1_client_response.h"
-#include "http1_server_response.h"
+#include "decimal_text.h"
+#include "http1_chunked_body.h"
+#include "http1_client_request_fields.h"
+#include "http1_connection_plan.h"
+#include "http_authority.h"
+#include "http_client_request_view.h"
 #include "http_connect_udp.h"
 #include "http_connection_fields.h"
+#include "http_field_kind.h"
+#include "http_field_text.h"
+#include "http_field_validation.h"
 #include "http_header.h"
+#include "http_message.h"
+#include "http_message_framing_fields.h"
 #include "http_request.h"
 #include "http_uri_syntax.h"
 #include "http_wire_writer.h"
-#include "websocket_handshake.h"
-#include "websocket_negotiation.h"
-
-// What a caller-supplied request header section must satisfy before the writer
-// will encode it, and the facts the encoder then needs from it: its field
-// section budget, which singleton fields it already carries, and the
-// connection and upgrade options it expresses.
 
 namespace ruvia::detail {
-
-struct http1_client_request_field_facts final {
-    // The caller's fields, charged by the shared field-section rule.
-    http_field_section_budget section_;
-    detail::request_field_state fields_{detail::request_field_framing::http1};
-    detail::http_connection_options connection_options_;
-    detail::http_upgrade_protocols upgrade_protocols_;
-    std::string_view first_upgrade_value_{};
-    std::size_t upgrade_value_bytes_{0};
-    std::size_t upgrade_field_count_{0};
-    bool has_te_{false};
-    // The caller declared trailer fields; the writer requires chunked content.
-    bool has_trailer_{false};
-};
-
-[[nodiscard]] bool analyze_http1_client_request_field(http_header_view header, detail::http_field_kind kind, http1_client_request_field_facts& facts, http1_client_request_prepare_error& error, http_request_field_source source = http_request_field_source::generated) noexcept;
-
-[[nodiscard]] bool finish_http1_client_request_fields(const http1_client_request_field_facts& facts, http1_client_request_prepare_error& error) noexcept;
 
 // Validate every field and collect the facts the encoder needs. Returns false
 // with `error` set on the first field that cannot be sent.
@@ -90,6 +74,26 @@ struct http1_client_request_prepare_result_access final {
 
 namespace ruvia {
 namespace {
+
+[[nodiscard]] constexpr bool http_origin_uses_default_port(const http_origin_view& origin) noexcept {
+    return origin.port() == detail::http_scheme_default_port(origin.scheme());
+}
+
+void validate_origin_host(std::string_view host) {
+    if (host.empty()) {
+        throw std::invalid_argument("HTTP origin host must not be empty");
+    }
+    if (!detail::is_valid_http_host(host)) {
+        throw std::invalid_argument("HTTP origin host is invalid");
+    }
+}
+
+std::uint16_t resolved_origin_port(http_scheme scheme, const http_origin_options& options) noexcept {
+    if (options.port_.has_value()) {
+        return options.port_->value();
+    }
+    return detail::http_scheme_default_port(scheme);
+}
 
 constexpr std::string_view crlf = "\r\n";
 constexpr std::string_view http11_request_line_suffix = " HTTP/1.1\r\n";
@@ -355,6 +359,31 @@ struct request_head_write_plan final {
 
 }  // namespace
 
+http_origin_view http_origin_view::http(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(http_scheme::http, host, resolved_origin_port(http_scheme::http, options));
+}
+
+http_origin_view http_origin_view::https(http_origin_options options) {
+    const auto host = options.host_.view();
+    validate_origin_host(host);
+    return http_origin_view(http_scheme::https, host, resolved_origin_port(http_scheme::https, options));
+}
+
+std::string make_http_origin_authority(const http_origin_view& origin) {
+    const auto host = origin.host();
+    const bool include_port = !http_origin_uses_default_port(origin);
+    std::string authority;
+    authority.reserve(host.size() + (include_port ? 6 : 0));
+    authority.append(host);
+    if (include_port) {
+        authority.push_back(':');
+        http_append_unsigned(authority, origin.port());
+    }
+    return authority;
+}
+
 std::string_view http1_client_request_prepare_error_message(http1_client_request_prepare_error error) noexcept {
     switch (error) {
         case http1_client_request_prepare_error::invalid_method:
@@ -458,18 +487,6 @@ std::variant<prepared_http1_client_request, http1_client_request_buffer_too_smal
     }
     const auto tunnel_origin = http_origin_view::http({.host_ = parsed_value->host(), .port_ = *parsed_value->port()});
     return prepare_connect_request(&tunnel_origin, headers, head_buffer, policy);
-}
-
-http1_response_head_plan prepare_http1_connect_response_head(const http_response& response, http_protocol_version version) {
-    if ((version != http_protocol_version::http10 && version != http_protocol_version::http11) || !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
-        throw http1_response_head_error("invalid HTTP/1 CONNECT response head");
-    }
-    if (detail::response_has_known_header(response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
-        throw http1_response_head_error("CONNECT response cannot contain message framing fields");
-    }
-    const auto body = plan_http_response_body(http_known_method::connect, response.status());
-    const auto connection = version == http_protocol_version::http10 ? plan_http10_request_connection(true, false) : http1_request_connection_plan::http11_close();
-    return http1_close_delimited_response_stream_head_plan(body, connection);
 }
 
 }  // namespace ruvia
@@ -667,108 +684,5 @@ void http1_request_content_writer::commit_finish() {
     }
     finishing_ = false;
     finished_ = true;
-}
-namespace {
-// The one application-header policy of the client handshake: the request
-// writer owns every protocol-managed field (Host, framing, Expect and the
-// Upgrade/Connection pair) and the handshake generates every Sec-WebSocket-*
-// field.
-bool is_reserved_handshake_header(std::string_view name, detail::http_field_kind kind) noexcept {
-    switch (kind) {
-        case detail::http_field_kind::sec_websocket_key:
-        case detail::http_field_kind::sec_websocket_version:
-        case detail::http_field_kind::sec_websocket_protocol:
-        case detail::http_field_kind::sec_websocket_extensions:
-            return true;
-        case detail::http_field_kind::other:
-            return detail::is_protocol_managed_request_field(kind, name) || http_ascii_equals_ignore_case(name, "sec-websocket-accept");
-        default:
-            return detail::is_protocol_managed_request_field(kind, name);
-    }
-}
-}  // namespace
-
-void validate_http1_websocket_client_handshake_configuration(std::span<const http_header_view> headers) {
-    detail::http1_client_request_field_facts facts;
-    http1_client_request_prepare_error error{};
-    for (const auto& header : headers) {
-        const auto kind = detail::classify_http_field(header.name());
-        if (is_reserved_handshake_header(header.name(), kind)) {
-            throw std::invalid_argument("invalid or reserved WebSocket handshake header");
-        }
-        if (!detail::analyze_http1_client_request_field(header, kind, facts, error)) {
-            throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
-        }
-    }
-    if (!detail::finish_http1_client_request_fields(facts, error)) {
-        throw std::invalid_argument(http1_client_request_prepare_error_message(error).data());
-    }
-}
-
-namespace {
-template <typename header_type>
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_websocket_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const header_type> headers, std::span<char> head_buffer, http_request_field_source source) {
-    const auto negotiation_fields = negotiation.request_fields();
-    detail::http_header_descriptor_storage<http_header_view> staged_headers;
-    staged_headers.reserve(headers.size() + 3U + negotiation_fields.size());
-    for (const auto& header : headers) {
-        staged_headers.append(http_header_view{header.name(), header.value()});
-    }
-    staged_headers.append(http_header_view{"Upgrade", "websocket"});
-    staged_headers.append(http_header_view{detail::http_connection_field_name, detail::http_connection_upgrade_option});
-    staged_headers.append(http_header_view{"Sec-WebSocket-Key", std::string_view(encoded_key.data(), encoded_key.size())});
-    for (const auto& field : negotiation_fields) {
-        staged_headers.append(http_header_view{field.name(), field.value()});
-    }
-    return http1_client_request_writer().prepare(origin, {.method_ = "GET", .target_ = target, .headers_ = staged_headers.view()}, head_buffer, {.field_source_ = source});
-}
-
-}  // namespace
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header> headers, std::span<char> head_buffer, http_request_field_source source) {
-    return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, source);
-}
-
-std::variant<prepared_http1_client_request, http1_client_request_buffer_too_small, http1_client_request_prepare_error> prepare_http1_websocket_client_request(const http_origin_view& origin, std::string_view target, std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, std::span<const http_header_view> headers, std::span<char> head_buffer, http_request_field_source source) {
-    return prepare_websocket_request(origin, target, encoded_key, negotiation, headers, head_buffer, source);
-}
-
-std::variant<websocket_client_negotiation_result_view, websocket_client_handshake_error> validate_http1_websocket_client_response(std::span<const char, 24> encoded_key, const websocket_client_negotiation& negotiation, const http1_parsed_client_response_head& response) {
-    if (response.plan().protocol_upgrade() == nullptr || response.head().status() != http_status::switching_protocols) {
-        return websocket_client_handshake_error::response_status;
-    }
-    detail::websocket_accept_key_type expected{};
-    detail::encode_websocket_accept(expected, std::string_view(encoded_key.data(), encoded_key.size()));
-    std::size_t accepts = 0;
-    bool accept_matches = false, has_upgrade = false, has_connection = false;
-    for (const auto& header : response.head().headers()) {
-        switch (detail::classify_http_field(header.name())) {
-            case detail::http_field_kind::upgrade:
-                has_upgrade = has_upgrade || detail::http_has_token(header.value(), "websocket");
-                break;
-            case detail::http_field_kind::connection:
-                has_connection = has_connection || detail::http_has_token(header.value(), detail::http_connection_upgrade_option);
-                break;
-            case detail::http_field_kind::other:
-                if (http_ascii_equals_ignore_case(header.name(), "Sec-WebSocket-Accept")) {
-                    ++accepts;
-                    accept_matches = http_trim_ows(header.value()) == std::string_view(expected.data(), expected.size());
-                }
-                break;
-            default:
-                break;
-        }
-    }
-    if (accepts != 1 || !accept_matches) {
-        return websocket_client_handshake_error::accept;
-    }
-    if (!has_upgrade) {
-        return websocket_client_handshake_error::upgrade;
-    }
-    if (!has_connection) {
-        return websocket_client_handshake_error::connection;
-    }
-
-    return detail::validate_websocket_client_selection(negotiation, response.head().headers(), false);
 }
 }  // namespace ruvia

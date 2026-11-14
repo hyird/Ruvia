@@ -25,10 +25,16 @@
 
 #include "blocking_pool.h"
 #include "event_loop.h"
+#include "move_only_function.h"
+#include "one_shot.h"
+#include "operation_options.h"
+#include "pool_lease.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "timeout_duration.h"
 #include "worker_ref.h"
+#include "worker_result.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::worker_wait_tests {

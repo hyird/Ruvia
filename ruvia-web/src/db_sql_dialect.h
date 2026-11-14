@@ -1,0 +1,365 @@
+#pragma once
+
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+
+#include "binary_text_encoding.h"
+#include "db_query.h"
+#include "db_schema.h"
+#include "db_session.h"
+#include "decimal_text.h"
+#include "utf8.h"
+
+namespace ruvia::detail {
+
+inline void require_db_dialect(db_driver driver) {
+    if (driver != db_driver::postgresql && driver != db_driver::mariadb) {
+        throw std::invalid_argument("SQL compilation requires an explicit database driver");
+    }
+}
+
+// MariaDB limits identifiers to 64 characters and PostgreSQL to 63 bytes
+// (NAMEDATALEN - 1). Counting characters requires well-formed UTF-8, so an
+// ill-formed MariaDB name is rejected rather than measured by guesswork.
+[[nodiscard]] inline bool fits_db_identifier_limit(std::string_view name, db_driver driver) noexcept {
+    if (driver == db_driver::postgresql) {
+        return name.size() <= 63;
+    }
+    std::size_t characters = 0;
+    for (std::size_t i = 0; i < name.size(); ++characters) {
+        if (static_cast<unsigned char>(name[i]) < 0x80) {
+            ++i;
+            continue;
+        }
+        const auto sequence = ::ruvia::scan_utf8_sequence(name, i);
+        if (!sequence.well_formed_) {
+            return false;
+        }
+        i += sequence.length_;
+    }
+    return characters <= 64;
+}
+
+inline void validate_db_identifier(std::string_view name, db_driver driver) {
+    require_db_dialect(driver);
+    if (name.empty() || name.find('\0') != std::string_view::npos || !fits_db_identifier_limit(name, driver)) {
+        throw std::invalid_argument("invalid or overlong database identifier");
+    }
+}
+
+inline void append_db_identifier(std::string& output, std::string_view name, db_driver driver) {
+    validate_db_identifier(name, driver);
+    const char quote = driver == db_driver::postgresql ? '"' : '`';
+    output.push_back(quote);
+    for (auto at = name.find(quote); at != std::string_view::npos; at = name.find(quote)) {
+        output.append(name.data(), at + 1);
+        output.push_back(quote);
+        name.remove_prefix(at + 1);
+    }
+    output.append(name);
+    output.push_back(quote);
+}
+
+inline void append_db_qualified_identifier(std::string& output, std::string_view name, db_driver driver) {
+    while (true) {
+        const auto dot = name.find('.');
+        append_db_identifier(output, name.substr(0, dot), driver);
+        if (dot == std::string_view::npos) {
+            return;
+        }
+        output.push_back('.');
+        name.remove_prefix(dot + 1);
+    }
+}
+
+inline void append_db_string_literal(std::string& output, std::string_view value, db_driver driver) {
+    require_db_dialect(driver);
+    if (value.find('\0') != std::string_view::npos) {
+        throw std::invalid_argument("database text cannot contain NUL");
+    }
+    if (driver == db_driver::mariadb) {
+        // Hex text is independent of NO_BACKSLASH_ESCAPES and ANSI_QUOTES.
+        // It also avoids allowing connection SQL modes to change DDL values.
+        output.reserve(output.size() + 26U + value.size() * 2U);
+        output += "CONVERT(X'";
+        http_append_lower_hex(output, value);
+        output += "' USING utf8mb4)";
+        return;
+    }
+    output.reserve(output.size() + 3U + value.size());
+    output += "E'";
+    for (auto at = value.find_first_of("'\\"); at != std::string_view::npos; at = value.find_first_of("'\\")) {
+        output.append(value.data(), at + 1);
+        output.push_back(value[at]);
+        value.remove_prefix(at + 1);
+    }
+    output.append(value);
+    output.push_back('\'');
+}
+
+// Bound doubles travel as float8/DOUBLE, so a literal must keep that type: an
+// unadorned 2 is an integer and 2.5 is exact NUMERIC/DECIMAL in both dialects,
+// which changes division and overload resolution. PostgreSQL gets an explicit
+// cast of a quoted constant (valid in DEFAULT, CHECK, generated columns and
+// views, and immune to a preceding '-' forming a comment); MariaDB reads any
+// literal with an exponent as DOUBLE.
+inline void append_db_double_literal(std::string& output, double value, db_driver driver) {
+    require_db_dialect(driver);
+    if (driver == db_driver::postgresql) {
+        output += "CAST('";
+        append_db_number(output, value);
+        output += "' AS DOUBLE PRECISION)";
+        return;
+    }
+    const auto start = output.size();
+    append_db_number(output, value);
+    if (output.find_first_of("eE", start) == std::string::npos) {
+        output += "e0";
+    }
+}
+
+inline void append_db_literal(std::string& output, const db_value& value, db_driver driver) {
+    require_db_dialect(driver);
+    switch (value.type()) {
+        case db_value_type::null:
+            output += "NULL";
+            return;
+        case db_value_type::string:
+            append_db_string_literal(output, value.text(), driver);
+            return;
+        case db_value_type::signed_value:
+            append_db_number(output, value.signed_value());
+            return;
+        case db_value_type::unsigned_value:
+            append_db_number(output, value.unsigned_value());
+            return;
+        case db_value_type::double_value:
+            append_db_double_literal(output, value.double_value(), driver);
+            return;
+        case db_value_type::bool_value:
+            output += value.bool_value() ? "TRUE" : "FALSE";
+            return;
+    }
+    std::terminate();
+}
+
+enum class db_sql_type_usage : std::uint8_t { column,
+    cast };
+
+void append_db_expression(std::string& output, db_expression expression, db_driver driver);
+
+template <typename contains_fn_type>
+[[nodiscard]] inline std::string_view select_db_dollar_delimiter(std::array<char, 32>& delimiter_buf, contains_fn_type&& contains_delimiter) noexcept {
+    std::string_view delimiter = "$ruvia$";
+    for (std::uint64_t suffix = 1; contains_delimiter(delimiter); ++suffix) {
+        std::string_view("$ruvia").copy(delimiter_buf.data(), 6);
+        std::array<char, http_max_unsigned_decimal_size> digits;
+        const auto formatted = http_format_unsigned(digits, suffix);
+        std::size_t length = 6;
+        formatted.copy(delimiter_buf.data() + length, formatted.size());
+        length += formatted.size();
+        delimiter_buf[length++] = '$';
+        delimiter = std::string_view(delimiter_buf.data(), length);
+    }
+    return delimiter;
+}
+
+inline void append_db_dollar_body(std::string& output, std::string_view body) {
+    std::array<char, 32> delimiter_buf;
+    const auto delimiter = select_db_dollar_delimiter(delimiter_buf, [body](std::string_view candidate) noexcept {
+        return body.find(candidate) != std::string_view::npos;
+    });
+    output.reserve(output.size() + delimiter.size() * 2U + body.size());
+    output.append(delimiter);
+    output.append(body);
+    output.append(delimiter);
+}
+
+[[nodiscard]] inline std::string_view table_lock_mode_name(db_table_lock_mode mode) {
+    switch (mode) {
+        case db_table_lock_mode::access_share:
+            return "ACCESS SHARE";
+        case db_table_lock_mode::row_share:
+            return "ROW SHARE";
+        case db_table_lock_mode::row_exclusive:
+            return "ROW EXCLUSIVE";
+        case db_table_lock_mode::share_update_exclusive:
+            return "SHARE UPDATE EXCLUSIVE";
+        case db_table_lock_mode::share:
+            return "SHARE";
+        case db_table_lock_mode::share_row_exclusive:
+            return "SHARE ROW EXCLUSIVE";
+        case db_table_lock_mode::exclusive:
+            return "EXCLUSIVE";
+        case db_table_lock_mode::access_exclusive:
+            return "ACCESS EXCLUSIVE";
+    }
+    throw std::invalid_argument("unknown table lock mode");
+}
+
+// PostgreSQL statements emitted both as migration steps and inside PL/pgSQL bodies.
+inline void append_db_lock_table_statement(std::string& output, std::string_view table, db_table_lock_mode mode, bool nowait) {
+    const auto mode_name = table_lock_mode_name(mode);
+    output.append("LOCK TABLE ");
+    append_db_qualified_identifier(output, table, db_driver::postgresql);
+    output.append(" IN ");
+    output.append(mode_name);
+    output.append(" MODE");
+    if (nowait) {
+        output.append(" NOWAIT");
+    }
+}
+inline void append_db_perform_statement(std::string& output, db_expression expression) {
+    output.append("PERFORM ");
+    append_db_expression(output, expression, db_driver::postgresql);
+}
+
+inline void append_db_type_name(std::string& output, db_data_type type, std::string_view custom_name, std::size_t length, unsigned precision, unsigned scale, bool array_value, db_driver driver, db_sql_type_usage usage = db_sql_type_usage::column) {
+    require_db_dialect(driver);
+    const bool pg = driver == db_driver::postgresql;
+    if ((array_value || !custom_name.empty()) && !pg) {
+        throw std::invalid_argument("array and named database types require PostgreSQL");
+    }
+    if (!custom_name.empty()) {
+        if (type != db_data_type::inferred || length != 0 || precision != 0 || scale != 0) {
+            throw std::invalid_argument("a named database type cannot also specify scalar type modifiers");
+        }
+        append_db_qualified_identifier(output, custom_name, driver);
+        if (array_value) {
+            output += "[]";
+        }
+        return;
+    }
+    if (length != 0 && type != db_data_type::char_value && type != db_data_type::varchar) {
+        throw std::invalid_argument("length requires CHAR or VARCHAR");
+    }
+    if ((precision != 0 || scale != 0) && type != db_data_type::numeric) {
+        throw std::invalid_argument("precision and scale require NUMERIC");
+    }
+    if (scale > precision || (precision > (pg ? 1000U : 65U))) {
+        throw std::invalid_argument("invalid database numeric precision or scale");
+    }
+    const bool maria_cast = !pg && usage == db_sql_type_usage::cast;
+    if (type == db_data_type::char_value) {
+        if (length == 0) {
+            throw std::invalid_argument("CHAR requires a positive length");
+        }
+        if (pg && length > 10485760) {
+            throw std::invalid_argument("PostgreSQL CHAR length exceeds the supported maximum");
+        }
+        if (!pg && !maria_cast && length > 255) {
+            throw std::invalid_argument("MariaDB CHAR length exceeds the supported maximum");
+        }
+    }
+    switch (type) {
+        case db_data_type::boolean:
+            output += maria_cast ? "UNSIGNED" : "BOOLEAN";
+            break;
+        case db_data_type::small_int:
+            output += maria_cast ? "SIGNED" : "SMALLINT";
+            break;
+        case db_data_type::integer:
+            output += maria_cast ? "SIGNED" : "INTEGER";
+            break;
+        case db_data_type::big_int:
+            output += maria_cast ? "SIGNED" : "BIGINT";
+            break;
+        case db_data_type::real:
+            output += maria_cast ? "DOUBLE" : "REAL";
+            break;
+        case db_data_type::double_value:
+            output += pg ? "DOUBLE PRECISION" : "DOUBLE";
+            break;
+        case db_data_type::text:
+            output += maria_cast ? "CHAR" : "TEXT";
+            break;
+        case db_data_type::char_value:
+            output += "CHAR(";
+            append_db_number(output, static_cast<std::uint64_t>(length));
+            output.push_back(')');
+            break;
+        case db_data_type::varchar:
+            if (length == 0) {
+                throw std::invalid_argument("VARCHAR requires a positive length");
+            }
+            output += maria_cast ? "CHAR(" : "VARCHAR(";
+            append_db_number(output, static_cast<std::uint64_t>(length));
+            output.push_back(')');
+            break;
+        case db_data_type::numeric:
+            output += "DECIMAL";
+            if (precision != 0) {
+                output.push_back('(');
+                append_db_number(output, static_cast<std::uint64_t>(precision));
+                output.push_back(',');
+                append_db_number(output, static_cast<std::uint64_t>(scale));
+                output.push_back(')');
+            } else if (!pg) {
+                // MariaDB's bare DECIMAL is DECIMAL(10,0) and silently rounds.
+                throw std::invalid_argument("MariaDB DECIMAL requires an explicit precision");
+            }
+            break;
+        case db_data_type::date:
+            output += "DATE";
+            break;
+        case db_data_type::timestamp:
+            // Match PostgreSQL's microsecond precision; bare DATETIME truncates.
+            output += pg ? "TIMESTAMP" : "DATETIME(6)";
+            break;
+        case db_data_type::json:
+            if (maria_cast) {
+                throw std::invalid_argument("MariaDB does not support CAST AS JSON");
+            }
+            output += "JSON";
+            break;
+        case db_data_type::jsonb:
+        case db_data_type::uuid:
+        case db_data_type::timestamp_tz:
+        case db_data_type::interval:
+        case db_data_type::inet:
+        case db_data_type::cidr:
+        case db_data_type::bytea:
+            if (!pg) {
+                throw std::invalid_argument("selected database type requires PostgreSQL");
+            }
+            switch (type) {
+                case db_data_type::jsonb:
+                    output += "JSONB";
+                    break;
+                case db_data_type::uuid:
+                    output += "UUID";
+                    break;
+                case db_data_type::timestamp_tz:
+                    output += "TIMESTAMPTZ";
+                    break;
+                case db_data_type::interval:
+                    output += "INTERVAL";
+                    break;
+                case db_data_type::inet:
+                    output += "INET";
+                    break;
+                case db_data_type::cidr:
+                    output += "CIDR";
+                    break;
+                case db_data_type::bytea:
+                    output += "BYTEA";
+                    break;
+                default:
+                    std::terminate();
+            }
+            break;
+        case db_data_type::array:
+        case db_data_type::inferred:
+            throw std::invalid_argument("SQL requires an explicit scalar type; use the array flag for arrays");
+    }
+    if (array_value) {
+        output += "[]";
+    }
+}
+
+}  // namespace ruvia::detail

@@ -1,0 +1,229 @@
+#pragma once
+
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <exception>
+#include <memory>
+#include <mutex>
+#include <optional>
+#include <span>
+#include <utility>
+#include <vector>
+
+#include <asio/io_context.hpp>
+#include <asio/ip/udp.hpp>
+
+#include "move_only_function.h"
+#include "runtime_control.h"
+#include "server_listener.h"
+#include "server_options.h"
+#include "task.h"
+#include "task_scope.h"
+#include "worker_ref.h"
+#include "worker_runtime.h"
+#include "worker_signal.h"
+
+#if defined(_WIN32)
+
+namespace ruvia::detail {
+
+class connection_count;
+#if defined(RUVIA_ENABLE_HTTP3)
+class http3_worker_directory;
+#endif
+
+// An accepted TCP SOCKET that no I/O completion port owns yet: the acceptor
+// creates it for AcceptEx and hands it to a business worker, whose io_context
+// binds it on adoption. Closes it unless released.
+class windows_accepted_socket final {
+public:
+    explicit windows_accepted_socket(SOCKET handle) noexcept :
+        handle_(handle) {}
+    windows_accepted_socket(windows_accepted_socket&& other) noexcept :
+        handle_(std::exchange(other.handle_, INVALID_SOCKET)) {}
+    windows_accepted_socket(const windows_accepted_socket&) = delete;
+    windows_accepted_socket& operator=(const windows_accepted_socket&) = delete;
+    windows_accepted_socket& operator=(windows_accepted_socket&&) = delete;
+    ~windows_accepted_socket();
+
+    [[nodiscard]] SOCKET get() const noexcept {
+        return handle_;
+    }
+    // The caller now owns the handle.
+    SOCKET release() noexcept {
+        return std::exchange(handle_, INVALID_SOCKET);
+    }
+
+private:
+    SOCKET handle_;
+};
+
+// The application's dedicated Windows acceptor (AGENTS.md §5): a lightweight
+// worker with its own core runtime and thread that owns every TCP listener,
+// and every HTTP/3 UDP socket, exclusively (SO_EXCLUSIVEADDRUSE), so the
+// business workers stay alike.
+//
+// TCP: AcceptEx accepts a raw SOCKET that no completion port owns and hands
+// it to the business worker holding the fewest connections (ties rotate),
+// through that worker's bounded queue: admission is reserved first, and a
+// socket the queue refuses is closed and counted as refused. The worker binds
+// the socket to its own io_context and serves it like any connection.
+//
+// HTTP/3: the acceptor receives every datagram and hands it, through the
+// HTTP/3 worker directory, to the worker its destination connection ID names,
+// or for a long header naming none (a new connection's Initial) to the worker
+// http3_initial_worker picks. Workers send through transmit(): the datagram
+// is queued, bounded per worker, and sent from the listener's socket.
+//
+// Lifecycle (driven by the application run):
+//   start()          binds (or adopts) every listener; the two-phase start's
+//                    first phase
+//   serve()          after every business worker serves: accepting begins
+//   stop_admission() pending accepts and receives are cancelled; the UDP
+//                    sockets stay open for the business workers' last
+//                    datagrams (CONNECTION_CLOSE)
+//   request_stop()   after the business workers joined: every socket closes
+//   join()
+// Listener slots match the business workers' and are never reused within a
+// run; application::add_listener() and remove_listener() change them on the
+// acceptor thread through post_control().
+class windows_acceptor final {
+public:
+    // Business worker thread: adopts one accepted socket.
+    using adopt_type = void (*)(void* target, std::size_t listener_index, windows_accepted_socket accepted);
+
+    // One business worker as a hand-over target.
+    struct business_worker final {
+        worker_ref worker_;
+        const connection_count* load_{nullptr};
+        void* target_{nullptr};
+        adopt_type adopt_{nullptr};
+    };
+
+    windows_acceptor(std::span<const http_server_listener_definition> listeners, std::size_t worker_count,
+#if defined(RUVIA_ENABLE_HTTP3)
+        http3_worker_directory* directory,
+#endif
+        worker_failure_sink failure);
+    ~windows_acceptor();
+
+    windows_acceptor(const windows_acceptor&) = delete;
+    windows_acceptor& operator=(const windows_acceptor&) = delete;
+
+    // Construction thread, once per business worker in worker order.
+    void bind_worker(std::size_t index, business_worker target);
+    // Lifecycle thread. False when a stop came first; rethrows the
+    // acceptor's failure (a listener that cannot be bound).
+    [[nodiscard]] bool start();
+    [[nodiscard]] bool serve();
+    [[nodiscard]] task<void> start(worker_ref caller);
+    [[nodiscard]] task<void> serve(worker_ref caller);
+    // Any thread.
+    void stop_admission() noexcept;
+    void request_stop() noexcept;
+    // Lifecycle thread, after request_stop().
+    void join();
+    // Waits for the native thread HANDLE asynchronously; join() afterwards only
+    // reclaims a thread whose exit has already been observed.
+    [[nodiscard]] task<void> join(worker_ref caller, asio::io_context& caller_io);
+    [[nodiscard]] std::exception_ptr failure() noexcept;
+    // Any thread: sockets the chosen worker's queue refused, and accept
+    // failures other than peer disconnects.
+    [[nodiscard]] std::size_t refused() const noexcept {
+        return refused_.load(std::memory_order_relaxed);
+    }
+    [[nodiscard]] std::size_t accept_failures() const noexcept {
+        return accept_failures_.load(std::memory_order_relaxed);
+    }
+    // Any thread: runs `control` on the acceptor thread; false once stopping.
+    [[nodiscard]] bool post_control(move_only_function<void()> control) noexcept {
+        return runtime_.post_control(std::move(control));
+    }
+    // Acceptor thread, the controls of application::add_listener(): binds or
+    // adopts `definition`'s TCP socket in slot `index` and its HTTP/3 UDP
+    // socket in slot `http3_index`, accepting nothing yet, or throws with
+    // both slots left empty.
+    void prepare_listener(std::size_t index, std::optional<std::size_t> http3_index, const http_server_listener_definition& definition
+#if defined(RUVIA_ENABLE_HTTP3)
+        ,
+        http3_worker_directory* directory
+#endif
+    );
+    // Starts accepting for (and receiving datagrams of) a prepared listener.
+    void open_listener(std::size_t index) noexcept;
+    // Closes the sockets of a listener prepared but never opened.
+    void discard_listener(std::size_t index, std::shared_ptr<void> receipt = {}) noexcept;
+    // application::remove_listener(): stops accepting for listener `index`
+    // and closes its TCP socket, holding `receipt` until its accepts ended.
+    // Its UDP socket keeps receiving for the established QUIC connections
+    // until every business worker released it.
+    void remove_listener(std::size_t index, std::shared_ptr<void> receipt) noexcept;
+#if defined(RUVIA_ENABLE_HTTP3)
+    // Business worker `worker_index`'s thread: queues one datagram for the
+    // socket of HTTP/3 listener `http3_listener_index`. False when it was
+    // dropped (the worker's bound is full or the acceptor stopped).
+    [[nodiscard]] bool transmit(std::size_t worker_index, std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    // Any thread: one business worker's endpoint of a removed HTTP/3
+    // listener served its last connection. The last worker releases this
+    // listener's claim; the socket closes once no listener still needs it.
+    void release_http3_listener(std::size_t http3_listener_index) noexcept;
+#endif
+
+private:
+    struct tcp_listener;
+    struct worker_slot;
+#if defined(RUVIA_ENABLE_HTTP3)
+    struct udp_transport;
+    struct udp_listener;
+#endif
+
+    void complete_phase(bool startup, std::exception_ptr failure = {}) noexcept;
+    task<void> run();
+    void open_listeners();
+    void open_tcp_listener(tcp_listener& listener);
+#if defined(RUVIA_ENABLE_HTTP3)
+    void open_udp_listener(udp_listener& listener);
+#endif
+    void prepare_listener_tasks(tcp_listener& listener);
+    void start_listener(tcp_listener& listener) noexcept;
+    void serve_on_context();
+    void close_admission() noexcept;
+    task<void> run_accepts(tcp_listener& listener);
+    void report_accept_error(const std::error_code& error);
+    void dispatch(std::size_t listener_index, windows_accepted_socket accepted);
+    [[nodiscard]] std::size_t select_worker() noexcept;
+#if defined(RUVIA_ENABLE_HTTP3)
+    task<void> run_receives(udp_listener& listener);
+    void steer(const udp_listener& listener, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& remote, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+    void send_datagram(std::size_t http3_listener_index, const asio::ip::udp::endpoint& remote, std::span<const std::byte> bytes, const asio::ip::udp::endpoint& local, std::uint32_t interface_index) noexcept;
+#endif
+
+    // Declared first: every socket below belongs to its io_context.
+    worker_runtime runtime_;
+    asio::io_context& io_;
+    worker_failure_sink failure_sink_;
+    worker_signal finalize_signal_;
+    task_scope tasks_;
+    std::vector<std::unique_ptr<worker_slot>> workers_;
+    // Indexed by listener slot, the HTTP/3 ones by HTTP/3 slot; empty for a
+    // listener whose addition was rolled back. A removed listener keeps its
+    // closed socket object until the acceptor ends: its accepts reference it.
+    std::vector<std::unique_ptr<tcp_listener>> tcp_listeners_;
+#if defined(RUVIA_ENABLE_HTTP3)
+    http3_worker_directory* directory_;
+    std::vector<std::unique_ptr<udp_listener>> udp_listeners_;
+#endif
+    // Owner thread.
+    std::size_t next_worker_{0};
+    bool admitting_{false};
+    bool stopping_{false};
+    std::atomic<std::size_t> refused_{0};
+    std::atomic<std::size_t> accept_failures_{0};
+    std::mutex phase_mutex_;
+    std::optional<runtime_control_completion::receipt> startup_receipt_;
+    std::optional<runtime_control_completion::receipt> serve_receipt_;
+};
+
+}  // namespace ruvia::detail
+#endif

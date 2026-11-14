@@ -13,6 +13,7 @@
 #include <openssl/evp.h>
 #include <openssl/rand.h>
 
+#include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "inline_storage.h"
 

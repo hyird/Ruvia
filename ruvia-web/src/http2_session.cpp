@@ -29,22 +29,35 @@
 #include "context_access.h"
 #include "event_loop.h"
 #include "http1_server_response.h"
+#include "http1_session_state.h"
 #include "http2_connection.h"
 #include "http_client_pool.h"
 #include "http_content_negotiation.h"
+#include "http_error.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_admission.h"
+#include "http_request_body_failure.h"
 #include "http_response.h"
+#include "http_response_stream.h"
 #include "inbound_buffer.h"
+#include "io_operation.h"
 #include "middleware.h"
 #include "multiplexed_session.h"
+#include "request_stream.h"
+#include "response_coding_policy.h"
 #include "response_file.h"
-#include "server_session.h"
+#include "route_stream_dispatch.h"
+#include "route_table.h"
+#include "server_options.h"
+#include "server_socket_stream.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
 #include "task_scope.h"
+#include "transport_stream_end.h"
 #include "websocket_handshake.h"
+#include "worker_connections.h"
 
 namespace ruvia::detail {
 
@@ -2225,6 +2238,16 @@ task<http_connection_close> run_http2_sans_io_session(inbound_socket_stream& str
 task<http_connection_close> run_http2_sans_io_session(server_tls_stream& stream, const route_table& routes_value, http2_sans_io_session_context session_value, std::string_view initial_bytes) {
     return run_http2_sans_io_session_impl(stream, stream.lowest_layer(), routes_value, std::move(session_value), initial_bytes);
 }
+
+template <typename stream_type>
+task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket, context_services services) {
+    connection_scanner::entry scanner_entry;
+    connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
+    co_return co_await run_http2_sans_io_session(stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
+}
+
+template task<http_connection_close> worker_connections::run_http2<inbound_socket_stream>(inbound_socket_stream&, tcp_socket_type&, context_services);
+template task<http_connection_close> worker_connections::run_http2<server_tls_stream>(server_tls_stream&, tcp_socket_type&, context_services);
 
 namespace {
 

@@ -1,12 +1,15 @@
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
-#include <limits>
 #include <optional>
 #include <string_view>
 
-#include "http_connection_fields.h"
+#include "http_field_text.h"
+#include "http_header.h"
+#include "http_message_framing_fields.h"
+#include "http_protocol.h"
 
 // HTTP/1 head wire scanning shared by the server request parser and the client
 // response parser: field-line scanning, head boundaries, version and framing
@@ -41,71 +44,47 @@ namespace ruvia::detail {
     return http_header_view{name, buffer.substr(value_start, value_end - value_start)};
 }
 
-// Request slots are assigned only when appended; unused inline slots need no
-// per-request zeroing. Offsets keep their borrowed bytes independent of moves.
-struct http_header_slice {
-    std::uint32_t offset_;
-    std::uint32_t length_;
-
-    [[nodiscard]] std::string_view bind(std::string_view buffer) const noexcept {
-        return buffer.substr(offset_, length_);
+[[nodiscard]] inline std::size_t find_http_header_end(std::string_view buffer, std::size_t search_offset) noexcept {
+    buffer = buffer.substr(0, max_http_header_bytes);
+    if (buffer.size() < 4) {
+        return std::string_view::npos;
     }
 
-    template <http_temporary_owning_char_string buffer_type>
-    std::string_view bind(buffer_type&&) const = delete;
-};
+    auto cursor_value = std::max<std::size_t>(3, search_offset);
+    while (cursor_value < buffer.size()) {
+        const auto i = buffer[cursor_value] == '\n' ? cursor_value : buffer.find('\n', cursor_value + 1);
+        if (i == std::string_view::npos) {
+            return std::string_view::npos;
+        }
+        if (buffer[i - 1] == '\r') {
+            if (buffer[i - 2] == '\n' && buffer[i - 3] == '\r') {
+                return i + 1;
+            }
+            if (i + 2 < buffer.size() && buffer[i + 1] == '\r' && buffer[i + 2] == '\n') {
+                return i + 3;
+            }
+            cursor_value = i + 3;
+            continue;
+        }
+        cursor_value = i + 1;
+    }
 
-struct parsed_request_header_slot {
-    http_header_slice name_;
-    http_header_slice value_;
-    http_field_kind kind_;
-};
+    return std::string_view::npos;
+}
 
-using known_request_header_index_type = std::int16_t;
-// parse_http_header_block stops at max_http_header_fields, so every field index
-// fits the index type and the request's descriptor block.
-static_assert(max_http_header_fields <= static_cast<std::size_t>((std::numeric_limits<known_request_header_index_type>::max)()));
-
-struct parsed_request_header_block {
-    parsed_request_header_block() noexcept = default;
-
-    http_header_slice method_;
-    http_header_slice target_;
-    http_protocol_version protocol_version_;
-    http_header_descriptor_storage<parsed_request_header_slot> headers_;
-    known_request_header_index_type host_header_index_{-1};
-    http_connection_options connection_options_;
-    http_content_length_state content_length_;
-    request_field_state fields_{request_field_framing::http1};
-    http_transfer_encoding_state transfer_encoding_;
-    http_request_expectations expectations_;
-};
-
-[[nodiscard]] std::size_t find_http_header_end(std::string_view buffer, std::size_t search_offset) noexcept;
 // True if an LF at or after search_offset (and within max_http_header_bytes)
 // is not preceded by CR. Within a field section such a line can never end the
 // CRLF-delimited head; the caller passes the end of the accepted request-line
 // or status-line, or a later offset whose earlier bytes were already scanned.
-[[nodiscard]] bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept;
-// RFC 9112 section 2.2: a server SHOULD ignore at least one empty line received
-// before the request-line. Leading CRLF or bare LF lines are skipped; they count
-// toward max_http_header_bytes, which bounds how many are ignored. The scan
-// resumes after `skipped` bytes already classified by an earlier call.
-[[nodiscard]] std::size_t http_request_leading_empty_line_bytes(std::string_view buffer, std::size_t skipped) noexcept;
-// find_http_header_end for a request head: the returned end is measured from
-// the start of buffer and includes the ignored leading empty lines, whose
-// count `leading_bytes` carries in (from an earlier call) and out.
-[[nodiscard]] std::size_t find_http_request_head_end(std::string_view buffer, std::size_t& leading_bytes, std::size_t search_offset) noexcept;
-// Classifies the request-line of a still incomplete head: a request-line error
-// once the first line after the leading empty lines is CRLF-terminated, or as
-// soon as its first byte cannot start a method token. Bytes before
-// search_offset were classified by an earlier call. An accepted line sets
-// request_line_end to the offset just past its CRLF; nullopt without it means
-// more input is needed.
-[[nodiscard]] std::optional<http_parse_error> classify_http_request_line_prefix(std::string_view buffer, std::size_t leading_bytes, std::size_t search_offset, std::size_t& request_line_end) noexcept;
-// header_bytes is the find_http_request_head_end result; the request-line is
-// parsed after the leading_bytes ignored leading empty lines.
-[[nodiscard]] std::optional<http_parse_error> parse_http_header_block(std::string_view buffer, std::size_t leading_bytes, std::size_t header_bytes, parsed_request_header_block& block);
+[[nodiscard]] inline bool has_http_bare_line_feed(std::string_view buffer, std::size_t search_offset) noexcept {
+    buffer = buffer.substr(0, max_http_header_bytes);
+    for (auto line_feed = buffer.find('\n', std::max<std::size_t>(search_offset, 1)); line_feed != std::string_view::npos; line_feed = buffer.find('\n', line_feed + 1)) {
+        if (buffer[line_feed - 1] != '\r') {
+            return true;
+        }
+    }
+    return false;
+}
 
 enum class http1_version_parse_result : std::uint8_t { invalid,
     unsupported,

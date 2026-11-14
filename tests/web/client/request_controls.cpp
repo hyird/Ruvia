@@ -13,10 +13,13 @@
 
 #include "event_loop.h"
 #include "http_client.h"
+#include "http_client_request_view.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "task_scope.h"
 #ifdef RUVIA_ENABLE_HTTP2
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server_fixture.h"
 #endif
 
@@ -38,6 +41,7 @@
 #include <asio/write.hpp>
 
 #include "stop_token.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace http_client_request_controls_test {

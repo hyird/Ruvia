@@ -1,0 +1,1613 @@
+#include <algorithm>
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <limits>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <utility>
+#include <vector>
+
+#include "db_query.h"
+#include "db_query_storage.h"
+#include "db_session.h"
+#include "db_sql_dialect.h"
+
+namespace ruvia::detail {
+namespace {
+
+void validate_query_shape(const db_query_storage& s) {
+    const bool select = s.kind_ == db_query_kind::select;
+    const bool values = s.kind_ == db_query_kind::values;
+    const bool insert = s.kind_ == db_query_kind::insert;
+    const bool update = s.kind_ == db_query_kind::update;
+    if (!select && (!s.projections_.empty() || s.distinct_ || !s.distinct_on_.empty() || !s.groups_.empty() || s.having_ != no_db_node)) {
+        throw std::invalid_argument("SELECT clauses cannot be attached to a non-SELECT query");
+    }
+    if ((select || values) && (!s.returning_.empty() || !s.target_.empty())) {
+        throw std::invalid_argument("a row query cannot have a DML target or RETURNING");
+    }
+    if ((insert || values) && (s.source_ || !s.joins_.empty() || s.predicate_ != no_db_node)) {
+        throw std::invalid_argument("INSERT/VALUES cannot have FROM/JOIN/WHERE clauses");
+    }
+    if (!s.source_ && !s.joins_.empty()) {
+        throw std::invalid_argument("JOIN requires a FROM source");
+    }
+    if (!insert && (s.conflict_ || s.insert_query_ != no_db_node || !s.columns_.empty())) {
+        throw std::invalid_argument("INSERT clauses on a non-INSERT query");
+    }
+    if (!insert && !values && !s.rows_.empty()) {
+        throw std::invalid_argument("VALUES on an incompatible query");
+    }
+    if (!update && !s.assignments_.empty()) {
+        throw std::invalid_argument("SET on a non-UPDATE query");
+    }
+    if (!select && !values && (!s.orders_.empty() || s.limit_ || s.offset_ || s.lock_ || !s.set_operations_.empty())) {
+        throw std::invalid_argument("ordering, pagination, locks and set operations require a row query");
+    }
+    if (s.lock_ && (!select || !s.set_operations_.empty() || s.distinct_ || !s.distinct_on_.empty() || !s.groups_.empty() || s.having_ != no_db_node)) {
+        throw std::invalid_argument("row locks require an ungrouped SELECT without DISTINCT or set operations");
+    }
+}
+
+bool is_mariadb_bare_function_name(std::string_view name) noexcept {
+    if (name.empty() || name.size() > 64) {
+        return false;
+    }
+    const auto is_ascii_letter = [](char value) noexcept {
+        return (value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z');
+    };
+    if (!is_ascii_letter(name.front()) && name.front() != '_') {
+        return false;
+    }
+    return std::ranges::all_of(name.substr(1), [&](char value) noexcept {
+        return is_ascii_letter(value) || (value >= '0' && value <= '9') || value == '_' || value == '$';
+    });
+}
+
+[[nodiscard]] bool same_db_value(const db_value& a, const db_value& b) noexcept {
+    if (a.type() != b.type()) {
+        return false;
+    }
+    switch (a.type()) {
+        case db_value_type::null:
+            return true;
+        case db_value_type::string:
+            return a.text() == b.text();
+        case db_value_type::signed_value:
+            return a.signed_value() == b.signed_value();
+        case db_value_type::unsigned_value:
+            return a.unsigned_value() == b.unsigned_value();
+        case db_value_type::double_value:
+            return a.double_value() == b.double_value();
+        case db_value_type::bool_value:
+            return a.bool_value() == b.bool_value();
+    }
+    return false;
+}
+
+struct date_part_sql_spec final {
+    std::string_view token_;
+    std::string_view pg_feature_{};
+};
+
+constexpr std::array<date_part_sql_spec, 11> date_part_sql_specs{{
+    {"EPOCH", "EXTRACT EPOCH"},
+    {"YEAR"},
+    {"MONTH"},
+    {"DAY"},
+    {"HOUR"},
+    {"MINUTE"},
+    {"SECOND"},
+    {"DOW", "EXTRACT DOW"},
+    {"DOY", "EXTRACT DOY"},
+    {"WEEK"},
+    {"QUARTER"},
+}};
+static_assert(static_cast<std::size_t>(db_date_part::quarter) + 1 == date_part_sql_specs.size());
+
+struct binary_operator_sql_spec final {
+    std::string_view pg_token_;
+    std::string_view maria_token_{};
+    std::string_view pg_feature_{};
+};
+
+constexpr std::string_view pg_extended_operator_feature = "PostgreSQL JSON, array, regex or network operator";
+
+constexpr std::array<binary_operator_sql_spec, 47> binary_operator_sql_specs{{
+    {"="},
+    {"<>"},
+    {"<"},
+    {"<="},
+    {">"},
+    {">="},
+    {"AND"},
+    {"OR"},
+    {"+"},
+    {"-"},
+    {"*"},
+    {"/"},
+    {"%"},
+    {"||"},
+    {"LIKE"},
+    {"NOT LIKE"},
+    {"ILIKE", {}, "ILIKE"},
+    {"NOT ILIKE", {}, "NOT ILIKE"},
+    {"IN"},
+    {"NOT IN"},
+    {"IS DISTINCT FROM", "<=>"},
+    {"IS NOT DISTINCT FROM", "<=>"},
+    {"&"},
+    {"|"},
+    {"#", "^"},
+    {"->", {}, pg_extended_operator_feature},
+    {"->>", {}, pg_extended_operator_feature},
+    {"#>", {}, pg_extended_operator_feature},
+    {"#>>", {}, pg_extended_operator_feature},
+    {"@>", {}, pg_extended_operator_feature},
+    {"<@", {}, pg_extended_operator_feature},
+    {"?", {}, pg_extended_operator_feature},
+    {"?|", {}, pg_extended_operator_feature},
+    {"?&", {}, pg_extended_operator_feature},
+    {"||", {}, pg_extended_operator_feature},
+    {"-", {}, pg_extended_operator_feature},
+    {"#-", {}, pg_extended_operator_feature},
+    {"@>", {}, pg_extended_operator_feature},
+    {"<@", {}, pg_extended_operator_feature},
+    {"&&", {}, pg_extended_operator_feature},
+    {"~", {}, pg_extended_operator_feature},
+    {"~*", {}, pg_extended_operator_feature},
+    {">>", {}, pg_extended_operator_feature},
+    {">>=", {}, pg_extended_operator_feature},
+    {"<<", {}, pg_extended_operator_feature},
+    {"<<=", {}, pg_extended_operator_feature},
+    {"&&", {}, pg_extended_operator_feature},
+}};
+static_assert(static_cast<std::size_t>(db_binary_operator::inet_overlap) + 1 == binary_operator_sql_specs.size());
+
+// How a bound PostgreSQL parameter is typed in compiled SQL. By default it is
+// sent untyped and PostgreSQL infers its type from the surrounding SQL: the
+// other operand, the target column, the parameter type of the selected
+// function or operator overload, a Boolean context, an explicit cast. A value
+// carries its C++ value category only where PostgreSQL provably cannot type an
+// unknown parameter: "any" and polymorphic-only function arguments, numeric
+// and boolean operands of arithmetic operators whose operands are all bound
+// values, the null predicates, and COALESCE, NULLIF, GREATEST and LEAST over
+// bound values only, which PostgreSQL would otherwise resolve as text.
+enum class pg_parameter_cast : std::uint8_t {
+    // The surrounding SQL types the value.
+    context,
+    // Nothing types the value: signed integers render ::int8, unsigned
+    // integers ::numeric, doubles ::float8, booleans ::bool and text ::text.
+    value_category,
+    // Bare integer bitwise operands use bigint's signed range.
+    bitwise_integer,
+    // The PostgreSQL signature at this position accepts only int4; other
+    // values stay untyped.
+    int4,
+};
+
+struct pg_function_parameter_casts final {
+    std::string_view name_;
+    // Bit i selects argument i.
+    std::uint32_t value_category_positions_;
+    std::uint32_t int4_positions_;
+};
+
+constexpr std::uint32_t pg_every_argument = ~std::uint32_t{0};
+// Every argument after a leading text one (a separator or format string).
+constexpr std::uint32_t pg_after_first_argument = ~std::uint32_t{1};
+
+// Built-in functions whose arguments at these positions are declared only as
+// "any", anyelement or anycompatible, so an untyped argument cannot be
+// resolved, and int4-only arguments, where an integer is typed int4 explicitly.
+// Every other function argument keeps the type of its selected overload.
+// Function names are emitted quoted, so the match is exact.
+constexpr std::array pg_function_parameter_cast_table{
+    pg_function_parameter_casts{"array_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"array_length", 0, 0b10},
+    pg_function_parameter_casts{"array_lower", 0, 0b10},
+    pg_function_parameter_casts{"array_upper", 0, 0b10},
+    pg_function_parameter_casts{"chr", 0, 0b1},
+    pg_function_parameter_casts{"concat", pg_every_argument, 0},
+    pg_function_parameter_casts{"concat_ws", pg_after_first_argument, 0},
+    pg_function_parameter_casts{"format", pg_after_first_argument, 0},
+    pg_function_parameter_casts{"json_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_build_array", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_build_object", pg_every_argument, 0},
+    pg_function_parameter_casts{"json_object_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_build_array", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_build_object", pg_every_argument, 0},
+    pg_function_parameter_casts{"jsonb_object_agg", pg_every_argument, 0},
+    pg_function_parameter_casts{"lag", 0, 0b10},
+    pg_function_parameter_casts{"lead", 0, 0b10},
+    pg_function_parameter_casts{"left", 0, 0b10},
+    pg_function_parameter_casts{"lpad", 0, 0b10},
+    pg_function_parameter_casts{"make_date", 0, 0b111},
+    pg_function_parameter_casts{"make_interval", 0, 0b111111},
+    pg_function_parameter_casts{"make_time", 0, 0b11},
+    pg_function_parameter_casts{"make_timestamp", 0, 0b11111},
+    pg_function_parameter_casts{"make_timestamptz", 0, 0b11111},
+    pg_function_parameter_casts{"nth_value", 0, 0b10},
+    pg_function_parameter_casts{"ntile", 0, 0b1},
+    pg_function_parameter_casts{"num_nonnulls", pg_every_argument, 0},
+    pg_function_parameter_casts{"num_nulls", pg_every_argument, 0},
+    pg_function_parameter_casts{"repeat", 0, 0b10},
+    pg_function_parameter_casts{"right", 0, 0b10},
+    pg_function_parameter_casts{"round", 0, 0b10},
+    pg_function_parameter_casts{"rpad", 0, 0b10},
+    pg_function_parameter_casts{"split_part", 0, 0b100},
+    pg_function_parameter_casts{"substr", 0, 0b110},
+    pg_function_parameter_casts{"substring", 0, 0b110},
+    pg_function_parameter_casts{"to_json", pg_every_argument, 0},
+    pg_function_parameter_casts{"to_jsonb", pg_every_argument, 0},
+    pg_function_parameter_casts{"trim_array", 0, 0b10},
+    pg_function_parameter_casts{"trunc", 0, 0b10},
+    pg_function_parameter_casts{"width_bucket", 0, 0b1000},
+};
+
+static_assert(std::ranges::is_sorted(pg_function_parameter_cast_table, {}, &pg_function_parameter_casts::name_));
+
+// The cast for argument `position` of `function`, unqualified or in pg_catalog.
+[[nodiscard]] pg_parameter_cast pg_function_parameter_cast(std::string_view function, std::size_t position) noexcept {
+    constexpr std::string_view catalog = "pg_catalog.";
+    if (function.starts_with(catalog)) {
+        function.remove_prefix(catalog.size());
+    }
+    if (position >= 32) {
+        return pg_parameter_cast::context;
+    }
+    const auto found = std::ranges::lower_bound(pg_function_parameter_cast_table, function, {}, &pg_function_parameter_casts::name_);
+    if (found != pg_function_parameter_cast_table.end() && found->name_ == function) {
+        if ((found->int4_positions_ >> position) & 1U) {
+            return pg_parameter_cast::int4;
+        }
+        if ((found->value_category_positions_ >> position) & 1U) {
+            return pg_parameter_cast::value_category;
+        }
+    }
+    return pg_parameter_cast::context;
+}
+
+// Two unknown arithmetic operands select no overload. Bitwise integer
+// operands need an integral SQL type rather than the wider numeric category.
+// Concatenation resolves unknown || unknown to text || text.
+[[nodiscard]] pg_parameter_cast pg_binary_operand_cast(db_binary_operator value) noexcept {
+    switch (value) {
+        case db_binary_operator::add:
+        case db_binary_operator::subtract:
+        case db_binary_operator::multiply:
+        case db_binary_operator::divide:
+        case db_binary_operator::modulo:
+            return pg_parameter_cast::value_category;
+        case db_binary_operator::bit_and:
+        case db_binary_operator::bit_or:
+        case db_binary_operator::bit_xor:
+            return pg_parameter_cast::bitwise_integer;
+        default:
+            return pg_parameter_cast::context;
+    }
+}
+
+// A bound non-NULL value: it has no SQL type until a cast or its context gives one.
+[[nodiscard]] bool is_untyped_value(const db_query_node& node) noexcept {
+    return node.kind_ == db_node_kind::value && node.value_.type() != db_value_type::null;
+}
+
+// Only bare integers acquire the bitwise range contract. Other numeric and
+// boolean values retain their category; strings retain SQL context because a
+// reused parameter may already have been typed by an earlier reference.
+[[nodiscard]] pg_parameter_cast pg_operator_operand_cast(const db_query_node& node, pg_parameter_cast cast) noexcept {
+    if (!is_untyped_value(node) || node.value_.type() == db_value_type::string) {
+        return pg_parameter_cast::context;
+    }
+    const auto type = node.value_.type();
+    return cast == pg_parameter_cast::bitwise_integer && type != db_value_type::signed_value && type != db_value_type::unsigned_value ? pg_parameter_cast::value_category : cast;
+}
+
+// PostgreSQL's Bind message counts parameters in an Int16 (protocol 3.0).
+constexpr std::size_t max_postgresql_parameters = 65535;
+
+// PostgreSQL lexes `$` followed by digits as a positional parameter unless the
+// `$` continues an identifier (`a$1`).
+[[nodiscard]] bool contains_pg_positional_parameter(std::string_view text) noexcept {
+    const auto is_digit = [](char value) noexcept {
+        return value >= '0' && value <= '9';
+    };
+    for (auto position = text.find('$'); position != std::string_view::npos; position = text.find('$', position + 1)) {
+        if (position + 1 == text.size() || !is_digit(text[position + 1])) {
+            continue;
+        }
+        if (position == 0) {
+            return true;
+        }
+        const auto previous = static_cast<unsigned char>(text[position - 1]);
+        const bool continues_identifier = previous >= 0x80 || previous == '_' || previous == '$' || is_digit(static_cast<char>(previous)) || (previous >= 'a' && previous <= 'z') || (previous >= 'A' && previous <= 'Z');
+        if (!continues_identifier) {
+            return true;
+        }
+    }
+    return false;
+}
+
+class query_sql_writer final {
+public:
+    query_sql_writer(db_driver driver, db_parameter_mode mode) :
+        driver_(driver),
+        mode_(mode) {
+        require_db_dialect(driver);
+    }
+
+    std::string sql_;
+    std::vector<db_value> params_;
+    [[nodiscard]] db_driver driver() const noexcept {
+        return driver_;
+    }
+
+    bool pg() const noexcept {
+        return driver_ == db_driver::postgresql;
+    }
+
+    [[noreturn]] static void unsupported(std::string_view feature) {
+        throw std::invalid_argument(std::string(feature) + " is not supported by this database dialect");
+    }
+
+    void require_pg(std::string_view feature) const {
+        if (!pg()) {
+            unsupported(feature);
+        }
+    }
+
+    void identifier(std::string_view name) {
+        append_db_identifier(sql_, name, driver_);
+    }
+
+    void qualified(std::string_view name) {
+        append_db_qualified_identifier(sql_, name, driver_);
+    }
+
+    void function_name(std::string_view name) {
+        if (driver_ == db_driver::mariadb && is_mariadb_bare_function_name(name)) {
+            sql_ += name;
+        } else {
+            qualified(name);
+        }
+    }
+
+    // `cast` refines PostgreSQL parameter typing for the position the value
+    // fills. Bare bitwise integers share the same range and SQL type in bound
+    // and literal output; other casts leave literals to PostgreSQL's parser.
+    void bound(const db_value& value, pg_parameter_cast cast = pg_parameter_cast::context) {
+        append_parameter(value, nullptr, cast);
+    }
+
+    // Binds value node `index` of `s`. PostgreSQL numbers each node once,
+    // however often grouped or repeated SQL emits it.
+    void bound_node(const db_query_storage& s, std::size_t index, pg_parameter_cast cast) {
+        append_parameter(s.nodes_[index].value_, parameter_position(s, index), cast);
+    }
+
+    void number(std::uint64_t value) {
+        if (pg()) {
+            if (!std::in_range<std::int64_t>(value)) {
+                throw std::invalid_argument("PostgreSQL row count or offset exceeds bigint range");
+            }
+            bound(db_value(static_cast<std::int64_t>(value)));
+        } else {
+            bound(db_value(value));
+        }
+    }
+
+    void type(const db_stored_type& value) {
+        append_db_type_name(sql_, value.data_type_, value.custom_name_, value.length_, value.precision_, value.scale_, value.array_, driver_, db_sql_type_usage::cast);
+    }
+
+private:
+    void append_parameter(const db_value& value, std::uint32_t* position, pg_parameter_cast cast) {
+        const bool bitwise_integer = pg() && cast == pg_parameter_cast::bitwise_integer;
+        if (bitwise_integer && value.type() == db_value_type::unsigned_value && value.unsigned_value() > static_cast<std::uint64_t>((std::numeric_limits<std::int64_t>::max)())) {
+            throw std::invalid_argument("PostgreSQL integer bitwise operand exceeds bigint range");
+        }
+        if (mode_ == db_parameter_mode::literal || value.type() == db_value_type::null) {
+            if (bitwise_integer) {
+                sql_ += '(';
+            }
+            append_db_literal(sql_, value, driver_);
+            if (bitwise_integer) {
+                // Cast the whole signed literal, including a possible minus.
+                sql_ += ")::int8";
+            }
+            return;
+        }
+        if (position != nullptr && *position != 0) {
+            pg_parameter(*position, value, cast);
+            return;
+        }
+        if (pg() && params_.size() == max_postgresql_parameters) {
+            throw std::length_error("PostgreSQL statement exceeds 65535 bound parameters");
+        }
+        params_.push_back(db_value(value));
+        if (position != nullptr) {
+            *position = static_cast<std::uint32_t>(params_.size());
+        }
+        if (pg()) {
+            pg_parameter(params_.size(), value, cast);
+        } else {
+            sql_ += '?';
+        }
+    }
+
+    // The parameter slot of a PostgreSQL bound value node, or nullptr where
+    // parameters are not numbered.
+    [[nodiscard]] std::uint32_t* parameter_position(const db_query_storage& s, std::size_t index) {
+        if (!pg() || mode_ != db_parameter_mode::bound) {
+            return nullptr;
+        }
+        if (positions_owner_ != &s) {
+            const auto existing = std::ranges::find_if(parameter_positions_, [&s](const auto& entry_value) noexcept {
+                return entry_value.owner_ == &s;
+            });
+            if (existing != parameter_positions_.end()) {
+                positions_ = &existing->positions_;
+            } else {
+                auto& added = parameter_positions_.emplace_back(&s, std::vector<std::uint32_t>(s.nodes_.size(), 0));
+                positions_ = &added.positions_;
+            }
+            positions_owner_ = &s;
+        }
+        return &(*positions_)[index];
+    }
+
+    void pg_parameter(std::size_t position, const db_value& value, pg_parameter_cast cast) {
+        sql_ += '$';
+        append_db_number(sql_, static_cast<std::uint64_t>(position));
+        const auto type = value.type();
+        const bool integer = type == db_value_type::signed_value || type == db_value_type::unsigned_value;
+        if (cast == pg_parameter_cast::bitwise_integer) {
+            sql_ += "::int8";
+            return;
+        }
+        if (cast == pg_parameter_cast::int4) {
+            if (integer) {
+                sql_ += "::int4";
+            }
+            return;
+        }
+        if (cast == pg_parameter_cast::context) {
+            return;
+        }
+        switch (type) {
+            case db_value_type::signed_value:
+                sql_ += "::int8";
+                break;
+            case db_value_type::unsigned_value:
+                // The whole uint64 range exceeds bigint; numeric holds every
+                // value exactly, independent of the bound value.
+                sql_ += "::numeric";
+                break;
+            case db_value_type::double_value:
+                sql_ += "::float8";
+                break;
+            case db_value_type::bool_value:
+                sql_ += "::bool";
+                break;
+            case db_value_type::string:
+                sql_ += "::text";
+                break;
+            case db_value_type::null:
+                break;
+        }
+    }
+
+    db_driver driver_;
+    db_parameter_mode mode_;
+    // One dense table per compiled storage, indexed by node and holding the
+    // node's 1-based parameter number (0: not yet bound); positions_ caches
+    // the table of positions_owner_.
+    struct storage_parameter_positions final {
+        const db_query_storage* owner_{nullptr};
+        std::vector<std::uint32_t> positions_;
+    };
+    std::vector<storage_parameter_positions> parameter_positions_;
+    const db_query_storage* positions_owner_{nullptr};
+    std::vector<std::uint32_t>* positions_{nullptr};
+};
+
+}  // namespace
+
+class db_query_compiler final {
+public:
+    db_query_compiler(db_driver driver, db_parameter_mode mode) :
+        output_(driver, mode),
+        mode_(mode),
+        grouped_{nullptr, std::vector<std::pair<std::size_t, std::size_t>>{}} {}
+
+    query_sql_writer output_;
+    db_parameter_mode mode_;
+
+    void expression(db_expression value) {
+        if (value.empty()) {
+            throw std::invalid_argument("empty database expression");
+        }
+        expr(*value.owner_, value.node_, 0);
+    }
+    void query(const db_query_storage& s, std::size_t depth = 0) {
+        require_depth(depth);
+        validate_query_shape(s);
+        if (depth == 0) {
+            output_.sql_.reserve(64U + s.nodes_.size() * 16U + s.projections_.size() * 12U + s.orders_.size() * 16U + s.joins_.size() * 32U + s.ctes_.size() * 48U);
+        }
+        auto enclosing_groups = std::exchange(grouped_, bound_groups(s));
+        if (!s.ctes_.empty()) {
+            if (!output_.pg() && s.kind_ != db_query_kind::select) {
+                output_.unsupported("data-changing WITH");
+            }
+            output_.sql_ += "WITH ";
+            if (std::ranges::any_of(s.ctes_, [](const auto& cte) {
+                return cte.recursive_;
+            })) {
+                output_.sql_ += "RECURSIVE ";
+            }
+            separated(s.ctes_, [&](const auto& cte) {
+                output_.identifier(cte.name_);
+                if (!cte.columns_.empty()) {
+                    output_.sql_ += " (";
+                    identifiers(cte.columns_);
+                    output_.sql_ += ')';
+                }
+                output_.sql_ += " AS ";
+                switch (cte.materialization_) {
+                    case db_materialization::default_value:
+                        break;
+                    case db_materialization::materialized:
+                        output_.require_pg("materialized CTE");
+                        output_.sql_ += "MATERIALIZED ";
+                        break;
+                    case db_materialization::not_materialized:
+                        output_.require_pg("not-materialized CTE");
+                        output_.sql_ += "NOT MATERIALIZED ";
+                        break;
+                }
+                const auto& child_value = nested(s, cte.query_);
+                if (child_value.kind_ != db_query_kind::select && child_value.kind_ != db_query_kind::values) {
+                    output_.require_pg("data-changing CTE");
+                    if (depth != 0) {
+                        throw std::invalid_argument("data-changing CTE requires a top-level WITH statement");
+                    }
+                }
+                output_.sql_ += '(';
+                query(child_value, depth + 1);
+                output_.sql_ += ')';
+            });
+            output_.sql_ += ' ';
+        }
+        for (std::size_t i = 0; i < s.set_operations_.size(); ++i) {
+            output_.sql_ += '(';
+        }
+        body(s, depth + 1);
+        for (const auto& operation : s.set_operations_) {
+            output_.sql_ += ')';
+            switch (operation.operation_) {
+                case db_set_operation::union_value:
+                    output_.sql_ += " UNION ";
+                    break;
+                case db_set_operation::union_all:
+                    output_.sql_ += " UNION ALL ";
+                    break;
+                case db_set_operation::intersect:
+                    output_.sql_ += " INTERSECT ";
+                    break;
+                case db_set_operation::intersect_all:
+                    output_.require_pg("INTERSECT ALL");
+                    output_.sql_ += " INTERSECT ALL ";
+                    break;
+                case db_set_operation::except:
+                    output_.sql_ += " EXCEPT ";
+                    break;
+                case db_set_operation::except_all:
+                    output_.require_pg("EXCEPT ALL");
+                    output_.sql_ += " EXCEPT ALL ";
+                    break;
+            }
+            output_.sql_ += '(';
+            query(nested(s, operation.query_), depth + 1);
+            output_.sql_ += ')';
+        }
+        if (!s.orders_.empty()) {
+            output_.sql_ += " ORDER BY ";
+            orders(s, s.orders_, depth + 1);
+        }
+        if (s.limit_) {
+            output_.sql_ += " LIMIT ";
+            output_.number(*s.limit_);
+        } else if (s.offset_ && !output_.pg()) {
+            output_.sql_ += " LIMIT 18446744073709551615";
+        }
+        if (s.offset_) {
+            output_.sql_ += " OFFSET ";
+            output_.number(*s.offset_);
+        }
+        if (s.lock_) {
+            const auto& lock = *s.lock_;
+            switch (lock.mode_) {
+                case db_row_lock::update:
+                    output_.sql_ += " FOR UPDATE";
+                    break;
+                case db_row_lock::no_key_update:
+                    output_.require_pg("FOR NO KEY UPDATE");
+                    output_.sql_ += " FOR NO KEY UPDATE";
+                    break;
+                case db_row_lock::share:
+                    output_.sql_ += output_.pg() ? " FOR SHARE" : " LOCK IN SHARE MODE";
+                    break;
+                case db_row_lock::key_share:
+                    output_.require_pg("FOR KEY SHARE");
+                    output_.sql_ += " FOR KEY SHARE";
+                    break;
+            }
+            if (!lock.tables_.empty()) {
+                output_.require_pg("row lock OF");
+                output_.sql_ += " OF ";
+                identifiers(lock.tables_);
+            }
+            if (lock.nowait_) {
+                output_.sql_ += " NOWAIT";
+            }
+            if (lock.skip_locked_) {
+                if (!output_.pg() && lock.mode_ != db_row_lock::update) {
+                    output_.unsupported("SKIP LOCKED for a shared lock");
+                }
+                output_.sql_ += " SKIP LOCKED";
+            }
+        }
+        if (!s.returning_.empty()) {
+            // MariaDB (>= 10.5) accepts RETURNING on INSERT and DELETE but not
+            // on UPDATE (MDEV-10014).
+            if (s.kind_ == db_query_kind::update) {
+                output_.require_pg("UPDATE ... RETURNING");
+            }
+            output_.sql_ += " RETURNING ";
+            expressions(s, s.returning_, depth + 1, true);
+        }
+        grouped_ = std::move(enclosing_groups);
+    }
+
+private:
+    // Grouped bound expressions of one storage. PostgreSQL must see the same
+    // parameter numbers wherever SELECT, GROUP BY and HAVING repeat a grouped
+    // expression, but an imported copy has its own value nodes; each entry
+    // maps such a GROUP BY expression to the node emitted for it.
+    struct grouped_bound_values final {
+        const db_query_storage* storage_{nullptr};
+        // (GROUP BY node, node emitted for every equal expression)
+        std::vector<std::pair<std::size_t, std::size_t>> groups_;
+    };
+
+    static void require_depth(std::size_t depth) {
+        if (depth > max_db_query_depth) {
+            throw std::length_error("database query nesting exceeds 256 levels");
+        }
+    }
+    static const db_query_storage& nested(const db_query_storage& s, std::size_t index) {
+        return s.queries_.at(index).storage();
+    }
+    [[nodiscard]] grouped_bound_values bound_groups(const db_query_storage& s) const {
+        grouped_bound_values result{&s, std::vector<std::pair<std::size_t, std::size_t>>{}};
+        if (!output_.pg() || mode_ != db_parameter_mode::bound) {
+            return result;
+        }
+        for (const auto group : s.groups_) {
+            if (!contains_bound_value(s, group)) {
+                continue;
+            }
+            auto emitted = group;
+            for (auto projection : s.projections_) {
+                if (s.nodes_[projection].kind_ == db_node_kind::alias) {
+                    projection = s.nodes_[projection].left_;
+                }
+                if (same_expression(s, group, projection)) {
+                    emitted = projection;
+                    break;
+                }
+            }
+            result.groups_.emplace_back(group, emitted);
+        }
+        return result;
+    }
+    // The node to emit for `index`: the grouped expression it repeats, if any.
+    [[nodiscard]] std::size_t grouped_node(const db_query_storage& s, std::size_t index) const {
+        if (grouped_.storage_ != &s || grouped_.groups_.empty()) {
+            return index;
+        }
+        const auto kind = s.nodes_.at(index).kind_;
+        for (const auto& [group, emitted] : grouped_.groups_) {
+            if (s.nodes_[group].kind_ == kind && same_expression(s, group, index)) {
+                return emitted;
+            }
+        }
+        return index;
+    }
+
+    template <class range_type, class fn_type>
+    void separated(const range_type& range, fn_type&& fn) {
+        bool first = true;
+        for (const auto& item : range) {
+            if (!first) {
+                output_.sql_ += ", ";
+            }
+            first = false;
+            fn(item);
+        }
+    }
+    template <class range_type>
+    void identifiers(const range_type& range) {
+        separated(range, [&](const auto& name) {
+            output_.identifier(name);
+        });
+    }
+    template <class range_type>
+    void expressions(const db_query_storage& s, const range_type& range, std::size_t depth, bool aliases = false) {
+        separated(range, [&](std::size_t index) {
+            expr(s, index, depth, aliases);
+        });
+    }
+    void orders(const db_query_storage& s, const std::vector<db_stored_order>& terms, std::size_t depth) {
+        separated(terms, [&](const auto& term) {
+            if (!output_.pg() && term.nulls_ != db_nulls_order::default_value) {
+                output_.sql_ += '(';
+                expr(s, term.expression_, depth);
+                output_.sql_ += " IS NULL)";
+                output_.sql_ += term.nulls_ == db_nulls_order::first ? " DESC, " : " ASC, ";
+            }
+            expr(s, term.expression_, depth);
+            output_.sql_ += term.direction_ == db_order_direction::asc ? " ASC" : " DESC";
+            if (output_.pg()) {
+                if (term.nulls_ == db_nulls_order::first) {
+                    output_.sql_ += " NULLS FIRST";
+                }
+                if (term.nulls_ == db_nulls_order::last) {
+                    output_.sql_ += " NULLS LAST";
+                }
+            }
+        });
+    }
+    void boundary(const db_window_boundary& boundary) {
+        if (boundary.kind_ != db_frame_boundary::preceding && boundary.kind_ != db_frame_boundary::following && boundary.offset_.value() != 0) {
+            throw std::invalid_argument("a non-offset window frame boundary has an offset");
+        }
+        switch (boundary.kind_) {
+            case db_frame_boundary::unbounded_preceding:
+                output_.sql_ += "UNBOUNDED PRECEDING";
+                break;
+            case db_frame_boundary::preceding:
+                append_db_number(output_.sql_, boundary.offset_.value());
+                output_.sql_ += " PRECEDING";
+                break;
+            case db_frame_boundary::current_row:
+                output_.sql_ += "CURRENT ROW";
+                break;
+            case db_frame_boundary::following:
+                append_db_number(output_.sql_, boundary.offset_.value());
+                output_.sql_ += " FOLLOWING";
+                break;
+            case db_frame_boundary::unbounded_following:
+                output_.sql_ += "UNBOUNDED FOLLOWING";
+                break;
+        }
+    }
+    // Imports own their nodes. Equal grouped expressions must nevertheless use
+    // the same PostgreSQL parameter nodes in SELECT, GROUP BY and HAVING.
+    static bool same_expression(const db_query_storage& s, std::size_t lhs, std::size_t rhs, std::size_t depth = 0) {
+        if (lhs == rhs) {
+            return true;
+        }
+        if (lhs == no_db_node || rhs == no_db_node || depth > max_db_query_depth) {
+            return false;
+        }
+        const auto& a = s.nodes_.at(lhs);
+        const auto& b = s.nodes_.at(rhs);
+        if (a.kind_ != b.kind_ || a.text_ != b.text_ || a.qualifier_ != b.qualifier_ || a.binary_ != b.binary_ || a.unary_ != b.unary_ || a.date_part_ != b.date_part_ || a.flag_ != b.flag_ || a.query_ != no_db_node || b.query_ != no_db_node || a.args_.size() != b.args_.size() || a.named_.size() != b.named_.size() || a.orders_.size() != b.orders_.size() || a.type_.data_type_ != b.type_.data_type_ || a.type_.custom_name_ != b.type_.custom_name_ || a.type_.length_ != b.type_.length_ || a.type_.precision_ != b.type_.precision_ || a.type_.scale_ != b.type_.scale_ || a.type_.array_ != b.type_.array_ || a.frame_.has_value() != b.frame_.has_value()) {
+            return false;
+        }
+        if (a.frame_ && (a.frame_->kind_ != b.frame_->kind_ || a.frame_->start_.kind_ != b.frame_->start_.kind_ || a.frame_->start_.offset_ != b.frame_->start_.offset_ || a.frame_->end_.kind_ != b.frame_->end_.kind_ || a.frame_->end_.offset_ != b.frame_->end_.offset_)) {
+            return false;
+        }
+        if (a.kind_ == db_node_kind::value && !same_db_value(a.value_, b.value_)) {
+            return false;
+        }
+        const auto same = [&](std::size_t x, std::size_t y) {
+            return same_expression(s, x, y, depth + 1);
+        };
+        if (!same(a.left_, b.left_) || !same(a.right_, b.right_)) {
+            return false;
+        }
+        for (std::size_t i = 0; i < a.args_.size(); ++i) {
+            if (!same(a.args_[i], b.args_[i])) {
+                return false;
+            }
+        }
+        for (std::size_t i = 0; i < a.named_.size(); ++i) {
+            if (a.named_[i].name_ != b.named_[i].name_ || !same(a.named_[i].expression_, b.named_[i].expression_)) {
+                return false;
+            }
+        }
+        for (std::size_t i = 0; i < a.orders_.size(); ++i) {
+            if (a.orders_[i].direction_ != b.orders_[i].direction_ || a.orders_[i].nulls_ != b.orders_[i].nulls_ || !same(a.orders_[i].expression_, b.orders_[i].expression_)) {
+                return false;
+            }
+        }
+        return true;
+    }
+    [[nodiscard]] static bool contains_bound_value(const db_query_storage& s, std::size_t index, std::size_t depth = 0) noexcept {
+        if (index >= s.nodes_.size() || depth > max_db_query_depth) {
+            return false;
+        }
+        const auto& n = s.nodes_[index];
+        switch (n.kind_) {
+            case db_node_kind::column:
+            case db_node_kind::star:
+            case db_node_kind::default_value:
+            case db_node_kind::excluded:
+                return false;
+            case db_node_kind::value:
+                return n.value_.type() != db_value_type::null;
+            default:
+                break;
+        }
+        if (contains_bound_value(s, n.left_, depth + 1) || contains_bound_value(s, n.right_, depth + 1)) {
+            return true;
+        }
+        for (const auto arg : n.args_) {
+            if (contains_bound_value(s, arg, depth + 1)) {
+                return true;
+            }
+        }
+        for (const auto& named : n.named_) {
+            if (contains_bound_value(s, named.expression_, depth + 1)) {
+                return true;
+            }
+        }
+        for (const auto& order : n.orders_) {
+            if (contains_bound_value(s, order.expression_, depth + 1)) {
+                return true;
+            }
+        }
+        return false;
+    }
+    // `cast` applies when the expression is a bound value; see pg_parameter_cast.
+    void expr(const db_query_storage& s, std::size_t index, std::size_t depth, bool aliases = false, pg_parameter_cast cast = pg_parameter_cast::context) {
+        require_depth(depth);
+        index = grouped_node(s, index);
+        const auto& n = s.nodes_.at(index);
+        const auto child_value = [&](std::size_t id) {
+            expr(s, id, depth + 1);
+        };
+        switch (n.kind_) {
+            case db_node_kind::sql:
+                if (output_.pg() && mode_ == db_parameter_mode::bound && (contains_pg_positional_parameter(n.text_) || std::ranges::any_of(n.named_, [](const auto& part) {
+                    return contains_pg_positional_parameter(part.name_);
+                }))) {
+                    // It would silently address the compiler's own numbering.
+                    throw std::invalid_argument("raw SQL cannot contain PostgreSQL positional parameters; pass value() arguments");
+                }
+                output_.sql_ += '(';
+                for (const auto& part : n.named_) {
+                    output_.sql_ += part.name_;
+                    // A following negative literal or `*` would otherwise
+                    // start a `--` line comment or a `/*` block comment.
+                    if (!part.name_.empty() && (part.name_.back() == '-' || part.name_.back() == '/')) {
+                        output_.sql_ += ' ';
+                    }
+                    child_value(part.expression_);
+                }
+                output_.sql_ += n.text_;
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::column:
+            case db_node_kind::star:
+                if (!n.qualifier_.empty()) {
+                    output_.qualified(n.qualifier_);
+                    output_.sql_ += '.';
+                }
+                if (n.kind_ == db_node_kind::star) {
+                    output_.sql_ += '*';
+                } else {
+                    output_.identifier(n.text_);
+                }
+                break;
+            case db_node_kind::value:
+                output_.bound_node(s, index, cast);
+                break;
+            case db_node_kind::default_value:
+                output_.sql_ += "DEFAULT";
+                break;
+            case db_node_kind::excluded:
+                if (output_.pg()) {
+                    output_.sql_ += "excluded.";
+                    output_.identifier(n.text_);
+                } else {
+                    output_.sql_ += "VALUES(";
+                    output_.identifier(n.text_);
+                    output_.sql_ += ')';
+                }
+                break;
+            case db_node_kind::function:
+            case db_node_kind::aggregate:
+            case db_node_kind::coalesce:
+            case db_node_kind::null_if:
+            case db_node_kind::greatest:
+            case db_node_kind::least: {
+                switch (n.kind_) {
+                    case db_node_kind::coalesce:
+                        output_.sql_ += "COALESCE";
+                        break;
+                    case db_node_kind::null_if:
+                        output_.sql_ += "NULLIF";
+                        break;
+                    case db_node_kind::greatest:
+                        output_.sql_ += "GREATEST";
+                        break;
+                    case db_node_kind::least:
+                        output_.sql_ += "LEAST";
+                        break;
+                    default:
+                        output_.function_name(n.text_);
+                        break;
+                }
+                output_.sql_ += '(';
+                if (n.kind_ == db_node_kind::aggregate && n.flag_) {
+                    output_.sql_ += "DISTINCT ";
+                }
+                // COALESCE, NULLIF, GREATEST and LEAST take their type from
+                // their arguments; with only bound values there is none.
+                const bool only_values = std::ranges::all_of(n.args_, [&](std::size_t arg) {
+                    return s.nodes_.at(arg).kind_ == db_node_kind::value;
+                });
+                for (std::size_t position = 0; position < n.args_.size(); ++position) {
+                    if (position != 0) {
+                        output_.sql_ += ", ";
+                    }
+                    auto argument_cast = pg_parameter_cast::context;
+                    if (output_.pg()) {
+                        if (n.kind_ == db_node_kind::function || n.kind_ == db_node_kind::aggregate) {
+                            argument_cast = pg_function_parameter_cast(n.text_, position);
+                        } else if (only_values) {
+                            argument_cast = pg_parameter_cast::value_category;
+                        }
+                    }
+                    expr(s, n.args_[position], depth + 1, false, argument_cast);
+                }
+                if (!n.named_.empty()) {
+                    output_.require_pg("named function arguments");
+                    if (!n.args_.empty()) {
+                        output_.sql_ += ", ";
+                    }
+                    separated(n.named_, [&](const auto& arg) {
+                        output_.identifier(arg.name_);
+                        output_.sql_ += " => ";
+                        child_value(arg.expression_);
+                    });
+                }
+                if (!n.orders_.empty()) {
+                    output_.require_pg("ordered aggregate");
+                    output_.sql_ += " ORDER BY ";
+                    orders(s, n.orders_, depth + 1);
+                }
+                output_.sql_ += ')';
+                break;
+            }
+            case db_node_kind::binary:
+                binary(s, n, depth + 1);
+                break;
+            case db_node_kind::unary: {
+                // Negation retains the value category; bitwise NOT selects an
+                // integer type for bare integer operands. Null predicates take
+                // any category. NOT and IS TRUE/FALSE coerce theirs to boolean.
+                const auto& operand = s.nodes_.at(n.left_);
+                auto operand_cast = pg_parameter_cast::context;
+                if (output_.pg()) {
+                    if (n.unary_ == db_unary_operator::negate || n.unary_ == db_unary_operator::bit_not) {
+                        operand_cast = pg_operator_operand_cast(operand, n.unary_ == db_unary_operator::bit_not ? pg_parameter_cast::bitwise_integer : pg_parameter_cast::value_category);
+                    } else if ((n.unary_ == db_unary_operator::is_null || n.unary_ == db_unary_operator::is_not_null) && is_untyped_value(operand)) {
+                        operand_cast = pg_parameter_cast::value_category;
+                    }
+                }
+                output_.sql_ += '(';
+                switch (n.unary_) {
+                    case db_unary_operator::not_value:
+                        output_.sql_ += "NOT ";
+                        child_value(n.left_);
+                        break;
+                    case db_unary_operator::negate:
+                        // Keep the operator apart from its operand: a negative
+                        // literal would otherwise render "--5", which
+                        // PostgreSQL lexes as a line comment, and "~-5", which
+                        // it lexes as the single operator "~-".
+                        output_.sql_ += "- ";
+                        expr(s, n.left_, depth + 1, false, operand_cast);
+                        break;
+                    case db_unary_operator::bit_not:
+                        output_.sql_ += "~ ";
+                        expr(s, n.left_, depth + 1, false, operand_cast);
+                        break;
+                    default:
+                        expr(s, n.left_, depth + 1, false, operand_cast);
+                        switch (n.unary_) {
+                            case db_unary_operator::is_null:
+                                output_.sql_ += " IS NULL";
+                                break;
+                            case db_unary_operator::is_not_null:
+                                output_.sql_ += " IS NOT NULL";
+                                break;
+                            case db_unary_operator::is_true:
+                                output_.sql_ += " IS TRUE";
+                                break;
+                            case db_unary_operator::is_false:
+                                output_.sql_ += " IS FALSE";
+                                break;
+                            case db_unary_operator::is_not_true:
+                                output_.sql_ += " IS NOT TRUE";
+                                break;
+                            case db_unary_operator::is_not_false:
+                                output_.sql_ += " IS NOT FALSE";
+                                break;
+                            default:
+                                std::terminate();
+                        }
+                }
+                output_.sql_ += ')';
+                break;
+            }
+            case db_node_kind::between:
+                output_.sql_ += '(';
+                child_value(n.args_[0]);
+                output_.sql_ += n.flag_ ? " NOT BETWEEN " : " BETWEEN ";
+                child_value(n.args_[1]);
+                output_.sql_ += " AND ";
+                child_value(n.args_[2]);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::tuple:
+            case db_node_kind::list:
+            case db_node_kind::array:
+                if (n.kind_ == db_node_kind::array) {
+                    output_.require_pg("SQL arrays");
+                    output_.sql_ += "ARRAY[";
+                } else {
+                    if (n.args_.empty()) {
+                        throw std::invalid_argument("empty SQL tuple or list");
+                    }
+                    output_.sql_ += n.kind_ == db_node_kind::tuple ? "ROW(" : "(";
+                }
+                expressions(s, n.args_, depth + 1);
+                output_.sql_ += n.kind_ == db_node_kind::array ? ']' : ')';
+                break;
+            case db_node_kind::any:
+            case db_node_kind::all:
+                output_.require_pg("array ANY/ALL");
+                output_.sql_ += n.kind_ == db_node_kind::any ? "ANY(" : "ALL(";
+                child_value(n.left_);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::cast:
+                output_.sql_ += "CAST(";
+                child_value(n.left_);
+                output_.sql_ += " AS ";
+                output_.type(n.type_);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::alias:
+                if (!aliases) {
+                    throw std::invalid_argument("an alias is only valid in a projection or RETURNING");
+                }
+                child_value(n.left_);
+                output_.sql_ += " AS ";
+                output_.identifier(n.text_);
+                break;
+            case db_node_kind::case_value:
+                output_.sql_ += "CASE";
+                for (std::size_t i = 0; i < n.args_.size(); i += 2) {
+                    output_.sql_ += " WHEN ";
+                    child_value(n.args_[i]);
+                    output_.sql_ += " THEN ";
+                    child_value(n.args_[i + 1]);
+                }
+                if (n.left_ != no_db_node) {
+                    output_.sql_ += " ELSE ";
+                    child_value(n.left_);
+                }
+                output_.sql_ += " END";
+                break;
+            case db_node_kind::exists:
+            case db_node_kind::subquery:
+                if (n.kind_ == db_node_kind::exists) {
+                    output_.sql_ += "EXISTS ";
+                }
+                output_.sql_ += '(';
+                query(nested(s, n.query_), depth + 1);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::filter:
+                output_.require_pg("aggregate FILTER");
+                child_value(n.left_);
+                output_.sql_ += " FILTER (WHERE ";
+                child_value(n.right_);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::window: {
+                child_value(n.left_);
+                output_.sql_ += " OVER (";
+                bool space = false;
+                if (!n.args_.empty()) {
+                    output_.sql_ += "PARTITION BY ";
+                    expressions(s, n.args_, depth + 1);
+                    space = true;
+                }
+                if (!n.orders_.empty()) {
+                    if (space) {
+                        output_.sql_ += ' ';
+                    }
+                    output_.sql_ += "ORDER BY ";
+                    orders(s, n.orders_, depth + 1);
+                    space = true;
+                }
+                if (n.frame_) {
+                    if (space) {
+                        output_.sql_ += ' ';
+                    }
+                    const auto& frame = *n.frame_;
+                    if (frame.start_.kind_ == db_frame_boundary::unbounded_following || frame.end_.kind_ == db_frame_boundary::unbounded_preceding || frame.start_.kind_ > frame.end_.kind_) {
+                        throw std::invalid_argument("invalid window frame boundaries");
+                    }
+                    switch (frame.kind_) {
+                        case db_window_frame::rows:
+                            output_.sql_ += "ROWS";
+                            break;
+                        case db_window_frame::range:
+                            output_.sql_ += "RANGE";
+                            break;
+                        case db_window_frame::groups:
+                            output_.require_pg("GROUPS window frame");
+                            output_.sql_ += "GROUPS";
+                            break;
+                    }
+                    output_.sql_ += " BETWEEN ";
+                    boundary(frame.start_);
+                    output_.sql_ += " AND ";
+                    boundary(frame.end_);
+                }
+                output_.sql_ += ')';
+                break;
+            }
+            case db_node_kind::within_group:
+                output_.require_pg("ordered-set aggregate");
+                child_value(n.left_);
+                output_.sql_ += " WITHIN GROUP (ORDER BY ";
+                orders(s, n.orders_, depth + 1);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::extract: {
+                const auto& spec = date_part_sql_specs.at(static_cast<std::size_t>(n.date_part_));
+                if (!spec.pg_feature_.empty()) {
+                    output_.require_pg(spec.pg_feature_);
+                }
+                output_.sql_ += "EXTRACT(";
+                output_.sql_ += spec.token_;
+                output_.sql_ += " FROM ";
+                child_value(n.left_);
+                output_.sql_ += ')';
+                break;
+            }
+            case db_node_kind::subscript:
+                output_.require_pg("array subscript");
+                output_.sql_ += '(';
+                child_value(n.left_);
+                output_.sql_ += ")[";
+                child_value(n.right_);
+                output_.sql_ += ']';
+                break;
+            case db_node_kind::collate:
+                output_.sql_ += '(';
+                child_value(n.left_);
+                output_.sql_ += " COLLATE ";
+                output_.qualified(n.text_);
+                output_.sql_ += ')';
+                break;
+            case db_node_kind::at_time_zone: {
+                output_.require_pg("AT TIME ZONE");
+                const auto& zone = s.nodes_.at(n.right_);
+                const auto zone_cast = is_untyped_value(zone) ? pg_parameter_cast::value_category : pg_parameter_cast::context;
+                output_.sql_ += '(';
+                child_value(n.left_);
+                output_.sql_ += " AT TIME ZONE ";
+                expr(s, n.right_, depth + 1, false, zone_cast);
+                output_.sql_ += ')';
+                break;
+            }
+        }
+    }
+    // Emits a left-deep AND/OR chain flat, `(a AND b AND c)`, at one nesting
+    // level. A link that repeats a grouped expression goes through expr().
+    void logical_chain(const db_query_storage& s, const db_query_node& n, std::size_t depth) {
+        std::vector<const db_query_node*> spine;
+        spine.push_back(&n);
+        while (continues_logical_chain(s.nodes_, *spine.back(), spine.back()->left_) && grouped_node(s, spine.back()->left_) == spine.back()->left_) {
+            spine.push_back(&s.nodes_[spine.back()->left_]);
+        }
+        const std::string_view token = n.binary_ == db_binary_operator::and_value ? " AND " : " OR ";
+        output_.sql_ += '(';
+        expr(s, spine.back()->left_, depth);
+        for (auto link = spine.rbegin(); link != spine.rend(); ++link) {
+            output_.sql_ += token;
+            expr(s, (*link)->right_, depth);
+        }
+        output_.sql_ += ')';
+    }
+    void binary(const db_query_storage& s, const db_query_node& n, std::size_t depth) {
+        if (continues_logical_chain(s.nodes_, n, n.left_) && grouped_node(s, n.left_) == n.left_) {
+            logical_chain(s, n, depth);
+            return;
+        }
+        const auto& left = s.nodes_.at(n.left_);
+        const auto& right = s.nodes_.at(n.right_);
+        if ((n.binary_ == db_binary_operator::in || n.binary_ == db_binary_operator::not_in) && right.kind_ == db_node_kind::list && right.args_.empty()) {
+            output_.sql_ += n.binary_ == db_binary_operator::in ? "FALSE" : "TRUE";
+            return;
+        }
+        if (n.binary_ == db_binary_operator::concat && !output_.pg()) {
+            output_.sql_ += "CONCAT(";
+            expr(s, n.left_, depth);
+            output_.sql_ += ", ";
+            expr(s, n.right_, depth);
+            output_.sql_ += ')';
+            return;
+        }
+        const bool maria_distinct = !output_.pg() && n.binary_ == db_binary_operator::is_distinct_from;
+        output_.sql_ += '(';
+        if (maria_distinct) {
+            output_.sql_ += "NOT (";
+        }
+        auto left_cast = pg_parameter_cast::context;
+        auto right_cast = pg_parameter_cast::context;
+        if (output_.pg()) {
+            // Preserve the other operand's SQL type. Only arithmetic over two
+            // bare values needs an explicit choice of overload.
+            const auto operand_cast = pg_binary_operand_cast(n.binary_);
+            if (operand_cast != pg_parameter_cast::context && is_untyped_value(left) && is_untyped_value(right)) {
+                left_cast = pg_operator_operand_cast(left, operand_cast);
+                right_cast = pg_operator_operand_cast(right, operand_cast);
+            }
+            // jsonb -> n, ->> n and - n index arrays with int4 only; untyped,
+            // an integer would be read as a text key.
+            if (n.binary_ == db_binary_operator::json_get || n.binary_ == db_binary_operator::json_get_text || n.binary_ == db_binary_operator::json_delete) {
+                right_cast = pg_parameter_cast::int4;
+            }
+        }
+        expr(s, n.left_, depth, false, left_cast);
+        const auto op_index = static_cast<std::size_t>(n.binary_);
+        if (op_index >= binary_operator_sql_specs.size()) {
+            std::terminate();
+        }
+        const auto& op_spec = binary_operator_sql_specs[op_index];
+        if (!op_spec.pg_feature_.empty()) {
+            output_.require_pg(op_spec.pg_feature_);
+        }
+        const auto token = (!output_.pg() && !op_spec.maria_token_.empty()) ? op_spec.maria_token_ : op_spec.pg_token_;
+        if ((n.binary_ == db_binary_operator::in || n.binary_ == db_binary_operator::not_in) && right.kind_ != db_node_kind::list && right.kind_ != db_node_kind::subquery) {
+            throw std::invalid_argument("IN requires a list or a subquery");
+        }
+        output_.sql_ += ' ';
+        output_.sql_ += token;
+        output_.sql_ += ' ';
+        expr(s, n.right_, depth, false, right_cast);
+        if (maria_distinct) {
+            output_.sql_ += ')';
+        }
+        output_.sql_ += ')';
+    }
+    void source(const db_query_storage& s, const db_query_source& value, std::size_t depth) {
+        if (value.lateral_) {
+            output_.require_pg("LATERAL");
+            output_.sql_ += "LATERAL ";
+        }
+        switch (value.kind_) {
+            case db_source_kind::table:
+                output_.qualified(value.name_);
+                break;
+            case db_source_kind::query:
+                output_.sql_ += '(';
+                query(nested(s, value.query_), depth + 1);
+                output_.sql_ += ')';
+                break;
+            case db_source_kind::function:
+                output_.require_pg("table function");
+                expr(s, value.expression_, depth + 1);
+                break;
+        }
+        if (value.ordinality_) {
+            output_.require_pg("WITH ORDINALITY");
+            if (value.kind_ != db_source_kind::function) {
+                throw std::invalid_argument("WITH ORDINALITY requires a table function");
+            }
+            output_.sql_ += " WITH ORDINALITY";
+        }
+        if (!value.alias_.empty()) {
+            output_.sql_ += " AS ";
+            output_.identifier(value.alias_);
+        }
+        if (!value.columns_.empty()) {
+            if (value.alias_.empty()) {
+                throw std::invalid_argument("source column names require an alias");
+            }
+            output_.sql_ += " (";
+            const bool typed = value.columns_.front().type_.data_type_ != db_data_type::inferred || !value.columns_.front().type_.custom_name_.empty();
+            if (typed && (value.kind_ != db_source_kind::function || value.ordinality_)) {
+                throw std::invalid_argument("record definitions require a function without ordinality");
+            }
+            separated(value.columns_, [&](const auto& column) {
+                const bool has_type = column.type_.data_type_ != db_data_type::inferred || !column.type_.custom_name_.empty();
+                if (has_type != typed) {
+                    throw std::invalid_argument("source column definitions must all specify a type or all omit it");
+                }
+                output_.identifier(column.name_);
+                if (typed) {
+                    output_.sql_ += ' ';
+                    const auto& t = column.type_;
+                    append_db_type_name(output_.sql_, t.data_type_, t.custom_name_, t.length_, t.precision_, t.scale_, t.array_, output_.driver());
+                }
+            });
+            output_.sql_ += ')';
+        }
+    }
+    void sources(const db_query_storage& s, std::size_t depth) {
+        source(s, *s.source_, depth);
+        for (const auto& join : s.joins_) {
+            switch (join.type_) {
+                case db_join_type::inner:
+                    output_.sql_ += " INNER JOIN ";
+                    break;
+                case db_join_type::left:
+                    output_.sql_ += " LEFT JOIN ";
+                    break;
+                case db_join_type::right:
+                    output_.sql_ += " RIGHT JOIN ";
+                    break;
+                case db_join_type::full:
+                    output_.require_pg("FULL JOIN");
+                    output_.sql_ += " FULL JOIN ";
+                    break;
+                case db_join_type::cross:
+                    output_.sql_ += " CROSS JOIN ";
+                    break;
+            }
+            if (join.type_ == db_join_type::cross) {
+                if (join.on_ != no_db_node || !join.using_columns_.empty()) {
+                    throw std::invalid_argument("CROSS JOIN has no ON or USING");
+                }
+            } else if ((join.on_ != no_db_node) == !join.using_columns_.empty()) {
+                throw std::invalid_argument("JOIN requires exactly one of ON or USING");
+            }
+            source(s, join.source_, depth + 1);
+            if (join.on_ != no_db_node) {
+                output_.sql_ += " ON ";
+                expr(s, join.on_, depth + 1);
+            }
+            if (!join.using_columns_.empty()) {
+                output_.sql_ += " USING (";
+                identifiers(join.using_columns_);
+                output_.sql_ += ')';
+            }
+        }
+    }
+    void assignments(const db_query_storage& s, const std::vector<db_stored_assignment>& values, std::size_t depth) {
+        if (values.empty()) {
+            throw std::invalid_argument("UPDATE requires assignments");
+        }
+        separated(values, [&](const auto& assignment) {
+            output_.identifier(assignment.column_);
+            output_.sql_ += " = ";
+            expr(s, assignment.expression_, depth + 1);
+        });
+    }
+    void conflict(const db_query_storage& s, std::size_t depth) {
+        const auto& value = *s.conflict_;
+        if (value.do_nothing_ && (!value.assignments_.empty() || value.update_where_ != no_db_node)) {
+            throw std::invalid_argument("DO NOTHING cannot specify updates");
+        }
+        if (output_.pg()) {
+            if (value.any_unique_key_) {
+                throw std::invalid_argument("any_unique_key is specific to MariaDB");
+            }
+            if (!value.columns_.empty() && !value.constraint_.empty()) {
+                throw std::invalid_argument("conflict target cannot have both columns and a constraint");
+            }
+            if (value.target_where_ != no_db_node && value.columns_.empty()) {
+                throw std::invalid_argument("a conflict predicate requires target columns");
+            }
+            output_.sql_ += " ON CONFLICT";
+            if (!value.columns_.empty()) {
+                output_.sql_ += " (";
+                identifiers(value.columns_);
+                output_.sql_ += ')';
+            }
+            if (!value.constraint_.empty()) {
+                output_.sql_ += " ON CONSTRAINT ";
+                output_.identifier(value.constraint_);
+            }
+            if (value.target_where_ != no_db_node) {
+                output_.sql_ += " WHERE ";
+                expr(s, value.target_where_, depth + 1);
+            }
+            if (value.do_nothing_) {
+                output_.sql_ += " DO NOTHING";
+                return;
+            }
+            if (value.columns_.empty() && value.constraint_.empty()) {
+                throw std::invalid_argument("DO UPDATE requires a conflict target");
+            }
+            output_.sql_ += " DO UPDATE SET ";
+            assignments(s, value.assignments_, depth);
+            if (value.update_where_ != no_db_node) {
+                output_.sql_ += " WHERE ";
+                expr(s, value.update_where_, depth + 1);
+            }
+        } else {
+            if (!value.any_unique_key_ || !value.columns_.empty() || !value.constraint_.empty() || value.target_where_ != no_db_node || value.update_where_ != no_db_node || value.do_nothing_) {
+                output_.unsupported("targeted or conditional upsert / DO NOTHING");
+            }
+            output_.sql_ += " ON DUPLICATE KEY UPDATE ";
+            assignments(s, value.assignments_, depth);
+        }
+    }
+    void rows(const db_query_storage& s, std::size_t depth) {
+        if (s.rows_.empty() || s.rows_.front().empty()) {
+            throw std::invalid_argument("VALUES requires nonempty rows");
+        }
+        const auto width = s.rows_.front().size();
+        if (!s.columns_.empty() && width != s.columns_.size()) {
+            throw std::invalid_argument("INSERT column and row widths differ");
+        }
+        output_.sql_ += "VALUES ";
+        separated(s.rows_, [&](const auto& row) {
+            if (row.size() != width) {
+                throw std::invalid_argument("VALUES rows have different widths");
+            }
+            output_.sql_ += '(';
+            expressions(s, row, depth + 1);
+            output_.sql_ += ')';
+        });
+    }
+    void body(const db_query_storage& s, std::size_t depth) {
+        switch (s.kind_) {
+            case db_query_kind::select:
+                output_.sql_ += "SELECT ";
+                if (s.distinct_) {
+                    output_.sql_ += "DISTINCT ";
+                }
+                if (!s.distinct_on_.empty()) {
+                    output_.require_pg("DISTINCT ON");
+                    output_.sql_ += "DISTINCT ON (";
+                    expressions(s, s.distinct_on_, depth + 1);
+                    output_.sql_ += ") ";
+                }
+                if (s.projections_.empty()) {
+                    output_.sql_ += '*';
+                } else {
+                    expressions(s, s.projections_, depth + 1, true);
+                }
+                if (s.source_) {
+                    output_.sql_ += " FROM ";
+                    sources(s, depth + 1);
+                }
+                break;
+            case db_query_kind::values:
+                rows(s, depth);
+                break;
+            case db_query_kind::insert:
+                output_.sql_ += "INSERT INTO ";
+                output_.qualified(s.target_);
+                if (!s.target_alias_.empty()) {
+                    output_.require_pg("INSERT target alias");
+                    output_.sql_ += " AS ";
+                    output_.identifier(s.target_alias_);
+                }
+                if (!s.columns_.empty()) {
+                    output_.sql_ += " (";
+                    identifiers(s.columns_);
+                    output_.sql_ += ')';
+                }
+                output_.sql_ += ' ';
+                if (s.insert_query_ != no_db_node) {
+                    if (!s.rows_.empty()) {
+                        throw std::invalid_argument("INSERT cannot have both VALUES and SELECT");
+                    }
+                    query(nested(s, s.insert_query_), depth + 1);
+                } else if (s.rows_.empty() || (s.columns_.empty() && s.rows_.size() == 1 && s.rows_.front().empty())) {
+                    if (!s.columns_.empty()) {
+                        throw std::invalid_argument("INSERT column list requires input rows");
+                    }
+                    output_.sql_ += output_.pg() ? "DEFAULT VALUES" : "() VALUES ()";
+                } else {
+                    rows(s, depth);
+                }
+                if (s.conflict_) {
+                    conflict(s, depth + 1);
+                }
+                break;
+            case db_query_kind::update:
+            case db_query_kind::delete_value:
+                output_.sql_ += s.kind_ == db_query_kind::update ? "UPDATE " : "DELETE FROM ";
+                output_.qualified(s.target_);
+                if (!s.target_alias_.empty()) {
+                    if (!output_.pg() && s.kind_ == db_query_kind::delete_value) {
+                        output_.unsupported("DELETE target alias");
+                    }
+                    output_.sql_ += " AS ";
+                    output_.identifier(s.target_alias_);
+                }
+                if (s.kind_ == db_query_kind::update) {
+                    output_.sql_ += " SET ";
+                    assignments(s, s.assignments_, depth + 1);
+                }
+                if (s.source_) {
+                    output_.require_pg("UPDATE FROM / DELETE USING");
+                    output_.sql_ += s.kind_ == db_query_kind::update ? " FROM " : " USING ";
+                    sources(s, depth + 1);
+                }
+                break;
+        }
+        if (s.predicate_ != no_db_node) {
+            output_.sql_ += " WHERE ";
+            expr(s, s.predicate_, depth + 1);
+        }
+        if (!s.groups_.empty()) {
+            output_.sql_ += " GROUP BY ";
+            expressions(s, s.groups_, depth + 1);
+        }
+        if (s.having_ != no_db_node) {
+            output_.sql_ += " HAVING ";
+            expr(s, s.having_, depth + 1);
+        }
+    }
+
+    grouped_bound_values grouped_;
+};
+void append_db_expression(std::string& output, db_expression expression, db_driver driver) {
+    if (expression.empty()) {
+        throw std::invalid_argument("empty database expression");
+    }
+    db_query_compiler compiler(driver, db_parameter_mode::literal);
+    const auto initial_size = output.size();
+    compiler.output_.sql_ = std::move(output);
+    try {
+        if (compiler.output_.sql_.capacity() - initial_size < 32U) {
+            compiler.output_.sql_.reserve(initial_size + 64U);
+        }
+        compiler.expression(expression);
+        output = std::move(compiler.output_.sql_);
+    } catch (...) {
+        compiler.output_.sql_.resize(initial_size);
+        output = std::move(compiler.output_.sql_);
+        throw;
+    }
+}
+
+}  // namespace ruvia::detail
+
+namespace ruvia {
+
+db_statement db_query::compile(db_driver driver, db_parameter_mode mode) const {
+    detail::db_query_compiler compiler(driver, mode);
+    compiler.query(storage());
+    return db_statement(std::move(compiler.output_.sql_), std::move(compiler.output_.params_), returns_rows());
+}
+
+std::string db_query::render_expression(db_expression expression, db_driver driver) {
+    std::string output;
+    detail::append_db_expression(output, expression, driver);
+    return output;
+}
+
+}  // namespace ruvia

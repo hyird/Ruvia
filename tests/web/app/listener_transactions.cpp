@@ -35,6 +35,7 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "server_connection.h"
 namespace listener_transactions_test {
 
 using namespace std::chrono_literals;

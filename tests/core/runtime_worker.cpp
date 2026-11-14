@@ -31,10 +31,16 @@
 #include <windows.h>
 #endif
 
+#include "asio_bridge.h"
 #include "event_loop.h"
+#include "move_only_function.h"
 #include "stop_token.h"
 #include "task_scope.h"
+#include "worker_cancellation.h"
 #include "worker_ref.h"
+#include "worker_runtime.h"
+#include "worker_signal.h"
+#include "worker_timer.h"
 #include "worker_wait.h"
 
 namespace ruvia::test::runtime_worker_tests {

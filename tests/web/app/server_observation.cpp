@@ -26,6 +26,7 @@
 #include "context.h"
 #include "controller.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http3_connection.h"
 #include "http_request.h"
 #include "http_server.h"

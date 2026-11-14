@@ -55,8 +55,10 @@
 
 #include "app.h"
 #include "context.h"
+#include "http_client_request_view.h"
 #include "http_server.h"
 #include "middleware.h"
+#include "test_app.h"
 #include "worker_task_fixture.h"
 
 #if defined(_WIN32)

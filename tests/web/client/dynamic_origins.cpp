@@ -32,6 +32,7 @@
 #include <openssl/ssl.h>
 
 #include "blocking_pool.h"
+#include "byte_view.h"
 #include "event_loop.h"
 #include "http_client.h"
 #include "http_client_types.h"
@@ -39,6 +40,8 @@
 #include "http_server_fixture.h"
 #include "stop_token.h"
 #include "task_scope.h"
+#include "tcp_client.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::dynamic_origin_tests {

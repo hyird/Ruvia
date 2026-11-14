@@ -12,6 +12,7 @@
 #include <utility>
 
 #include "event_loop.h"
+#include "failure_report.h"
 #include "worker_ref.h"
 
 // Cross-worker runtime controls (listener and certificate changes): receipts

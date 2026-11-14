@@ -21,6 +21,7 @@
 
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db.h"
+#include "db_migration.h"
 #endif
 
 namespace example {

@@ -14,6 +14,7 @@
 #include <type_traits>
 #include <utility>
 #include <variant>
+#include <vector>
 
 #include <asio.hpp>
 #include <asio/buffer.hpp>
@@ -21,26 +22,175 @@
 #include <openssl/ssl.h>
 
 #include "borrowed_text.h"
+#include "byte_view.h"
 #include "connection_lifecycle.h"
 #include "connection_scanner.h"
 #include "context.h"
 #include "context_access.h"
 #include "event_loop.h"
+#include "http1_connection_plan.h"
 #include "http1_server_response.h"
+#include "http1_session_state.h"
 #include "http2_connection.h"
 #include "http_content_negotiation.h"
+#include "http_error.h"
 #include "http_header.h"
+#include "http_io_buffer.h"
 #include "http_request.h"
+#include "http_request_admission.h"
+#include "http_request_body_failure.h"
 #include "http_response.h"
+#include "http_response_stream.h"
+#include "http_tunnel_session.h"
 #include "inbound_buffer.h"
+#include "io_operation.h"
+#include "ip_address.h"
 #include "middleware.h"
+#include "request_stream.h"
+#include "response_coding_policy.h"
 #include "response_file.h"
-#include "server_session.h"
+#include "response_stream_state.h"
+#include "route_stream_dispatch.h"
+#include "server_options.h"
+#include "server_socket_stream.h"
 #include "stop_token.h"
 #include "streaming.h"
 #include "task.h"
 #include "task_scope.h"
+#include "transport_stream_end.h"
+#include "worker_connections.h"
+
 namespace ruvia::detail {
+namespace {
+
+// Reclaim read storage beyond the header limit once the pending bytes fit the
+// initial size. Amortized growth and handed-over pipelines can both exceed it.
+constexpr std::size_t read_buffer_shrink_capacity_bytes = max_http_header_bytes;
+// Deferred access-log entries retained across coalesced writes.
+constexpr std::size_t retained_deferred_access_entries = 64;
+
+}  // namespace
+
+// Reserve the initial capacity before exposing the active work set.
+connection_read_buffer::connection_read_buffer() noexcept {
+    storage_.reserve(initial_read_buffer_bytes);
+}
+
+std::span<char> connection_read_buffer::prepare_read() & {
+    if (storage_.size() >= max_http_header_bytes) {
+        return {};
+    }
+    const auto remaining = max_http_header_bytes - storage_.size();
+    auto space = storage_.prepare_spare();
+    if (space.empty()) {
+        // Storage may outgrow the protocol window to amortize a short consumed
+        // prefix; only the bytes still allowed in that window are writable.
+        (void)storage_.prepare(std::min(initial_read_buffer_bytes, remaining));
+        space = storage_.prepare_spare();
+    }
+    return space.first(std::min(space.size(), remaining));
+}
+
+void connection_read_buffer::consume(std::size_t bytes) noexcept {
+    if (bytes > storage_.size()) {
+        std::terminate();
+    }
+    storage_.consume(bytes);
+}
+
+void connection_read_buffer::assign(std::string_view bytes) {
+    storage_.clear();
+    storage_.append(bytes);
+}
+
+void connection_read_buffer::complete_request(const http1_request_buffer_completion& completion) {
+    if (const auto* compaction = completion.compaction()) {
+        consume(compaction->consumed_bytes());
+        return;
+    }
+    if (const auto* restore = completion.pipeline_restore()) {
+        assign(restore->pipeline());
+        return;
+    }
+    // A discarded buffer is valid only when the connection plan closes. The
+    // session must never reach reusable cleanup with that alternative.
+    std::terminate();
+}
+
+void connection_read_buffer::trim() {
+    if (storage_.capacity() > read_buffer_shrink_capacity_bytes && storage_.size() <= initial_read_buffer_bytes) {
+        storage_.shrink_to(initial_read_buffer_bytes);
+    }
+}
+
+http1_deferred_access_log::http1_deferred_access_log() noexcept = default;
+
+void http1_deferred_access_log::defer(std::size_t head_end, const http_request& request, ip_address client_address, std::chrono::steady_clock::time_point start, http_status_code status, const request_io_metrics& io_metrics) {
+    const auto method = request.method();
+    const auto path = request.path();
+    const auto text_begin = text_.size();
+    const auto required_text = text_begin + method.size() + path.size();
+    if (required_text > text_.capacity()) {
+        text_.reserve(std::max<std::size_t>(required_text, std::max<std::size_t>(256, text_.capacity() * 2)));
+    }
+    text_.append(method);
+    text_.append(path);
+    if (entries_.size() == entries_.capacity()) {
+        entries_.reserve(std::max<std::size_t>(8, entries_.capacity() * 2));
+    }
+    entries_.push_back({
+        .head_end_ = head_end,
+        .text_begin_ = text_begin,
+        .method_bytes_ = method.size(),
+        .path_bytes_ = path.size(),
+        .client_address_ = client_address,
+        .start_ = start,
+        .io_metrics_ = io_metrics,
+        .known_method_ = request.known_method(),
+        .protocol_version_ = request.protocol_version(),
+        .status_ = status,
+    });
+}
+
+void http1_deferred_access_log::complete(const access_log_sink& access_log, ip_address remote_address, std::size_t written) noexcept {
+    const std::string_view text = text_;
+    for (const auto& entry : entries_) {
+        if (entry.head_end_ > written) {
+            break;
+        }
+        const auto fields = text.substr(entry.text_begin_);
+        access_log.invoke(access_log_record_access::make({
+            .method_ = fields.substr(0, entry.method_bytes_),
+            .known_method_ = entry.known_method_,
+            .path_ = fields.substr(entry.method_bytes_, entry.path_bytes_),
+            .protocol_version_ = entry.protocol_version_,
+            .remote_address_ = remote_address,
+            .client_address_ = entry.client_address_,
+            .status_ = entry.status_,
+            .duration_micros_ = access_log_record_access::duration_since(entry.start_),
+            .db_count_ = entry.io_metrics_.db_count_,
+            .db_duration_micros_ = entry.io_metrics_.db_duration_micros_,
+            .redis_count_ = entry.io_metrics_.redis_count_,
+            .redis_duration_micros_ = entry.io_metrics_.redis_duration_micros_,
+        }));
+    }
+    reset();
+}
+
+void http1_deferred_access_log::reset() noexcept {
+    entries_.clear();
+    if (entries_.capacity() > retained_deferred_access_entries) {
+        std::vector<entry_type>(entries_.get_allocator()).swap(entries_);
+    }
+    http_clear_string_retaining_small(text_);
+}
+
+connection_work_set::connection_work_set() noexcept = default;
+
+std::unique_ptr<connection_work_set> make_connection_work_set() {
+    return std::make_unique<connection_work_set>();
+}
+
 #if defined(_WIN32)
 // On Windows plain TCP a single file range longer than this leaves through an
 // overlapped TransmitFile from the response's own handle. Shorter ranges,
@@ -3083,17 +3233,5 @@ template task<http_connection_close> worker_connections::run_stream<inbound_sock
 template task<http_connection_close> worker_connections::run_stream<server_tls_stream>(http_server_session_config&, server_tls_stream&, tcp_socket_type&, context_services);
 template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<inbound_socket_stream>(http1_connection_session<inbound_socket_stream>&, connection_work_set&);
 template task<std::variant<http1_serve_handoff, http_connection_close>> worker_connections::serve_requests<server_tls_stream>(http1_connection_session<server_tls_stream>&, connection_work_set&);
-
-#if defined(RUVIA_ENABLE_HTTP2)
-template <typename stream_type>
-task<http_connection_close> worker_connections::run_http2(stream_type& stream, tcp_socket_type& socket, context_services services) {
-    connection_scanner::entry scanner_entry;
-    connection_scanner::guard scanner_guard(scanner_, scanner_entry, connection_transport::tcp(socket));
-    co_return co_await run_http2_sans_io_session(stream, routes_, http2_sans_io_session_context(std::move(services), options_, scanner_entry));
-}
-
-template task<http_connection_close> worker_connections::run_http2<inbound_socket_stream>(inbound_socket_stream&, tcp_socket_type&, context_services);
-template task<http_connection_close> worker_connections::run_http2<server_tls_stream>(server_tls_stream&, tcp_socket_type&, context_services);
-#endif
 
 }  // namespace ruvia::detail

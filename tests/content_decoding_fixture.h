@@ -25,10 +25,15 @@
 
 #include "http1_client_request.h"
 #include "http1_client_response.h"
+#include "http1_connection_plan.h"
 #include "http1_server_response.h"
+#include "http_client_request_view.h"
+#include "http_client_response_head.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_header.h"
 #include "http_multipart.h"
+#include "http_request_body_failure.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"
 #endif

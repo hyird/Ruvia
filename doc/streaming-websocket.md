@@ -7,7 +7,7 @@
 ## 1. 流式请求体与流式响应 / SSE
 
 头文件：`"streaming.h"`、`"http_multipart.h"`、`"http_server_sent_events.h"`。
-不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发http_serverh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主http_serverh)。
+不经路由、以同一组 `body_reader` / `response_stream_writer` 直接处理监听器请求的方式见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发request_streamh)；绑定调用方事件循环、接管外部已接受连接见 [1.9 独立入站宿主](web-guide.md#19-独立入站宿主http_serverh)。
 
 ### 1.1 流式消费请求体（`body_reader` 与 `multipart_reader`）
 
@@ -137,7 +137,7 @@ ruvia::task<void> stream_events(ruvia::context& c) {
 
 ```cpp
 #include <string>
-#include "worker_wait.h"
+#include "channel.h"
 #include "context.h"
 #include "streaming.h"
 
@@ -183,11 +183,11 @@ ruvia::task<void> stream_subscription(
 
 ## 3. WebSocket 服务端
 
-头文件：`"streaming.h"`、`"websocket_connection.h"`。
+头文件：`"websocket.h"`、`"websocket_connection.h"`。
 参考示例：[examples/websocket.cpp](../examples/websocket.cpp)。
 
 Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended CONNECT（RFC 8441）与 HTTP/3 Extended CONNECT（RFC 9220）；后两者使用 `:protocol = websocket`，路由代码统一。
-不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发http_serverh) 显式协商并取得同一个 `websocket` 会话接口。
+不注册路由时，通过 [`request_stream::accept_websocket()`](web-guide.md#18-请求流分发request_streamh) 显式协商并取得同一个 `websocket` 会话接口。
 
 - **Extended CONNECT 字段**：HTTP/2 中的 `Sec-WebSocket-Key` / `Sec-WebSocket-Accept` 已被 `:protocol` 取代，按 [RFC 8441 §5](https://www.rfc-editor.org/rfc/rfc8441.html#section-5) 不做处理，既不校验也不拒绝。
 - **子协议提议**：接收方跳过 `Sec-WebSocket-Protocol` 提议中的重复子协议；唯一性是 RFC 6455 §4.1 对发送方客户端的要求。
@@ -196,7 +196,7 @@ Ruvia WebSocket 服务端支持 HTTP/1.1 `Upgrade: websocket`、HTTP/2 Extended 
 ### 3.1 路由注册与配置
 
 ```cpp
-#include "streaming.h"
+#include "websocket.h"
 
 inline const ruvia::websocket_route_config chat_ws_options{
     .subprotocols_ = {"chat.v1", "json.v1"},
@@ -318,9 +318,9 @@ private:
 
 ## 4. HTTP `CONNECT` 与 `CONNECT-UDP` 隧道
 
-头文件：`"streaming.h"`。
+头文件：`"http_tunnel.h"`。
 参考示例：[examples/tunnels.cpp](../examples/tunnels.cpp)。
-不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发http_serverh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发http_serverh)。
+不经 HTTP、直接接管整条 TCP/TLS 连接字节流的监听器见 [web-guide 1.7 原始连接分发](web-guide.md#17-原始连接分发server_connectionh)；不经路由在回调中决定是否接受 CONNECT / HTTP/1.1 Upgrade 隧道见 [web-guide 1.8 请求流分发](web-guide.md#18-请求流分发request_streamh)。
 
 ### 4.1 服务端 `CONNECT` 字节流隧道
 
@@ -342,7 +342,7 @@ HTTP/2 客户端在收到 2xx 前乐观发送的 `DATA`（RFC 9113 §8.5；RFC 9
 
 HTTP/3 使用相同路由及隧道门面；WebSocket 经 RFC 9220 Extended CONNECT，普通 CONNECT 经 RFC 9114 §4.4。`finish()` 仅关闭发送方向，接收方向继续读到对端结束；隧道流与同连接的其他请求独立。
 
-- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发http_serverh)采用相同的在途操作与冷任务回收规则。
+- **操作回收**：与[原始连接分发](web-guide.md#17-原始连接分发server_connectionh)采用相同的在途操作与冷任务回收规则。
 - **隧道时限**：`http_tunnel_route_config` 字段（路由首参与 `request_stream::accept_tunnel(status, config)` 共用；HTTP/1.1、HTTP/2、HTTP/3 相同）：
 
 | 字段 | 默认 | 语义 |
@@ -439,7 +439,7 @@ co_return c.text(body.text());
 | `response.json<T>(max_bytes)` | 收集正文并按公开 Model JSON 契约解析 |
 | `response.stream().read()` / `.text()` | 拉取下一块正文；`nullopt` 表示 EOF，视图在下一次正文操作启动前有效 |
 | `response.pipe_to(c)` / `response.pipe_to(request_stream)` | 将上游响应转发给当前服务端响应；提交后的传输失败中止流，不伪造完整响应 |
-| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发http_serverh) |
+| `response.stream().pipe_to(writer)` | 只转发正文；调用方先设置响应元数据并 `commit()`，仅 `body` 结果允许转发。入站 Upgrade / CONNECT 拒绝同样支持流式输出，见[请求流分发](web-guide.md#18-请求流分发request_streamh) |
 | `response.reprioritize(http_priority)` | 对尚在传输中的 HTTP/2 或 HTTP/3 响应流发送 RFC 9218 `PRIORITY_UPDATE` 帧 |
 | `client.connect(authority).open()`、`client.udp(path).open()` | 打开字节隧道或 CONNECT-UDP；结果区分已建立的隧道与非 2xx HTTP 响应 |
 | `request.upgrade(config = {})` | 将带 `Connection: Upgrade`、`Upgrade` 字段的 HTTP/1.1 请求升级为原始字节隧道；非 101 保留为普通流式 HTTP 响应 |

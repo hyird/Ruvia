@@ -26,6 +26,7 @@
 #include "app.h"
 #include "context.h"
 #include "controller.h"
+#include "http_content_codec.h"
 #include "http_content_coding.h"
 #include "http_content_negotiation.h"
 #include "http_server.h"

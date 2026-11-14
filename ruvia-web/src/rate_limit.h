@@ -13,8 +13,9 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http_error.h"
 #include "http_response.h"
-#include "middleware.h"
+#include "rate_limiting.h"
 
 // Worker-local sliding-window rate limiting: client keys, the per-worker
 // table, the 429 rejection carried through error dispatch, and its headers.

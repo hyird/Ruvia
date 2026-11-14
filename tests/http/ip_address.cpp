@@ -1,3 +1,5 @@
+#include "ip_address.h"
+
 #include <gtest/gtest.h>
 
 #include <array>

@@ -26,6 +26,7 @@
 #include "controller.h"
 #include "event_loop.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_header.h"
 #include "http_server_fixture.h"
 #include "middleware.h"

@@ -1,3 +1,5 @@
+#include "worker_runtime.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -17,9 +19,12 @@
 #include <asio/steady_timer.hpp>
 
 #include "event_loop.h"
+#include "move_only_function.h"
 #include "task_scope.h"
 #include "worker_ref.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
+#include "worker_timer.h"
 
 namespace worker_runtime_test {
 

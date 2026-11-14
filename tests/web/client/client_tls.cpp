@@ -34,6 +34,7 @@
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace {

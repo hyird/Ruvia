@@ -21,6 +21,7 @@
 #include "blocking_pool.h"
 #include "db.h"
 #include "db_query.h"
+#include "db_schema.h"
 #include "db_session.h"
 #include "event_loop.h"
 #include "middleware.h"

@@ -33,8 +33,10 @@ using ruvia::http_header_view;
 #include "http_response.h"
 #include "middleware.h"
 #include "model.h"
+#include "session.h"
 #include "task.h"
 #include "task_scope.h"
+#include "test_app.h"
 #include "worker_task_fixture.h"
 #ifdef RUVIA_ENABLE_DATABASE
 #include "db.h"

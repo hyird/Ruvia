@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "ip_address.h"
 
 namespace ruvia {
 

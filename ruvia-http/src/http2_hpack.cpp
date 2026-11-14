@@ -1,3 +1,5 @@
+#include "http2_hpack.h"
+
 #include <nghttp2/nghttp2.h>
 
 #include <array>
@@ -8,9 +10,10 @@
 #include <string>
 #include <string_view>
 
-#include "http2_connection.h"
 #include "http_c_library_memory.h"
-#include "http_connection_fields.h"
+#include "http_field_kind.h"
+#include "http_field_text.h"
+#include "http_status.h"
 
 namespace ruvia {
 namespace detail {

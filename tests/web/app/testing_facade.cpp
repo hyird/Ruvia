@@ -24,6 +24,9 @@
 #include "http_server.h"
 #include "middleware.h"
 #include "model.h"
+#include "security_middleware.h"
+#include "session.h"
+#include "test_app.h"
 #include "worker_task_fixture.h"
 RUVIA_MODEL(testing_facade_echo, RUVIA_OPTIONAL_FIELD(value, ruvia::string));
 

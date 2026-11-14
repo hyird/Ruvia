@@ -10,7 +10,9 @@
 #include <utility>
 
 #include "event_loop.h"
+#include "operation_scope.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test::scoped_operation_tests {

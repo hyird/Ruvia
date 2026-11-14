@@ -13,6 +13,7 @@
 
 #include "db.h"
 #include "db_query.h"
+#include "db_schema.h"
 #include "worker_task_fixture.h"
 
 using ruvia::db_data_type;

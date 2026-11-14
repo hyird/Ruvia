@@ -28,6 +28,8 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "security_middleware.h"
+#include "session.h"
 #include "streaming.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"

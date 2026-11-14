@@ -21,6 +21,7 @@
 #include "http_request.h"
 #include "middleware.h"
 #include "model.h"
+#include "test_app.h"
 #include "worker_task_fixture.h"
 
 namespace ruvia::test {

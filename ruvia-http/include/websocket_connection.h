@@ -15,10 +15,19 @@
 #include <variant>
 
 #include "borrowed_text.h"
-#include "http_header.h"
+#include "http_io_buffer.h"
 #include "http_protocol.h"
 
 namespace ruvia {
+// Each WebSocket connection buffer: transport input, pending output,
+// compressed outbound payload and decompressed inbound message.
+inline constexpr std::size_t websocket_retained_buffer_bytes = std::size_t{16} * 1024;
+
+// Transport read that waits for the next frame on a server WebSocket
+// connection whose recent frames were small. It bounds the read storage an
+// idle connection holds; a larger frame grows the buffer on demand.
+inline constexpr std::size_t websocket_idle_read_bytes = 512;
+
 // awaiting_peer_eof: a client completed the close handshake and, per RFC 6455
 // section 7.1.1, leaves closing the transport to the server. Its driver keeps
 // reading (next_event() discards input) until notify_transport_eof(), which
@@ -412,60 +421,7 @@ private:
     value_type value_;
 };
 
-namespace detail {
-class zlib_deflate_stream;
-class zlib_inflate_stream;
-class websocket_deflate;
-}  // namespace detail
-
-enum class websocket_inflate_result : std::uint8_t {
-    ok,
-    error,
-    too_large,
-};
-
-// RFC 7692 permessage-deflate codecs for directions negotiated without context
-// takeover. Such a direction starts every message from an empty dictionary,
-// so one owner (for example a worker) can serve any number of connections
-// with one codec set instead of a dictionary pair per connection.
-//
-// Each call handles one whole message and resets the codec it used before
-// returning; a codec left by an exception is discarded and recreated by the
-// next use: no message, and no failed message, ever influences another. Raw
-// deflaters are created on first use for each (compression level, window
-// bits) pair; one raw inflater with a 15-bit window serves every receive
-// window. Not thread-safe; the address is stable for the borrowers.
-class websocket_deflate_codecs final {
-public:
-    websocket_deflate_codecs() noexcept = default;
-    ~websocket_deflate_codecs();
-    websocket_deflate_codecs(const websocket_deflate_codecs&) = delete;
-    websocket_deflate_codecs& operator=(const websocket_deflate_codecs&) = delete;
-    websocket_deflate_codecs(websocket_deflate_codecs&&) = delete;
-    websocket_deflate_codecs& operator=(websocket_deflate_codecs&&) = delete;
-
-    // Appends the compressed message payload to `out` without the trailing
-    // 0x00 0x00 0xFF 0xFF of the final flush (RFC 7692 section 7.2.1). The
-    // level is 0 through 9 and the negotiated window 8 through 15; anything
-    // else throws std::invalid_argument. false reports a codec failure;
-    // allocation exceptions propagate with their original type.
-    [[nodiscard]] bool deflate_message(std::string_view payload, std::string& out, int compression_level, int window_bits);
-
-    // Appends the decompressed message to `out`, bounded by `message_limit`
-    // across everything this call appends (RFC 7692 section 7.2.2).
-    [[nodiscard]] websocket_inflate_result inflate_message(std::string_view payload, std::string& out, protocol_byte_limit message_limit);
-
-private:
-    // A connection inflates through the shared inflater under its receive
-    // storage budget.
-    friend class detail::websocket_deflate;
-    static constexpr int min_window_bits = 8;
-    static constexpr int max_window_bits = 15;
-    static constexpr int compression_levels = 10;
-
-    std::array<detail::zlib_deflate_stream*, static_cast<std::size_t>((max_window_bits - min_window_bits + 1) * compression_levels)> deflaters_{};
-    detail::zlib_inflate_stream* inflater_{nullptr};
-};
+class websocket_deflate_codecs;
 
 enum class websocket_feed_status : std::uint8_t { accepted,
     inactive,

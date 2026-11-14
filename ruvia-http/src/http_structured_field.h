@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <string_view>
 
+#include "binary_text_encoding.h"
 #include "borrowed_text.h"
 #include "http_header.h"
 

@@ -14,11 +14,21 @@
 #include <variant>
 
 #include "borrowed_text.h"
+#include "decimal_text.h"
+#include "http1_connection_plan.h"
 #include "http_connection_fields.h"
+#include "http_date_parts.h"
+#include "http_field_kind.h"
+#include "http_field_text.h"
+#include "http_field_validation.h"
 #include "http_header.h"
+#include "http_io_buffer.h"
+#include "http_message_access.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "http_response_framing.h"
+#include "http_response_stream.h"
+#include "http_status.h"
 #include "http_wire_writer.h"
 
 namespace ruvia::detail {
@@ -269,53 +279,6 @@ http1_request_connection_plan http1_commit_final_response(http_response& respons
     return plan;
 }
 
-http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) {
-    if (response.status() != commit_plan.response_status()) {
-        throw std::invalid_argument("response stream commit plan status does not match response");
-    }
-    if (!commit_plan.trailer_intent_allowed()) {
-        throw std::invalid_argument("response stream status does not permit trailers");
-    }
-    const auto framing = commit_plan.framing();
-    if (!detail::response_transfer_encoding_replaceable(response)) {
-        if (framing == http_response_stream_framing::http2_frames || framing == http_response_stream_framing::http3_frames) {
-            throw std::invalid_argument("HTTP/2 or HTTP/3 response cannot carry a Transfer-Encoding other than chunked");
-        }
-        throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
-    }
-    const auto body_plan = commit_plan.body_plan();
-    const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
-
-    // Keep the prepared response metadata consistent with the wire plan. The
-    // framework's chunk writer is the only Transfer-Encoding producer, so the
-    // handler's chunked hint survives only as that writer's own field; HTTP/2
-    // and HTTP/3 frames and an HTTP/1.0 close-delimited body carry none. An HTTP/1.0
-    // close-delimited body cannot retain Content-Length either. HEAD/304 may
-    // retain Content-Length metadata because their body is suppressed.
-    if (writer_owns_http1_chunked) {
-        response.remove_header("Content-Length");
-    } else {
-        response.remove_header("Transfer-Encoding");
-    }
-    if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {
-        response.remove_header("Content-Length");
-    }
-    // Without a chunked body the trailer section is discarded, so the head must
-    // not announce trailer fields that will never follow (RFC 9110 6.6.2).
-    if (!commit_plan.trailers_available()) {
-        response.remove_header("Trailer");
-    }
-
-    if (writer_owns_http1_chunked) {
-        if (!detail::response_has_known_header(response, detail::response_header_transfer_encoding)) {
-            response.reserve_headers(response.headers().size() + 1);
-        }
-        response.header_stable_view("Transfer-Encoding", "chunked");
-    }
-
-    return http_response_stream_head(std::move(response), commit_plan);
-}
-
 namespace {
 
 // The length a body-carrying stream declares for itself: a valid
@@ -534,6 +497,115 @@ std::string_view http_response_head_buffer::view() const& noexcept {
 bool http_response_head_buffer::can_append_on_stack(std::size_t size) const noexcept {
     const auto* const stack_state = std::get_if<stack_state_type>(&state_);
     return stack_state != nullptr && size <= stack_.size() - stack_state->used_;
+}
+
+namespace {
+
+constexpr std::string_view crlf = "\r\n";
+
+struct http1_interim_header_facts final {
+    http_field_section_budget section_;
+    detail::http_connection_options connection_options_;
+    detail::http_upgrade_protocols upgrade_protocols_;
+};
+
+[[nodiscard]] const char* common_validation_message(detail::http_interim_response_header_validation_status status) noexcept {
+    switch (status) {
+        case detail::http_interim_response_header_validation_status::content_length_forbidden:
+            return "Content-Length is forbidden on an interim response";
+        case detail::http_interim_response_header_validation_status::transfer_encoding_forbidden:
+            return "Transfer-Encoding is forbidden on an interim response";
+        case detail::http_interim_response_header_validation_status::trailer_forbidden:
+            return "Trailer is forbidden on an interim response";
+        case detail::http_interim_response_header_validation_status::repeated_singleton:
+            return "repeated singleton interim response header";
+        case detail::http_interim_response_header_validation_status::invalid_header:
+        case detail::http_interim_response_header_validation_status::ok:
+            break;
+    }
+    return "invalid HTTP/1 interim response header";
+}
+
+void analyze_http1_fields(const http_interim_response_head& response, http1_interim_header_facts& facts) {
+    detail::http_interim_response_sender_validator validator;
+    for (const auto& header : response.headers()) {
+        const auto name = header.name();
+        const auto value = header.value();
+        auto kind = detail::http_field_kind::other;
+        const auto status = validator.validate(name, value, &kind);
+        if (status != detail::http_interim_response_header_validation_status::ok) {
+            throw http1_response_head_error(common_validation_message(status));
+        }
+        switch (detail::parse_http_response_control_field(kind, value, facts.connection_options_, facts.upgrade_protocols_)) {
+            case detail::http_response_control_field_status::invalid_connection:
+                throw http1_response_head_error("invalid HTTP/1 interim response Connection field");
+            case detail::http_response_control_field_status::invalid_upgrade:
+                throw http1_response_head_error("invalid HTTP/1 interim response Upgrade field");
+            case detail::http_response_control_field_status::te_forbidden:
+                throw http1_response_head_error("TE is not a response field");
+            case detail::http_response_control_field_status::ok:
+                break;
+        }
+
+        if (!facts.section_.add_field(name, value)) {
+            throw http1_response_head_error("HTTP/1 interim response head is too large");
+        }
+    }
+    if (!detail::http_response_upgrade_pair_valid(facts.connection_options_, facts.upgrade_protocols_)) {
+        throw http1_response_head_error("HTTP/1 interim Upgrade requires Connection: Upgrade");
+    }
+}
+
+[[nodiscard]] char* write_interim_response_head(char* output, const http_interim_response_head& response, std::string_view reason_phrase) noexcept {
+    detail::http_raw_wire_sink sink(output);
+    detail::emit_http1_status_line(sink, response.status(), reason_phrase);
+    for (const auto& header : response.headers()) {
+        detail::emit_http1_field_line(sink, header.name(), header.value());
+    }
+    sink.append(crlf);
+    return sink.position();
+}
+
+}  // namespace
+
+http_interim_response_head::http_interim_response_head(http_status_code status_code, borrowed_http_headers headers) :
+    status_code_(status_code),
+    headers_(headers.view()) {
+    if (!detail::http_interim_status_code_valid(status_code)) {
+        throw std::invalid_argument(status_code == http_status::switching_protocols ? "Switching Protocols requires a dedicated protocol driver" : "invalid interim HTTP status code");
+    }
+}
+
+std::variant<prepared_http1_interim_response, http1_interim_response_buffer_too_small> prepare_http1_interim_response_head(const http_interim_response_head& response, std::span<char> head_buffer) {
+    const auto reason_phrase = http_reason_phrase(response.status());
+    http1_interim_header_facts facts;
+    analyze_http1_fields(response, facts);
+    if (!facts.section_.add(detail::http1_status_line_size(reason_phrase)) || !facts.section_.add(crlf.size())) {
+        throw http1_response_head_error("HTTP/1 interim response head is too large");
+    }
+    const auto head_bytes = facts.section_.bytes();
+    if (head_buffer.size() < head_bytes) {
+        return http1_interim_response_buffer_too_small(head_bytes);
+    }
+
+    const auto output = head_buffer.first(head_bytes);
+    detail::write_http_wire(output, detail::http_wire_inputs_overlap(std::string_view(output.data(), output.size()), response.headers()), [&](char* destination) noexcept {
+        return write_interim_response_head(destination, response, reason_phrase);
+    });
+
+    return prepared_http1_interim_response(std::string_view(head_buffer.data(), head_bytes), facts.connection_options_.close() ? http1_interim_connection_disposition::close_after_interim_response : http1_interim_connection_disposition::unchanged);
+}
+
+http1_response_head_plan prepare_http1_connect_response_head(const http_response& response, http_protocol_version version) {
+    if ((version != http_protocol_version::http10 && version != http_protocol_version::http11) || !response.status().is_successful() || response.file_body() || !response.body_bytes().empty()) {
+        throw http1_response_head_error("invalid HTTP/1 CONNECT response head");
+    }
+    if (detail::response_has_known_header(response, detail::response_header_content_length | detail::response_header_transfer_encoding)) {
+        throw http1_response_head_error("CONNECT response cannot contain message framing fields");
+    }
+    const auto body = plan_http_response_body(http_known_method::connect, response.status());
+    const auto connection = version == http_protocol_version::http10 ? plan_http10_request_connection(true, false) : http1_request_connection_plan::http11_close();
+    return http1_close_delimited_response_stream_head_plan(body, connection);
 }
 
 }  // namespace ruvia

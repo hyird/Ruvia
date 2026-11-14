@@ -14,6 +14,7 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_io_buffer.h"
 #include "http_protocol.h"
 #include "http_status.h"
 

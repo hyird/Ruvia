@@ -13,10 +13,10 @@
 #include <utility>
 #include <vector>
 
-#include "borrowed_text.h"
-#include "http_connection_fields.h"
+#include "decimal_text.h"
 #include "http_date.h"
 #include "http_header.h"
+#include "http_proxy_forwarding.h"
 #include "http_response.h"
 #include "http_structured_field.h"
 

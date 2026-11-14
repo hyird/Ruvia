@@ -11,6 +11,7 @@
 #include "http_cache.h"
 #include "http_cors.h"
 #include "http_header.h"
+#include "http_proxy_forwarding.h"
 #include "http_request.h"
 #include "http_response.h"
 

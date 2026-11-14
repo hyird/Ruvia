@@ -20,10 +20,14 @@
 #include "http1_chunked_body.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
+#include "http1_connection_plan.h"
 #include "http1_server_response.h"
+#include "http_authority.h"
 #include "http_client_redirect.h"
+#include "http_client_request_view.h"
 #include "http_header.h"
 #include "http_request.h"
+#include "http_request_target.h"
 
 namespace {
 

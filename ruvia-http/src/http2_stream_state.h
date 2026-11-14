@@ -21,14 +21,15 @@
 #include <variant>
 #include <vector>
 
-#include "borrowed_text.h"
-#include "http1_server_response.h"
 #include "http2_connection.h"
 #include "http_binary_message.h"
-#include "http_connection_fields.h"
+#include "http_field_kind.h"
+#include "http_field_text.h"
 #include "http_header.h"
+#include "http_message.h"
+#include "http_priority.h"
 #include "http_request.h"
-#include "http_response.h"
+#include "http_status.h"
 
 namespace ruvia::detail {
 

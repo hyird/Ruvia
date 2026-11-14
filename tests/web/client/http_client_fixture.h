@@ -22,6 +22,7 @@
 #include "http_client.h"
 #include "task.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 
 // Shared by the HTTP client suites; each translation unit keeps its own copy.
 namespace {

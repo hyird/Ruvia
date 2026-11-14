@@ -1,0 +1,1100 @@
+#pragma once
+
+#include <array>
+#include <concepts>
+#include <cstddef>
+#include <cstdint>
+#include <initializer_list>
+#include <memory>
+#include <optional>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <string_view>
+#include <tuple>
+#include <type_traits>
+#include <utility>
+#include <vector>
+
+#include "borrowed_text.h"
+#include "db_query.h"
+#include "db_session.h"
+#include "entity_storage.h"
+#include "fixed_string.h"
+#include "model.h"
+
+namespace ruvia {
+
+namespace detail {
+template <typename e_type>
+struct db_entity_access;
+}  // namespace detail
+
+enum class db_relation_kind : unsigned char { one_to_one,
+    many_to_one,
+    one_to_many,
+    many_to_many };
+
+template <fixed_string local_name, fixed_string referenced_name>
+struct db_join_column final {
+    static constexpr auto local = local_name;
+    static constexpr auto referenced = referenced_name;
+};
+
+template <typename... j_type>
+struct db_join_columns final {
+    using tuple_type = std::tuple<j_type...>;
+};
+template <fixed_string field_name>
+struct db_inverse final {
+    static constexpr auto name = field_name;
+};
+namespace detail {
+template <typename t_type>
+struct is_db_inverse : std::false_type {};
+template <fixed_string n>
+struct is_db_inverse<db_inverse<n>> : std::true_type {};
+template <typename t_type>
+struct db_inverse_name {
+    static constexpr auto value = fixed_string{""};
+};
+template <fixed_string n>
+struct db_inverse_name<db_inverse<n>> {
+    static constexpr auto value = n;
+};
+template <typename... t_type>
+struct relation_join_tuple {
+    using type = std::tuple<t_type...>;
+};
+template <typename t_type>
+    requires requires { typename t_type::tuple_type; }
+struct relation_join_tuple<t_type> {
+    using type = typename t_type::tuple_type;
+};
+template <typename... t_type>
+struct first_inverse_name {
+    static constexpr auto value = fixed_string{""};
+};
+template <typename t_type, typename... rest_type>
+struct first_inverse_name<t_type, rest_type...> {
+    static constexpr auto value = [] {
+        if constexpr (is_db_inverse<t_type>::value) {
+            return db_inverse_name<t_type>::value;
+        } else {
+            return first_inverse_name<rest_type...>::value;
+        }
+    }();
+};
+}  // namespace detail
+template <fixed_string table, typename owner, typename inverse_type>
+struct db_join_table final {
+    static constexpr auto name = table;
+    using owner_columns_type = typename owner::tuple_type;
+    using inverse_columns_type = typename inverse_type::tuple_type;
+};
+namespace detail {
+template <typename t_type>
+struct is_db_join_table : std::false_type {};
+template <fixed_string n, typename o_type, typename i_type>
+struct is_db_join_table<db_join_table<n, o_type, i_type>> : std::true_type {};
+}  // namespace detail
+
+template <fixed_string field_name, typename target_type, typename... js_type>
+struct db_many_to_one final {
+    static constexpr auto name = field_name;
+    using target_entity_type = target_type;
+    using join_columns_type = std::tuple<js_type...>;
+    static constexpr auto kind = db_relation_kind::many_to_one;
+    static constexpr bool is_collection = false;
+    static constexpr bool is_owning = true;
+    static constexpr auto inverse_name = fixed_string{""};
+};
+template <fixed_string field_name, typename target_type, typename... mapping_type>
+struct db_one_to_one final {
+    static constexpr auto name = field_name;
+    using target_entity_type = target_type;
+    static constexpr auto kind = db_relation_kind::one_to_one;
+    static constexpr bool is_collection = false;
+    static constexpr bool is_owning = !(sizeof...(mapping_type) == 1 && (detail::is_db_inverse<mapping_type>::value && ...));
+    using join_columns_type = typename detail::relation_join_tuple<mapping_type...>::type;
+    static constexpr auto inverse_name = detail::first_inverse_name<mapping_type...>::value;
+};
+template <fixed_string field_name, typename target_type, fixed_string inverse>
+struct db_one_to_many final {
+    static constexpr auto name = field_name;
+    using target_entity_type = target_type;
+    static constexpr auto kind = db_relation_kind::one_to_many;
+    static constexpr bool is_collection = true;
+    static constexpr bool is_owning = false;
+    static constexpr auto inverse_name = inverse;
+    using join_columns_type = std::tuple<>;
+};
+template <fixed_string field_name, typename target_type, typename mapping_type>
+struct db_many_to_many final {
+    static constexpr auto name = field_name;
+    using target_entity_type = target_type;
+    using join_table_type = mapping_type;
+    static constexpr auto kind = db_relation_kind::many_to_many;
+    static constexpr bool is_collection = true;
+    static constexpr bool is_owning = detail::is_db_join_table<mapping_type>::value;
+    static constexpr auto inverse_name = [] {
+        if constexpr (detail::is_db_inverse<mapping_type>::value) {
+            return mapping_type::name;
+        } else {
+            return fixed_string{""};
+        }
+    }();
+    using join_columns_type = std::tuple<>;
+};
+
+enum class db_generated_type : unsigned char { none,
+    stored,
+    virtual_value };
+
+template <typename enum_name_type = fixed_string<1>, typename default_expression_type = fixed_string<1>>
+struct db_column_options final {
+    db_data_type data_type_{db_data_type::inferred};
+    bool primary_key_{false};
+    bool generated_{false};
+    db_generated_type generated_type_{db_generated_type::none};
+    bool nullable_{false};
+    bool read_only_{false};
+    bool create_date_{false};
+    bool update_date_{false};
+    bool delete_date_{false};
+    bool version_{false};
+    std::size_t length_{0};
+    unsigned precision_{0};
+    unsigned scale_{0};
+    enum_name_type enum_name_{""};
+    default_expression_type default_expression_{""};
+    constexpr bool operator==(const db_column_options&) const = default;
+};
+
+namespace detail {
+
+template <typename t_type>
+struct db_entity_type_traits {
+    using value_type = t_type;
+    static constexpr db_data_type data_type = db_data_type::inferred;
+};
+template <>
+struct db_entity_type_traits<bool> {
+    using value_type = bool;
+    static constexpr db_data_type data_type = db_data_type::boolean;
+};
+template <>
+struct db_entity_type_traits<std::int16_t> {
+    using value_type = std::int16_t;
+    static constexpr db_data_type data_type = db_data_type::small_int;
+};
+template <>
+struct db_entity_type_traits<std::int32_t> {
+    using value_type = std::int32_t;
+    static constexpr db_data_type data_type = db_data_type::integer;
+};
+template <>
+struct db_entity_type_traits<std::int64_t> {
+    using value_type = std::int64_t;
+    static constexpr db_data_type data_type = db_data_type::big_int;
+};
+template <>
+struct db_entity_type_traits<float> {
+    using value_type = float;
+    static constexpr db_data_type data_type = db_data_type::real;
+};
+template <>
+struct db_entity_type_traits<double> {
+    using value_type = double;
+    static constexpr db_data_type data_type = db_data_type::double_value;
+};
+template <>
+struct db_entity_type_traits<std::string> {
+    using value_type = std::string;
+    static constexpr db_data_type data_type = db_data_type::text;
+};
+template <>
+struct db_entity_type_traits<string> {
+    using value_type = string;
+    static constexpr db_data_type data_type = db_data_type::text;
+};
+template <typename t_type>
+struct db_entity_type_traits<std::optional<t_type>> {
+    using value_type = typename db_entity_type_traits<t_type>::value_type;
+    static constexpr db_data_type data_type = db_entity_type_traits<t_type>::data_type;
+};
+template <typename t_type>
+struct db_entity_type_traits<std::vector<t_type>> {
+    using value_type = std::vector<t_type>;
+    static constexpr db_data_type data_type = db_data_type::array;
+};
+
+// Column descriptor predicates shared by typed field references and the
+// repository builders so both agree on which columns accept writes and
+// arithmetic updates.
+template <typename c_type>
+consteval bool is_writable_db_column() noexcept {
+    return c_type::options.generated_type_ == db_generated_type::none && !c_type::options.read_only_;
+}
+// Columns a conflict update writes from EXCLUDED when the caller names none.
+template <typename c_type>
+consteval bool is_conflict_updatable_db_column() noexcept {
+    return !c_type::options.primary_key_ && !c_type::options.generated_ && is_writable_db_column<c_type>();
+}
+template <typename c_type>
+consteval bool is_numeric_db_column() noexcept {
+    return !is_std_vector<typename c_type::value_type>::value && (c_type::data_type == db_data_type::small_int || c_type::data_type == db_data_type::integer || c_type::data_type == db_data_type::big_int || c_type::data_type == db_data_type::numeric || c_type::data_type == db_data_type::real || c_type::data_type == db_data_type::double_value);
+}
+consteval bool is_integer_db_data_type(db_data_type type) noexcept {
+    return type == db_data_type::small_int || type == db_data_type::integer || type == db_data_type::big_int;
+}
+
+// Every rule here depends only on the descriptor, so a malformed column is
+// rejected where it is declared instead of when a schema compiles it; the
+// repository relies on these invariants (for example, the soft-delete filter
+// requires a writable delete_date_ column).
+template <typename t_type>
+consteval bool valid_db_column_options(const auto& options) noexcept {
+    const auto data_type = options.data_type_ == db_data_type::inferred ? db_entity_type_traits<t_type>::data_type : options.data_type_;
+    const bool integer = !is_std_vector<t_type>::value && is_integer_db_data_type(data_type);
+    const bool computed = options.generated_type_ != db_generated_type::none;
+    const bool writable = !computed && !options.read_only_;
+    const int lifecycle_flags = int{options.create_date_} + int{options.update_date_} + int{options.delete_date_} + int{options.version_};
+    // create_date_ only selects a schema default; the repository writes the other three.
+    const bool repository_stamped = options.update_date_ || options.delete_date_ || options.version_;
+    return !(options.generated_ && computed) && !(options.read_only_ && (options.generated_ || computed)) && (options.enum_name_.view().empty() || options.data_type_ == db_data_type::inferred || options.data_type_ == db_data_type::array) && (!options.generated_ || (integer && !options.nullable_)) && (!options.version_ || (integer && !options.nullable_)) && (!options.primary_key_ || (!options.nullable_ && !options.delete_date_)) && lifecycle_flags <= 1 && (!repository_stamped || writable);
+}
+
+// Table names may be schema-qualified; generated aliases and constraint names
+// use the unqualified table name.
+constexpr std::string_view unqualified_db_name(std::string_view name) noexcept {
+    const auto dot = name.rfind('.');
+    return dot == std::string_view::npos ? name : name.substr(dot + 1);
+}
+
+template <typename t_type, bool collection = false>
+struct db_relation_slot final {
+    enum class state_type : unsigned char { unset,
+        null,
+        value };
+    using stored_type = std::conditional_t<collection, entity_rows<t_type>, t_type>;
+    using pointer = std::unique_ptr<stored_type>;
+    db_relation_slot() noexcept = default;
+    db_relation_slot(const db_relation_slot&) = delete;
+    db_relation_slot& operator=(const db_relation_slot&) = delete;
+    db_relation_slot(db_relation_slot&& other) noexcept :
+        state_(std::exchange(other.state_, state_type::unset)),
+        value_(std::move(other.value_)) {}
+    db_relation_slot& operator=(db_relation_slot&&) = delete;
+    state_type state_{state_type::unset};
+    pointer value_;
+    void reset() noexcept {
+        value_.reset();
+        state_ = state_type::unset;
+    }
+};
+
+template <template <typename> class predicate_type, typename... ts_type>
+struct tuple_filter;
+template <template <typename> class predicate_type>
+struct tuple_filter<predicate_type> {
+    using type = std::tuple<>;
+};
+template <template <typename> class predicate_type, typename t_type, typename... ts_type>
+struct tuple_filter<predicate_type, t_type, ts_type...> {
+    using tail = typename tuple_filter<predicate_type, ts_type...>::type;
+    using type = std::conditional_t<predicate_type<t_type>::value, decltype(std::tuple_cat(std::declval<std::tuple<t_type>>(), std::declval<tail>())), tail>;
+};
+template <template <typename> class predicate_type, typename... ts_type>
+using tuple_filter_t = typename tuple_filter<predicate_type, ts_type...>::type;
+
+}  // namespace detail
+
+// Columns and projections require db_mapped_value: all text is owned.
+// PostgreSQL arrays use std::vector of owning scalar or optional elements.
+// Decoding retains one-dimensional element order and discards the lower bound;
+// multidimensional arrays are rejected with db_conversion_error.
+// Option combinations that cannot hold (see valid_db_column_options) do not
+// name a column type, so the declaration fails to compile.
+template <fixed_string field_name, db_mapped_value t_type, db_column_options options_type = db_column_options{}>
+    requires(detail::valid_db_column_options<t_type>(options_type))
+struct db_column final {
+    static_assert(!detail::is_optional<t_type>::value, "use nullable column options and set_null for entity fields; optional is only for array elements");
+    static constexpr auto name = field_name;
+    using value_type = t_type;
+    static consteval auto normalize_options(auto opts) noexcept {
+        if (opts.delete_date_) {
+            opts.nullable_ = true;
+        }
+        return opts;
+    }
+    static constexpr auto options = normalize_options(options_type);
+    static constexpr db_data_type data_type = options_type.data_type_ == db_data_type::inferred ? detail::db_entity_type_traits<t_type>::data_type : options_type.data_type_;
+};
+
+template <typename t_type>
+struct is_db_column : std::false_type {};
+template <fixed_string name, typename t_type, db_column_options options_type>
+struct is_db_column<db_column<name, t_type, options_type>> : std::true_type {};
+template <typename t_type>
+struct is_db_relation : std::false_type {};
+template <fixed_string name, typename target_type, typename... joins_type>
+struct is_db_relation<db_many_to_one<name, target_type, joins_type...>> : std::true_type {};
+template <fixed_string name, typename target_type, typename... mapping_type>
+struct is_db_relation<db_one_to_one<name, target_type, mapping_type...>> : std::true_type {};
+template <fixed_string name, typename target_type, fixed_string inverse>
+struct is_db_relation<db_one_to_many<name, target_type, inverse>> : std::true_type {};
+template <fixed_string name, typename target_type, typename mapping_type>
+struct is_db_relation<db_many_to_many<name, target_type, mapping_type>> : std::true_type {};
+
+namespace detail {
+
+template <fixed_string table, typename... members_type>
+class db_entity_storage final {
+    static_assert(((is_db_column<members_type>::value || is_db_relation<members_type>::value) && ...), "SQL entities require RUVIA_DB_COLUMN or SQL relation descriptors");
+    using columns_tuple_type = tuple_filter_t<is_db_column, members_type...>;
+    using relations_tuple_type = tuple_filter_t<is_db_relation, members_type...>;
+    static_assert(unique_entity_columns<members_type...>(), "duplicate database entity member name");
+    static consteval std::size_t count_lifecycle_columns(auto predicate) noexcept {
+        return [&]<typename... cols>(std::tuple<cols...>*) {
+            return (std::size_t{predicate(cols::options)} + ... + std::size_t{0});
+        }(static_cast<columns_tuple_type*>(nullptr));
+    }
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.create_date_;
+    }) <= 1,
+        "database entity may declare at most one create_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.update_date_;
+    }) <= 1,
+        "database entity may declare at most one update_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.delete_date_;
+    }) <= 1,
+        "database entity may declare at most one delete_date_ column");
+    static_assert(count_lifecycle_columns([](const auto& opts) {
+        return opts.version_;
+    }) <= 1,
+        "database entity may declare at most one version_ column");
+    template <typename r_type>
+    using relation_slot_type = db_relation_slot<typename r_type::target_entity_type, r_type::is_collection>;
+    template <std::size_t... indexes>
+    static auto make_relation_slots(std::index_sequence<indexes...>) {
+        return std::tuple<relation_slot_type<std::tuple_element_t<indexes, relations_tuple_type>>...>{};
+    }
+    using column_storage = typename entity_storage_from_tuple<columns_tuple_type>::type;
+    using relation_slots_type = decltype(make_relation_slots(std::make_index_sequence<std::tuple_size_v<relations_tuple_type>>{}));
+    template <fixed_string name>
+    static consteval std::size_t relation_index() {
+        constexpr auto result_value = descriptor_index<relations_tuple_type, name>();
+        static_assert(result_value < std::tuple_size_v<relations_tuple_type>, "unknown database entity relation");
+        return result_value;
+    }
+    // Member names are unique across columns and relations.
+    template <fixed_string name>
+    static consteval bool is_relation() {
+        return descriptor_index<relations_tuple_type, name>() < std::tuple_size_v<relations_tuple_type>;
+    }
+    template <fixed_string name>
+    auto& relation_slot() {
+        return std::get<relation_index<name>()>(relation_slots_);
+    }
+    template <fixed_string name>
+    const auto& relation_slot() const {
+        return std::get<relation_index<name>()>(relation_slots_);
+    }
+
+public:
+    using columns_type = columns_tuple_type;
+    using relations_type = relations_tuple_type;
+    static constexpr std::string_view table_name() noexcept {
+        return table.view();
+    }
+    template <fixed_string name>
+    static consteval std::size_t column_index() {
+        return column_storage::template column_index<name>();
+    }
+    template <fixed_string name>
+    static consteval std::string_view column_name() noexcept {
+        return column_storage::template column_name<name>();
+    }
+    db_entity_storage() = default;
+    db_entity_storage(const db_entity_storage&) = delete;
+    db_entity_storage& operator=(const db_entity_storage&) = delete;
+    db_entity_storage(db_entity_storage&&) noexcept = default;
+    template <fixed_string name>
+    auto& get() & RUVIA_LIFETIMEBOUND {
+        if constexpr (is_relation<name>()) {
+            auto& s = relation_slot<name>();
+            if (s.state_ != decltype(s.state_)::value) {
+                throw std::logic_error("database entity relation is not loaded");
+            }
+            return *s.value_;
+        } else {
+            return columns_.template get<name>();
+        }
+    }
+    template <fixed_string name>
+    auto& get() && = delete;
+    template <fixed_string name>
+    const auto& get() const& RUVIA_LIFETIMEBOUND {
+        return const_cast<db_entity_storage*>(this)->get<name>();
+    }
+    template <fixed_string name>
+    const auto& get() const&& = delete;
+    template <fixed_string name, typename v_type>
+    void set(v_type&& value) {
+        static_assert(!is_relation<name>(), "relations cannot be assigned; use relation loading access");
+        columns_.template set<name>(std::forward<v_type>(value));
+    }
+    template <fixed_string name>
+    void set_null()
+        requires(!is_relation<name>() && std::tuple_element_t<column_index<name>(), columns_type>::options.nullable_)
+    {
+        columns_.template set_null<name>();
+    }
+    template <fixed_string name>
+    void reset() {
+        if constexpr (is_relation<name>()) {
+            relation_slot<name>().reset();
+        } else {
+            columns_.template reset<name>();
+        }
+    }
+    template <fixed_string name>
+    bool is_set() const {
+        if constexpr (is_relation<name>()) {
+            return relation_slot<name>().state_ != decltype(relation_slot<name>().state_)::unset;
+        } else {
+            return columns_.template is_set<name>();
+        }
+    }
+    template <fixed_string name>
+    bool is_null() const {
+        if constexpr (is_relation<name>()) {
+            return relation_slot<name>().state_ == decltype(relation_slot<name>().state_)::null;
+        } else {
+            return columns_.template is_null<name>();
+        }
+    }
+
+private:
+    template <typename>
+    friend struct db_entity_access;
+    column_storage columns_;
+    relation_slots_type relation_slots_;
+};
+
+template <typename e_type>
+struct db_entity_access final {
+    static auto& storage(e_type& entity) noexcept {
+        return entity.entity_;
+    }
+    template <fixed_string name>
+    static auto& emplace_relation(e_type& entity) {
+        auto& slot = relation_slot<name, false>(entity);
+        using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
+        slot.value_ = std::make_unique<stored_type>();
+        slot.state_ = decltype(slot.state_)::value;
+        return *slot.value_;
+    }
+
+    template <fixed_string name>
+    static auto& ensure_relation_collection(e_type& entity) {
+        auto& slot = relation_slot<name, true>(entity);
+        if (slot.state_ != decltype(slot.state_)::value) {
+            using stored_type = typename std::remove_reference_t<decltype(slot)>::stored_type;
+            slot.value_ = std::make_unique<stored_type>();
+            slot.state_ = decltype(slot.state_)::value;
+        }
+        return *slot.value_;
+    }
+
+    template <fixed_string name>
+    static void set_relation_null(e_type& entity) {
+        auto& slot = relation_slot<name, false>(entity);
+        slot.reset();
+        slot.state_ = decltype(slot.state_)::null;
+    }
+
+private:
+    template <fixed_string name, bool expected_collection>
+    static auto& relation_slot(e_type& entity) noexcept {
+        auto& owner_value = storage(entity);
+        using owner_type = std::remove_reference_t<decltype(owner_value)>;
+        static_assert(owner_type::template is_relation<name>());
+        using relation_type = std::tuple_element_t<owner_type::template relation_index<name>(), typename e_type::relations_type>;
+        if constexpr (expected_collection) {
+            static_assert(relation_type::is_collection, "ensure_relation_collection requires a collection relation");
+        } else {
+            static_assert(!relation_type::is_collection, "to-one relation operation is not valid on a collection relation");
+        }
+        return owner_value.template relation_slot<name>();
+    }
+};
+
+template <typename columns>
+inline constexpr bool sql_columns = []<std::size_t... indices>(std::index_sequence<indices...>) {
+    return (is_db_column<std::tuple_element_t<indices, columns>>::value && ...);
+}(std::make_index_sequence<std::tuple_size_v<columns>>{});
+
+}  // namespace detail
+
+template <typename entity>
+concept sql_entity = requires(const entity& value) {
+    typename entity::columns_type;
+    typename entity::relations_type;
+    typename entity::sql_entity_type;
+    requires std::same_as<entity, typename entity::sql_entity_type>;
+    requires detail::sql_columns<typename entity::columns_type>;
+    { entity::table_name() } -> std::convertible_to<std::string_view>;
+};
+
+template <typename projection>
+concept sql_projection = requires(const projection& value) {
+    typename projection::columns_type;
+    typename projection::db_projection_type;
+    requires std::same_as<projection, typename projection::db_projection_type>;
+    requires detail::sql_columns<typename projection::columns_type>;
+};
+
+template <typename e_type, fixed_string field_name>
+class db_field_reference final {
+    static_assert(sql_entity<e_type>, "SQL field references require a SQL entity");
+    static_assert(e_type::template column_index<field_name>() < std::tuple_size_v<typename e_type::columns_type>);
+    using column_type = std::tuple_element_t<e_type::template column_index<field_name>(), typename e_type::columns_type>;
+    static constexpr bool is_writable = detail::is_writable_db_column<column_type>();
+    static constexpr bool is_numeric = detail::is_numeric_db_column<column_type>();
+
+public:
+    constexpr db_field_reference(borrowed_text alias = {}) noexcept :
+        alias_(alias) {}
+    constexpr db_field_reference(const db_field_reference&) noexcept = default;
+    constexpr db_field_reference(db_field_reference&&) noexcept = default;
+    constexpr db_field_reference& operator=(const db_field_reference&) noexcept = default;
+    constexpr db_field_reference& operator=(db_field_reference&&) noexcept = default;
+
+    [[nodiscard]] static constexpr std::string_view name() noexcept {
+        return field_name.view();
+    }
+    [[nodiscard]] static constexpr std::string_view table_name() noexcept {
+        return e_type::table_name();
+    }
+    [[nodiscard]] constexpr std::string_view alias() const noexcept {
+        return alias_;
+    }
+    [[nodiscard]] constexpr db_field_reference with_alias(borrowed_text alias) const noexcept {
+        return db_field_reference(alias);
+    }
+    [[nodiscard]] db_expression expression(db_query& query, std::string_view fallback_alias = {}) const {
+        const auto qualifier = !alias_.empty() ? alias_.view() : (fallback_alias.empty() ? e_type::table_name() : fallback_alias);
+        return query.column(field_name.view(), qualifier);
+    }
+    [[nodiscard]] db_expression excluded(db_query& query) const {
+        return query.excluded(field_name.view());
+    }
+    [[nodiscard]] db_expr to_expr() const {
+        return db_expr(detail::db_owned_expression::make_static_column(field_name.view(), e_type::table_name(), alias_));
+    }
+    [[nodiscard]] operator db_expr() const {
+        return to_expr();
+    }
+    [[nodiscard]] db_expr excluded_expr() const noexcept {
+        return db_expr(detail::db_owned_expression::make_static_excluded(field_name.view()));
+    }
+    [[nodiscard]] db_order_term asc(db_nulls_order nulls = db_nulls_order::default_value) const {
+        return to_expr().asc(nulls);
+    }
+    [[nodiscard]] db_order_term desc(db_nulls_order nulls = db_nulls_order::default_value) const {
+        return to_expr().desc(nulls);
+    }
+
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate is_distinct_from(v_type&& value) const {
+        return to_expr().is_distinct_from(std::forward<v_type>(value));
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_predicate is_not_distinct_from(v_type&& value) const {
+        return to_expr().is_not_distinct_from(std::forward<v_type>(value));
+    }
+    [[nodiscard]] db_predicate is_distinct_from(const db_expr& rhs) const {
+        return to_expr().is_distinct_from(rhs);
+    }
+    [[nodiscard]] db_predicate is_not_distinct_from(const db_expr& rhs) const {
+        return to_expr().is_not_distinct_from(rhs);
+    }
+
+    [[nodiscard]] db_predicate like(std::string_view pattern) const {
+        return to_expr().like(pattern);
+    }
+    [[nodiscard]] db_predicate not_like(std::string_view pattern) const {
+        return to_expr().not_like(pattern);
+    }
+    [[nodiscard]] db_predicate ilike(std::string_view pattern) const {
+        return to_expr().ilike(pattern);
+    }
+    [[nodiscard]] db_predicate not_ilike(std::string_view pattern) const {
+        return to_expr().not_ilike(pattern);
+    }
+    [[nodiscard]] db_predicate regex(std::string_view pattern) const {
+        return to_expr().regex(pattern);
+    }
+    [[nodiscard]] db_predicate iregex(std::string_view pattern) const {
+        return to_expr().iregex(pattern);
+    }
+    template <detail::db_parameter lower_type, detail::db_parameter upper_type>
+    [[nodiscard]] db_predicate between(lower_type&& lower, upper_type&& upper) const {
+        return to_expr().between(std::forward<lower_type>(lower), std::forward<upper_type>(upper));
+    }
+    template <detail::db_parameter lower_type, detail::db_parameter upper_type>
+    [[nodiscard]] db_predicate not_between(lower_type&& lower, upper_type&& upper) const {
+        return to_expr().not_between(std::forward<lower_type>(lower), std::forward<upper_type>(upper));
+    }
+    [[nodiscard]] db_predicate is_null() const {
+        return to_expr().is_null();
+    }
+    [[nodiscard]] db_predicate is_not_null() const {
+        return to_expr().is_not_null();
+    }
+    [[nodiscard]] db_predicate is_true() const {
+        return to_expr().is_true();
+    }
+    [[nodiscard]] db_predicate is_false() const {
+        return to_expr().is_false();
+    }
+    [[nodiscard]] db_predicate is_not_true() const {
+        return to_expr().is_not_true();
+    }
+    [[nodiscard]] db_predicate is_not_false() const {
+        return to_expr().is_not_false();
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate in(std::span<const t_type> values) const {
+        return compare_list(db_binary_operator::in, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate in(std::initializer_list<t_type> values) const {
+        return in(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate not_in(std::span<const t_type> values) const {
+        return compare_list(db_binary_operator::not_in, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate not_in(std::initializer_list<t_type> values) const {
+        return not_in(std::span<const t_type>(values.begin(), values.size()));
+    }
+    [[nodiscard]] db_predicate in(const db_query& subquery) const {
+        return compare_subquery(db_binary_operator::in, subquery);
+    }
+    [[nodiscard]] db_predicate not_in(const db_query& subquery) const {
+        return compare_subquery(db_binary_operator::not_in, subquery);
+    }
+    template <typename subquery_type>
+        requires requires(const subquery_type& s) {
+            { s.query() } -> std::same_as<const db_query&>;
+        }
+    [[nodiscard]] db_predicate in(const subquery_type& subquery) const {
+        return compare_subquery(db_binary_operator::in, subquery.query());
+    }
+    template <typename subquery_type>
+        requires requires(const subquery_type& s) {
+            { s.query() } -> std::same_as<const db_query&>;
+        }
+    [[nodiscard]] db_predicate not_in(const subquery_type& subquery) const {
+        return compare_subquery(db_binary_operator::not_in, subquery.query());
+    }
+
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contains(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_contains, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contains(std::initializer_list<t_type> values) const {
+        return array_contains(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contained_by(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_contained_by, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_contained_by(std::initializer_list<t_type> values) const {
+        return array_contained_by(std::span<const t_type>(values.begin(), values.size()));
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_overlap(std::span<const t_type> values) const {
+        return compare_array(db_binary_operator::array_overlap, values);
+    }
+    template <typename t_type>
+    [[nodiscard]] db_predicate array_overlap(std::initializer_list<t_type> values) const {
+        return array_overlap(std::span<const t_type>(values.begin(), values.size()));
+    }
+
+    [[nodiscard]] db_predicate json_contains(std::string_view json_text) const {
+        return compare_json(db_binary_operator::json_contains, json_text);
+    }
+    [[nodiscard]] db_predicate json_contained_by(std::string_view json_text) const {
+        return compare_json(db_binary_operator::json_contained_by, json_text);
+    }
+    [[nodiscard]] db_predicate json_has_key(std::string_view key) const {
+        return to_expr().compare_expr(db_binary_operator::json_has_key, db_expr::value(key));
+    }
+    [[nodiscard]] db_predicate json_has_any_key(std::span<const std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_any_key, keys);
+    }
+    [[nodiscard]] db_predicate json_has_any_key(std::initializer_list<std::string_view> keys) const {
+        return json_has_any_key(std::span<const std::string_view>(keys.begin(), keys.size()));
+    }
+    [[nodiscard]] db_predicate json_has_all_keys(std::span<const std::string_view> keys) const {
+        return compare_json_keys(db_binary_operator::json_has_all_keys, keys);
+    }
+    [[nodiscard]] db_predicate json_has_all_keys(std::initializer_list<std::string_view> keys) const {
+        return json_has_all_keys(std::span<const std::string_view>(keys.begin(), keys.size()));
+    }
+    [[nodiscard]] db_predicate json_text_equals(std::string_view key, std::string_view value) const {
+        return to_expr().json_get_text(key) == value;
+    }
+    [[nodiscard]] db_predicate json_path_text_equals(std::span<const std::string_view> path, std::string_view value) const {
+        return to_expr().json_path_text(path) == value;
+    }
+    [[nodiscard]] db_predicate json_path_text_equals(std::initializer_list<std::string_view> path, std::string_view value) const {
+        return json_path_text_equals(std::span<const std::string_view>(path.begin(), path.size()), value);
+    }
+
+    [[nodiscard]] db_selection select() const {
+        return as(field_name.view());
+    }
+    [[nodiscard]] db_selection as(borrowed_text alias_name) const {
+        return to_expr().as(alias_name);
+    }
+    template <detail::db_parameter v_type>
+    [[nodiscard]] db_selection coalesce(v_type&& fallback, borrowed_text alias_name = field_name.view()) const {
+        return db_expr::coalesce({to_expr(), db_expr::value(std::forward<v_type>(fallback))}).as(alias_name);
+    }
+    [[nodiscard]] db_selection coalesce_text(std::string_view fallback = {}, borrowed_text alias_name = field_name.view()) const {
+        auto col_expr = to_expr();
+        if constexpr (column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
+            col_expr = col_expr.cast(db_data_type::text);
+        }
+        return db_expr::coalesce({col_expr, db_expr::value(fallback)}).as(alias_name);
+    }
+
+    template <detail::db_parameter v_type>
+        requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
+    [[nodiscard]] db_assignment set(v_type&& value) const {
+        return db_assignment{field_name.view(), db_expr::value(std::forward<v_type>(value))};
+    }
+    template <detail::db_parameter v_type>
+        requires(is_writable && (!std::same_as<std::remove_cvref_t<v_type>, std::nullptr_t> || column_type::options.nullable_))
+    [[nodiscard]] db_assignment operator=(v_type&& value) const {
+        return set(std::forward<v_type>(value));
+    }
+    [[nodiscard]] db_assignment set(const db_expr& value) const
+        requires is_writable
+    {
+        if (value.empty()) {
+            throw std::invalid_argument("cannot assign an empty database expression");
+        }
+        return db_assignment{field_name.view(), value};
+    }
+    [[nodiscard]] db_assignment operator=(const db_expr& value) const
+        requires is_writable
+    {
+        return set(value);
+    }
+    [[nodiscard]] db_assignment set_null() const
+        requires(is_writable && column_type::options.nullable_)
+    {
+        return db_assignment{field_name.view(), db_expr::null()};
+    }
+    [[nodiscard]] db_assignment set_null_if_empty(std::string_view value) const
+        requires(is_writable && column_type::options.nullable_)
+    {
+        auto expr = db_expr::null_if(db_expr::value(value), db_expr::value(std::string_view{}));
+        if constexpr (!column_type::options.enum_name_.view().empty()) {
+            expr = expr.cast({.custom_name_ = column_type::options.enum_name_.view()});
+        } else if constexpr (column_type::data_type != db_data_type::inferred && column_type::data_type != db_data_type::text && column_type::data_type != db_data_type::varchar && column_type::data_type != db_data_type::char_value) {
+            expr = expr.cast({.data_type_ = column_type::data_type, .length_ = column_type::options.length_, .precision_ = column_type::options.precision_, .scale_ = column_type::options.scale_});
+        }
+        return db_assignment{field_name.view(), std::move(expr)};
+    }
+    [[nodiscard]] db_assignment set_default() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), db_expr::default_value()};
+    }
+    [[nodiscard]] db_assignment set_now() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), db_expr::now()};
+    }
+    [[nodiscard]] db_assignment set_excluded() const
+        requires is_writable
+    {
+        return db_assignment{field_name.view(), excluded_expr()};
+    }
+    template <typename number_type = std::int64_t>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment increment(number_type value = number_type{1}) const {
+        return db_assignment{field_name.view(), to_expr() + value};
+    }
+    template <typename number_type>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment operator+=(number_type value) const {
+        return increment(value);
+    }
+    template <typename number_type = std::int64_t>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment decrement(number_type value = number_type{1}) const {
+        return db_assignment{field_name.view(), to_expr() - value};
+    }
+    template <typename number_type>
+        requires(is_writable && is_numeric && (std::integral<number_type> || std::floating_point<number_type>) && !std::same_as<number_type, bool>)
+    [[nodiscard]] db_assignment operator-=(number_type value) const {
+        return decrement(value);
+    }
+
+private:
+    template <typename t_type>
+    [[nodiscard]] db_predicate compare_list(db_binary_operator op, std::span<const t_type> values) const {
+        return db_predicate(detail::db_owned_expression::make_in_list(to_expr().owned(), op, values));
+    }
+    [[nodiscard]] db_predicate compare_subquery(db_binary_operator op, const db_query& subquery) const {
+        return db_predicate(detail::db_owned_expression::make_in_subquery(to_expr().owned(), op, subquery));
+    }
+    [[nodiscard]] db_predicate compare_json(db_binary_operator op, std::string_view json_text) const {
+        return to_expr().compare_expr(op, db_expr::value(json_text).cast(db_data_type::jsonb));
+    }
+    [[nodiscard]] db_predicate compare_json_keys(db_binary_operator op, std::span<const std::string_view> keys) const {
+        return db_predicate(detail::db_owned_expression::make_json_path_op(to_expr().owned(), op, keys));
+    }
+    template <typename t_type>
+    db_predicate compare_array(db_binary_operator op, std::span<const t_type> values) const {
+        static_assert(detail::is_std_vector<typename column_type::value_type>::value, "array predicates require an array column");
+        using item_type = typename detail::is_std_vector<typename column_type::value_type>::value_type;
+        constexpr auto type = column_type::options.data_type_ == db_data_type::inferred || column_type::options.data_type_ == db_data_type::array ? detail::db_entity_type_traits<item_type>::data_type : column_type::options.data_type_;
+        const db_type_definition array_type{
+            .data_type_ = type,
+            .length_ = column_type::options.length_,
+            .precision_ = column_type::options.precision_,
+            .scale_ = column_type::options.scale_,
+            .array_ = true,
+        };
+        return db_predicate(detail::db_owned_expression::make_array_op(to_expr().owned(), op, values, array_type));
+    }
+
+    borrowed_text alias_{};
+};
+
+#define RUVIA_DB_COLUMN(name, value_type, ...) ::ruvia::db_column<::ruvia::fixed_string{#name}, value_type __VA_OPT__(, ) __VA_ARGS__>
+#define RUVIA_DB_JOIN_COLUMN(local, referenced) ::ruvia::db_join_column<::ruvia::fixed_string{#local}, ::ruvia::fixed_string{#referenced}>
+#define RUVIA_DB_JOIN_COLUMNS(...) ::ruvia::db_join_columns<__VA_ARGS__>
+#define RUVIA_DB_INVERSE(name) ::ruvia::db_inverse<::ruvia::fixed_string{#name}>
+#define RUVIA_DB_JOIN_TABLE(table, owner_columns_type, inverse_columns_type) ::ruvia::db_join_table<::ruvia::fixed_string{table}, owner_columns_type, inverse_columns_type>
+#define RUVIA_DB_MANY_TO_ONE(name, target, ...) ::ruvia::db_many_to_one<::ruvia::fixed_string{#name}, target, __VA_ARGS__>
+#define RUVIA_DB_ONE_TO_ONE(name, target, ...) ::ruvia::db_one_to_one<::ruvia::fixed_string{#name}, target, __VA_ARGS__>
+#define RUVIA_DB_ONE_TO_MANY(name, target, inverse) ::ruvia::db_one_to_many<::ruvia::fixed_string{#name}, target, ::ruvia::fixed_string{#inverse}>
+#define RUVIA_DB_MANY_TO_MANY(name, target, mapping_type) ::ruvia::db_many_to_many<::ruvia::fixed_string{#name}, target, mapping_type>
+
+// set<field>() 检查整数范围与有限浮点溢出，数组及 optional 元素递归使用相同规则。
+// 整数列不隐式接受浮点输入；调用方须显式选择转换策略。失败保留原值和 unset/null 状态。
+// 此保证不拦截调用方通过可变 get() 或显式转换自行执行的数值赋值。
+#define RUVIA_DB_ENTITY(name, table, ...)                                                                                   \
+    struct name final {                                                                                                     \
+    private:                                                                                                                \
+        using storage_type = ::ruvia::detail::db_entity_storage<::ruvia::fixed_string{table}, __VA_ARGS__>;                 \
+        storage_type entity_;                                                                                               \
+        template <typename>                                                                                                 \
+        friend struct ::ruvia::detail::db_entity_access;                                                                    \
+        template <typename, bool>                                                                                           \
+        friend struct ::ruvia::detail::db_relation_slot;                                                                    \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, entity_)                                                          \
+        using sql_entity_type = name;                                                                                       \
+        using columns_type = typename storage_type::columns_type;                                                           \
+        using relations_type = typename storage_type::relations_type;                                                       \
+        static constexpr std::string_view table_name() noexcept {                                                           \
+            return storage_type::table_name();                                                                              \
+        }                                                                                                                   \
+        template <::ruvia::fixed_string field_name>                                                                         \
+        static constexpr ::ruvia::db_field_reference<name, field_name> column(::ruvia::borrowed_text alias = {}) noexcept { \
+            return ::ruvia::db_field_reference<name, field_name>(alias);                                                    \
+        }                                                                                                                   \
+        RUVIA_DETAIL_ENTITY_VALUE_API(entity_)                                                                              \
+    };
+namespace detail {
+template <typename... columns>
+struct db_projection_storage final {
+    static_assert((::ruvia::is_db_column<columns>::value && ...));
+    using type = ::ruvia::detail::entity_value_storage<columns...>;
+};
+}  // namespace detail
+
+#define RUVIA_DB_PROJECTION(name, ...)                                                           \
+    struct name final {                                                                          \
+    private:                                                                                     \
+        using storage_type = typename ::ruvia::detail::db_projection_storage<__VA_ARGS__>::type; \
+        storage_type values_;                                                                    \
+        RUVIA_DETAIL_ENTITY_OWNER_API(name, storage_type, values_)                               \
+        using db_projection_type = name;                                                         \
+        using columns_type = typename storage_type::columns_type;                                \
+        RUVIA_DETAIL_ENTITY_VALUE_API(values_)                                                   \
+    };
+
+}  // namespace ruvia
+
+namespace ruvia::detail {
+
+template <typename entity_type, fixed_string name>
+struct db_relation_named final {
+    static constexpr auto index = descriptor_index<typename entity_type::relations_type, name>();
+    static_assert(index < std::tuple_size_v<typename entity_type::relations_type>, "unknown inverse database relation");
+    using type = std::tuple_element_t<index, typename entity_type::relations_type>;
+};
+
+template <typename tuple_type>
+struct reverse_db_join_columns;
+template <typename... columns_type>
+struct reverse_db_join_columns<std::tuple<columns_type...>> final {
+    using type = std::tuple<db_join_column<columns_type::referenced, columns_type::local>...>;
+};
+
+// An owning one-to-one relation stores its join columns exactly like an owning
+// many-to-one relation, so both normalize to the same mapping.
+template <typename relation_type>
+consteval db_relation_kind db_relation_mapping_kind() noexcept {
+    return relation_type::kind == db_relation_kind::one_to_one && relation_type::is_owning ? db_relation_kind::many_to_one : relation_type::kind;
+}
+
+// One normalized mapping is consumed by schema generation and query planning.
+// Target metadata is deliberately inspected only when a mapping is consumed,
+// so mutually recursive and self-referential entity declarations stay valid.
+template <typename source, typename relation_type, db_relation_kind kind = db_relation_mapping_kind<relation_type>(), bool owning = relation_type::is_owning>
+struct db_relation_mapping;
+
+template <typename source, typename relation_type>
+struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_one, true> {
+    static constexpr bool through_join_table = false;
+    using join_columns_type = typename relation_type::join_columns_type;
+};
+
+template <typename source, typename relation_type>
+struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_many, false> {
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
+    static_assert(inverse_type::kind == db_relation_kind::many_to_one && inverse_type::is_owning, "one-to-many must refer to an owning many-to-one relation");
+    static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>, "inverse database relation must target its source entity");
+    static constexpr bool through_join_table = false;
+    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type;
+};
+
+template <typename source, typename relation_type>
+struct db_relation_mapping<source, relation_type, db_relation_kind::one_to_one, false> {
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
+    static_assert(inverse_type::kind == db_relation_kind::one_to_one && inverse_type::is_owning, "inverse one-to-one must refer to an owning one-to-one relation");
+    static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>, "inverse database relation must target its source entity");
+    static constexpr bool through_join_table = false;
+    using join_columns_type = typename reverse_db_join_columns<typename inverse_type::join_columns_type>::type;
+};
+
+template <typename source, typename relation_type>
+struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_many, true> {
+    static constexpr bool through_join_table = true;
+    using table = typename relation_type::join_table_type;
+    using source_columns_type = typename table::owner_columns_type;
+    using target_columns_type = typename table::inverse_columns_type;
+    static constexpr std::string_view table_name() noexcept {
+        return table::name.view();
+    }
+};
+
+template <typename source, typename relation_type>
+struct db_relation_mapping<source, relation_type, db_relation_kind::many_to_many, false> {
+    using inverse_type = typename db_relation_named<typename relation_type::target_entity_type, relation_type::inverse_name>::type;
+    static_assert(inverse_type::kind == db_relation_kind::many_to_many && inverse_type::is_owning, "inverse many-to-many must refer to an owning many-to-many relation");
+    static_assert(std::is_same_v<typename inverse_type::target_entity_type, source>, "inverse database relation must target its source entity");
+    static constexpr bool through_join_table = true;
+    using table = typename inverse_type::join_table_type;
+    using source_columns_type = typename table::inverse_columns_type;
+    using target_columns_type = typename table::owner_columns_type;
+    static constexpr std::string_view table_name() noexcept {
+        return table::name.view();
+    }
+};
+
+template <typename columns_type>
+consteval bool unique_db_join_columns() {
+    constexpr auto count = std::tuple_size_v<columns_type>;
+    std::array<std::string_view, count> local{}, referenced{};
+    for_each_descriptor<columns_type>([&]<typename column_type, std::size_t i> {
+        local[i] = column_type::local.view();
+        referenced[i] = column_type::referenced.view();
+    });
+    for (std::size_t i = 0; i < count; ++i) {
+        if (local[i].empty() || referenced[i].empty()) {
+            return false;
+        }
+        for (std::size_t j = i + 1; j < count; ++j) {
+            if (local[i] == local[j] || referenced[i] == referenced[j]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+template <typename source, typename relation_type>
+constexpr void validate_db_relation() {
+    using target_type = typename relation_type::target_entity_type;
+    using mapping_type = db_relation_mapping<source, relation_type>;
+    if constexpr (mapping_type::through_join_table) {
+        using owner = typename mapping_type::source_columns_type;
+        using other_type = typename mapping_type::target_columns_type;
+        static_assert(std::tuple_size_v<owner> > 0 && std::tuple_size_v<other_type> > 0, "a join table requires both owner and inverse columns");
+        static_assert(unique_db_join_columns<owner>() && unique_db_join_columns<other_type>(), "join table column mappings must be nonempty and unique");
+        static_assert([] {
+            bool unique = true;
+            for_each_descriptor<owner>([&]<typename left_type, std::size_t> {
+                for_each_descriptor<other_type>([&]<typename right_type, std::size_t> {
+                    unique &= left_type::local.view() != right_type::local.view();
+                });
+            });
+            return unique;
+        }(), "join table owner and inverse columns must have distinct names");
+        for_each_descriptor<owner>([]<typename column_type, std::size_t> {
+            (void)source::template column_index<column_type::referenced>();
+        });
+        for_each_descriptor<other_type>([]<typename column_type, std::size_t> {
+            (void)target_type::template column_index<column_type::referenced>();
+        });
+    } else {
+        using columns_type = typename mapping_type::join_columns_type;
+        static_assert(std::tuple_size_v<columns_type> > 0, "a database relation requires join columns");
+        static_assert(unique_db_join_columns<columns_type>(), "database relation column mappings must be nonempty and unique");
+        for_each_descriptor<columns_type>([]<typename column_type, std::size_t> {
+            (void)source::template column_index<column_type::local>();
+            (void)target_type::template column_index<column_type::referenced>();
+        });
+    }
+}
+
+template <typename entity_type>
+consteval std::size_t db_primary_key_count() {
+    std::size_t count = 0;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        count += column_type::options.primary_key_ ? 1 : 0;
+    });
+    return count;
+}
+
+template <typename entity_type>
+consteval auto db_primary_key_columns() {
+    std::array<std::string_view, db_primary_key_count<entity_type>()> result_value{};
+    std::size_t i = 0;
+    for_each_descriptor<typename entity_type::columns_type>([&]<typename column_type, std::size_t> {
+        if constexpr (column_type::options.primary_key_) {
+            result_value[i++] = column_type::name.view();
+        }
+    });
+    return result_value;
+}
+
+}  // namespace ruvia::detail

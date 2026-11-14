@@ -21,6 +21,8 @@
 #include <asio/post.hpp>
 
 #include "event_loop.h"
+#include "move_only_function.h"
+#include "operation_options.h"
 #include "task_scope.h"
 #include "worker_task_fixture.h"
 

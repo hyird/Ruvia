@@ -38,10 +38,12 @@
 #include <utility>
 #include <variant>
 
-#include "stop_token.h"
+#include "move_only_function.h"
+#include "one_shot.h"
+#include "operation_options.h"
 #include "task.h"
 #include "worker_ref.h"
-#include "worker_wait.h"
+#include "worker_result.h"
 
 namespace ruvia {
 

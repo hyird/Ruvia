@@ -45,6 +45,7 @@
 #include "http1_server_response.h"
 #include "http3_test_client.h"
 #include "http_client.h"
+#include "http_client_request_view.h"
 #include "http_connect_udp.h"
 #include "http_server_fixture.h"
 #include "stop_token.h"

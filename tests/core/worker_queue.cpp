@@ -10,7 +10,12 @@
 #include <asio/io_context.hpp>
 #include <asio/post.hpp>
 
+#include "asio_bridge.h"
 #include "event_loop.h"
+#include "move_only_function.h"
+#include "worker_cancellation.h"
+#include "worker_notification.h"
+#include "worker_runtime.h"
 #include "worker_wait.h"
 TEST(Ruvia, worker_queue_yields_to_io_context_between_batches) {
     struct reposting_task final {

@@ -26,6 +26,7 @@
 #include "http_header.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "websocket_deflate_codecs.h"
 
 namespace {
 

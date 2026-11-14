@@ -10,6 +10,7 @@
 
 #include "content_decoding_fixture.h"
 #include "http_request.h"
+#include "http_request_body_failure.h"
 #include "http_transfer_coding.h"
 
 using namespace ruvia::test;

@@ -7,6 +7,9 @@
 
 #include "http1_server_response.h"
 #include "http_connection_fields.h"
+#include "http_field_kind.h"
+#include "http_message_access.h"
+#include "http_message_framing_fields.h"
 #include "http_response.h"
 
 // Final-response control and Content-Length framing decided before any wire

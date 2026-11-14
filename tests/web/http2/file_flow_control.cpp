@@ -22,10 +22,13 @@
 #include "controller.h"
 #include "event_loop.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_client.h"
+#include "http_client_request_view.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 
 namespace http2_file_flow_control_test {

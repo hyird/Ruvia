@@ -1,0 +1,175 @@
+#include "client_happy_eyeballs.h"
+
+#include <cstddef>
+#include <exception>
+#include <system_error>
+#include <utility>
+
+#include <asio/error.hpp>
+#include <asio/ip/tcp.hpp>
+
+#include "task.h"
+#include "timeout_duration.h"
+#include "worker_ref.h"
+#include "worker_timer.h"
+
+namespace ruvia::detail {
+
+client_happy_eyeballs::client_happy_eyeballs(const worker_ref& worker, const asio::ip::tcp::socket::executor_type& executor, const asio::ip::tcp::resolver::results_type& addresses) :
+    worker_(worker),
+    changed_(worker),
+    attempts_() {
+    if (addresses.empty()) {
+        return;
+    }
+    attempts_.reserve(addresses.size());
+    client_address_sequence sequence(addresses);
+    while (auto endpoint = sequence.next()) {
+        attempts_.emplace_back(executor, *endpoint);
+    }
+}
+
+client_happy_eyeballs::~client_happy_eyeballs() {
+    delay_.cancel();
+    if (active_ != 0) {
+        std::terminate();
+    }
+}
+
+void client_happy_eyeballs::close_socket(asio::ip::tcp::socket& socket) noexcept {
+    std::error_code ignored;
+    (void)socket.cancel(ignored);
+    (void)socket.close(ignored);
+}
+
+void client_happy_eyeballs::close_active() noexcept {
+    for (auto& current : attempts_) {
+        if (current.active_) {
+            close_socket(current.socket_);
+        }
+    }
+}
+
+void client_happy_eyeballs::cancel() noexcept {
+    if (cancelled_) {
+        return;
+    }
+    cancelled_ = true;
+    if (winner_) {
+        close_socket(attempts_[*winner_].socket_);
+    }
+    winner_.reset();
+    delay_.cancel();
+    close_active();
+    changed_.notify();
+}
+
+void client_happy_eyeballs::schedule_next() noexcept {
+    if (next_ == attempts_.size() || cancelled_ || winner_) {
+        return;
+    }
+    try {
+        const auto status = worker_.schedule_timer(delay_, deadline_after(client_connection_attempt_delay), [this](worker_timer_outcome outcome) noexcept {
+            on_delay(outcome);
+        });
+        if (status != worker_timer_schedule_status::worker_stopping) {
+            return;
+        }
+    } catch (...) {
+        failure_ = std::current_exception();
+    }
+    cancel();
+}
+
+void client_happy_eyeballs::start_next() noexcept {
+    if (next_ == attempts_.size() || cancelled_ || winner_) {
+        return;
+    }
+    const auto index = next_++;
+    auto& current = attempts_[index];
+    current.active_ = true;
+    ++active_;
+    try {
+        current.socket_.async_connect(current.endpoint_, [this, index](const std::error_code& error) noexcept {
+            on_connect(index, error);
+        });
+    } catch (...) {
+        current.active_ = false;
+        --active_;
+        close_socket(current.socket_);
+        failure_ = std::current_exception();
+        cancel();
+        return;
+    }
+    schedule_next();
+}
+
+void client_happy_eyeballs::on_delay(worker_timer_outcome outcome) noexcept {
+    if (outcome == worker_timer_outcome::cancelled) {
+        cancel();
+        return;
+    }
+    launch_ready_ = true;
+    changed_.notify();
+}
+
+void client_happy_eyeballs::on_connect(std::size_t index, const std::error_code& error) noexcept {
+    auto& current = attempts_[index];
+    if (!current.active_ || active_ == 0) {
+        std::terminate();
+    }
+    current.active_ = false;
+    --active_;
+    if (!error && !cancelled_ && !winner_) {
+        winner_ = index;
+        delay_.cancel();
+        close_active();
+    } else {
+        if (error && error != asio::error::operation_aborted) {
+            last_error_ = error;
+            if (!cancelled_ && !winner_) {
+                // RFC 8305 section 5: a fast failure must not leave the next
+                // address waiting for the remainder of the attempt delay.
+                delay_.cancel();
+                launch_ready_ = true;
+            }
+        }
+        close_socket(current.socket_);
+    }
+    changed_.notify();
+}
+
+task<client_happy_eyeballs_result> client_happy_eyeballs::connect() & {
+    if (cancelled_) {
+        co_return client_happy_eyeballs_result{{}, asio::error::operation_aborted};
+    }
+    if (attempts_.empty()) {
+        co_return client_happy_eyeballs_result{{}, asio::error::host_not_found};
+    }
+    start_next();
+    for (;;) {
+        if (launch_ready_) {
+            launch_ready_ = false;
+            start_next();
+        }
+        if (cancelled_) {
+            close_active();
+            if (active_ == 0) {
+                if (failure_) {
+                    std::rethrow_exception(failure_);
+                }
+                co_return client_happy_eyeballs_result{{}, asio::error::operation_aborted};
+            }
+        } else if (winner_) {
+            if (active_ == 0) {
+                auto socket = std::move(attempts_[*winner_].socket_);
+                co_return client_happy_eyeballs_result{std::move(socket), {}};
+            }
+        } else if (active_ == 0 && next_ == attempts_.size()) {
+            co_return client_happy_eyeballs_result{{}, last_error_ ? last_error_ : std::error_code(asio::error::host_unreachable)};
+        }
+        co_await changed_.wait();
+    }
+}
+
+}  // namespace ruvia::detail

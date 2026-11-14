@@ -30,7 +30,10 @@
 #include "http_server.h"
 #include "http_server_fixture.h"
 #include "middleware.h"
+#include "request_stream.h"
+#include "server_connection.h"
 #include "task_scope.h"
+#include "worker_signal.h"
 #include "worker_task_fixture.h"
 #ifndef _WIN32
 #include <fcntl.h>

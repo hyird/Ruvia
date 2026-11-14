@@ -1,3 +1,5 @@
+#include "channel.h"
+
 #include <gtest/gtest.h>
 
 #include <atomic>
@@ -17,7 +19,9 @@
 #include <asio/post.hpp>
 
 #include "event_loop.h"
+#include "operation_options.h"
 #include "task_scope.h"
+#include "worker_result.h"
 #include "worker_task_fixture.h"
 #include "worker_wait.h"
 

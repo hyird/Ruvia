@@ -13,8 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "borrowed_text.h"
-#include "http_connection_fields.h"
+#include "decimal_text.h"
 #include "http_content_negotiation.h"
 #include "http_header.h"
 #include "http_multipart.h"

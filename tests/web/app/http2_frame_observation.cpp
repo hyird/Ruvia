@@ -22,6 +22,7 @@
 #include "app.h"
 #include "controller.h"
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
 namespace http2_frame_observation_test {

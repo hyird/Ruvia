@@ -27,11 +27,14 @@
 #include "http_client.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
 #include "stop_token.h"
 #include "task_scope.h"
+#include "websocket_deflate_codecs.h"
 #include "websocket_handshake.h"
 #if defined(RUVIA_ENABLE_HTTP2)
 #include "http2_connection.h"
+#include "http2_hpack.h"
 #include "http_server_fixture.h"
 #endif
 #if defined(RUVIA_ENABLE_HTTP3)

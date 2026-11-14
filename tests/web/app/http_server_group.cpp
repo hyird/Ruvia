@@ -29,6 +29,9 @@
 #include "controller.h"
 #include "http_server.h"
 #include "http_server_fixture.h"
+#include "request_stream.h"
+#include "router.h"
+#include "server_connection.h"
 #include "task_scope.h"
 #if defined(RUVIA_ENABLE_HTTP3)
 #include "http3_test_client.h"
