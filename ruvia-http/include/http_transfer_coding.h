@@ -11,6 +11,7 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_protocol.h"
 
 namespace ruvia {
 

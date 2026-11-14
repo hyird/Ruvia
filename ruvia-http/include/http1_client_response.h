@@ -11,6 +11,9 @@
 
 #include "http1_chunked_body.h"
 #include "http1_client_request.h"
+#include "http_message.h"
+#include "http_protocol.h"
+#include "http_status.h"
 #include "http_transfer_coding.h"
 
 namespace ruvia::detail {

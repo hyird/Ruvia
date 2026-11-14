@@ -28,6 +28,7 @@
 #include "http_priority.h"
 #include "http_request.h"
 #include "http_response.h"
+#include "http_status.h"
 #include "websocket_handshake.h"
 
 namespace ruvia {

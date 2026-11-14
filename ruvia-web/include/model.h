@@ -27,6 +27,7 @@
 #include <vector>
 
 #include "borrowed_text.h"
+#include "http_status.h"
 #if defined(__SSE2__) || defined(_M_X64) || (defined(_M_IX86_FP) && _M_IX86_FP >= 2)
 #include <emmintrin.h>
 #define RUVIA_JSON_SCAN_SSE2 1

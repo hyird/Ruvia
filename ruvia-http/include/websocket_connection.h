@@ -16,6 +16,7 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_protocol.h"
 
 namespace ruvia {
 // awaiting_peer_eof: a client completed the close handshake and, per RFC 6455

@@ -15,6 +15,7 @@
 #include "http1_client_response.h"
 #include "http1_server_response.h"
 #include "http_header.h"
+#include "http_protocol.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "websocket_connection.h"

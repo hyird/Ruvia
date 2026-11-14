@@ -9,6 +9,8 @@
 #include "borrowed_text.h"
 #include "http1_client_request.h"
 #include "http1_client_response.h"
+#include "http_message.h"
+#include "http_status.h"
 
 namespace ruvia {
 // Outbound HTTP redirect protocol helpers.

@@ -9,6 +9,7 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_message.h"
 
 namespace ruvia {
 

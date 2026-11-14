@@ -14,6 +14,8 @@
 
 #include "borrowed_text.h"
 #include "http_header.h"
+#include "http_protocol.h"
+#include "http_status.h"
 
 namespace ruvia {
 namespace detail {

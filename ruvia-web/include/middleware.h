@@ -28,6 +28,7 @@
 #include "borrowed_text.h"
 #include "http_header.h"
 #include "http_response.h"
+#include "http_status.h"
 #include "stop_token.h"
 #include "task.h"
 #include "task_scope.h"
