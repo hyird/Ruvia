@@ -1,30 +1,128 @@
 #include "http_representation.h"
 
-#include <algorithm>
-#include <charconv>
 #include <cstddef>
-#include <cstdint>
-#include <limits>
+#include <ctime>
 #include <optional>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
-#include <utility>
 #include <variant>
-#include <vector>
 
 #include "borrowed_text.h"
-#include "http1_server_response.h"
-#include "http_cache.h"
 #include "http_connection_fields.h"
-#include "http_content_negotiation.h"
-#include "http_header.h"
-#include "http_multipart.h"
+#include "http_date.h"
 #include "http_request.h"
-#include "http_response.h"
 
 namespace ruvia {
+
+http_conditional_headers get_http_conditional_headers(const http_request& request) noexcept {
+    return http_conditional_headers{detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_unmodified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_unmodified_since), detail::http_request_access::has_repeated_known_header(request, detail::http_field_kind::if_modified_since) ? std::string_view{} : detail::http_request_access::known_header(request, detail::http_field_kind::if_modified_since), detail::http_request_access::known_header(request, detail::http_field_kind::range), detail::http_request_access::known_header(request, detail::http_field_kind::if_range), detail::http_request_access::has_known_header(request, detail::http_field_kind::if_range)};
+}
+
+void http_etag_field_condition::update(std::string_view value, std::string_view expected, bool strong) noexcept {
+    const bool already_present = present_;
+    present_ = true;
+    const auto trimmed = http_trim_ows(value);
+    if (trimmed == "*") {
+        wildcard_ = true;
+        if (already_present) {
+            valid_ = false;
+        }
+        return;
+    }
+    if (wildcard_) {
+        valid_ = false;
+    }
+    const auto result_value = detail::http_parse_etag_list_matches(value, expected, strong);
+    valid_ = valid_ && result_value.valid_;
+    matched_ = matched_ || result_value.matched_;
+}
+
+http_etag_preconditions get_http_etag_preconditions(const http_request& request, std::string_view etag) noexcept {
+    http_etag_preconditions result;
+    // Both conditions are RFC list fields. Multiple field lines are equivalent
+    // to comma-joining their values (RFC 9110 §5.3), but the request keeps
+    // zero-copy views into separate wire lines. Fold them line by line and
+    // retain whole-list validity without allocating a joined string.
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::if_match, [&result, etag](std::string_view value) noexcept {
+        result.if_match_.update(value, etag, true);
+        return true;
+    });
+    (void)detail::http_request_access::visit_known_headers(request, detail::http_field_kind::if_none_match, [&result, etag](std::string_view value) noexcept {
+        result.if_none_match_.update(value, etag, false);
+        return true;
+    });
+    return result;
+}
+
+bool http_date_not_modified(std::string_view header_value, std::time_t modified_seconds) noexcept {
+    const auto date = parse_http_date(header_value);
+    return date.has_value() && modified_seconds <= *date;
+}
+
+bool http_date_unmodified(std::string_view header_value, std::time_t modified_seconds) noexcept {
+    const auto date = parse_http_date(header_value);
+    return !date.has_value() || modified_seconds <= *date;
+}
+
+bool http_if_range_allows(std::string_view header_value, std::string_view etag, std::optional<std::time_t> modified_seconds, bool date_validator_strong) noexcept {
+    if (header_value.empty()) {
+        return false;
+    }
+    const auto value = http_trim_ows(header_value);
+    if (!value.empty() && (value.front() == '"' || value.starts_with("W/"))) {
+        return detail::http_strong_etag_equals(value, etag);
+    }
+    if (!date_validator_strong || !modified_seconds) {
+        return false;
+    }
+    const auto date = parse_http_date(value);
+    return date.has_value() && *modified_seconds == *date;
+}
+
+bool is_valid_http_entity_tag(std::string_view value) noexcept {
+    if (value.starts_with("W/")) {
+        value.remove_prefix(2);
+    }
+    if (value.size() < 2U || value.front() != '"' || value.back() != '"') {
+        return false;
+    }
+    for (std::size_t i = 1U; i + 1U < value.size(); ++i) {
+        const auto byte = static_cast<unsigned char>(value[i]);
+        if (byte == '"' || (byte != 0x21U && !(byte >= 0x23U && byte <= 0x7eU) && byte < 0x80U)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool is_weak_http_entity_tag(std::string_view value) noexcept {
+    return value.starts_with("W/") && is_valid_http_entity_tag(value);
+}
+
+bool is_strong_http_entity_tag(std::string_view value) noexcept {
+    return !value.starts_with("W/") && is_valid_http_entity_tag(value);
+}
+
+bool http_strong_etag_equals(std::string_view left, std::string_view right) noexcept {
+    return is_strong_http_entity_tag(left) && is_strong_http_entity_tag(right) && left == right;
+}
+
+bool http_weak_etag_equals(std::string_view left, std::string_view right) noexcept {
+    return is_valid_http_entity_tag(left) && is_valid_http_entity_tag(right) && detail::http_weak_etag_equals(left, right);
+}
+
+std::string weaken_http_etag(std::string_view etag) {
+    etag = http_trim_ows(etag);
+    if (is_strong_http_entity_tag(etag)) {
+        std::string weakened;
+        weakened.reserve(2U + etag.size());
+        weakened.append("W/");
+        weakened.append(etag);
+        return weakened;
+    }
+    return std::string(etag);
+}
 
 const http_representation_response_plan::full_type* http_representation_response_plan::full() const& noexcept {
     return std::get_if<full_type>(&value_);
@@ -129,53 +227,6 @@ http_representation_response_plan plan_http_representation_response(const http_r
         return make_full();
     }
     return http_representation_response_plan(ranges, headers.has_if_range_);
-}
-
-[[nodiscard]] http_response_stream_head prepare_http_response_stream_head(http_response response, http_response_stream_commit_plan commit_plan) {
-    if (response.status() != commit_plan.response_status()) {
-        throw std::invalid_argument("response stream commit plan status does not match response");
-    }
-    if (!commit_plan.trailer_intent_allowed()) {
-        throw std::invalid_argument("response stream status does not permit trailers");
-    }
-    const auto framing = commit_plan.framing();
-    if (!detail::response_transfer_encoding_replaceable(response)) {
-        if (framing == http_response_stream_framing::http2_frames || framing == http_response_stream_framing::http3_frames) {
-            throw std::invalid_argument("HTTP/2 or HTTP/3 response cannot carry a Transfer-Encoding other than chunked");
-        }
-        throw http1_response_head_error("HTTP response Transfer-Encoding must be exactly chunked");
-    }
-    const auto body_plan = commit_plan.body_plan();
-    const bool writer_owns_http1_chunked = framing == http_response_stream_framing::http1_chunked && body_plan.transfer_encoding_allowed() && !body_plan.body_suppressed();
-
-    // Keep the prepared response metadata consistent with the wire plan. The
-    // framework's chunk writer is the only Transfer-Encoding producer, so the
-    // handler's chunked hint survives only as that writer's own field; HTTP/2
-    // and HTTP/3 frames and an HTTP/1.0 close-delimited body carry none. An HTTP/1.0
-    // close-delimited body cannot retain Content-Length either. HEAD/304 may
-    // retain Content-Length metadata because their body is suppressed.
-    if (writer_owns_http1_chunked) {
-        response.remove_header("Content-Length");
-    } else {
-        response.remove_header("Transfer-Encoding");
-    }
-    if (framing == http_response_stream_framing::http1_close_delimited && !body_plan.body_suppressed()) {
-        response.remove_header("Content-Length");
-    }
-    // Without a chunked body the trailer section is discarded, so the head must
-    // not announce trailer fields that will never follow (RFC 9110 6.6.2).
-    if (!commit_plan.trailers_available()) {
-        response.remove_header("Trailer");
-    }
-
-    if (writer_owns_http1_chunked) {
-        if (!detail::response_has_known_header(response, detail::response_header_transfer_encoding)) {
-            response.reserve_headers(response.headers().size() + 1);
-        }
-        response.header_stable_view("Transfer-Encoding", "chunked");
-    }
-
-    return http_response_stream_head(std::move(response), commit_plan);
 }
 
 }  // namespace ruvia

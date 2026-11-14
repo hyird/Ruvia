@@ -35,6 +35,7 @@
 #include "http_cors.h"
 #include "http_header.h"
 #include "http_priority.h"
+#include "http_representation.h"
 #include "http_request.h"
 #include "http_response.h"
 #include "tls_client_hello.h"
